@@ -1,0 +1,6 @@
+inputs:
+  rpus:
+    - /mnt/d/data/gfv2_param/NHDPlusV21_CO_14_14a_NEDSnapshot_01/NHDPlusCO/NHDPlus14/NEDSnapshot/Ned14a
+    - /mnt/d/data/gfv2_param/NHDPlusV21_CO_14_14b_NEDSnapshot_01/NHDPlusCO/NHDPlus14/NEDSnapshot/Ned14b
+output:
+  file: output/NHDPlusNED_14_merged.tif
