@@ -1,0 +1,15 @@
+gdptools
+marimo[recommended]
+plotly
+pandas
+numpy
+hvplot
+geoviews
+datashader
+dask
+intake
+intake-xarray
+intake-parquet
+s3fs
+pooch
+matplotlib

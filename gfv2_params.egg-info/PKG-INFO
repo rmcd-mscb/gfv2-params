@@ -1,0 +1,20 @@
+Metadata-Version: 2.4
+Name: gfv2-params
+Version: 0.1.0
+Summary: Geospatial analysis project with marimo workflows
+Author-email: Your Name <you@example.com>
+Requires-Dist: gdptools
+Requires-Dist: marimo[recommended]
+Requires-Dist: plotly
+Requires-Dist: pandas
+Requires-Dist: numpy
+Requires-Dist: hvplot
+Requires-Dist: geoviews
+Requires-Dist: datashader
+Requires-Dist: dask
+Requires-Dist: intake
+Requires-Dist: intake-xarray
+Requires-Dist: intake-parquet
+Requires-Dist: s3fs
+Requires-Dist: pooch
+Requires-Dist: matplotlib

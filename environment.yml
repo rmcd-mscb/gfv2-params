@@ -1,0 +1,17 @@
+name: geoenv
+channels:
+  - conda-forge
+dependencies:
+  - python=3.12
+  - gdal
+  - rasterio
+  - geopandas
+  - pyproj
+  - xarray
+  - numba
+  - llvmlite
+  - spatialpandas
+  - pip  # Needed to install uv into the env
+  - pip:
+      - uv
+

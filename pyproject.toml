@@ -1,0 +1,25 @@
+[project]
+name = "gfv2-params"
+version = "0.1.0"
+description = "Geospatial analysis project with marimo workflows"
+authors = [{name = "Your Name", email = "you@example.com"}]
+dependencies = [
+    "gdptools",
+    "marimo[recommended]",
+    "plotly",
+    "pandas",
+    "numpy",
+    "hvplot",
+    "geoviews",
+    "datashader",
+    "dask",
+    "intake",
+    "intake-xarray",
+    "intake-parquet",
+    "s3fs",
+    "pooch",
+    "matplotlib"
+]
+
+[tool.uv]
+# uv-specific settings (optional)
