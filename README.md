@@ -62,7 +62,11 @@ This will run the notebook in a terminal and print the output to the console.
 To launch the interactive GUI for development:
 
 ```bash
-marimo gui
+marimo edit
+
+# or edit a specific file
+
+merimo edit marimo/your_notebook.py
 ```
 
 This will start a Jupyter server and open the Marimo GUI in your browser.
