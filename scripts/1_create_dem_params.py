@@ -4,17 +4,18 @@ Handles special cases for 03N, 03S, 03W.
 """
 
 import argparse
+import sys
 from pathlib import Path
 
 import geopandas as gpd
 import rioxarray
-import yaml
 from gdptools import UserTiffData, ZonalGen
 
+# Add the src directory to the Python path for helper function imports
+src_path = Path(__file__).resolve().parent.parent / "src"
+sys.path.append(str(src_path))
+from helpers import load_config  # noqa: E402
 
-def load_config(config_path):
-    with open(config_path, "r") as f:
-        return yaml.safe_load(f)
 
 def main():
     parser = argparse.ArgumentParser(description="Process NEDSnapshot_merged_fixed_{vpu}.tif files by VPU.")
