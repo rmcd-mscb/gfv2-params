@@ -17,11 +17,12 @@ This project uses a hybrid environment setup:
 ```bash
 conda env create -f environment.yml
 conda activate geoenv
-
-### 2. Install project dependencies with uv
+```
+### 2. Install project dependencies with uv and install pre-commit
 
 ```bash
-uv pip install -e .
+uv pip install -e .[dev]
+pre-commit install
 ```
 
 This will install all project.dependencies defined in pyproject.toml.
@@ -42,7 +43,7 @@ conda env update -f environment.yml --prune
 
 ## 🚀 Using Marimo
 
-Marimo notebooks are stored in the marimo/ directory.
+Marimo notebooks are stored in the marimo/ directory.  The are used for experimenting with workflow processing.
 
 To run a notebook:
 
@@ -76,11 +77,18 @@ You can then create new notebooks, run existing notebooks, and manage your envir
 
 ```bash
 gfv2-params/
-├── env.yml                  # Conda environment for geospatial dependencies
+├── environment.yml                  # Conda environment for geospatial dependencies
 ├── pyproject.toml           # Python dependencies managed by uv
+├── .pre-commit-config.yml
 ├── marimo/                  # Marimo-based workflows
 │   ├── 01_preprocess.marimo.py
 │   └── 02_analysis.marimo.py
+├── slurm_batch
+|   ├── 01_create_elev_params.batch
+|   └── a_process_NHD_by_vpu.batch
+├── scripts
+|   ├── 01_create_elev_params.py
+|   └── process_NHD_by_vpu.py
 ├── src/
 │   └── gfv2_params/         # Installable Python package
 │       ├── __init__.py
