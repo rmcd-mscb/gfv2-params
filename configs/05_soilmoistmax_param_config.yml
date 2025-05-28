@@ -1,0 +1,5 @@
+base_source_dir: /caldera/hovenweep/projects/usgs/water/impd/nhgf/gfv2_param/source_data/data_layers
+target_source_dir: /caldera/hovenweep/projects/usgs/water/impd/nhgf/gfv2_param/targets
+output_dir: /caldera/hovenweep/projects/usgs/water/impd/nhgf/gfv2_param/nhm_params
+source_type: soil_moist_max
+categorical: False

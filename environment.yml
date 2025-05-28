@@ -11,6 +11,8 @@ dependencies:
   - numba
   - llvmlite
   - spatialpandas
+  - richdem
+  - rasterstats
   - pip  # Needed to install uv into the env
   - pip:
       - uv

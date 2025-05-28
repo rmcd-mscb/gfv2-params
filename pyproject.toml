@@ -18,7 +18,12 @@ dependencies = [
     "intake-parquet",
     "s3fs",
     "pooch",
-    "matplotlib"
+    "matplotlib",
+    "py7zr",
+    "simple_parsing",
+    "ipykernel",
+    "dask",
+    "distributed",
 ]
 
 [tool.uv]

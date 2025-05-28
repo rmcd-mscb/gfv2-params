@@ -1,6 +1,612 @@
-inputs:
-  rpus:
-    - /mnt/d/data/gfv2_param/NHDPlusV21_CO_14_14a_NEDSnapshot_01/NHDPlusCO/NHDPlus14/NEDSnapshot/Ned14a/elev_cm/
-    - /mnt/d/data/gfv2_param/NHDPlusV21_CO_14_14b_NEDSnapshot_01/NHDPlusCO/NHDPlus14/NEDSnapshot/Ned14b/elev_cm/
-output:
-  file: output/NHDPlusNED_14_merged.tif
+"01":
+  NEDSnapshot:
+    rpus: [
+      "source_data/NHDPlus_Extracted/01/01a/NEDSnapshot/NHDPlusNE/NHDPlus01/NEDSnapshot/Ned01a/elev_cm"
+    ]
+    output: "source_data/NHDPlus_Merged_Rasters/01/NEDSnapshot_merged_01.tif"
+
+  Hydrodem:
+    rpus: [
+      "source_data/NHDPlus_Extracted/01/01a/Hydrodem/NHDPlusNE/NHDPlus01/NHDPlusHydrodem01a/hydrodem"
+    ]
+    output: "source_data/NHDPlus_Merged_Rasters/01/Hydrodem_merged_01.tif"
+  
+  FdrFac_Fdr:
+    rpus: [
+      "source_data/NHDPlus_Extracted/01/01a/FdrFac/NHDPlusNE/NHDPlus01/NHDPlusFdrFac01a/fdr"
+    ]
+    output: "source_data/NHDPlus_Merged_Rasters/01/Fdr_merged_01.tif"
+
+  FdrFac_Fac:
+    rpus: [
+      "source_data/NHDPlus_Extracted/01/01a/FdrFac/NHDPlusNE/NHDPlus01/NHDPlusFdrFac01a/fac"
+    ]
+    output: "source_data/NHDPlus_Merged_Rasters/01/Fac_merged_01.tif"
+
+"02":
+  NEDSnapshot:
+    rpus: [
+      "source_data/NHDPlus_Extracted/02/02a/NEDSnapshot/NHDPlusMA/NHDPlus02/NEDSnapshot/Ned02a/elev_cm",
+      "source_data/NHDPlus_Extracted/02/02b/NEDSnapshot/NHDPlusMA/NHDPlus02/NEDSnapshot/Ned02b/elev_cm"
+    ]
+    output: "source_data/NHDPlus_Merged_Rasters/02/NEDSnapshot_merged_02.tif"
+
+  Hydrodem:
+    rpus: [
+      "source_data/NHDPlus_Extracted/02/02a/Hydrodem/NHDPlusMA/NHDPlus02/NHDPlusHydrodem02a/hydrodem",
+      "source_data/NHDPlus_Extracted/02/02b/Hydrodem/NHDPlusMA/NHDPlus02/NHDPlusHydrodem02b/hydrodem"
+    ]
+    output: "source_data/NHDPlus_Merged_Rasters/02/Hydrodem_merged_02.tif"
+  
+  FdrFac_Fdr:
+    rpus: [
+      "source_data/NHDPlus_Extracted/02/02a/FdrFac/NHDPlusMA/NHDPlus02/NHDPlusFdrFac02a/fdr",
+      "source_data/NHDPlus_Extracted/02/02b/FdrFac/NHDPlusMA/NHDPlus02/NHDPlusFdrFac02b/fdr"
+    ]
+    output: "source_data/NHDPlus_Merged_Rasters/02/Fdr_merged_02.tif"
+
+  FdrFac_Fac:
+    rpus: [
+      "source_data/NHDPlus_Extracted/02/02a/FdrFac/NHDPlusMA/NHDPlus02/NHDPlusFdrFac02a/fac",
+      "source_data/NHDPlus_Extracted/02/02b/FdrFac/NHDPlusMA/NHDPlus02/NHDPlusFdrFac02b/fac"
+    ]
+    output: "source_data/NHDPlus_Merged_Rasters/02/Fac_merged_02.tif"
+
+"03":
+  NEDSnapshot:
+    rpus: [
+      "source_data/NHDPlus_Extracted/03N/03a/NEDSnapshot/NHDPlusSA/NHDPlus03N/NEDSnapshot/Ned03a/elev_cm",
+      "source_data/NHDPlus_Extracted/03N/03b/NEDSnapshot/NHDPlusSA/NHDPlus03N/NEDSnapshot/Ned03b/elev_cm",
+      "source_data/NHDPlus_Extracted/03S/03c/NEDSnapshot/NHDPlusSA/NHDPlus03S/NEDSnapshot/Ned03c/elev_cm",
+      "source_data/NHDPlus_Extracted/03S/03d/NEDSnapshot/NHDPlusSA/NHDPlus03S/NEDSnapshot/Ned03d/elev_cm",
+      "source_data/NHDPlus_Extracted/03W/03e/NEDSnapshot/NHDPlusSA/NHDPlus03W/NEDSnapshot/Ned03e/elev_cm",
+      "source_data/NHDPlus_Extracted/03W/03f/NEDSnapshot/NHDPlusSA/NHDPlus03W/NEDSnapshot/Ned03f/elev_cm"
+    ]
+    output: "source_data/NHDPlus_Merged_Rasters/03/NEDSnapshot_merged_03.tif"
+
+  Hydrodem:
+    rpus: [
+      "source_data/NHDPlus_Extracted/03N/03a/Hydrodem/NHDPlusSA/NHDPlus03N/NHDPlusHydrodem03a/hydrodem",
+      "source_data/NHDPlus_Extracted/03N/03b/Hydrodem/NHDPlusSA/NHDPlus03N/NHDPlusHydrodem03b/hydrodem",
+      "source_data/NHDPlus_Extracted/03S/03c/Hydrodem/NHDPlusSA/NHDPlus03S/NHDPlusHydrodem03c/hydrodem",
+      "source_data/NHDPlus_Extracted/03S/03d/Hydrodem/NHDPlusSA/NHDPlus03S/NHDPlusHydrodem03d/hydrodem",
+      "source_data/NHDPlus_Extracted/03W/03e/Hydrodem/NHDPlusSA/NHDPlus03W/NHDPlusHydrodem03e/hydrodem",
+      "source_data/NHDPlus_Extracted/03W/03f/Hydrodem/NHDPlusSA/NHDPlus03W/NHDPlusHydrodem03f/hydrodem"
+    ]
+    output: "source_data/NHDPlus_Merged_Rasters/03/Hydrodem_merged_03.tif"
+  
+  FdrFac_Fdr:
+    rpus: [
+      "source_data/NHDPlus_Extracted/03N/03a/FdrFac/NHDPlusSA/NHDPlus03N/NHDPlusFdrFac03a/fdr",
+      "source_data/NHDPlus_Extracted/03N/03b/FdrFac/NHDPlusSA/NHDPlus03N/NHDPlusFdrFac03b/fdr",
+      "source_data/NHDPlus_Extracted/03S/03c/FdrFac/NHDPlusSA/NHDPlus03S/NHDPlusFdrFac03c/fdr",
+      "source_data/NHDPlus_Extracted/03S/03d/FdrFac/NHDPlusSA/NHDPlus03S/NHDPlusFdrFac03d/fdr",
+      "source_data/NHDPlus_Extracted/03W/03e/FdrFac/NHDPlusSA/NHDPlus03W/NHDPlusFdrFac03e/fdr",
+      "source_data/NHDPlus_Extracted/03W/03f/FdrFac/NHDPlusSA/NHDPlus03W/NHDPlusFdrFac03f/fdr"
+      
+    ]
+    output: "source_data/NHDPlus_Merged_Rasters/03/Fdr_merged_03.tif"
+
+  FdrFac_Fac:
+    rpus: [
+      "source_data/NHDPlus_Extracted/03N/03a/FdrFac/NHDPlusSA/NHDPlus03N/NHDPlusFdrFac03a/fac",
+      "source_data/NHDPlus_Extracted/03N/03b/FdrFac/NHDPlusSA/NHDPlus03N/NHDPlusFdrFac03b/fac",
+      "source_data/NHDPlus_Extracted/03S/03c/FdrFac/NHDPlusSA/NHDPlus03S/NHDPlusFdrFac03c/fac",
+      "source_data/NHDPlus_Extracted/03S/03d/FdrFac/NHDPlusSA/NHDPlus03S/NHDPlusFdrFac03d/fac",
+      "source_data/NHDPlus_Extracted/03W/03e/FdrFac/NHDPlusSA/NHDPlus03W/NHDPlusFdrFac03e/fac",
+      "source_data/NHDPlus_Extracted/03W/03f/FdrFac/NHDPlusSA/NHDPlus03W/NHDPlusFdrFac03f/fac"
+    ]
+    output: "source_data/NHDPlus_Merged_Rasters/03/Fac_merged_03.tif"
+
+"04":
+  NEDSnapshot:
+    rpus: [
+      "source_data/NHDPlus_Extracted/04/04a/NEDSnapshot/NHDPlusGL/NHDPlus04/NEDSnapshot/ned04a/elev_cm",
+      "source_data/NHDPlus_Extracted/04/04b/NEDSnapshot/NHDPlusGL/NHDPlus04/NEDSnapshot/ned04b/elev_cm",
+      "source_data/NHDPlus_Extracted/04/04c/NEDSnapshot/NHDPlusGL/NHDPlus04/NEDSnapshot/ned04c/elev_cm",
+      "source_data/NHDPlus_Extracted/04/04d/NEDSnapshot/NHDPlusGL/NHDPlus04/NEDSnapshot/ned04d/elev_cm"
+      
+    ]
+    output: "source_data/NHDPlus_Merged_Rasters/04/NEDSnapshot_merged_04.tif"
+
+  Hydrodem:
+    rpus: [
+      "source_data/NHDPlus_Extracted/04/04a/Hydrodem/NHDPlusGL/NHDPlus04/NHDPlusHydrodem04a/hydrodem",
+      "source_data/NHDPlus_Extracted/04/04b/Hydrodem/NHDPlusGL/NHDPlus04/NHDPlusHydrodem04b/hydrodem",
+      "source_data/NHDPlus_Extracted/04/04c/Hydrodem/NHDPlusGL/NHDPlus04/NHDPlusHydrodem04c/hydrodem",
+      "source_data/NHDPlus_Extracted/04/04d/Hydrodem/NHDPlusGL/NHDPlus04/NHDPlusHydrodem04d/hydrodem"
+    ]
+    output: "source_data/NHDPlus_Merged_Rasters/04/Hydrodem_merged_04.tif"
+  
+  FdrFac_Fdr:
+    rpus: [
+      "source_data/NHDPlus_Extracted/04/04a/FdrFac/NHDPlusGL/NHDPlus04/NHDPlusFdrFac04a/fdr",
+      "source_data/NHDPlus_Extracted/04/04b/FdrFac/NHDPlusGL/NHDPlus04/NHDPlusFdrFac04b/fdr",
+      "source_data/NHDPlus_Extracted/04/04c/FdrFac/NHDPlusGL/NHDPlus04/NHDPlusFdrFac04c/fdr",
+      "source_data/NHDPlus_Extracted/04/04d/FdrFac/NHDPlusGL/NHDPlus04/NHDPlusFdrFac04d/fdr"
+    ]
+    output: "source_data/NHDPlus_Merged_Rasters/04/Fdr_merged_04.tif"
+
+  FdrFac_Fac:
+    rpus: [
+      "source_data/NHDPlus_Extracted/04/04a/FdrFac/NHDPlusGL/NHDPlus04/NHDPlusFdrFac04a/fac",
+      "source_data/NHDPlus_Extracted/04/04b/FdrFac/NHDPlusGL/NHDPlus04/NHDPlusFdrFac04b/fac",
+      "source_data/NHDPlus_Extracted/04/04c/FdrFac/NHDPlusGL/NHDPlus04/NHDPlusFdrFac04c/fac",
+      "source_data/NHDPlus_Extracted/04/04d/FdrFac/NHDPlusGL/NHDPlus04/NHDPlusFdrFac04d/fac"
+    ]
+    output: "source_data/NHDPlus_Merged_Rasters/04/Fac_merged_04.tif"
+
+"05":
+  NEDSnapshot:
+    rpus: [
+      "source_data/NHDPlus_Extracted/05/05a/NEDSnapshot/NHDPlusMS/NHDPlus05/NEDSnapshot/Ned05a/elev_cm",
+      "source_data/NHDPlus_Extracted/05/05b/NEDSnapshot/NHDPlusMS/NHDPlus05/NEDSnapshot/Ned05b/elev_cm",
+      "source_data/NHDPlus_Extracted/05/05c/NEDSnapshot/NHDPlusMS/NHDPlus05/NEDSnapshot/Ned05c/elev_cm",
+      "source_data/NHDPlus_Extracted/05/05d/NEDSnapshot/NHDPlusMS/NHDPlus05/NEDSnapshot/Ned05d/elev_cm",
+    ]
+    output: "source_data/NHDPlus_Merged_Rasters/05/NEDSnapshot_merged_05.tif"
+
+  Hydrodem:
+    rpus: [
+      "source_data/NHDPlus_Extracted/05/05a/Hydrodem/NHDPlusMS/NHDPlus05/NHDPlusHydrodem05a/hydrodem",
+      "source_data/NHDPlus_Extracted/05/05b/Hydrodem/NHDPlusMS/NHDPlus05/NHDPlusHydrodem05b/hydrodem",
+      "source_data/NHDPlus_Extracted/05/05c/Hydrodem/NHDPlusMS/NHDPlus05/NHDPlusHydrodem05c/hydrodem",
+      "source_data/NHDPlus_Extracted/05/05d/Hydrodem/NHDPlusMS/NHDPlus05/NHDPlusHydrodem05d/hydrodem"
+    ]
+    output: "source_data/NHDPlus_Merged_Rasters/05/Hydrodem_merged_05.tif"
+  
+  FdrFac_Fdr:
+    rpus: [
+      "source_data/NHDPlus_Extracted/05/05a/FdrFac/NHDPlusMS/NHDPlus05/NHDPlusFdrFac05a/fdr",
+      "source_data/NHDPlus_Extracted/05/05b/FdrFac/NHDPlusMS/NHDPlus05/NHDPlusFdrFac05b/fdr",
+      "source_data/NHDPlus_Extracted/05/05c/FdrFac/NHDPlusMS/NHDPlus05/NHDPlusFdrFac05c/fdr",
+      "source_data/NHDPlus_Extracted/05/05d/FdrFac/NHDPlusMS/NHDPlus05/NHDPlusFdrFac05d/fdr"
+    ]
+    output: "source_data/NHDPlus_Merged_Rasters/05/Fdr_merged_05.tif"
+
+  FdrFac_Fac:
+    rpus: [
+      "source_data/NHDPlus_Extracted/05/05a/FdrFac/NHDPlusMS/NHDPlus05/NHDPlusFdrFac05a/fac",
+      "source_data/NHDPlus_Extracted/05/05b/FdrFac/NHDPlusMS/NHDPlus05/NHDPlusFdrFac05b/fac",
+      "source_data/NHDPlus_Extracted/05/05c/FdrFac/NHDPlusMS/NHDPlus05/NHDPlusFdrFac05c/fac",
+      "source_data/NHDPlus_Extracted/05/05d/FdrFac/NHDPlusMS/NHDPlus05/NHDPlusFdrFac05d/fac"
+    ]
+    output: "source_data/NHDPlus_Merged_Rasters/05/Fac_merged_05.tif"
+
+"06":
+  NEDSnapshot:
+    rpus: [
+      "source_data/NHDPlus_Extracted/06/06a/NEDSnapshot/NHDPlusMS/NHDPlus06/NEDSnapshot/Ned06a/elev_cm"
+    ]
+    output: "source_data/NHDPlus_Merged_Rasters/06/NEDSnapshot_merged_06.tif"
+
+  Hydrodem:
+    rpus: [
+      "source_data/NHDPlus_Extracted/06/06a/Hydrodem/NHDPlusMS/NHDPlus06/NHDPlusHydrodem06a/hydrodem"
+    ]
+    output: "source_data/NHDPlus_Merged_Rasters/06/Hydrodem_merged_06.tif"
+  
+  FdrFac_Fdr:
+    rpus: [
+      "source_data/NHDPlus_Extracted/06/06a/FdrFac/NHDPlusMS/NHDPlus06/NHDPlusFdrFac06a/fdr"
+    ]
+    output: "source_data/NHDPlus_Merged_Rasters/06/Fdr_merged_06.tif"
+
+  FdrFac_Fac:
+    rpus: [
+      "source_data/NHDPlus_Extracted/06/06a/FdrFac/NHDPlusMS/NHDPlus06/NHDPlusFdrFac06a/fac"
+    ]
+    output: "source_data/NHDPlus_Merged_Rasters/06/Fac_merged_06.tif"
+
+"07":
+  NEDSnapshot:
+    rpus: [
+      "source_data/NHDPlus_Extracted/07/07a/NEDSnapshot/NHDPlusMS/NHDPlus07/NEDSnapshot/Ned07a/elev_cm",
+      "source_data/NHDPlus_Extracted/07/07b/NEDSnapshot/NHDPlusMS/NHDPlus07/NEDSnapshot/Ned07b/elev_cm",
+      "source_data/NHDPlus_Extracted/07/07c/NEDSnapshot/NHDPlusMS/NHDPlus07/NEDSnapshot/Ned07c/elev_cm",
+    ]
+    output: "source_data/NHDPlus_Merged_Rasters/07/NEDSnapshot_merged_07.tif"
+
+  Hydrodem:
+    rpus: [
+      "source_data/NHDPlus_Extracted/07/07a/Hydrodem/NHDPlusMS/NHDPlus07/NHDPlusHydrodem07a/hydrodem",
+      "source_data/NHDPlus_Extracted/07/07b/Hydrodem/NHDPlusMS/NHDPlus07/NHDPlusHydrodem07b/hydrodem",
+      "source_data/NHDPlus_Extracted/07/07c/Hydrodem/NHDPlusMS/NHDPlus07/NHDPlusHydrodem07c/hydrodem"
+    ]
+    output: "source_data/NHDPlus_Merged_Rasters/07/Hydrodem_merged_07.tif"
+  
+  FdrFac_Fdr:
+    rpus: [
+      "source_data/NHDPlus_Extracted/07/07a/FdrFac/NHDPlusMS/NHDPlus07/NHDPlusFdrFac07a/fdr",
+      "source_data/NHDPlus_Extracted/07/07b/FdrFac/NHDPlusMS/NHDPlus07/NHDPlusFdrFac07b/fdr",
+      "source_data/NHDPlus_Extracted/07/07c/FdrFac/NHDPlusMS/NHDPlus07/NHDPlusFdrFac07c/fdr"
+    ]
+    output: "source_data/NHDPlus_Merged_Rasters/07/Fdr_merged_07.tif"
+
+  FdrFac_Fac:
+    rpus: [
+      "source_data/NHDPlus_Extracted/07/07a/FdrFac/NHDPlusMS/NHDPlus07/NHDPlusFdrFac07a/fac",
+      "source_data/NHDPlus_Extracted/07/07b/FdrFac/NHDPlusMS/NHDPlus07/NHDPlusFdrFac07b/fac",
+      "source_data/NHDPlus_Extracted/07/07c/FdrFac/NHDPlusMS/NHDPlus07/NHDPlusFdrFac07c/fac"
+    ]
+    output: "source_data/NHDPlus_Merged_Rasters/07/Fac_merged_07.tif"
+
+"08":
+  NEDSnapshot:
+    rpus: [
+      "source_data/NHDPlus_Extracted/08/03g/NEDSnapshot/NHDPlusMS/NHDPlus08/NEDSnapshot/ned03g/elev_cm",
+      "source_data/NHDPlus_Extracted/08/08a/NEDSnapshot/NHDPlusMS/NHDPlus08/NEDSnapshot/ned08a/elev_cm",
+      "source_data/NHDPlus_Extracted/08/08b/NEDSnapshot/NHDPlusMS/NHDPlus08/NEDSnapshot/ned08b/elev_cm",
+    ]
+    output: "source_data/NHDPlus_Merged_Rasters/08/NEDSnapshot_merged_08.tif"
+
+  Hydrodem:
+    rpus: [
+      "source_data/NHDPlus_Extracted/08/03g/Hydrodem/NHDPlusMS/NHDPlus08/NHDPlusHydrodem03g/hydrodem",
+      "source_data/NHDPlus_Extracted/08/08a/Hydrodem/NHDPlusMS/NHDPlus08/NHDPlusHydrodem08a/hydrodem",
+      "source_data/NHDPlus_Extracted/08/08b/Hydrodem/NHDPlusMS/NHDPlus08/NHDPlusHydrodem08b/hydrodem"
+    ]
+    output: "source_data/NHDPlus_Merged_Rasters/08/Hydrodem_merged_08.tif"
+  
+  FdrFac_Fdr:
+    rpus: [
+      "source_data/NHDPlus_Extracted/08/03g/FdrFac/NHDPlusMS/NHDPlus08/NHDPlusFdrFac03g/fdr",
+      "source_data/NHDPlus_Extracted/08/08a/FdrFac/NHDPlusMS/NHDPlus08/NHDPlusFdrFac08a/fdr",
+      "source_data/NHDPlus_Extracted/08/08b/FdrFac/NHDPlusMS/NHDPlus08/NHDPlusFdrFac08b/fdr"
+    ]
+    output: "source_data/NHDPlus_Merged_Rasters/08/Fdr_merged_08.tif"
+
+  FdrFac_Fac:
+    rpus: [
+      "source_data/NHDPlus_Extracted/08/03g/FdrFac/NHDPlusMS/NHDPlus08/NHDPlusFdrFac03g/fac",
+      "source_data/NHDPlus_Extracted/08/08a/FdrFac/NHDPlusMS/NHDPlus08/NHDPlusFdrFac08a/fac",
+      "source_data/NHDPlus_Extracted/08/08b/FdrFac/NHDPlusMS/NHDPlus08/NHDPlusFdrFac08b/fac"
+    ]
+    output: "source_data/NHDPlus_Merged_Rasters/08/Fac_merged_08.tif"
+
+"09":
+  NEDSnapshot:
+    rpus: [
+      "source_data/NHDPlus_Extracted/09/09a/NEDSnapshot/NHDPlusSR/NHDPlus09/NEDSnapshot/ned09a/elev_cm"
+    ]
+    output: "source_data/NHDPlus_Merged_Rasters/09/NEDSnapshot_merged_09.tif"
+
+  Hydrodem:
+    rpus: [
+      "source_data/NHDPlus_Extracted/09/09a/Hydrodem/NHDPlusSR/NHDPlus09/NHDPlusHydrodem09a/hydrodem"
+    ]
+    output: "source_data/NHDPlus_Merged_Rasters/09/Hydrodem_merged_09.tif"
+  
+  FdrFac_Fdr:
+    rpus: [
+      "source_data/NHDPlus_Extracted/09/09a/FdrFac/NHDPlusSR/NHDPlus09/NHDPlusFdrFac09a/fdr"
+    ]
+    output: "source_data/NHDPlus_Merged_Rasters/09/Fdr_merged_09.tif"
+
+  FdrFac_Fac:
+    rpus: [
+      "source_data/NHDPlus_Extracted/09/09a/FdrFac/NHDPlusSR/NHDPlus09/NHDPlusFdrFac09a/fac"
+    ]
+    output: "source_data/NHDPlus_Merged_Rasters/09/Fac_merged_09.tif"
+
+"10":
+  NEDSnapshot:
+    rpus: [
+      "source_data/NHDPlus_Extracted/10L/10a/NEDSnapshot/NHDPlusMS/NHDPlus10L/NEDSnapshot/Ned10a/elev_cm",
+      "source_data/NHDPlus_Extracted/10L/10b/NEDSnapshot/NHDPlusMS/NHDPlus10L/NEDSnapshot/Ned10b/elev_cm",
+      "source_data/NHDPlus_Extracted/10L/10c/NEDSnapshot/NHDPlusMS/NHDPlus10L/NEDSnapshot/Ned10c/elev_cm",
+      "source_data/NHDPlus_Extracted/10L/10d/NEDSnapshot/NHDPlusMS/NHDPlus10L/NEDSnapshot/Ned10d/elev_cm",
+      "source_data/NHDPlus_Extracted/10U/10e/NEDSnapshot/NHDPlusMS/NHDPlus10U/NEDSnapshot/Ned10e/elev_cm",
+      "source_data/NHDPlus_Extracted/10U/10f/NEDSnapshot/NHDPlusMS/NHDPlus10U/NEDSnapshot/Ned10f/elev_cm",
+      "source_data/NHDPlus_Extracted/10U/10g/NEDSnapshot/NHDPlusMS/NHDPlus10U/NEDSnapshot/Ned10g/elev_cm",
+      "source_data/NHDPlus_Extracted/10U/10h/NEDSnapshot/NHDPlusMS/NHDPlus10U/NEDSnapshot/Ned10h/elev_cm",
+      "source_data/NHDPlus_Extracted/10U/10i/NEDSnapshot/NHDPlusMS/NHDPlus10U/NEDSnapshot/Ned10i/elev_cm"
+    ]
+    output: "source_data/NHDPlus_Merged_Rasters/10/NEDSnapshot_merged_10.tif"
+
+  Hydrodem:
+    rpus: [
+      "source_data/NHDPlus_Extracted/10L/10a/Hydrodem/NHDPlusMS/NHDPlus10L/NHDPlusHydrodem10a/hydrodem",
+      "source_data/NHDPlus_Extracted/10L/10b/Hydrodem/NHDPlusMS/NHDPlus10L/NHDPlusHydrodem10b/hydrodem",
+      "source_data/NHDPlus_Extracted/10L/10c/Hydrodem/NHDPlusMS/NHDPlus10L/NHDPlusHydrodem10c/hydrodem",
+      "source_data/NHDPlus_Extracted/10L/10d/Hydrodem/NHDPlusMS/NHDPlus10L/NHDPlusHydrodem10d/hydrodem",
+      "source_data/NHDPlus_Extracted/10U/10e/Hydrodem/NHDPlusMS/NHDPlus10U/NHDPlusHydrodem10e/hydrodem",
+      "source_data/NHDPlus_Extracted/10U/10f/Hydrodem/NHDPlusMS/NHDPlus10U/NHDPlusHydrodem10f/hydrodem",
+      "source_data/NHDPlus_Extracted/10U/10g/Hydrodem/NHDPlusMS/NHDPlus10U/NHDPlusHydrodem10g/hydrodem",
+      "source_data/NHDPlus_Extracted/10U/10h/Hydrodem/NHDPlusMS/NHDPlus10U/NHDPlusHydrodem10h/hydrodem",
+      "source_data/NHDPlus_Extracted/10U/10i/Hydrodem/NHDPlusMS/NHDPlus10U/NHDPlusHydrodem10i/hydrodem"
+    ]
+    output: "source_data/NHDPlus_Merged_Rasters/10/Hydrodem_merged_10.tif"
+  
+  FdrFac_Fdr:
+    rpus: [
+      "source_data/NHDPlus_Extracted/10L/10a/FdrFac/NHDPlusMS/NHDPlus10L/NHDPlusFdrFac10a/fdr",
+      "source_data/NHDPlus_Extracted/10L/10b/FdrFac/NHDPlusMS/NHDPlus10L/NHDPlusFdrFac10b/fdr",
+      "source_data/NHDPlus_Extracted/10L/10c/FdrFac/NHDPlusMS/NHDPlus10L/NHDPlusFdrFac10c/fdr",
+      "source_data/NHDPlus_Extracted/10L/10d/FdrFac/NHDPlusMS/NHDPlus10L/NHDPlusFdrFac10d/fdr",
+      "source_data/NHDPlus_Extracted/10U/10e/FdrFac/NHDPlusMS/NHDPlus10U/NHDPlusFdrFac10e/fdr",
+      "source_data/NHDPlus_Extracted/10U/10f/FdrFac/NHDPlusMS/NHDPlus10U/NHDPlusFdrFac10f/fdr",
+      "source_data/NHDPlus_Extracted/10U/10g/FdrFac/NHDPlusMS/NHDPlus10U/NHDPlusFdrFac10g/fdr",
+      "source_data/NHDPlus_Extracted/10U/10h/FdrFac/NHDPlusMS/NHDPlus10U/NHDPlusFdrFac10h/fdr",
+      "source_data/NHDPlus_Extracted/10U/10i/FdrFac/NHDPlusMS/NHDPlus10U/NHDPlusFdrFac10i/fdr"
+    ]
+    output: "source_data/NHDPlus_Merged_Rasters/10/Fdr_merged_10.tif"
+
+  FdrFac_Fac:
+    rpus: [
+      "source_data/NHDPlus_Extracted/10L/10a/FdrFac/NHDPlusMS/NHDPlus10L/NHDPlusFdrFac10a/fac",
+      "source_data/NHDPlus_Extracted/10L/10b/FdrFac/NHDPlusMS/NHDPlus10L/NHDPlusFdrFac10b/fac",
+      "source_data/NHDPlus_Extracted/10L/10c/FdrFac/NHDPlusMS/NHDPlus10L/NHDPlusFdrFac10c/fac",
+      "source_data/NHDPlus_Extracted/10L/10d/FdrFac/NHDPlusMS/NHDPlus10L/NHDPlusFdrFac10d/fac",
+      "source_data/NHDPlus_Extracted/10U/10e/FdrFac/NHDPlusMS/NHDPlus10U/NHDPlusFdrFac10e/fac",
+      "source_data/NHDPlus_Extracted/10U/10f/FdrFac/NHDPlusMS/NHDPlus10U/NHDPlusFdrFac10f/fac",
+      "source_data/NHDPlus_Extracted/10U/10g/FdrFac/NHDPlusMS/NHDPlus10U/NHDPlusFdrFac10g/fac",
+      "source_data/NHDPlus_Extracted/10U/10h/FdrFac/NHDPlusMS/NHDPlus10U/NHDPlusFdrFac10h/fac",
+      "source_data/NHDPlus_Extracted/10U/10i/FdrFac/NHDPlusMS/NHDPlus10U/NHDPlusFdrFac10i/fac"
+    ]
+    output: "source_data/NHDPlus_Merged_Rasters/10/Fac_merged_10.tif"
+
+"11":
+  NEDSnapshot:
+    rpus: [
+      "source_data/NHDPlus_Extracted/11/11a/NEDSnapshot/NHDPlusMS/NHDPlus11/NEDSnapshot/NED11a/elev_cm",
+      "source_data/NHDPlus_Extracted/11/11b/NEDSnapshot/NHDPlusMS/NHDPlus11/NEDSnapshot/NED11b/elev_cm",
+      "source_data/NHDPlus_Extracted/11/11c/NEDSnapshot/NHDPlusMS/NHDPlus11/NEDSnapshot/NED11c/elev_cm",
+      "source_data/NHDPlus_Extracted/11/11d/NEDSnapshot/NHDPlusMS/NHDPlus11/NEDSnapshot/NED11d/elev_cm",
+    ]
+    output: "source_data/NHDPlus_Merged_Rasters/11/NEDSnapshot_merged_11.tif"
+
+  Hydrodem:
+    rpus: [
+      "source_data/NHDPlus_Extracted/11/11a/Hydrodem/NHDPlusMS/NHDPlus11/NHDPlusHydrodem11a/hydrodem",
+      "source_data/NHDPlus_Extracted/11/11b/Hydrodem/NHDPlusMS/NHDPlus11/NHDPlusHydrodem11b/hydrodem",
+      "source_data/NHDPlus_Extracted/11/11c/Hydrodem/NHDPlusMS/NHDPlus11/NHDPlusHydrodem11c/hydrodem",
+      "source_data/NHDPlus_Extracted/11/11d/Hydrodem/NHDPlusMS/NHDPlus11/NHDPlusHydrodem11d/hydrodem"
+    ]
+    output: "source_data/NHDPlus_Merged_Rasters/11/Hydrodem_merged_11.tif"
+  
+  FdrFac_Fdr:
+    rpus: [
+      "source_data/NHDPlus_Extracted/11/11a/FdrFac/NHDPlusMS/NHDPlus11/NHDPlusFdrFac11a/fdr",
+      "source_data/NHDPlus_Extracted/11/11b/FdrFac/NHDPlusMS/NHDPlus11/NHDPlusFdrFac11b/fdr",
+      "source_data/NHDPlus_Extracted/11/11c/FdrFac/NHDPlusMS/NHDPlus11/NHDPlusFdrFac11c/fdr",
+      "source_data/NHDPlus_Extracted/11/11d/FdrFac/NHDPlusMS/NHDPlus11/NHDPlusFdrFac11d/fdr"
+    ]
+    output: "source_data/NHDPlus_Merged_Rasters/11/Fdr_merged_11.tif"
+
+  FdrFac_Fac:
+    rpus: [
+      "source_data/NHDPlus_Extracted/11/11a/FdrFac/NHDPlusMS/NHDPlus11/NHDPlusFdrFac11a/fac",
+      "source_data/NHDPlus_Extracted/11/11b/FdrFac/NHDPlusMS/NHDPlus11/NHDPlusFdrFac11b/fac",
+      "source_data/NHDPlus_Extracted/11/11c/FdrFac/NHDPlusMS/NHDPlus11/NHDPlusFdrFac11c/fac",
+      "source_data/NHDPlus_Extracted/11/11d/FdrFac/NHDPlusMS/NHDPlus11/NHDPlusFdrFac11d/fac"
+    ]
+    output: "source_data/NHDPlus_Merged_Rasters/11/Fac_merged_11.tif"
+
+"12":
+  NEDSnapshot:
+    rpus: [
+      "source_data/NHDPlus_Extracted/12/12a/NEDSnapshot/NHDPlusTX/NHDPlus12/NEDSnapshot/NED12a/elev_cm",
+      "source_data/NHDPlus_Extracted/12/12b/NEDSnapshot/NHDPlusTX/NHDPlus12/NEDSnapshot/NED12b/elev_cm",
+      "source_data/NHDPlus_Extracted/12/12c/NEDSnapshot/NHDPlusTX/NHDPlus12/NEDSnapshot/NED12c/elev_cm",
+      "source_data/NHDPlus_Extracted/12/12d/NEDSnapshot/NHDPlusTX/NHDPlus12/NEDSnapshot/NED12d/elev_cm",
+    ]
+    output: "source_data/NHDPlus_Merged_Rasters/12/NEDSnapshot_merged_12.tif"
+
+  Hydrodem:
+    rpus: [
+      "source_data/NHDPlus_Extracted/12/12a/Hydrodem/NHDPlusTX/NHDPlus12/NHDPlusHydrodem12a/hydrodem",
+      "source_data/NHDPlus_Extracted/12/12b/Hydrodem/NHDPlusTX/NHDPlus12/NHDPlusHydrodem12b/hydrodem",
+      "source_data/NHDPlus_Extracted/12/12c/Hydrodem/NHDPlusTX/NHDPlus12/NHDPlusHydrodem12c/hydrodem",
+      "source_data/NHDPlus_Extracted/12/12d/Hydrodem/NHDPlusTX/NHDPlus12/NHDPlusHydrodem12d/hydrodem"
+    ]
+    output: "source_data/NHDPlus_Merged_Rasters/12/Hydrodem_merged_12.tif"
+  
+  FdrFac_Fdr:
+    rpus: [
+      "source_data/NHDPlus_Extracted/12/12a/FdrFac/NHDPlusTX/NHDPlus12/NHDPlusFdrFac12a/fdr",
+      "source_data/NHDPlus_Extracted/12/12b/FdrFac/NHDPlusTX/NHDPlus12/NHDPlusFdrFac12b/fdr",
+      "source_data/NHDPlus_Extracted/12/12c/FdrFac/NHDPlusTX/NHDPlus12/NHDPlusFdrFac12c/fdr",
+      "source_data/NHDPlus_Extracted/12/12d/FdrFac/NHDPlusTX/NHDPlus12/NHDPlusFdrFac12d/fdr"
+    ]
+    output: "source_data/NHDPlus_Merged_Rasters/12/Fdr_merged_12.tif"
+
+  FdrFac_Fac:
+    rpus: [
+      "source_data/NHDPlus_Extracted/12/12a/FdrFac/NHDPlusTX/NHDPlus12/NHDPlusFdrFac12a/fac",
+      "source_data/NHDPlus_Extracted/12/12b/FdrFac/NHDPlusTX/NHDPlus12/NHDPlusFdrFac12b/fac",
+      "source_data/NHDPlus_Extracted/12/12c/FdrFac/NHDPlusTX/NHDPlus12/NHDPlusFdrFac12c/fac",
+      "source_data/NHDPlus_Extracted/12/12d/FdrFac/NHDPlusTX/NHDPlus12/NHDPlusFdrFac12d/fac"
+    ]
+    output: "source_data/NHDPlus_Merged_Rasters/12/Fac_merged_12.tif"
+
+"13":
+  NEDSnapshot:
+    rpus: [
+      "source_data/NHDPlus_Extracted/13/13a/NEDSnapshot/NHDPlusRG/NHDPlus13/NEDSnapshot/Ned13a/elev_cm",
+      "source_data/NHDPlus_Extracted/13/13b/NEDSnapshot/NHDPlusRG/NHDPlus13/NEDSnapshot/Ned13b/elev_cm",
+      "source_data/NHDPlus_Extracted/13/13c/NEDSnapshot/NHDPlusRG/NHDPlus13/NEDSnapshot/Ned13c/elev_cm",
+      "source_data/NHDPlus_Extracted/13/13d/NEDSnapshot/NHDPlusRG/NHDPlus13/NEDSnapshot/Ned13d/elev_cm"
+    ]
+    output: "source_data/NHDPlus_Merged_Rasters/13/NEDSnapshot_merged_13.tif"
+
+  Hydrodem:
+    rpus: [
+      "source_data/NHDPlus_Extracted/13/13a/Hydrodem/NHDPlusRG/NHDPlus13/NHDPlusHydrodem13a/hydrodem",
+      "source_data/NHDPlus_Extracted/13/13b/Hydrodem/NHDPlusRG/NHDPlus13/NHDPlusHydrodem13b/hydrodem",
+      "source_data/NHDPlus_Extracted/13/13c/Hydrodem/NHDPlusRG/NHDPlus13/NHDPlusHydrodem13c/hydrodem",
+      "source_data/NHDPlus_Extracted/13/13d/Hydrodem/NHDPlusRG/NHDPlus13/NHDPlusHydrodem13d/hydrodem"
+    ]
+    output: "source_data/NHDPlus_Merged_Rasters/13/Hydrodem_merged_13.tif"
+  
+  FdrFac_Fdr:
+    rpus: [
+      "source_data/NHDPlus_Extracted/13/13a/FdrFac/NHDPlusRG/NHDPlus13/NHDPlusFdrFac13a/fdr",
+      "source_data/NHDPlus_Extracted/13/13b/FdrFac/NHDPlusRG/NHDPlus13/NHDPlusFdrFac13b/fdr",
+      "source_data/NHDPlus_Extracted/13/13c/FdrFac/NHDPlusRG/NHDPlus13/NHDPlusFdrFac13c/fdr",
+      "source_data/NHDPlus_Extracted/13/13d/FdrFac/NHDPlusRG/NHDPlus13/NHDPlusFdrFac13d/fdr"
+    ]
+    output: "source_data/NHDPlus_Merged_Rasters/13/Fdr_merged_13.tif"
+
+  FdrFac_Fac:
+    rpus: [
+      "source_data/NHDPlus_Extracted/13/13a/FdrFac/NHDPlusRG/NHDPlus13/NHDPlusFdrFac13a/fac",
+      "source_data/NHDPlus_Extracted/13/13b/FdrFac/NHDPlusRG/NHDPlus13/NHDPlusFdrFac13b/fac",
+      "source_data/NHDPlus_Extracted/13/13c/FdrFac/NHDPlusRG/NHDPlus13/NHDPlusFdrFac13c/fac",
+      "source_data/NHDPlus_Extracted/13/13d/FdrFac/NHDPlusRG/NHDPlus13/NHDPlusFdrFac13d/fac"
+    ]
+    output: "source_data/NHDPlus_Merged_Rasters/13/Fac_merged_13.tif"
+
+"14":
+  NEDSnapshot:
+    rpus: [
+      "source_data/NHDPlus_Extracted/14/14a/NEDSnapshot/NHDPlusCO/NHDPlus14/NEDSnapshot/Ned14a/elev_cm",
+      "source_data/NHDPlus_Extracted/14/14b/NEDSnapshot/NHDPlusCO/NHDPlus14/NEDSnapshot/Ned14b/elev_cm"
+    ]
+    output: "source_data/NHDPlus_Merged_Rasters/14/NEDSnapshot_merged_14.tif"
+
+  Hydrodem:
+    rpus: [
+      "source_data/NHDPlus_Extracted/14/14a/Hydrodem/NHDPlusCO/NHDPlus14/NHDPlusHydrodem14a/hydrodem",
+      "source_data/NHDPlus_Extracted/14/14b/Hydrodem/NHDPlusCO/NHDPlus14/NHDPlusHydrodem14b/hydrodem"
+    ]
+    output: "source_data/NHDPlus_Merged_Rasters/14/Hydrodem_merged_14.tif"
+  
+  FdrFac_Fdr:
+    rpus: [
+      "source_data/NHDPlus_Extracted/14/14a/FdrFac/NHDPlusCO/NHDPlus14/NHDPlusFdrFac14a/fdr",
+      "source_data/NHDPlus_Extracted/14/14b/FdrFac/NHDPlusCO/NHDPlus14/NHDPlusFdrFac14b/fdr"
+    ]
+    output: "source_data/NHDPlus_Merged_Rasters/14/Fdr_merged_14.tif"
+
+  FdrFac_Fac:
+    rpus: [
+      "source_data/NHDPlus_Extracted/14/14a/FdrFac/NHDPlusCO/NHDPlus14/NHDPlusFdrFac14a/fac",
+      "source_data/NHDPlus_Extracted/14/14b/FdrFac/NHDPlusCO/NHDPlus14/NHDPlusFdrFac14b/fac"
+    ]
+    output: "source_data/NHDPlus_Merged_Rasters/14/Fac_merged_14.tif"
+
+"15":
+  NEDSnapshot:
+    rpus: [
+      "source_data/NHDPlus_Extracted/15/15a/NEDSnapshot/NHDPlusCO/NHDPlus15/NEDSnapshot/Ned15a/elev_cm",
+      "source_data/NHDPlus_Extracted/15/15b/NEDSnapshot/NHDPlusCO/NHDPlus15/NEDSnapshot/Ned15b/elev_cm"
+      ]
+    output: "source_data/NHDPlus_Merged_Rasters/15/NEDSnapshot_merged_15.tif"
+
+  Hydrodem:
+    rpus: [
+      "source_data/NHDPlus_Extracted/15/15a/Hydrodem/NHDPlusCO/NHDPlus15/NHDPlusHydrodem15a/hydrodem",
+      "source_data/NHDPlus_Extracted/15/15b/Hydrodem/NHDPlusCO/NHDPlus15/NHDPlusHydrodem15b/hydrodem"
+    ]
+    output: "source_data/NHDPlus_Merged_Rasters/15/Hydrodem_merged_15.tif"
+  
+  FdrFac_Fdr:
+    rpus: [
+      "source_data/NHDPlus_Extracted/15/15a/FdrFac/NHDPlusCO/NHDPlus15/NHDPlusFdrFac15a/fdr",
+      "source_data/NHDPlus_Extracted/15/15b/FdrFac/NHDPlusCO/NHDPlus15/NHDPlusFdrFac15b/fdr"
+    ]
+    output: "source_data/NHDPlus_Merged_Rasters/15/Fdr_merged_15.tif"
+
+  FdrFac_Fac:
+    rpus: [
+      "source_data/NHDPlus_Extracted/15/15a/FdrFac/NHDPlusCO/NHDPlus15/NHDPlusFdrFac15a/fdr",
+      "source_data/NHDPlus_Extracted/15/15b/FdrFac/NHDPlusCO/NHDPlus15/NHDPlusFdrFac15b/fdr"
+    ]
+    output: "source_data/NHDPlus_Merged_Rasters/15/Fac_merged_15.tif"
+
+"16":
+  NEDSnapshot:
+    rpus: [
+      "source_data/NHDPlus_Extracted/16/16a/NEDSnapshot/NHDPlusGB/NHDPlus16/NEDSnapshot/Ned16a/elev_cm",
+      "source_data/NHDPlus_Extracted/16/16b/NEDSnapshot/NHDPlusGB/NHDPlus16/NEDSnapshot/Ned16b/elev_cm"
+      ]
+    output: "source_data/NHDPlus_Merged_Rasters/16/NEDSnapshot_merged_16.tif"
+
+  Hydrodem:
+    rpus: [
+      "source_data/NHDPlus_Extracted/16/16a/Hydrodem/NHDPlusGB/NHDPlus16/NHDPlusHydrodem16a/hydrodem",
+      "source_data/NHDPlus_Extracted/16/16b/Hydrodem/NHDPlusGB/NHDPlus16/NHDPlusHydrodem16b/hydrodem"
+    ]
+    output: "source_data/NHDPlus_Merged_Rasters/16/Hydrodem_merged_16.tif"
+  
+  FdrFac_Fdr:
+    rpus: [
+      "source_data/NHDPlus_Extracted/16/16a/FdrFac/NHDPlusGB/NHDPlus16/NHDPlusFdrFac16a/fdr",
+      "source_data/NHDPlus_Extracted/16/16b/FdrFac/NHDPlusGB/NHDPlus16/NHDPlusFdrFac16b/fdr"
+    ]
+    output: "source_data/NHDPlus_Merged_Rasters/16/Fdr_merged_16.tif"
+
+  FdrFac_Fac:
+    rpus: [
+      "source_data/NHDPlus_Extracted/16/16a/FdrFac/NHDPlusGB/NHDPlus16/NHDPlusFdrFac16a/fac",
+      "source_data/NHDPlus_Extracted/16/16b/FdrFac/NHDPlusGB/NHDPlus16/NHDPlusFdrFac16b/fac"
+    ]
+    output: "source_data/NHDPlus_Merged_Rasters/16/Fac_merged_16.tif"
+
+"17":
+  NEDSnapshot:
+    rpus: [
+      "source_data/NHDPlus_Extracted/17/17a/NEDSnapshot/NHDPlusPN/NHDPlus17/NEDSnapshot/ned17a/elev_cm",
+      "source_data/NHDPlus_Extracted/17/17b/NEDSnapshot/NHDPlusPN/NHDPlus17/NEDSnapshot/ned17b/elev_cm",
+      "source_data/NHDPlus_Extracted/17/17c/NEDSnapshot/NHDPlusPN/NHDPlus17/NEDSnapshot/ned17c/elev_cm",
+      "source_data/NHDPlus_Extracted/17/17d/NEDSnapshot/NHDPlusPN/NHDPlus17/NEDSnapshot/ned17d/elev_cm",
+    ]
+    output: "source_data/NHDPlus_Merged_Rasters/17/NEDSnapshot_merged_17.tif"
+
+  Hydrodem:
+    rpus: [
+      "source_data/NHDPlus_Extracted/17/17a/Hydrodem/NHDPlusPN/NHDPlus17/NHDPlusHydrodem17a/hydrodem",
+      "source_data/NHDPlus_Extracted/17/17b/Hydrodem/NHDPlusPN/NHDPlus17/NHDPlusHydrodem17b/hydrodem",
+      "source_data/NHDPlus_Extracted/17/17c/Hydrodem/NHDPlusPN/NHDPlus17/NHDPlusHydrodem17c/hydrodem",
+      "source_data/NHDPlus_Extracted/17/17d/Hydrodem/NHDPlusPN/NHDPlus17/NHDPlusHydrodem17d/hydrodem"
+    ]
+    output: "source_data/NHDPlus_Merged_Rasters/17/Hydrodem_merged_17.tif"
+  
+  FdrFac_Fdr:
+    rpus: [
+      "source_data/NHDPlus_Extracted/17/17a/FdrFac/NHDPlusPN/NHDPlus17/NHDPlusFdrFac17a/fdr",
+      "source_data/NHDPlus_Extracted/17/17b/FdrFac/NHDPlusPN/NHDPlus17/NHDPlusFdrFac17b/fdr",
+      "source_data/NHDPlus_Extracted/17/17c/FdrFac/NHDPlusPN/NHDPlus17/NHDPlusFdrFac17c/fdr"
+    ]
+    output: "source_data/NHDPlus_Merged_Rasters/17/Fdr_merged_17.tif"
+
+  FdrFac_Fac:
+    rpus: [
+      "source_data/NHDPlus_Extracted/17/17a/FdrFac/NHDPlusPN/NHDPlus17/NHDPlusFdrFac17a/fac",
+      "source_data/NHDPlus_Extracted/17/17b/FdrFac/NHDPlusPN/NHDPlus17/NHDPlusFdrFac17b/fac",
+      "source_data/NHDPlus_Extracted/17/17c/FdrFac/NHDPlusPN/NHDPlus17/NHDPlusFdrFac17c/fac"
+    ]
+    output: "source_data/NHDPlus_Merged_Rasters/17/Fac_merged_17.tif"
+
+"18":
+  NEDSnapshot:
+    rpus: [
+      "source_data/NHDPlus_Extracted/18/18a/NEDSnapshot/NHDPlusCA/NHDPlus18/NEDSnapshot/Ned18a/elev_cm",
+      "source_data/NHDPlus_Extracted/18/18b/NEDSnapshot/NHDPlusCA/NHDPlus18/NEDSnapshot/Ned18b/elev_cm",
+      "source_data/NHDPlus_Extracted/18/18c/NEDSnapshot/NHDPlusCA/NHDPlus18/NEDSnapshot/Ned18c/elev_cm"
+    ]
+    output: "source_data/NHDPlus_Merged_Rasters/18/NEDSnapshot_merged_18.tif"
+
+  Hydrodem:
+    rpus: [
+      "source_data/NHDPlus_Extracted/18/18a/Hydrodem/NHDPlusCA/NHDPlus18/NHDPlusHydrodem18a/hydrodem",
+      "source_data/NHDPlus_Extracted/18/18b/Hydrodem/NHDPlusCA/NHDPlus18/NHDPlusHydrodem18b/hydrodem",
+      "source_data/NHDPlus_Extracted/18/18c/Hydrodem/NHDPlusCA/NHDPlus18/NHDPlusHydrodem18c/hydrodem"
+    ]
+    output: "source_data/NHDPlus_Merged_Rasters/18/Hydrodem_merged_18.tif"
+  
+  FdrFac_Fdr:
+    rpus: [
+      "source_data/NHDPlus_Extracted/18/18a/FdrFac/NHDPlusCA/NHDPlus18/NHDPlusFdrFac18a/fdr",
+      "source_data/NHDPlus_Extracted/18/18b/FdrFac/NHDPlusCA/NHDPlus18/NHDPlusFdrFac18b/fdr",
+      "source_data/NHDPlus_Extracted/18/18c/FdrFac/NHDPlusCA/NHDPlus18/NHDPlusFdrFac18c/fdr"
+    ]
+    output: "source_data/NHDPlus_Merged_Rasters/18/Fdr_merged_18.tif"
+  FdrFac_Fac:
+    rpus: [
+      "source_data/NHDPlus_Extracted/18/18a/FdrFac/NHDPlusCA/NHDPlus18/NHDPlusFdrFac18a/fac",
+      "source_data/NHDPlus_Extracted/18/18b/FdrFac/NHDPlusCA/NHDPlus18/NHDPlusFdrFac18b/fac",
+      "source_data/NHDPlus_Extracted/18/18c/FdrFac/NHDPlusCA/NHDPlus18/NHDPlusFdrFac18c/fac"
+    ]
+    output: "source_data/NHDPlus_Merged_Rasters/18/Fac_merged_18.tif"
