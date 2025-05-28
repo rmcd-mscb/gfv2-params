@@ -28,11 +28,12 @@ def _(mo):
 
 @app.cell
 def _():
-    import marimo as mo
-    import rioxarray
-    import numpy as np
-    import matplotlib.pyplot as plt
     from pathlib import Path
+
+    import matplotlib.pyplot as plt
+    import rioxarray
+
+    import marimo as mo
     return Path, mo, plt, rioxarray
 
 

@@ -1,9 +1,10 @@
 import argparse
-import yaml
 from pathlib import Path
+
 import rioxarray as rxr
+import yaml
 from rioxarray.merge import merge_arrays
-import numpy as np
+
 
 def load_config(config_path):
     with open(config_path, "r") as f:

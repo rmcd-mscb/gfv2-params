@@ -6,25 +6,23 @@ app = marimo.App(width="medium")
 
 @app.cell
 def _():
-    import yaml
-    import rioxarray as rxr
-    from pathlib import Path
-    from rioxarray.merge import merge_arrays
-    import matplotlib.pyplot as plt
     import sys
-    import marimo as mo
-    import pandas as pd
-    import numpy as np
+    from pathlib import Path
+
+    import rioxarray as rxr
+    from rioxarray.merge import merge_arrays
+
     # Add the src directory to the Python path
     src_path = Path(__file__).resolve().parent.parent / "src"
     sys.path.append(str(src_path))
 
     # Now you can import helpers
-    from helpers import load_config
-    import simple_parsing
     from dataclasses import dataclass
-    from simple_parsing import ArgumentParser
     from typing import Literal
+
+    from simple_parsing import ArgumentParser
+
+    from helpers import load_config
     return (
         ArgumentParser,
         Literal,
@@ -146,7 +144,7 @@ def _(base_path, config, merge_arrays, rxr):
                     blockxsize=512,
                     blockysize=512
                 )
-        
+
 
         print(f"✅ Wrote raster: {output}")
     return

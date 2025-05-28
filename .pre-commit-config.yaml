@@ -1,0 +1,43 @@
+repos:
+  # isort for sorting Python imports
+  - repo: https://github.com/pycqa/isort
+    rev: 6.0.1 # Check https://github.com/pycqa/isort/releases for latest
+    hooks:
+      - id: isort
+        additional_dependencies: [setuptools]
+        name: isort (sort imports)
+        files: \.py$
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.11.11
+    hooks:
+      - id: ruff
+        args: [--fix]
+        files: \.py$
+  - repo: https://github.com/adrienverge/yamllint.git
+    rev: v1.37.1
+    hooks:
+      - id: yamllint
+        files: \.(yml|yaml)$
+  - repo: https://github.com/koalaman/shellcheck-precommit
+    rev: v0.10.0
+    hooks:
+      - id: shellcheck
+        files: \.(sh|slurm|sbatch)$
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: end-of-file-fixer
+      - id: trailing-whitespace
+    # Prettier for YAML autoformatting
+  - repo: https://github.com/pre-commit/mirrors-prettier
+    rev: v4.0.0-alpha.8 # Check for latest: https://github.com/pre-commit/mirrors-prettier/releases
+    hooks:
+      - id: prettier
+        files: \.(yml|yaml)$
+
+  # Yamllint for YAML linting (checks style, errors)
+  - repo: https://github.com/adrienverge/yamllint.git
+    rev: v1.37.1 # Use latest
+    hooks:
+      - id: yamllint
+        files: \.(yml|yaml)$

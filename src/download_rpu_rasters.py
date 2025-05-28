@@ -1,6 +1,7 @@
-import requests
-import py7zr
 from pathlib import Path
+
+import py7zr
+import requests
 
 # Define RPU metadata dictionary
 rpu_index = {

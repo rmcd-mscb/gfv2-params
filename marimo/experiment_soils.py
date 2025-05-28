@@ -6,16 +6,13 @@ app = marimo.App(width="medium")
 
 @app.cell
 def _():
-    import marimo as mo
-    import rioxarray
-    import numpy as np
-    import geopandas as gpd
-    import matplotlib.pyplot as plt
-    import pandas as pd
-    from gdptools import UserTiffData, ZonalGen
-    from pathlib import Path
-    import yaml
     import sys
+    from pathlib import Path
+
+    import geopandas as gpd
+    import rioxarray
+    from gdptools import UserTiffData, ZonalGen
+
     # Add the src directory to the Python path
     src_path = Path(__file__).resolve().parent.parent / "src"
     sys.path.append(str(src_path))
@@ -55,7 +52,7 @@ def _(Path, load_config):
 @app.cell
 def _(base_source_dir, gpd, rioxarray, source_type, target_source_dir, vpu):
     if source_type == "soils":
-        raster_path = base_source_dir / f"soils_litho/TEXT_PRMS.tif"
+        raster_path = base_source_dir / "soils_litho/TEXT_PRMS.tif"
     else:
         raise ValueError(f"Unknown source type: {source_type}")
     if not raster_path.exists():

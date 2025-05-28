@@ -6,23 +6,19 @@ app = marimo.App(width="medium")
 
 @app.cell
 def _():
-    import marimo as mo
-    import rioxarray
-    import numpy as np
-    import geopandas as gpd
-    import matplotlib.pyplot as plt
-    import pandas as pd
     import sys
-    from gdptools import UserTiffData, ZonalGen
     from pathlib import Path
-    import yaml
-    from rasterstats import zonal_stats
+
+    import geopandas as gpd
+    import rioxarray
+    from gdptools import UserTiffData, ZonalGen
+
     # Add the src directory to the Python path
     src_path = Path(__file__).resolve().parent.parent / "src"
     sys.path.append(str(src_path))
 
     # Now you can import helpers
-    from helpers import load_config, resample, mult_rasters
+    from helpers import load_config, mult_rasters, resample
     return (
         Path,
         UserTiffData,

@@ -1,7 +1,7 @@
-import os
 from pathlib import Path
-import requests
 from zipfile import ZipFile
+
+import requests
 
 # List of MRLC NLCD data URLs
 urls = [

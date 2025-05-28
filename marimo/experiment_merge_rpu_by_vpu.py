@@ -17,15 +17,15 @@ def _(mo):
 
 @app.cell
 def _():
-    import yaml
-    import rioxarray as rxr
-    from pathlib import Path
-    from rioxarray.merge import merge_arrays
-    import matplotlib.pyplot as plt
     import sys
-    import marimo as mo
-    import pandas as pd
+    from pathlib import Path
+
     import numpy as np
+    import rioxarray as rxr
+    from rioxarray.merge import merge_arrays
+
+    import marimo as mo
+
     # Add the src directory to the Python path
     src_path = Path(__file__).resolve().parent.parent / "src"
     sys.path.append(str(src_path))
@@ -147,7 +147,7 @@ def _(base_path, config, merge_arrays, rxr):
                         blockxsize=512,
                         blockysize=512
                     )
-            
+
 
             print(f"✅ Wrote raster: {output}")
 

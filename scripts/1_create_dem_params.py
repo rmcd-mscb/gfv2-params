@@ -5,10 +5,12 @@ Handles special cases for 03N, 03S, 03W.
 
 import argparse
 from pathlib import Path
-import yaml
+
 import geopandas as gpd
 import rioxarray
+import yaml
 from gdptools import UserTiffData, ZonalGen
+
 
 def load_config(config_path):
     with open(config_path, "r") as f:
@@ -24,7 +26,7 @@ def main():
     base_source_dir = Path(config["base_source_dir"])
     target_source_dir = Path(config["target_source_dir"])
     output_dir = Path(config["output_dir"])
-    
+
     source_type = config.get("source_type")
     categorical = config.get("categorical", False)
     output_path = output_dir / source_type

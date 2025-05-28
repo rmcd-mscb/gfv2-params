@@ -26,5 +26,19 @@ dependencies = [
     "distributed",
 ]
 
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "pre-commit",
+    "ruff",
+]
+
+[tool.isort]
+profile = "black"   # Or "ruff", "black", "django", etc. (recommended for compatibility)
+line_length = 120    # Match your code style/black config
+
+[tool.ruff]
+extend-ignore = ["F722"]
+
 [tool.uv]
 # uv-specific settings (optional)

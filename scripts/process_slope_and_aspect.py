@@ -5,9 +5,11 @@ Reads input_dir and output_dir from a YAML config file.
 
 import argparse
 from pathlib import Path
-import yaml
+
 import richdem as rd
 import rioxarray
+import yaml
+
 
 def load_config(config_path):
     with open(config_path, "r") as f:

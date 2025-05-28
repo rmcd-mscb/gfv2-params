@@ -1,9 +1,10 @@
-import os
-import yaml
 from pathlib import Path
-import rasterio
+
 import numpy as np
+import rasterio
+import yaml
 from osgeo import gdal, gdalconst
+
 
 def load_config(path: Path) -> dict:
     with open(path, "r") as file:
@@ -42,7 +43,6 @@ def resample(
     if src is None:
         raise FileNotFoundError(f"Source raster not found: {src_path}")
     src_proj = src.GetProjection()
-    src_geotrans = src.GetGeoTransform()
 
     tmpl = gdal.Open(template_path, gdalconst.GA_ReadOnly)
     if tmpl is None:
