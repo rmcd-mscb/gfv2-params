@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "Geospatial analysis project with marimo workflows"
 authors = [{name = "Your Name", email = "you@example.com"}]
 dependencies = [
-    "gdptools",
+    "gdptools=0.2.21",
     "marimo[recommended]",
     "plotly",
     "pandas",

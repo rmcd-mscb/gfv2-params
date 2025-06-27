@@ -6,8 +6,7 @@ This project uses a hybrid environment setup:
 
 - **Conda**: for binary dependencies (GDAL, PROJ, rasterio, etc.)
 - **uv**: for Python-only packages from `pyproject.toml`
-- **Marimo**: for building reproducible, interactive workflows
-
+- **Marimo**: I jupyter replacement, mostly used in this context for interactive experimenting and for generating plots as a check on the processing.
 ---
 
 ## 📦 Environment Setup

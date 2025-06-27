@@ -2,4 +2,5 @@ base_source_dir: /caldera/hovenweep/projects/usgs/water/impd/nhgf/gfv2_param/sou
 target_source_dir: /caldera/hovenweep/projects/usgs/water/impd/nhgf/gfv2_param/targets
 output_dir: /caldera/hovenweep/projects/usgs/water/impd/nhgf/gfv2_param/nhm_params
 source_type: slope
+merged_file: nhm_slope_params.csv
 categorical: False

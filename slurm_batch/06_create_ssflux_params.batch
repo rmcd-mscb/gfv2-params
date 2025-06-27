@@ -1,0 +1,22 @@
+#!/bin/bash
+#SBATCH -p cpu
+#SBATCH -A impd
+#SBATCH --job-name=proc_nhd_topo
+#SBATCH --output=logs/job_%A_%a.out
+#SBATCH --error=logs/job_%A_%a.err
+#SBATCH --array=0-20            # Array index range (0 to len(vpus)-1)
+#SBATCH --time=12:00:00        # Adjust as needed
+#SBATCH --ntasks=1             # Single task per job
+#SBATCH --cpus-per-task=2      # Adjust based on your script's CPU usage
+#SBATCH --mem=128G              # Adjust based on memory needs
+
+# Load required modules
+module load miniforge/latest
+conda activate geoenv
+
+vpus=("01" "02" "03N" "03S" "03W" "04" "05" "06" "07" "08" "09" "10L" "10U" "11" "12" "13" "14" "15" "16" "17" "18")
+vpu=${vpus[$SLURM_ARRAY_TASK_ID]}  # Select variable based on array index
+
+python /caldera/hovenweep/projects/usgs/water/impd/nhgf/gfv2_param/gfv2-params/scripts/6_create_ssflux_params.py \
+    --config /caldera/hovenweep/projects/usgs/water/impd/nhgf/gfv2_param/gfv2-params/configs/06_ssflux_param_config.yml \
+    --vpu $vpu

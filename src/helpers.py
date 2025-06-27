@@ -143,3 +143,19 @@ def mult_rasters(
         # Write output raster
         with rasterio.open(out_path, 'w', **profile) as dst:
             dst.write(result, 1)
+
+def deg_to_fraction(slope_deg: float) -> float:
+    """
+    Convert slope from degrees to percent.
+
+    Parameters
+    ----------
+    slope_deg : float
+        Slope angle in degrees.
+
+    Returns
+    -------
+    float
+        Percent slope.
+    """
+    return np.tan(np.deg2rad(slope_deg))

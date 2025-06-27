@@ -1,0 +1,37 @@
+#!/bin/bash
+#SBATCH -p cpu
+#SBATCH -A impd
+#SBATCH --job-name=proc_merge_params
+#SBATCH --output=logs/job_%A_%a.out
+#SBATCH --error=logs/job_%A_%a.err
+#SBATCH --time=06:00:00        # Adjust as needed
+#SBATCH --ntasks=6             # Single task per job
+#SBATCH --cpus-per-task=1      # Adjust based on your script's CPU usage
+#SBATCH --mem=128G             # Adjust based on memory needs
+
+set -x  # Enable debugging output
+
+# Load required modules
+module load miniforge/latest
+conda activate geoenv
+
+# Run Python commands in parallel
+srun --exclusive python /caldera/hovenweep/projects/usgs/water/impd/nhgf/gfv2_param/gfv2-params/scripts/7_add_nat_hru_id.py \
+    --config /caldera/hovenweep/projects/usgs/water/impd/nhgf/gfv2_param/gfv2-params/configs/01_elev_param_config.yml &
+
+srun --exclusive python /caldera/hovenweep/projects/usgs/water/impd/nhgf/gfv2_param/gfv2-params/scripts/7_add_nat_hru_id.py \
+    --config /caldera/hovenweep/projects/usgs/water/impd/nhgf/gfv2_param/gfv2-params/configs/02_slope_param_config.yml &
+
+srun --exclusive python /caldera/hovenweep/projects/usgs/water/impd/nhgf/gfv2_param/gfv2-params/scripts/7_add_nat_hru_id.py \
+    --config /caldera/hovenweep/projects/usgs/water/impd/nhgf/gfv2_param/gfv2-params/configs/03_aspect_param_config.yml &
+
+srun --exclusive python /caldera/hovenweep/projects/usgs/water/impd/nhgf/gfv2_param/gfv2-params/scripts/7_add_nat_hru_id.py \
+    --config /caldera/hovenweep/projects/usgs/water/impd/nhgf/gfv2_param/gfv2-params/configs/04_soils_param_config.yml &
+
+srun --exclusive python /caldera/hovenweep/projects/usgs/water/impd/nhgf/gfv2_param/gfv2-params/scripts/7_add_nat_hru_id.py \
+    --config /caldera/hovenweep/projects/usgs/water/impd/nhgf/gfv2_param/gfv2-params/configs/05_soilmoistmax_param_config.yml &
+
+srun --exclusive python /caldera/hovenweep/projects/usgs/water/impd/nhgf/gfv2_param/gfv2-params/scripts/7_add_nat_hru_id.py \
+    --config /caldera/hovenweep/projects/usgs/water/impd/nhgf/gfv2_param/gfv2-params/configs/06_ssflux_param_config.yml &
+
+wait
