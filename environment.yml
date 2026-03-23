@@ -13,6 +13,7 @@ dependencies:
   - spatialpandas
   - richdem
   - rasterstats
+  - rioxarray
   - pip # Needed to install uv into the env
   - pip:
       - uv

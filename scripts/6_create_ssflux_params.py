@@ -41,6 +41,9 @@ def main():
     # Get processing parameters from the config
     source_type = config.get("source_type")
 
+    if args.vpu in {"OR"}:
+        args.vpu = "17"
+        
     # Define target geopackage path and load the 'nhru' layer with geopandas
     target_gdf_path = target_source_dir / f"NHM_{args.vpu}_draft.gpkg"
     if not target_gdf_path.exists():
@@ -51,6 +54,7 @@ def main():
     source_gdf = gpd.read_file(
         base_source_dir / "data_layers/soils_litho/Lithology_exp_Konly_Project.shp"
     )
+
     slope_source_gdf = gpd.read_file(
         output_dir / f"slope/base_nhm_slope_{args.vpu}_param.csv"
     )
@@ -63,7 +67,7 @@ def main():
     if not weight_file.exists():
         weight_gen = WeightGenP2P(
             target_poly=target_gdf,
-            target_poly_idx="hru_id",
+            target_poly_idx="nat_hru_id",
             source_poly=source_gdf,
             source_poly_idx="flux_id",
             method="serial",
@@ -102,28 +106,28 @@ def main():
 
     # Sum the prorated k_perm for each target polygon.
     extensive_agg = (
-        w.groupby("hru_id")
+        w.groupby("nat_hru_id")
         .agg(k_perm_wtd = ("k_perm_wtd_sum", "sum"))
         .reset_index()
     )
-    extensive_agg["hru_id"] = extensive_agg["hru_id"].astype(int)
+    extensive_agg["nat_hru_id"] = extensive_agg["nat_hru_id"].astype(int)
     extensive_sorted = extensive_agg.sort_values(
-        by="hru_id",
+        by="nat_hru_id",
         ascending=True
     ).reset_index(drop=True)
 
     # no more zeros?
     print((extensive_sorted['k_perm_wtd'] == 0).sum(), "zeros remain")
 
-    slope_df = slope_source_gdf[["hru_id", "mean_slope_fraction"]].copy()
-    slope_df["hru_id"] = pd.to_numeric(slope_df["hru_id"], errors="coerce").astype("int64")
+    slope_df = slope_source_gdf[["nat_hru_id", "mean_slope_fraction"]].copy()
+    slope_df["nat_hru_id"] = pd.to_numeric(slope_df["nat_hru_id"], errors="coerce").astype("int64")
 
     target_gdf["hru_area"] = target_gdf.geometry.area
-    area_df = target_gdf[["hru_id", "hru_area"]].copy()
-    area_df["hru_id"] = pd.to_numeric(area_df["hru_id"], errors="coerce").astype("int64")
+    area_df = target_gdf[["nat_hru_id", "hru_area"]].copy()
+    area_df["nat_hru_id"] = pd.to_numeric(area_df["nat_hru_id"], errors="coerce").astype("int64")
 
-    df = extensive_sorted.merge(slope_df, on="hru_id", how="left").copy()
-    df = df.merge(area_df, on="hru_id", how="left")
+    df = extensive_sorted.merge(slope_df, on="nat_hru_id", how="left").copy()
+    df = df.merge(area_df, on="nat_hru_id", how="left")
 
     # compute PRMS fluxes
     df["r_soil2gw_max"]          = df["k_perm_wtd"]**3

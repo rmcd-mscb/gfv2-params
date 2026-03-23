@@ -13,12 +13,11 @@
 # Load required modules
 module load miniforge/latest
 conda activate geoenv
+conda activate gdptools-examples
 
-vpus=("01" "02" "03N" "03S" "03W" "04" "05" "06" "07" "08" "09" "10L" "10U" "11" "12" "13" "14" "15" "16" "17" "18")
-vpu=${vpus[$SLURM_ARRAY_TASK_ID]}  # Select variable based on array index
-
+vpu="OR"
 
 # python ../marimo/process_NHD_by_vpu.py --config_file gfv2-params/configs/config_merge_rpu_by_vpu.yml --vpu $vpu
-python /caldera/hovenweep/projects/usgs/water/impd/nhgf/gfv2_param/gfv2-params/scripts/1_create_dem_params.py \
-    --config /caldera/hovenweep/projects/usgs/water/impd/nhgf/gfv2_param/gfv2-params/configs/03_aspect_param_config.yml \
+python /caldera/hovenweep/projects/usgs/water/impd/nhgf/gfv2_param/gfv2-params/scripts/4_create_soils_params.py \
+    --config /caldera/hovenweep/projects/usgs/water/impd/nhgf/gfv2_param/gfv2-params/configs/04_soils_param_config.yml \
     --vpu $vpu

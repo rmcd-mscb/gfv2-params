@@ -31,6 +31,8 @@ def process_files(config):
     input_dir = Path(config["output_dir"]) / config["source_type"]
     source_type = config["source_type"]
     merged_file = Path(config["merged_file"])
+    final_output_dir = Path(config["output_dir"]) / "nhm_params_merged"
+    final_output_dir.mkdir(parents=True, exist_ok=True)  # Ensure output directory exists
 
     if not input_dir.exists():
         raise FileNotFoundError(f"Input directory not found: {input_dir}")
@@ -39,35 +41,43 @@ def process_files(config):
     file_pattern = f"base_nhm_{source_type}_*_param.csv"
     files = sorted(input_dir.glob(file_pattern), key=lambda f: f.stem.split("_")[3])
 
-    cumulative_offset = 0  # Tracks the cumulative hru_id offset across VPUs
+    # cumulative_offset = 0  # Tracks the cumulative hru_id offset across VPUs
     merged_df = pd.DataFrame()  # DataFrame to hold the merged result
 
     for file in files:
         print(f"Processing file: {file}")
         df = pd.read_csv(file)
 
-        if "hru_id" not in df.columns:
-            raise ValueError(f"'hru_id' column not found in file: {file}")
+        if "nat_hru_id" not in df.columns:
+            raise ValueError(f"'nat_hru_id' column not found in file: {file}")
+
+        # Sort by 'nat_hru_id'
+        df = df.sort_values("nat_hru_id")
 
         # Extract VPU from the filename
         vpu = file.stem.split("_")[3]
 
-        # Add nat_hru_id and vpu columns
-        df["nat_hru_id"] = df["hru_id"] + cumulative_offset
+        # # Add nat_hru_id and vpu columns
+        # df["nat_hru_id"] = df["hru_id"] + cumulative_offset
         df["vpu"] = vpu
 
-        # Update cumulative offset
-        cumulative_offset += len(df["hru_id"])
+        # # Update cumulative offset
+        # cumulative_offset += len(df["hru_id"])
 
-        # Save the updated file
-        df.to_csv(file, index=False)
-        print(f"Updated file saved: {file}")
+        # # Save the updated file
+        # df.to_csv(file, index=False)
+        # print(f"Updated file saved: {file}")
+
+        print(f"vpu: {vpu}, num_hru: {len(df)}")
 
         # Append to the merged DataFrame
         merged_df = pd.concat([merged_df, df], ignore_index=True)
 
+        # Sort by "nat_hru_id"
+        merged_df = merged_df.sort_values("nat_hru_id")
+
     # Save the merged DataFrame to the specified file
-    merged_df.to_csv(Path(config["output_dir"]) / merged_file, index=False)
+    merged_df.to_csv(final_output_dir / merged_file, index=False)
     print(f"Merged file saved to: {merged_file}")
 
 if __name__ == "__main__":

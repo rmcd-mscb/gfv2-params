@@ -40,6 +40,9 @@ def main():
     elif args.vpu in {"10U", "10L"}:
         raster_vpu = "10"
         gpkg_vpu = args.vpu
+    elif args.vpu in {"OR"}:
+        raster_vpu = "17"
+        gpkg_vpu = args.vpu
     else:
         raster_vpu = args.vpu
         gpkg_vpu = args.vpu
@@ -79,7 +82,7 @@ def main():
     bname = 'band'
     crs = ned_da.rio.crs.to_epsg()  # or use the EPSG code you expect, e.g., 5070
     varname = "elev"  # not currently used
-    id_feature = "hru_id"  # or your HRU ID field
+    id_feature = "nat_hru_id"  # or your HRU ID field
 
     # Create UserTiffData object
     data = UserTiffData(

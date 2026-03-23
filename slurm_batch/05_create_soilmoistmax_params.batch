@@ -5,10 +5,10 @@
 #SBATCH --output=logs/job_%A_%a.out
 #SBATCH --error=logs/job_%A_%a.err
 #SBATCH --array=0-20           # Array index range (0 to len(vpus)-1)
-#SBATCH --time=12:00:00        # Adjust as needed
+#SBATCH --time=02:00:00        # Adjust as needed
 #SBATCH --ntasks=1             # Single task per job
 #SBATCH --cpus-per-task=5      # Adjust based on your script's CPU usage
-#SBATCH --mem=128G              # Adjust based on memory needs
+#SBATCH --mem=256G              # Adjust based on memory needs
 
 # Load required modules
 module load miniforge/latest

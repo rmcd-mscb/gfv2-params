@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "Geospatial analysis project with marimo workflows"
 authors = [{name = "Your Name", email = "you@example.com"}]
 dependencies = [
-    "gdptools=0.2.21",
+    "gdptools==0.3.11",
     "marimo[recommended]",
     "plotly",
     "pandas",
@@ -38,6 +38,8 @@ profile = "black"   # Or "ruff", "black", "django", etc. (recommended for compat
 line_length = 120    # Match your code style/black config
 
 [tool.ruff]
+
+[tool.ruff.lint]
 extend-ignore = ["F722"]
 
 [tool.uv]

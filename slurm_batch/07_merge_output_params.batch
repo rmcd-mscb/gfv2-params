@@ -4,7 +4,7 @@
 #SBATCH --job-name=proc_merge_params
 #SBATCH --output=logs/job_%A_%a.out
 #SBATCH --error=logs/job_%A_%a.err
-#SBATCH --time=06:00:00        # Adjust as needed
+#SBATCH --time=02:00:00        # Adjust as needed
 #SBATCH --ntasks=6             # Single task per job
 #SBATCH --cpus-per-task=1      # Adjust based on your script's CPU usage
 #SBATCH --mem=128G             # Adjust based on memory needs
@@ -34,4 +34,5 @@ srun --exclusive python /caldera/hovenweep/projects/usgs/water/impd/nhgf/gfv2_pa
 srun --exclusive python /caldera/hovenweep/projects/usgs/water/impd/nhgf/gfv2_param/gfv2-params/scripts/7_add_nat_hru_id.py \
     --config /caldera/hovenweep/projects/usgs/water/impd/nhgf/gfv2_param/gfv2-params/configs/06_ssflux_param_config.yml &
 
-wait
+# ssflux has a few missing values so here we use a nearest neighbor approach to fill missing nat_hru_ids
+srun --exclusive python /caldera/hovenweep/projects/usgs/water/impd/nhgf/gfv2_param/gfv2-params/scripts/merge_vpu_and_fill_params.py

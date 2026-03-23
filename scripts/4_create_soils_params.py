@@ -21,7 +21,7 @@ from helpers import load_config, mult_rasters, resample  # noqa: E402
 
 
 def process_soils(
-    source_da, nhru_gdf, output_path, source_type, vpu, categorical, id_feature="hru_id"
+    source_da, nhru_gdf, output_path, source_type, vpu, categorical, id_feature="nat_hru_id"
 ):
     """
     Process soils data (source_type "soils").
@@ -88,7 +88,7 @@ def process_soil_moist_max(
     source_type,
     vpu,
     categorical,
-    id_feature="hru_id",
+    id_feature="nat_hru_id",
 ):
     """
     Process soil_moist_max data (source_type "soil_moist_max").
@@ -160,10 +160,10 @@ def process_soil_moist_max(
     print("Zonal statistics computed for soil_moist_max:")
     print(stats)
 
-    # Clean up temporary file
-    zg_file = output_path / f"{file_prefix}.csv"
-    if zg_file.exists():
-        zg_file.unlink()
+    # # Clean up temporary file
+    # zg_file = output_path / f"{file_prefix}.csv"
+    # if zg_file.exists():
+    #     zg_file.unlink()
 
     # For continuous data, use the 'mean' statistic
     mean_stats = stats[["mean"]].rename(columns={"mean": "soil_moist_max"})

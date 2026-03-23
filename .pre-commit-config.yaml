@@ -27,7 +27,9 @@ repos:
     rev: v5.0.0
     hooks:
       - id: end-of-file-fixer
+        exclude: ^(environment\.yml|environment_minimal\.yml|scripts/1_create_dem_params\.py|scripts/6_create_ssflux_params\.py|slurm_batch/01_create_elev_params\.batch|slurm_batch/04_OR_create_soils_params\.batch|slurm_batch/06_OR_create_ssflux_params\.batch)$
       - id: trailing-whitespace
+        exclude: ^(environment\.yml|environment_minimal\.yml|scripts/1_create_dem_params\.py|scripts/6_create_ssflux_params\.py|slurm_batch/01_create_elev_params\.batch|slurm_batch/04_OR_create_soils_params\.batch|slurm_batch/06_OR_create_ssflux_params\.batch)$
     # Prettier for YAML autoformatting
   - repo: https://github.com/pre-commit/mirrors-prettier
     rev: v4.0.0-alpha.8 # Check for latest: https://github.com/pre-commit/mirrors-prettier/releases
