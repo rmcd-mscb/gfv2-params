@@ -17,6 +17,6 @@ conda activate geoenv
 vpus=("14")
 vpu=${vpus[$SLURM_ARRAY_TASK_ID]}  # Select variable based on array index
 
-python /caldera/hovenweep/projects/usgs/water/impd/nhgf/gfv2_param/gfv2-params/scripts/6_create_ssflux_params.py \
-    --config /caldera/hovenweep/projects/usgs/water/impd/nhgf/gfv2_param/gfv2-params/configs/06_ssflux_param_config.yml \
+python /caldera/hovenweep/projects/usgs/water/impd/nhgf/gfv2_param/gfv2-params/scripts/create_ssflux_params.py \
+    --config /caldera/hovenweep/projects/usgs/water/impd/nhgf/gfv2_param/gfv2-params/configs/ssflux_param.yml \
     --vpu $vpu

@@ -1,0 +1,38 @@
+#!/bin/bash
+#SBATCH -p cpu
+#SBATCH -A impd
+#SBATCH --job-name=proc_merge_params
+#SBATCH --output=logs/job_%A_%a.out
+#SBATCH --error=logs/job_%A_%a.err
+#SBATCH --time=02:00:00        # Adjust as needed
+#SBATCH --ntasks=6             # Single task per job
+#SBATCH --cpus-per-task=1      # Adjust based on your script's CPU usage
+#SBATCH --mem=128G             # Adjust based on memory needs
+
+set -x  # Enable debugging output
+
+# Load required modules
+module load miniforge/latest
+conda activate geoenv
+
+# Run Python commands in parallel
+srun --exclusive python /caldera/hovenweep/projects/usgs/water/impd/nhgf/gfv2_param/gfv2-params/scripts/merge_params.py \
+    --config /caldera/hovenweep/projects/usgs/water/impd/nhgf/gfv2_param/gfv2-params/configs/elev_param.yml &
+
+srun --exclusive python /caldera/hovenweep/projects/usgs/water/impd/nhgf/gfv2_param/gfv2-params/scripts/merge_params.py \
+    --config /caldera/hovenweep/projects/usgs/water/impd/nhgf/gfv2_param/gfv2-params/configs/slope_param.yml &
+
+srun --exclusive python /caldera/hovenweep/projects/usgs/water/impd/nhgf/gfv2_param/gfv2-params/scripts/merge_params.py \
+    --config /caldera/hovenweep/projects/usgs/water/impd/nhgf/gfv2_param/gfv2-params/configs/aspect_param.yml &
+
+srun --exclusive python /caldera/hovenweep/projects/usgs/water/impd/nhgf/gfv2_param/gfv2-params/scripts/merge_params.py \
+    --config /caldera/hovenweep/projects/usgs/water/impd/nhgf/gfv2_param/gfv2-params/configs/soils_param.yml &
+
+srun --exclusive python /caldera/hovenweep/projects/usgs/water/impd/nhgf/gfv2_param/gfv2-params/scripts/merge_params.py \
+    --config /caldera/hovenweep/projects/usgs/water/impd/nhgf/gfv2_param/gfv2-params/configs/soilmoistmax_param.yml &
+
+srun --exclusive python /caldera/hovenweep/projects/usgs/water/impd/nhgf/gfv2_param/gfv2-params/scripts/merge_params.py \
+    --config /caldera/hovenweep/projects/usgs/water/impd/nhgf/gfv2_param/gfv2-params/configs/ssflux_param.yml &
+
+# ssflux has a few missing values so here we use a nearest neighbor approach to fill missing nat_hru_ids
+srun --exclusive python /caldera/hovenweep/projects/usgs/water/impd/nhgf/gfv2_param/gfv2-params/scripts/merge_and_fill_params.py
