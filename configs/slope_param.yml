@@ -1,0 +1,8 @@
+source_type: slope
+source_raster: "{data_root}/source_data/NHDPlus_Merged_Rasters/{raster_vpu}/NEDSnapshot_merged_slope_{raster_vpu}.tif"
+target_gpkg: "{data_root}/targets/NHM_{vpu}_draft.gpkg"
+target_layer: nhru
+id_feature: nat_hru_id
+output_dir: "{data_root}/nhm_params"
+merged_file: nhm_slope_params.csv
+categorical: false

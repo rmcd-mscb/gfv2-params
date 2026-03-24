@@ -1,0 +1,36 @@
+source_type: ssflux
+source_shapefile: "{data_root}/source_data/data_layers/soils_litho/Lithology_exp_Konly_Project.shp"
+target_gpkg: "{data_root}/targets/NHM_{vpu}_draft.gpkg"
+target_layer: nhru
+id_feature: nat_hru_id
+output_dir: "{data_root}/nhm_params"
+weight_dir: "{data_root}/weights"
+merged_file: nhm_ssflux_params.csv
+categorical: false
+
+# Lithology permeability constants (previously hardcoded in script)
+k_perm_min: -16.48
+
+# PRMS flux parameter normalization bounds
+flux_params:
+  - name: soil2gw_max
+    min: 0.1
+    max: 0.3
+  - name: ssr2gw_rate
+    min: 0.3
+    max: 0.7
+  - name: fastcoef_lin
+    min: 0.01
+    max: 0.6
+  - name: slowcoef_lin
+    min: 0.005
+    max: 0.3
+  - name: gwflow_coef
+    min: 0.005
+    max: 0.3
+  - name: dprst_seep_rate_open
+    min: 0.005
+    max: 0.2
+  - name: dprst_flow_coef
+    min: 0.005
+    max: 0.5
