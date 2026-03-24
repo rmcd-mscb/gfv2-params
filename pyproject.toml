@@ -1,32 +1,44 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
 [project]
 name = "gfv2-params"
 version = "0.1.0"
-description = "Geospatial analysis project with marimo workflows"
-authors = [{name = "Your Name", email = "you@example.com"}]
+description = "PRMS/NHM parameter generation from watershed fabric polygons"
+requires-python = ">=3.12"
 dependencies = [
     "gdptools==0.3.11",
-    "marimo[recommended]",
-    "plotly",
     "pandas",
     "numpy",
+    "geopandas",
+    "xarray",
+    "rioxarray",
+    "rasterstats",
+    "spatialpandas",
+    "pooch",
+    "py7zr",
+    "scikit-learn",
+    "pyyaml",
+    "tqdm",
+]
+
+[project.optional-dependencies]
+notebooks = [
+    "marimo[recommended]",
+    "plotly",
+    "matplotlib",
     "hvplot",
     "geoviews",
     "datashader",
     "dask",
+    "distributed",
     "intake",
     "intake-xarray",
     "intake-parquet",
     "s3fs",
-    "pooch",
-    "matplotlib",
-    "py7zr",
-    "simple_parsing",
     "ipykernel",
-    "dask",
-    "distributed",
 ]
-
-[project.optional-dependencies]
 dev = [
     "pytest",
     "pre-commit",
@@ -34,13 +46,11 @@ dev = [
 ]
 
 [tool.isort]
-profile = "black"   # Or "ruff", "black", "django", etc. (recommended for compatibility)
-line_length = 120    # Match your code style/black config
+profile = "black"
+line_length = 120
 
 [tool.ruff]
+line-length = 120
 
 [tool.ruff.lint]
 extend-ignore = ["F722"]
-
-[tool.uv]
-# uv-specific settings (optional)
