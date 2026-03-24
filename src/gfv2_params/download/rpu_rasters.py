@@ -105,7 +105,7 @@ vv = "01"  # version
 logger = configure_logging("download_rpu_rasters")
 
 
-def download_and_extract_old(dd, vpu, rpu, component):
+def download_and_extract_old(dd, vpu, rpu, component, download_dir, extract_dir):
     if any(code in vpu for code in {"03", "10", "05", "06", "07", "08", "11", "14", "15"}):
         base_url = f"https://dmap-data-commons-ow.s3.amazonaws.com/NHDPlusV21/Data/NHDPlus{dd}/NHDPlus{vpu}"
     else:
@@ -116,14 +116,14 @@ def download_and_extract_old(dd, vpu, rpu, component):
     local_path = download_dir / filename
 
     logger.info(f"Checking: {url}")
-    head = requests.head(url)
+    head = requests.head(url, timeout=60)
     if head.status_code != 200:
         logger.info(f"Not found: {filename}")
-        return
+        return False
 
     if not local_path.exists():
         logger.info(f"Downloading {filename} ...")
-        with requests.get(url, stream=True) as r:
+        with requests.get(url, stream=True, timeout=60) as r:
             r.raise_for_status()
             with open(local_path, "wb") as f:
                 for chunk in r.iter_content(chunk_size=8192):
@@ -140,11 +140,18 @@ def download_and_extract_old(dd, vpu, rpu, component):
         with py7zr.SevenZipFile(local_path, mode="r") as archive:
             archive.extractall(path=extract_path)
         logger.info(f"Extracted: {filename}")
+    except (py7zr.Bad7zFile, py7zr.DecompressionError) as e:
+        logger.error(f"Failed to extract {filename} (archive corruption): {e}")
+        local_path.unlink(missing_ok=True)
+        raise
     except Exception as e:
         logger.error(f"Failed to extract {filename}: {e}")
+        raise
+
+    return True
 
 
-def download_and_extract(dd, vpu, rpu, component):
+def download_and_extract(dd, vpu, rpu, component, download_dir, extract_dir):
     # Determine base URL structure
     if any(code in vpu for code in {"03", "10", "05", "06", "07", "08", "11", "14", "15"}):
         base_url = f"https://dmap-data-commons-ow.s3.amazonaws.com/NHDPlusV21/Data/NHDPlus{dd}/NHDPlus{vpu}"
@@ -169,10 +176,10 @@ def download_and_extract(dd, vpu, rpu, component):
             # Skip if already downloaded
             if local_path.exists():
                 logger.info(f"Already downloaded: {filename}, skipping download & extraction")
-                return
+                return True
 
             logger.info(f"Checking: {url}")
-            head = requests.head(url)
+            head = requests.head(url, timeout=60)
             if head.status_code == 200:
                 found = True
                 break
@@ -181,11 +188,11 @@ def download_and_extract(dd, vpu, rpu, component):
 
     if not found:
         logger.error(f"File not found for any variant of: {component} in {vpu}-{rpu}")
-        return
+        return False
 
     # Download
     logger.info(f"Downloading {filename} ...")
-    with requests.get(url, stream=True) as r:
+    with requests.get(url, stream=True, timeout=60) as r:
         r.raise_for_status()
         with open(local_path, "wb") as f:
             for chunk in r.iter_content(chunk_size=8192):
@@ -201,12 +208,18 @@ def download_and_extract(dd, vpu, rpu, component):
         with py7zr.SevenZipFile(local_path, mode="r") as archive:
             archive.extractall(path=extract_path)
         logger.info(f"Extracted: {filename}")
+    except (py7zr.Bad7zFile, py7zr.DecompressionError) as e:
+        logger.error(f"Failed to extract {filename} (archive corruption): {e}")
+        local_path.unlink(missing_ok=True)
+        raise
     except Exception as e:
         logger.error(f"Failed to extract {filename}: {e}")
+        raise
+
+    return True
 
 
 def main():
-    global download_dir, extract_dir
     base = load_base_config()
     data_root = Path(base["data_root"])
     download_dir = data_root / "source_data/NHDPlus_Downloads"
@@ -214,12 +227,23 @@ def main():
     download_dir.mkdir(exist_ok=True)
     extract_dir.mkdir(exist_ok=True)
 
+    failures = []
+
     # Main loop
     for vpu, vpu_data in rpu_index.items():
         dd = vpu_data["dd"]
         for rpu in vpu_data["rpu_ids"]:
             for component in components:
-                download_and_extract(dd, vpu, rpu, component)
+                success = download_and_extract(dd, vpu, rpu, component, download_dir, extract_dir)
+                if not success:
+                    failures.append(f"{vpu}-{rpu}-{component}")
+
+    if failures:
+        logger.warning(
+            "Download/extract failed for %d component(s): %s",
+            len(failures),
+            ", ".join(failures),
+        )
 
 
 if __name__ == "__main__":

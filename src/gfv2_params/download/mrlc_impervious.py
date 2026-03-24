@@ -20,7 +20,7 @@ logger = configure_logging("download_mrlc_impervious")
 def download_and_unzip(url, out_dir):
     local_zip = out_dir / Path(url).name
     logger.info(f"Downloading {url} ...")
-    with requests.get(url, stream=True) as r:
+    with requests.get(url, stream=True, timeout=60) as r:
         r.raise_for_status()
         with open(local_zip, "wb") as f:
             for chunk in r.iter_content(chunk_size=8192):

@@ -1,3 +1,4 @@
+import re
 from pathlib import Path
 
 import yaml
@@ -45,7 +46,12 @@ def load_base_config(base_config_path: Path | None = None) -> dict:
 def _load_yaml(path: Path) -> dict:
     """Load a YAML file and return its contents as a dict."""
     with open(path, "r") as f:
-        return yaml.safe_load(f)
+        data = yaml.safe_load(f)
+    if data is None:
+        raise ValueError(f"Config file is empty or contains no YAML data: {path}")
+    if not isinstance(data, dict):
+        raise TypeError(f"Config file must contain a YAML mapping, got {type(data).__name__}: {path}")
+    return data
 
 
 def _resolve_placeholders(config: dict, replacements: dict) -> dict:
@@ -55,6 +61,12 @@ def _resolve_placeholders(config: dict, replacements: dict) -> dict:
         if isinstance(value, str):
             for placeholder, replacement in replacements.items():
                 value = value.replace(f"{{{placeholder}}}", replacement)
+            remaining = re.findall(r'\{(\w+)\}', value)
+            if remaining:
+                raise ValueError(
+                    f"Unresolved placeholder(s) {remaining} in config key '{key}'. "
+                    f"Value: '{value}'. Did you forget to pass --vpu?"
+                )
         resolved[key] = value
     return resolved
 

@@ -12,6 +12,7 @@ from gfv2_params.log import configure_logging
 def process_files(config, logger):
     input_dir = Path(config["output_dir"]) / config["source_type"]
     source_type = config["source_type"]
+    id_feature = config["id_feature"]
     merged_file = Path(config["merged_file"])
     final_output_dir = Path(config["output_dir"]) / "nhm_params_merged"
     final_output_dir.mkdir(parents=True, exist_ok=True)
@@ -28,16 +29,16 @@ def process_files(config, logger):
         logger.info("Processing file: %s", file)
         df = pd.read_csv(file)
 
-        if "nat_hru_id" not in df.columns:
-            raise ValueError(f"'nat_hru_id' column not found in file: {file}")
+        if id_feature not in df.columns:
+            raise ValueError(f"'{id_feature}' column not found in file: {file}")
 
-        df = df.sort_values("nat_hru_id")
+        df = df.sort_values(id_feature)
         vpu = file.stem.split("_")[3]
         df["vpu"] = vpu
 
         logger.info("vpu: %s, num_hru: %d", vpu, len(df))
         merged_df = pd.concat([merged_df, df], ignore_index=True)
-        merged_df = merged_df.sort_values("nat_hru_id")
+        merged_df = merged_df.sort_values(id_feature)
 
     merged_df.to_csv(final_output_dir / merged_file, index=False)
     logger.info("Merged file saved to: %s", final_output_dir / merged_file)

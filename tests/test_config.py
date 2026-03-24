@@ -1,12 +1,15 @@
 import tempfile
 from pathlib import Path
 
+import pytest
 import yaml
 
 from gfv2_params.config import (
     VPUS_DETAILED,
     VPUS_SIMPLE,
     VPU_RASTER_MAP,
+    _load_yaml,
+    _resolve_placeholders,
     load_base_config,
     load_config,
     resolve_vpu,
@@ -117,3 +120,43 @@ def test_load_base_config():
         config = load_base_config(base_config)
         assert config["data_root"] == "/fake/root"
         assert config["expected_max_hru_id"] == 100
+
+
+def test_resolve_vpu_lowercase():
+    """Lowercase VPU not in map returns itself for both values."""
+    raster_vpu, gpkg_vpu = resolve_vpu("03n")
+    assert raster_vpu == "03n"
+    assert gpkg_vpu == "03n"
+
+
+def test_resolve_vpu_nonexistent():
+    """Non-existent VPU returns itself for both values."""
+    raster_vpu, gpkg_vpu = resolve_vpu("99")
+    assert raster_vpu == "99"
+    assert gpkg_vpu == "99"
+
+
+def test_load_yaml_empty_file():
+    """Empty YAML file raises ValueError."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        empty_file = Path(tmpdir) / "empty.yml"
+        empty_file.write_text("")
+        with pytest.raises(ValueError, match="empty or contains no YAML data"):
+            _load_yaml(empty_file)
+
+
+def test_load_yaml_non_dict():
+    """YAML file with a list raises TypeError."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        list_file = Path(tmpdir) / "list.yml"
+        list_file.write_text("- item1\n- item2\n")
+        with pytest.raises(TypeError, match="must contain a YAML mapping"):
+            _load_yaml(list_file)
+
+
+def test_resolve_placeholders_unresolved():
+    """Unresolved placeholders raise ValueError."""
+    config = {"key": "{data_root}/path/{vpu}/file.tif"}
+    replacements = {"data_root": "/root"}
+    with pytest.raises(ValueError, match="Unresolved placeholder"):
+        _resolve_placeholders(config, replacements)

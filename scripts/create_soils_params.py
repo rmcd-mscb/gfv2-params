@@ -63,7 +63,7 @@ def process_soil_moist_max(source_dir, nhru_gdf, output_path, source_type, vpu_l
     soil_moist_max_rast = source_dir / "soils_litho/soil_moist_max.tif"
     rd_rast = source_dir / "lulc_veg/RootDepth.tif"
     awc_rast = source_dir / "soils_litho/AWC.tif"
-    temp_rast = source_dir / "lulc_veg/rd_250_raw.tif"
+    temp_rast = source_dir / "lulc_veg/rd_250_intermediate.tif"
     final_rast = source_dir / "lulc_veg/rd_250_raw.tif"
 
     if not rd_rast.exists():

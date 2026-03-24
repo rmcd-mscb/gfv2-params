@@ -42,7 +42,7 @@ def main():
     source_gdf = gpd.read_file(Path(config["source_shapefile"]))
 
     # Load slope params
-    slope_source_gdf = gpd.read_file(output_dir / f"slope/base_nhm_slope_{vpu_label}_param.csv")
+    slope_source_gdf = pd.read_csv(output_dir / f"slope/base_nhm_slope_{vpu_label}_param.csv")
     slope_source_gdf["mean_slope_fraction"] = slope_source_gdf["mean"].astype(float).apply(deg_to_fraction)
     source_gdf["flux_id"] = np.arange(len(source_gdf))
 
@@ -120,8 +120,12 @@ def main():
         min_in, rng_in = df_r.at["min", rcol], df_r.at["range", rcol]
         min_out, max_out = param_mins[i], param_maxes[i]
         rng_out = max_out - min_out
-        norm = (df[rcol] - min_in) / rng_in
-        df[p] = norm * rng_out + min_out
+        if rng_in == 0:
+            logger.warning("Range is zero for %s; using midpoint of output range", p)
+            df[p] = (min_out + max_out) / 2.0
+        else:
+            norm = (df[rcol] - min_in) / rng_in
+            df[p] = norm * rng_out + min_out
 
     # Drop intermediate columns
     df.drop(columns=[f"r_{p}" for p in param_names], inplace=True)

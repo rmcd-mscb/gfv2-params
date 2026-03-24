@@ -32,12 +32,20 @@ def resample(
     height = tmpl.RasterYSize
 
     driver = gdal.GetDriverByName("GTiff")
+    if driver is None:
+        raise RuntimeError("GDAL GTiff driver not available")
     dst = driver.Create(intermediate_path, width, height, 1, gdalconst.GDT_Float32)
+    if dst is None:
+        raise RuntimeError(f"Failed to create output raster: {intermediate_path}")
     dst.SetGeoTransform(tmpl_geotrans)
     dst.SetProjection(tmpl_proj)
 
-    gdal.ReprojectImage(src, dst, src_proj, tmpl_proj, gdalconst.GRA_NearestNeighbour)
+    err = gdal.ReprojectImage(src, dst, src_proj, tmpl_proj, gdalconst.GRA_NearestNeighbour)
+    if err != 0:
+        raise RuntimeError(f"GDAL ReprojectImage failed with error code {err}")
     del dst
+    del src
+    del tmpl
 
     with rasterio.open(intermediate_path) as src_rio:
         data = src_rio.read(1)

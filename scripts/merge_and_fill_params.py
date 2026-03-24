@@ -36,6 +36,9 @@ def merge_vpu_geopackages(targets_dir, vpus, output_file, simplify_tolerance, lo
         merged_gdfs.append(gdf)
         logger.debug("Added %d features from VPU %s", len(gdf), vpu)
 
+    if not merged_gdfs:
+        raise FileNotFoundError(f"No VPU geopackages found in {targets_dir}")
+
     merged_gdf = pd.concat(merged_gdfs, ignore_index=True)
     merged_gdf = merged_gdf.sort_values("nat_hru_id").reset_index(drop=True)
 
@@ -138,13 +141,14 @@ def main():
     if missing_ids:
         param_columns = [col for col in param_df.columns if col not in ["hru_id", "nat_hru_id", "vpu"]]
         if not param_columns:
-            logger.error("No parameter column found in the data")
-            return
+            raise ValueError("No parameter columns found in the data")
 
-        param_column = param_columns[0]
-        logger.info("Using parameter column: %s", param_column)
+        logger.info("Filling parameter columns: %s", param_columns)
 
-        complete_df = fill_missing_values_knn(param_df, missing_ids, merged_gdf, param_column, args.k_neighbors, logger)
+        complete_df = param_df
+        for param_column in param_columns:
+            logger.info("Filling parameter column: %s", param_column)
+            complete_df = fill_missing_values_knn(complete_df, missing_ids, merged_gdf, param_column, args.k_neighbors, logger)
         complete_df.to_csv(filled_param_file, index=False)
         logger.info("Filled parameter file saved to: %s", filled_param_file)
 
