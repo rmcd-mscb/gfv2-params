@@ -6,23 +6,15 @@ app = marimo.App(width="medium")
 
 @app.cell
 def _():
-    import sys
+    from dataclasses import dataclass
     from pathlib import Path
+    from typing import Literal
 
     import rioxarray as rxr
     from rioxarray.merge import merge_arrays
-
-    # Add the src directory to the Python path
-    src_path = Path(__file__).resolve().parent.parent / "src"
-    sys.path.append(str(src_path))
-
-    # Now you can import helpers
-    from dataclasses import dataclass
-    from typing import Literal
-
     from simple_parsing import ArgumentParser
 
-    from helpers import load_config
+    from gfv2_params.config import load_config
     return (
         ArgumentParser,
         Literal,

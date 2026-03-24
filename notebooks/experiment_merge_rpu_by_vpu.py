@@ -17,7 +17,6 @@ def _(mo):
 
 @app.cell
 def _():
-    import sys
     from pathlib import Path
 
     import numpy as np
@@ -26,12 +25,7 @@ def _():
 
     import marimo as mo
 
-    # Add the src directory to the Python path
-    src_path = Path(__file__).resolve().parent.parent / "src"
-    sys.path.append(str(src_path))
-
-    # Now you can import helpers
-    from helpers import load_config
+    from gfv2_params.config import load_config
 
     return Path, load_config, merge_arrays, mo, np, rxr
 
