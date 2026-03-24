@@ -3,6 +3,9 @@ from pathlib import Path
 import py7zr
 import requests
 
+from gfv2_params.config import load_base_config
+from gfv2_params.log import configure_logging
+
 # Define RPU metadata dictionary
 rpu_index = {
     "01": {
@@ -99,12 +102,8 @@ rpu_index = {
 components = ["NEDSnapshot", "FdrFac", "Hydrodem"]
 vv = "01"  # version
 
-# Base URL and output directories
+logger = configure_logging("download_rpu_rasters")
 
-download_dir = Path("/caldera/hovenweep/projects/usgs/water/impd/nhgf/gfv2_param/source_data/NHDPlus_Downloads")
-extract_dir = Path("/caldera/hovenweep/projects/usgs/water/impd/nhgf/gfv2_param/source_data/NHDPlus_Extracted")
-download_dir.mkdir(exist_ok=True)
-extract_dir.mkdir(exist_ok=True)
 
 def download_and_extract_old(dd, vpu, rpu, component):
     if any(code in vpu for code in {"03", "10", "05", "06", "07", "08", "11", "14", "15"}):
@@ -116,33 +115,34 @@ def download_and_extract_old(dd, vpu, rpu, component):
     url = f"{base_url}/{filename}"
     local_path = download_dir / filename
 
-    print(f"Checking: {url}")
+    logger.info(f"Checking: {url}")
     head = requests.head(url)
     if head.status_code != 200:
-        print(f"Not found: {filename}")
+        logger.info(f"Not found: {filename}")
         return
 
     if not local_path.exists():
-        print(f"Downloading {filename} ...")
+        logger.info(f"Downloading {filename} ...")
         with requests.get(url, stream=True) as r:
             r.raise_for_status()
             with open(local_path, "wb") as f:
                 for chunk in r.iter_content(chunk_size=8192):
                     f.write(chunk)
-        print(f"Downloaded: {filename}")
+        logger.info(f"Downloaded: {filename}")
     else:
-        print(f"Already downloaded: {filename}")
+        logger.info(f"Already downloaded: {filename}")
 
     extract_path = extract_dir / vpu / rpu / component
     extract_path.mkdir(parents=True, exist_ok=True)
 
-    print(f"Extracting {filename} to {extract_path}")
+    logger.info(f"Extracting {filename} to {extract_path}")
     try:
         with py7zr.SevenZipFile(local_path, mode="r") as archive:
             archive.extractall(path=extract_path)
-        print(f"✅ Extracted: {filename}")
+        logger.info(f"Extracted: {filename}")
     except Exception as e:
-        print(f"❌ Failed to extract {filename}: {e}")
+        logger.error(f"Failed to extract {filename}: {e}")
+
 
 def download_and_extract(dd, vpu, rpu, component):
     # Determine base URL structure
@@ -168,10 +168,10 @@ def download_and_extract(dd, vpu, rpu, component):
 
             # Skip if already downloaded
             if local_path.exists():
-                print(f"✅ Already downloaded: {filename}, skipping download & extraction")
+                logger.info(f"Already downloaded: {filename}, skipping download & extraction")
                 return
 
-            print(f"Checking: {url}")
+            logger.info(f"Checking: {url}")
             head = requests.head(url)
             if head.status_code == 200:
                 found = True
@@ -180,34 +180,47 @@ def download_and_extract(dd, vpu, rpu, component):
             break
 
     if not found:
-        print(f"❌ File not found for any variant of: {component} in {vpu}-{rpu}")
+        logger.error(f"File not found for any variant of: {component} in {vpu}-{rpu}")
         return
 
     # Download
-    print(f"⬇️ Downloading {filename} ...")
+    logger.info(f"Downloading {filename} ...")
     with requests.get(url, stream=True) as r:
         r.raise_for_status()
         with open(local_path, "wb") as f:
             for chunk in r.iter_content(chunk_size=8192):
                 f.write(chunk)
-    print(f"📥 Downloaded: {filename}")
+    logger.info(f"Downloaded: {filename}")
 
     # Extract (keep logical component name for path)
     extract_path = extract_dir / vpu / rpu / component
     extract_path.mkdir(parents=True, exist_ok=True)
 
-    print(f"📦 Extracting {filename} to {extract_path}")
+    logger.info(f"Extracting {filename} to {extract_path}")
     try:
         with py7zr.SevenZipFile(local_path, mode="r") as archive:
             archive.extractall(path=extract_path)
-        print(f"✅ Extracted: {filename}")
+        logger.info(f"Extracted: {filename}")
     except Exception as e:
-        print(f"❌ Failed to extract {filename}: {e}")
+        logger.error(f"Failed to extract {filename}: {e}")
 
 
-# Main loop
-for vpu, vpu_data in rpu_index.items():
-    dd = vpu_data["dd"]
-    for rpu in vpu_data["rpu_ids"]:
-        for component in components:
-            download_and_extract(dd, vpu, rpu, component)
+def main():
+    global download_dir, extract_dir
+    base = load_base_config()
+    data_root = Path(base["data_root"])
+    download_dir = data_root / "source_data/NHDPlus_Downloads"
+    extract_dir = data_root / "source_data/NHDPlus_Extracted"
+    download_dir.mkdir(exist_ok=True)
+    extract_dir.mkdir(exist_ok=True)
+
+    # Main loop
+    for vpu, vpu_data in rpu_index.items():
+        dd = vpu_data["dd"]
+        for rpu in vpu_data["rpu_ids"]:
+            for component in components:
+                download_and_extract(dd, vpu, rpu, component)
+
+
+if __name__ == "__main__":
+    main()
