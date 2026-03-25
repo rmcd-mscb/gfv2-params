@@ -51,6 +51,44 @@ gfv2-params/
 └── environment.yml           # Conda environment (compiled deps only)
 ```
 
+## Output Directory Structure
+
+The data root (`data_root`) is configured in `configs/base_config.yml` and resolves to the `gfv2_param/` directory. All source data and outputs live under this root:
+
+```
+gfv2_param/
+├── source_data/
+│   ├── NHDPlus_Downloads/          # Raw NHDPlus zip archives
+│   ├── NHDPlus_Extracted/          # Unzipped per-RPU rasters
+│   ├── NHDPlus_Merged_Rasters/
+│   │   └── <VPU>/                  # NEDSnapshot, Hydrodem, Fdr, Fac GeoTIFFs
+│   └── mrlc_nlcd_fract_impervious/ # NLCD fractional impervious cover rasters
+├── targets/
+│   ├── NHM_<VPU>_draft.gpkg        # Input per-VPU watershed fabric (nhru layer)
+│   └── gfv2_nhru_merged.gpkg       # Merged nhru (produced by notebooks/merge_vpu_targets.py)
+└── nhm_params/
+    ├── elevation/
+    │   └── base_nhm_elevation_<VPU>_param.csv
+    ├── slope/
+    │   └── base_nhm_slope_<VPU>_param.csv
+    ├── aspect/
+    │   └── base_nhm_aspect_<VPU>_param.csv
+    ├── soils/
+    │   └── base_nhm_soils_<VPU>_param.csv
+    ├── soil_moist_max/
+    │   └── base_nhm_soil_moist_max_<VPU>_param.csv
+    ├── ssflux/
+    │   └── base_nhm_ssflux_<VPU>_param.csv
+    ├── nhm_params_merged/          # Per-parameter merged CSVs + KNN-filled ssflux
+    │   ├── nhm_*.csv
+    │   └── filled_nhm_ssflux_params.csv
+    ├── default/                    # Input NHM default parameter files
+    └── merged/                     # Final merged outputs per parameter
+        └── <param_name>_merged.csv
+```
+
+> **Note**: `targets/gfv2_nhru_merged.gpkg` is the canonical merged geometry file consumed by `scripts/merge_and_fill_params.py`. Run `notebooks/merge_vpu_targets.py` to produce it before running the gap-filling step.
+
 ## Usage
 
 ### VPU-based CONUS processing
