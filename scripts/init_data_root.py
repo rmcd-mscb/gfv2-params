@@ -48,9 +48,6 @@ _TREE = [
           nhm_default/      NHM default parameter files (input to final merge)
           nhd/downloads/    Raw NHDPlus zip archives
                             (downloadable via download/rpu_rasters.py)
-          nhd/extracted/    Unzipped per-RPU rasters
-                            (reproducible from nhd/downloads/ — safe to delete
-                             if disk space is tight, but re-extraction takes time)
         """,
     ),
     ("input/fabric", None),
@@ -60,7 +57,6 @@ _TREE = [
     ("input/lulc/nalcms_2020", None),
     ("input/nhm_default", None),
     ("input/nhd/downloads", None),
-    ("input/nhd/extracted", None),
     # ---- work (intermediates) ----------------------------------------------
     (
         "work",
@@ -71,6 +67,9 @@ _TREE = [
         and rebuilt.  Do NOT hand-edit files here.
 
         Subdirectory layout:
+          nhd_extracted/      Unzipped per-RPU NHDPlus rasters
+                              (reproducible from input/nhd/downloads/ —
+                               safe to delete if disk space is tight)
           nhd_merged/<VPU>/   Per-VPU merged GeoTIFFs produced by
                               merge_rpu_by_vpu.py and compute_slope_aspect.py
                               (NEDSnapshot_merged_*.tif, Hydrodem_merged_*.tif,
@@ -86,6 +85,7 @@ _TREE = [
                               build_weights.py (lith_weights_<fabric>.csv)
         """,
     ),
+    ("work/nhd_extracted", None),
     ("work/nhd_merged", None),
     ("work/derived_rasters", None),
     ("work/weights", None),
