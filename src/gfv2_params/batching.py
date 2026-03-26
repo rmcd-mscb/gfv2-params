@@ -65,6 +65,14 @@ def spatial_batch(
         )
         return result
 
+    if gdf.crs and gdf.crs.is_geographic:
+        logger.warning(
+            "Input CRS is geographic (%s). Centroid-based batching may produce "
+            "less compact batches at high latitudes. Consider projecting to a "
+            "planar CRS (e.g., EPSG:5070) before batching.",
+            gdf.crs,
+        )
+
     with warnings.catch_warnings():
         warnings.filterwarnings("ignore", message=".*geographic CRS.*centroid.*")
         centroids = np.column_stack(
@@ -109,11 +117,19 @@ def write_batches(
     batch_dir = Path(batch_dir)
     batch_dir.mkdir(parents=True, exist_ok=True)
 
+    # Clean stale batch files from previous runs
+    existing = list(batch_dir.glob("batch_*.gpkg"))
+    if existing:
+        logger.warning("Clearing %d existing batch files from %s", len(existing), batch_dir)
+        for f in existing:
+            f.unlink()
+
     batch_ids = sorted(gdf["batch_id"].unique())
 
     for bid in batch_ids:
         batch_gdf = gdf[gdf["batch_id"] == bid].drop(columns=["batch_id"])
         out_path = batch_dir / f"batch_{bid:04d}.gpkg"
+        logger.debug("Writing batch %d (%d features) -> %s", bid, len(batch_gdf), out_path)
         batch_gdf.to_file(out_path, layer=target_layer, driver="GPKG")
 
     manifest = {

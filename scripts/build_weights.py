@@ -67,6 +67,13 @@ def main():
         output_file=weight_file,
     )
     weights = weight_gen.calculate_weights()
+    if weights is None or len(weights) == 0:
+        raise RuntimeError(
+            "WeightGenP2P returned no weights. Check that target and source "
+            "polygons overlap spatially."
+        )
+    if not weight_file.exists():
+        raise RuntimeError(f"WeightGenP2P did not write output file: {weight_file}")
     logger.info("Weights computed: %d rows -> %s", len(weights), weight_file)
 
 

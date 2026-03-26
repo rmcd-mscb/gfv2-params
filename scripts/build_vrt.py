@@ -34,6 +34,7 @@ def main():
     if not nhd_merged_dir.exists():
         raise FileNotFoundError(f"NHD merged directory not found: {nhd_merged_dir}")
 
+    built_count = 0
     for vrt_name, pattern in RASTER_TYPES.items():
         source_files = sorted(nhd_merged_dir.glob(f"*/{pattern}"))
         if not source_files:
@@ -50,9 +51,15 @@ def main():
         vrt_ds.FlushCache()
         del vrt_ds
 
+        built_count += 1
         logger.info("Written: %s (%d sources)", vrt_path, len(source_files))
 
-    logger.info("VRT build complete")
+    if built_count == 0:
+        raise RuntimeError(
+            f"No VRTs were built. Check that {nhd_merged_dir} contains "
+            "per-VPU subdirectories with merged GeoTIFFs."
+        )
+    logger.info("VRT build complete: %d of %d types built", built_count, len(RASTER_TYPES))
 
 
 if __name__ == "__main__":

@@ -24,6 +24,11 @@ if [ ! -f "$MANIFEST" ]; then
 fi
 
 N_BATCHES=$(grep '^n_batches:' "$MANIFEST" | awk '{print $2}')
+if [ -z "$N_BATCHES" ] || [ "$N_BATCHES" -le 0 ] 2>/dev/null; then
+    echo "Error: could not parse n_batches from $MANIFEST (got: '$N_BATCHES')"
+    echo "Expected format: 'n_batches: <positive_integer>'"
+    exit 1
+fi
 LAST_IDX=$((N_BATCHES - 1))
 
 echo "Submitting $BATCH_SCRIPT with --array=0-$LAST_IDX ($N_BATCHES batches)"

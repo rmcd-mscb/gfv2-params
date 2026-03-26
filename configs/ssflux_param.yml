@@ -9,8 +9,10 @@ merged_slope_file: "{data_root}/{fabric}/params/merged/nhm_slope_params.csv"
 merged_file: nhm_ssflux_params.csv
 categorical: false
 
+# Lithology permeability constants (previously hardcoded in script)
 k_perm_min: -16.48
 
+# PRMS flux parameter normalization bounds
 flux_params:
   - name: soil2gw_max
     min: 0.1

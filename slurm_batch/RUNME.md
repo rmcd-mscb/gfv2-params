@@ -34,13 +34,18 @@ gfv2_param/
 
 ## Pipeline Stages
 
+All commands below assume the repo root as your working directory, e.g.:
+```bash
+cd /caldera/hovenweep/projects/usgs/water/impd/nhgf/gfv2_param/gfv2-params
+```
+
 ### Stage 1: Raster preparation (VPU-based)
 
 Download and merge per-RPU NHDPlus rasters, then derive slope/aspect:
 
 ```bash
-sbatch merge_rpu_by_vpu.batch
-sbatch compute_slope_aspect.batch
+sbatch slurm_batch/merge_rpu_by_vpu.batch
+sbatch slurm_batch/compute_slope_aspect.batch
 ```
 
 ### Stage 2a: Build VRTs (one-time)
@@ -76,20 +81,20 @@ Submit batch jobs using the wrapper script:
 
 ```bash
 BATCHES=/path/to/gfv2/batches
-./submit_jobs.sh $BATCHES create_zonal_elev_params.batch
-./submit_jobs.sh $BATCHES create_zonal_slope_params.batch
-./submit_jobs.sh $BATCHES create_zonal_aspect_params.batch
-./submit_jobs.sh $BATCHES create_soils_params.batch
-./submit_jobs.sh $BATCHES create_soilmoistmax_params.batch
+slurm_batch/submit_jobs.sh $BATCHES slurm_batch/create_zonal_elev_params.batch
+slurm_batch/submit_jobs.sh $BATCHES slurm_batch/create_zonal_slope_params.batch
+slurm_batch/submit_jobs.sh $BATCHES slurm_batch/create_zonal_aspect_params.batch
+slurm_batch/submit_jobs.sh $BATCHES slurm_batch/create_soils_params.batch
+slurm_batch/submit_jobs.sh $BATCHES slurm_batch/create_soilmoistmax_params.batch
 ```
 
 ### Stage 5: Merge and validate
 
 ```bash
-sbatch merge_output_params.batch
+sbatch slurm_batch/merge_output_params.batch
 ```
 
-Or run individually:
+Note: `merge_output_params.batch` merges all parameter types except ssflux (which is produced in Stage 6). Run individually if needed:
 ```bash
 python scripts/merge_params.py --config configs/elev_param.yml --base_config configs/base_config.yml
 ```
@@ -100,7 +105,7 @@ Pre-compute weights, then run batch jobs:
 
 ```bash
 python scripts/build_weights.py --config configs/ssflux_param.yml --base_config configs/base_config.yml
-./submit_jobs.sh $BATCHES create_ssflux_params.batch
+slurm_batch/submit_jobs.sh $BATCHES slurm_batch/create_ssflux_params.batch
 python scripts/merge_params.py --config configs/ssflux_param.yml --base_config configs/base_config.yml
 ```
 
@@ -125,9 +130,9 @@ python scripts/merge_default_params.py --base_config configs/base_config.yml
 
 ## Partial Reruns
 
-To rerun a single failed batch:
+To rerun a single failed batch (the batch file reads `$SLURM_ARRAY_TASK_ID` regardless of how the array was specified):
 ```bash
-sbatch --array=37 create_zonal_elev_params.batch
+sbatch --array=37 slurm_batch/create_zonal_elev_params.batch
 ```
 
 ## Monitoring

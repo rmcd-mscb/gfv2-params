@@ -61,7 +61,8 @@ def process_files(config, logger):
         gaps = sorted(expected_ids - existing_ids)
         if gaps:
             logger.warning(
-                "%d missing %s values (expected 1-%d, got %d). First 10: %s",
+                "%d missing %s values (expected 1-%d, got %d). First 10: %s. "
+                "If this is expected, run merge_and_fill_params.py to fill gaps via KNN.",
                 len(gaps), id_feature, expected_max, len(existing_ids), gaps[:10],
             )
 

@@ -1,7 +1,7 @@
 """Fill missing parameter values using KNN interpolation against a merged nhru geopackage.
 
 The merged geopackage is produced by the notebooks/merge_vpu_targets.py notebook
-or the prepare_fabric.py script.
+and serves as input to prepare_fabric.py for batching.
 """
 
 import argparse
@@ -44,6 +44,23 @@ def fill_missing_values_knn(param_df, missing_ids, merged_gdf, param_column, k, 
     existing_coords = existing_df[["x", "y"]].values
     missing_coords = missing_df[["x", "y"]].values
     existing_values = existing_df[param_column].values
+
+    # Filter NaN coordinates from existing data (null/invalid geometries)
+    nan_mask = np.isnan(existing_coords).any(axis=1)
+    if nan_mask.any():
+        logger.warning(
+            "%d features have NaN coordinates (null/invalid geometry). "
+            "Excluding from KNN fitting.", nan_mask.sum()
+        )
+        existing_coords = existing_coords[~nan_mask]
+        existing_values = existing_values[~nan_mask]
+
+    nan_missing = np.isnan(missing_coords).any(axis=1)
+    if nan_missing.any():
+        raise ValueError(
+            f"{nan_missing.sum()} missing features have null geometry "
+            "and cannot be filled via KNN interpolation."
+        )
 
     knn = NearestNeighbors(n_neighbors=k)
     knn.fit(existing_coords)
@@ -95,6 +112,12 @@ def main():
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
+    if not param_file.exists():
+        raise FileNotFoundError(
+            f"Parameter file not found: {param_file}\n"
+            "Run scripts/merge_params.py for this parameter type first."
+        )
+
     if not merged_gpkg.exists():
         raise FileNotFoundError(
             f"Merged geopackage not found: {merged_gpkg}\n"
@@ -116,7 +139,7 @@ def main():
     param_df, missing_ids = find_missing_ids(param_file, expected_max, logger)
 
     if missing_ids:
-        param_columns = [col for col in param_df.columns if col not in ["hru_id", "nat_hru_id"]]
+        param_columns = [col for col in param_df.columns if col not in ["hru_id", "nat_hru_id", "vpu"]]
         if not param_columns:
             raise ValueError("No parameter columns found in the data")
 

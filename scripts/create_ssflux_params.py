@@ -93,14 +93,30 @@ def main():
 
     # Merge with slope and area
     slope_merge = slope_df[[id_feature, "mean_slope_fraction"]].copy()
-    slope_merge[id_feature] = pd.to_numeric(slope_merge[id_feature], errors="coerce").astype("int64")
+    try:
+        slope_merge[id_feature] = slope_merge[id_feature].astype("int64")
+    except (ValueError, TypeError) as exc:
+        raise ValueError(f"Non-numeric {id_feature} values in slope data") from exc
 
     target_gdf["hru_area"] = target_gdf.geometry.area
     area_df = target_gdf[[id_feature, "hru_area"]].copy()
-    area_df[id_feature] = pd.to_numeric(area_df[id_feature], errors="coerce").astype("int64")
+    try:
+        area_df[id_feature] = area_df[id_feature].astype("int64")
+    except (ValueError, TypeError) as exc:
+        raise ValueError(f"Non-numeric {id_feature} values in target fabric") from exc
 
     df = extensive_sorted.merge(slope_merge, on=id_feature, how="left").copy()
     df = df.merge(area_df, on=id_feature, how="left")
+
+    # Validate no features were lost in merges
+    null_slope = df["mean_slope_fraction"].isna().sum()
+    null_area = df["hru_area"].isna().sum()
+    if null_slope > 0 or null_area > 0:
+        raise ValueError(
+            f"Merge produced missing values: {null_slope} features missing slope, "
+            f"{null_area} features missing area. Check that slope and batch data "
+            f"use consistent {id_feature} values."
+        )
 
     # Compute raw PRMS fluxes
     df["r_soil2gw_max"] = df["k_perm_wtd"] ** 3
@@ -111,7 +127,10 @@ def main():
     df["r_dprst_seep_rate_open"] = df["r_ssr2gw_rate"]
     df["r_dprst_flow_coef"] = df["r_fastcoef_lin"]
 
-    # Normalize using config-driven bounds
+    # Normalize using config-driven bounds.
+    # Note: normalization is per-batch (not CONUS-wide), matching the prior per-VPU
+    # behavior. The same raw value may map to slightly different normalized values
+    # in different batches because per-batch min/max ranges differ.
     flux_params = config["flux_params"]
     param_names = [fp["name"] for fp in flux_params]
     param_maxes = [fp["max"] for fp in flux_params]

@@ -44,11 +44,11 @@ gfv2-params/
 │   ├── merge_default_params.py     # Merge NHM default params
 │   ├── merge_and_fill_params.py    # KNN gap-filling
 │   └── find_missing_hru_ids.py     # Identify missing HRU IDs
-├── submit_jobs.sh            # SLURM array job submission wrapper
 ├── configs/                  # YAML configuration files
 │   ├── base_config.yml       # Data root and shared settings
 │   └── *.yml                 # Per-step configs with template placeholders
 ├── slurm_batch/              # HPC SLURM batch scripts
+│   ├── submit_jobs.sh        # SLURM array job submission wrapper
 │   └── RUNME.md              # HPC workflow documentation
 ├── notebooks/                # Marimo interactive notebooks
 ├── tests/                    # Unit tests
@@ -101,7 +101,7 @@ To run the pipeline against a non-default fabric (e.g., a regional subset):
 
 ## Configuration
 
-`configs/base_config.yml` defines the data root path and active fabric name. Per-step configs use `{data_root}`, `{fabric}`, and `{batch_id}` template placeholders that are resolved at runtime.
+`configs/base_config.yml` defines the data root path and active fabric name. Per-step configs use `{data_root}` and `{fabric}` template placeholders that are resolved at runtime. The `{vpu}` and `{raster_vpu}` placeholders remain available for VPU-based raster prep scripts.
 
 ## Logging
 
