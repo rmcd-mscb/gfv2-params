@@ -2,9 +2,14 @@ from pathlib import Path
 
 import py7zr
 import requests
+import urllib3
 
 from gfv2_params.config import load_base_config
 from gfv2_params.log import configure_logging
+
+# HPC clusters often have SSL inspection proxies with self-signed certificates.
+# Disable verification and suppress the resulting InsecureRequestWarning.
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # Define RPU metadata dictionary
 rpu_index = {
@@ -116,14 +121,14 @@ def download_and_extract_old(dd, vpu, rpu, component, download_dir, extract_dir)
     local_path = download_dir / filename
 
     logger.info(f"Checking: {url}")
-    head = requests.head(url, timeout=60)
+    head = requests.head(url, timeout=60, verify=False)
     if head.status_code != 200:
         logger.info(f"Not found: {filename}")
         return False
 
     if not local_path.exists():
         logger.info(f"Downloading {filename} ...")
-        with requests.get(url, stream=True, timeout=60) as r:
+        with requests.get(url, stream=True, timeout=60, verify=False) as r:
             r.raise_for_status()
             with open(local_path, "wb") as f:
                 for chunk in r.iter_content(chunk_size=8192):
@@ -179,7 +184,7 @@ def download_and_extract(dd, vpu, rpu, component, download_dir, extract_dir):
                 return True
 
             logger.info(f"Checking: {url}")
-            head = requests.head(url, timeout=60)
+            head = requests.head(url, timeout=60, verify=False)
             if head.status_code == 200:
                 found = True
                 break
@@ -192,7 +197,7 @@ def download_and_extract(dd, vpu, rpu, component, download_dir, extract_dir):
 
     # Download
     logger.info(f"Downloading {filename} ...")
-    with requests.get(url, stream=True, timeout=60) as r:
+    with requests.get(url, stream=True, timeout=60, verify=False) as r:
         r.raise_for_status()
         with open(local_path, "wb") as f:
             for chunk in r.iter_content(chunk_size=8192):

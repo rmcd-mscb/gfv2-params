@@ -12,9 +12,14 @@ from pathlib import Path
 from zipfile import ZipFile
 
 import requests
+import urllib3
 
 from gfv2_params.config import load_base_config
 from gfv2_params.log import configure_logging
+
+# HPC clusters often have SSL inspection proxies with self-signed certificates.
+# Disable verification and suppress the resulting InsecureRequestWarning.
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 URL = (
     "https://www.cec.org/files/atlas_layers/1_terrestrial_ecosystems/"
@@ -40,7 +45,7 @@ def download_and_extract(url: str, out_dir: Path) -> Path:
 
     if not local_zip.exists():
         logger.info("Downloading %s ...", url)
-        with requests.get(url, stream=True, timeout=120) as r:
+        with requests.get(url, stream=True, timeout=120, verify=False) as r:
             r.raise_for_status()
             with open(local_zip, "wb") as f:
                 for chunk in r.iter_content(chunk_size=65536):
