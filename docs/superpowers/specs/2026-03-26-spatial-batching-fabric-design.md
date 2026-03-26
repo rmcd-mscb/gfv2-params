@@ -63,7 +63,7 @@ gfv2_param/
 │   ├── batches/
 │   │   ├── manifest.yml                    # Batch metadata (count, fabric, batch_size)
 │   │   ├── batch_0000.gpkg
-│   │   ├── batch_001.gpkg
+│   │   ├── batch_0001.gpkg
 │   │   └── ...
 │   └── params/
 │       ├── elevation/
