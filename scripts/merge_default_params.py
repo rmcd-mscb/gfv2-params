@@ -81,21 +81,24 @@ def merge_param_files(param_name, files, output_dir, logger):
 
 def main():
     parser = argparse.ArgumentParser(description="Merge default parameter files by nat_hru_id.")
-    parser.add_argument("--dict", required=True, help="Path to parameter dictionary CSV file")
+    parser.add_argument("--dict", default=None, help="Path to parameter dictionary CSV file")
     parser.add_argument("--base_dir", default=None, help="Base directory containing parameter files")
     parser.add_argument("--output_dir", default=None, help="Output directory for merged files")
+    parser.add_argument("--base_config", default=None, help="Path to base_config.yml")
     args = parser.parse_args()
 
     logger = configure_logging("merge_default_params")
 
-    # Load base config after argparse so --help works without config file
-    base = load_base_config()
+    base = load_base_config(Path(args.base_config) if args.base_config else None)
     data_root = base["data_root"]
+    fabric = base["fabric"]
 
+    if args.dict is None:
+        args.dict = f"{data_root}/input/nhm_defaults/param_dict.csv"
     if args.base_dir is None:
-        args.base_dir = f"{data_root}/nhm_params/default"
+        args.base_dir = f"{data_root}/input/nhm_defaults"
     if args.output_dir is None:
-        args.output_dir = f"{data_root}/nhm_params/merged"
+        args.output_dir = f"{data_root}/{fabric}/params/defaults_merged"
 
     dict_file = Path(args.dict)
     base_dir = Path(args.base_dir)
