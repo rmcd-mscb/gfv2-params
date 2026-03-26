@@ -41,8 +41,15 @@ def _(mo):
 @app.cell
 def _(Path, VPUS_DETAILED, load_base_config):
     _base = load_base_config()
-    TARGETS_DIR = Path(_base["data_root"]) / "targets"
-    OUTPUT_PATH = TARGETS_DIR / "gfv2_nhru_merged.gpkg"
+    _data_root = Path(_base["data_root"])
+    _fabric    = _base["fabric"]
+
+    # Input per-VPU draft geopackages live under input/fabric/
+    TARGETS_DIR = _data_root / "input" / "fabric"
+
+    # Output merged fabric goes into {fabric}/fabric/ to match build_weights.py
+    # and prepare_fabric.py expectations
+    OUTPUT_PATH = _data_root / _fabric / "fabric" / f"{_fabric}_nhru_merged.gpkg"
 
     VPUS = VPUS_DETAILED
 
@@ -81,9 +88,11 @@ def _(
 ):
     if not TARGETS_DIR.exists():
         raise FileNotFoundError(
-            f"Targets directory not found: {TARGETS_DIR}\n"
+            f"Input fabric directory not found: {TARGETS_DIR}\n"
             "Verify that data_root in configs/base_config.yml is correct "
-            "and the filesystem is mounted."
+            "and run `python scripts/init_data_root.py` to scaffold the "
+            "directory layout, then stage the per-VPU NHM_<VPU>_draft.gpkg "
+            "files into input/fabric/."
         )
 
     _gdfs = []
