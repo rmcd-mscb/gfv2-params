@@ -65,7 +65,7 @@ def _resolve_placeholders(config: dict, replacements: dict) -> dict:
             if remaining:
                 raise ValueError(
                     f"Unresolved placeholder(s) {remaining} in config key '{key}'. "
-                    f"Value: '{value}'. Did you forget to pass --vpu?"
+                    f"Value: '{value}'. Check --vpu or fabric in base_config."
                 )
         resolved[key] = value
     return resolved
@@ -107,6 +107,9 @@ def load_config(
 
     # Build replacement map
     replacements = {"data_root": data_root}
+    fabric = base.get("fabric")
+    if fabric is not None:
+        replacements["fabric"] = fabric
     if vpu is not None:
         raster_vpu, gpkg_vpu = resolve_vpu(vpu)
         replacements["vpu"] = gpkg_vpu

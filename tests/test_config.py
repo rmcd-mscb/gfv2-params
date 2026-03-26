@@ -160,3 +160,63 @@ def test_resolve_placeholders_unresolved():
     replacements = {"data_root": "/root"}
     with pytest.raises(ValueError, match="Unresolved placeholder"):
         _resolve_placeholders(config, replacements)
+
+
+def test_load_config_resolves_fabric_placeholder():
+    """Config with {fabric} placeholder should resolve from base config."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        base_config = Path(tmpdir) / "base_config.yml"
+        base_config.write_text(yaml.dump({
+            "data_root": "/fake/root",
+            "fabric": "gfv2",
+            "expected_max_hru_id": 100,
+        }))
+        step_config = Path(tmpdir) / "step.yml"
+        step_config.write_text(yaml.dump({
+            "source_type": "elevation",
+            "source_raster": "{data_root}/work/nhd_merged/elevation.vrt",
+            "batch_dir": "{data_root}/{fabric}/batches",
+            "output_dir": "{data_root}/{fabric}/params",
+            "target_layer": "nhru",
+            "id_feature": "nat_hru_id",
+            "categorical": False,
+        }))
+        config = load_config(step_config, base_config_path=base_config)
+        assert config["batch_dir"] == "/fake/root/gfv2/batches"
+        assert config["output_dir"] == "/fake/root/gfv2/params"
+        assert config["fabric"] == "gfv2"
+
+
+def test_load_config_fabric_with_vpu():
+    """Both {fabric} and {vpu} should resolve when vpu is provided."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        base_config = Path(tmpdir) / "base_config.yml"
+        base_config.write_text(yaml.dump({
+            "data_root": "/fake/root",
+            "fabric": "gfv2",
+            "expected_max_hru_id": 100,
+        }))
+        step_config = Path(tmpdir) / "step.yml"
+        step_config.write_text(yaml.dump({
+            "target_gpkg": "{data_root}/input/fabrics/NHM_{vpu}_draft.gpkg",
+            "output_dir": "{data_root}/{fabric}/work",
+        }))
+        config = load_config(step_config, vpu="03N", base_config_path=base_config)
+        assert config["target_gpkg"] == "/fake/root/input/fabrics/NHM_03N_draft.gpkg"
+        assert config["output_dir"] == "/fake/root/gfv2/work"
+
+
+def test_load_config_without_fabric_still_works():
+    """Existing configs without {fabric} placeholder should still work."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        base_config = Path(tmpdir) / "base_config.yml"
+        base_config.write_text(yaml.dump({
+            "data_root": "/fake/root",
+            "expected_max_hru_id": 100,
+        }))
+        step_config = Path(tmpdir) / "step.yml"
+        step_config.write_text(yaml.dump({
+            "source_raster": "{data_root}/rasters/dem.tif",
+        }))
+        config = load_config(step_config, base_config_path=base_config)
+        assert config["source_raster"] == "/fake/root/rasters/dem.tif"
