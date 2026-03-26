@@ -1,8 +1,8 @@
 source_type: aspect
-source_raster: "{data_root}/source_data/NHDPlus_Merged_Rasters/{raster_vpu}/NEDSnapshot_merged_aspect_{raster_vpu}.tif"
-target_gpkg: "{data_root}/targets/NHM_{vpu}_draft.gpkg"
+source_raster: "{data_root}/work/nhd_merged/aspect.vrt"
+batch_dir: "{data_root}/{fabric}/batches"
 target_layer: nhru
 id_feature: nat_hru_id
-output_dir: "{data_root}/nhm_params"
+output_dir: "{data_root}/{fabric}/params"
 merged_file: nhm_aspect_params.csv
 categorical: false

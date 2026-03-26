@@ -1,4 +1,3 @@
 data_root: /caldera/hovenweep/projects/usgs/water/impd/nhgf/gfv2_param
-targets_dir: targets
-output_dir: nhm_params
+fabric: gfv2
 expected_max_hru_id: 361471

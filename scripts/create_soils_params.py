@@ -9,40 +9,24 @@ from gdptools import UserTiffData, ZonalGen
 
 from gfv2_params.config import load_config
 from gfv2_params.log import configure_logging
-from gfv2_params.raster_ops import mult_rasters, resample
 
 
-def process_soils(source_da, nhru_gdf, output_path, source_type, vpu_label, categorical, id_feature, logger):
+def process_soils(source_da, nhru_gdf, output_path, source_type, file_prefix, categorical, id_feature, logger):
     """Process categorical soils data: zonal stats -> dominant category -> CSV."""
-    logger.info("Loaded raster: shape=%s, crs=%s", source_da.shape, source_da.rio.crs)
-
-    file_prefix = f"base_nhm_{source_type}_{vpu_label}_param_temp"
-
     data = UserTiffData(
-        var="soils",
-        ds=source_da,
-        proj_ds=source_da.rio.crs,
-        x_coord="x",
-        y_coord="y",
-        band=1,
-        bname="band",
-        f_feature=nhru_gdf,
-        id_feature=id_feature,
+        var="soils", ds=source_da, proj_ds=source_da.rio.crs,
+        x_coord="x", y_coord="y", band=1, bname="band",
+        f_feature=nhru_gdf, id_feature=id_feature,
     )
-
     zonal_gen = ZonalGen(
-        user_data=data,
-        zonal_engine="exactextract",
-        zonal_writer="csv",
-        out_path=output_path,
-        file_prefix=file_prefix,
-        jobs=4,
+        user_data=data, zonal_engine="exactextract", zonal_writer="csv",
+        out_path=output_path, file_prefix=f"{file_prefix}_temp", jobs=4,
     )
     stats = zonal_gen.calculate_zonal(categorical=categorical)
     logger.info("Zonal statistics computed")
 
     # Remove temp file
-    zg_file = output_path / f"{file_prefix}.csv"
+    zg_file = output_path / f"{file_prefix}_temp.csv"
     if zg_file.exists():
         zg_file.unlink()
 
@@ -53,101 +37,74 @@ def process_soils(source_da, nhru_gdf, output_path, source_type, vpu_label, cate
     result = top_stats[["max_category"]].rename(columns={"max_category": "soils"})
     result.sort_index(inplace=True)
 
-    result_csv = output_path / f"base_nhm_{source_type}_{vpu_label}_param.csv"
+    result_csv = output_path / f"{file_prefix}.csv"
     result.to_csv(result_csv)
-    logger.info("Final soils parameters saved to: %s", result_csv)
+    logger.info("Soils parameters saved to: %s", result_csv)
 
 
-def process_soil_moist_max(source_dir, nhru_gdf, output_path, source_type, vpu_label, categorical, id_feature, logger):
-    """Process soil_moist_max: resample root depth, multiply by AWC, zonal mean."""
-    soil_moist_max_rast = source_dir / "soils_litho/soil_moist_max.tif"
-    rd_rast = source_dir / "lulc_veg/RootDepth.tif"
-    awc_rast = source_dir / "soils_litho/AWC.tif"
-    temp_rast = source_dir / "lulc_veg/rd_250_intermediate.tif"
-    final_rast = source_dir / "lulc_veg/rd_250_raw.tif"
-
-    if not rd_rast.exists():
-        raise FileNotFoundError(f"Root Depth raster not found: {rd_rast}")
-    if not awc_rast.exists():
-        raise FileNotFoundError(f"AWC raster not found: {awc_rast}")
-
-    if not final_rast.exists():
-        resample(str(rd_rast), str(awc_rast), str(temp_rast), str(final_rast))
-    if not soil_moist_max_rast.exists():
-        mult_rasters(str(final_rast), str(awc_rast), str(soil_moist_max_rast))
-
-    source_da = rioxarray.open_rasterio(soil_moist_max_rast)
-    logger.info("Loaded soil_moist_max raster: shape=%s, crs=%s", source_da.shape, source_da.rio.crs)
-
-    file_prefix = f"base_nhm_{source_type}_{vpu_label}_param_temp"
-
+def process_soil_moist_max(source_da, nhru_gdf, output_path, source_type, file_prefix, categorical, id_feature, logger):
+    """Process soil_moist_max: zonal mean from pre-built raster."""
     data = UserTiffData(
-        var=source_type,
-        ds=source_da,
-        proj_ds=source_da.rio.crs,
-        x_coord="x",
-        y_coord="y",
-        band=1,
-        bname="band",
-        f_feature=nhru_gdf,
-        id_feature=id_feature,
+        var=source_type, ds=source_da, proj_ds=source_da.rio.crs,
+        x_coord="x", y_coord="y", band=1, bname="band",
+        f_feature=nhru_gdf, id_feature=id_feature,
     )
-
     zonal_gen = ZonalGen(
-        user_data=data,
-        zonal_engine="exactextract",
-        zonal_writer="csv",
-        out_path=output_path,
-        file_prefix=file_prefix,
-        jobs=4,
+        user_data=data, zonal_engine="exactextract", zonal_writer="csv",
+        out_path=output_path, file_prefix=f"{file_prefix}_temp", jobs=4,
     )
     stats = zonal_gen.calculate_zonal(categorical=categorical)
     logger.info("Zonal statistics computed for soil_moist_max")
 
     mean_stats = stats[["mean"]].rename(columns={"mean": "soil_moist_max"})
-    result_csv = output_path / f"base_nhm_{source_type}_{vpu_label}_param.csv"
+    result_csv = output_path / f"{file_prefix}.csv"
     mean_stats.to_csv(result_csv)
-    logger.info("Final soil_moist_max parameters saved to: %s", result_csv)
+    logger.info("soil_moist_max parameters saved to: %s", result_csv)
 
 
 def main():
     parser = argparse.ArgumentParser(description="Create soils parameters from raster data.")
     parser.add_argument("--config", required=True, help="Path to config YAML file")
-    parser.add_argument("--vpu", default=None, help="VPU code (e.g., 01, 03N). Omit for custom fabrics.")
+    parser.add_argument("--base_config", default=None, help="Path to base_config.yml")
+    parser.add_argument("--batch_id", type=int, required=True, help="Batch ID")
     args = parser.parse_args()
 
     logger = configure_logging("create_soils_params")
 
-    config = load_config(Path(args.config), vpu=args.vpu)
+    config = load_config(
+        Path(args.config),
+        base_config_path=Path(args.base_config) if args.base_config else None,
+    )
     source_type = config["source_type"]
     categorical = config.get("categorical", False)
     id_feature = config["id_feature"]
     target_layer = config["target_layer"]
+    fabric = config["fabric"]
 
     output_dir = Path(config["output_dir"]) / source_type
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    gpkg_path = Path(config["target_gpkg"])
-    if not gpkg_path.exists():
-        raise FileNotFoundError(f"GPKG not found: {gpkg_path}")
-    nhru_gdf = gpd.read_file(gpkg_path, layer=target_layer)
-    logger.info("Loaded %s layer from %s: %d features", target_layer, gpkg_path, len(nhru_gdf))
+    # Load batch polygons
+    batch_dir = Path(config["batch_dir"])
+    batch_gpkg = batch_dir / f"batch_{args.batch_id:04d}.gpkg"
+    if not batch_gpkg.exists():
+        raise FileNotFoundError(f"Batch GPKG not found: {batch_gpkg}")
+    nhru_gdf = gpd.read_file(batch_gpkg, layer=target_layer)
+    logger.info("Loaded %s layer: %d features (batch %d)", target_layer, len(nhru_gdf), args.batch_id)
 
-    vpu_label = args.vpu if args.vpu else "custom"
+    file_prefix = f"base_nhm_{source_type}_{fabric}_batch_{args.batch_id:04d}_param"
+
+    # Load source raster (works for both soils and soil_moist_max)
+    raster_path = Path(config["source_raster"])
+    if not raster_path.exists():
+        raise FileNotFoundError(f"Input raster not found: {raster_path}")
+    source_da = rioxarray.open_rasterio(raster_path, masked=True)
+    logger.info("Loaded raster: shape=%s, crs=%s", source_da.shape, source_da.rio.crs)
 
     if source_type == "soils":
-        raster_path = Path(config["source_raster"])
-        if not raster_path.exists():
-            raise FileNotFoundError(f"Input raster not found: {raster_path}")
-        logger.info("Processing soils data using raster: %s", raster_path)
-        source_da = rioxarray.open_rasterio(raster_path)
-        process_soils(source_da, nhru_gdf, output_dir, source_type, vpu_label, categorical, id_feature, logger)
-
+        process_soils(source_da, nhru_gdf, output_dir, source_type, file_prefix, categorical, id_feature, logger)
     elif source_type == "soil_moist_max":
-        source_dir = Path(config["source_dir"])
-        logger.info("Processing soil_moist_max data from: %s", source_dir)
-        process_soil_moist_max(source_dir, nhru_gdf, output_dir, source_type, vpu_label, categorical, id_feature, logger)
-
+        process_soil_moist_max(source_da, nhru_gdf, output_dir, source_type, file_prefix, categorical, id_feature, logger)
     else:
         raise ValueError(f"Unknown source_type: {source_type}")
 

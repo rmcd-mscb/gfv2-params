@@ -1,8 +1,7 @@
 """Fill missing parameter values using KNN interpolation against a merged nhru geopackage.
 
 The merged geopackage is produced by the notebooks/merge_vpu_targets.py notebook
-(output: <targets_dir>/gfv2_nhru_merged.gpkg). Pass --force_rebuild to fall back
-to building the merged file on-the-fly from individual VPU geopackages.
+and serves as input to prepare_fabric.py for batching.
 """
 
 import argparse
@@ -14,50 +13,8 @@ import pandas as pd
 from sklearn.neighbors import NearestNeighbors
 from tqdm import tqdm
 
-from gfv2_params.config import VPUS_DETAILED, load_base_config
+from gfv2_params.config import load_base_config
 from gfv2_params.log import configure_logging
-
-
-def merge_vpu_geopackages(targets_dir, vpus, output_file, simplify_tolerance, logger):
-    logger.info("Merging VPU geopackages (legacy fallback — does not run make_valid)...")
-    merged_gdfs = []
-    skipped = []
-
-    for vpu in tqdm(vpus, desc="Merging VPU geopackages"):
-        gpkg_file = targets_dir / f"NHM_{vpu}_draft.gpkg"
-        if not gpkg_file.exists():
-            logger.warning("%s not found, skipping...", gpkg_file)
-            skipped.append(vpu)
-            continue
-
-        gdf = gpd.read_file(gpkg_file, layer="nhru")
-
-        if simplify_tolerance > 0:
-            gdf["geometry"] = gdf.apply(
-                lambda row: row["geometry"].simplify(tolerance=simplify_tolerance, preserve_topology=True)
-                if row["geometry"].area > simplify_tolerance * 10
-                else row["geometry"],
-                axis=1,
-            )
-
-        merged_gdfs.append(gdf)
-        logger.debug("Added %d features from VPU %s", len(gdf), vpu)
-
-    if not merged_gdfs:
-        raise FileNotFoundError(f"No VPU geopackages found in {targets_dir}")
-
-    if skipped:
-        logger.warning(
-            "Only %d of %d VPU files found. Missing VPUs: %s. Output may be incomplete.",
-            len(merged_gdfs), len(vpus), skipped,
-        )
-
-    merged_gdf = pd.concat(merged_gdfs, ignore_index=True)
-    merged_gdf = merged_gdf.sort_values("nat_hru_id").reset_index(drop=True)
-
-    logger.info("Saving merged geopackage with %d features to: %s", len(merged_gdf), output_file)
-    merged_gdf.to_file(output_file, driver="GPKG", layer="nhru")
-    return merged_gdf
 
 
 def find_missing_ids(param_file, expected_max, logger):
@@ -82,11 +39,28 @@ def fill_missing_values_knn(param_df, missing_ids, merged_gdf, param_column, k, 
     merged_gdf["y"] = merged_gdf["centroid"].y
 
     existing_df = param_df.merge(merged_gdf[["nat_hru_id", "x", "y"]], on="nat_hru_id", how="left")
-    missing_df = merged_gdf[merged_gdf["nat_hru_id"].isin(missing_ids)][["nat_hru_id", "x", "y", "vpu"]]
+    missing_df = merged_gdf[merged_gdf["nat_hru_id"].isin(missing_ids)][["nat_hru_id", "x", "y"]]
 
     existing_coords = existing_df[["x", "y"]].values
     missing_coords = missing_df[["x", "y"]].values
     existing_values = existing_df[param_column].values
+
+    # Filter NaN coordinates from existing data (null/invalid geometries)
+    nan_mask = np.isnan(existing_coords).any(axis=1)
+    if nan_mask.any():
+        logger.warning(
+            "%d features have NaN coordinates (null/invalid geometry). "
+            "Excluding from KNN fitting.", nan_mask.sum()
+        )
+        existing_coords = existing_coords[~nan_mask]
+        existing_values = existing_values[~nan_mask]
+
+    nan_missing = np.isnan(missing_coords).any(axis=1)
+    if nan_missing.any():
+        raise ValueError(
+            f"{nan_missing.sum()} missing features have null geometry "
+            "and cannot be filled via KNN interpolation."
+        )
 
     knn = NearestNeighbors(n_neighbors=k)
     knn.fit(existing_coords)
@@ -100,7 +74,6 @@ def fill_missing_values_knn(param_df, missing_ids, merged_gdf, param_column, k, 
     missing_filled = pd.DataFrame({
         "nat_hru_id": missing_df["nat_hru_id"].values,
         param_column: interpolated_values,
-        "vpu": missing_df["vpu"].values,
     })
     missing_filled["hru_id"] = missing_filled["nat_hru_id"]
 
@@ -112,70 +85,56 @@ def fill_missing_values_knn(param_df, missing_ids, merged_gdf, param_column, k, 
 
 def main():
     parser = argparse.ArgumentParser(description="Fill missing parameter values using KNN interpolation.")
-    parser.add_argument("--targets_dir", default=None)
-    parser.add_argument("--merged_gpkg", default=None,
-                        help="Path to pre-built merged nhru geopackage. "
-                             "Defaults to <targets_dir>/gfv2_nhru_merged.gpkg. "
-                             "Produce this file with the notebooks/merge_vpu_targets.py notebook.")
-    parser.add_argument("--param_file", default=None)
-    parser.add_argument("--output_dir", default=None)
-    parser.add_argument("--simplify_tolerance", type=float, default=100,
-                        help="Only used with --force_rebuild (legacy VPU merge fallback). "
-                             "Default 100 m; the notebook uses 10 m for higher detail.")
+    parser.add_argument("--base_config", default=None, help="Path to base_config.yml")
+    parser.add_argument("--merged_gpkg", default=None, help="Path to merged nhru geopackage")
+    parser.add_argument("--param_file", default=None, help="Path to merged parameter CSV to fill")
+    parser.add_argument("--output_dir", default=None, help="Output directory for filled file")
     parser.add_argument("--k_neighbors", type=int, default=1)
-    parser.add_argument("--force_rebuild", action="store_true",
-                        help="Rebuild the merged geopackage from individual VPU files "
-                             "instead of using the pre-built notebook output. "
-                             "Note: does not run make_valid on geometries (the notebook does).")
     args = parser.parse_args()
 
     logger = configure_logging("merge_and_fill_params")
 
-    # Load base config for defaults after argparse (so --help works without config)
-    base = load_base_config()
+    base = load_base_config(Path(args.base_config) if args.base_config else None)
     data_root = base["data_root"]
+    fabric = base["fabric"]
     expected_max = base["expected_max_hru_id"]
 
-    if args.targets_dir is None:
-        args.targets_dir = f"{data_root}/targets"
+    # Resolve defaults from fabric namespace
+    if args.merged_gpkg is None:
+        args.merged_gpkg = f"{data_root}/{fabric}/fabric/{fabric}_nhru_merged.gpkg"
     if args.param_file is None:
-        args.param_file = f"{data_root}/nhm_params/nhm_params_merged/nhm_ssflux_params.csv"
+        args.param_file = f"{data_root}/{fabric}/params/merged/nhm_ssflux_params.csv"
     if args.output_dir is None:
-        args.output_dir = f"{data_root}/nhm_params/nhm_params_merged"
+        args.output_dir = f"{data_root}/{fabric}/params/merged"
 
-    targets_dir = Path(args.targets_dir)
+    merged_gpkg = Path(args.merged_gpkg)
     param_file = Path(args.param_file)
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Resolve the merged geopackage path
-    if args.merged_gpkg is not None:
-        merged_gpkg = Path(args.merged_gpkg)
-    else:
-        merged_gpkg = targets_dir / "gfv2_nhru_merged.gpkg"
+    if not param_file.exists():
+        raise FileNotFoundError(
+            f"Parameter file not found: {param_file}\n"
+            "Run scripts/merge_params.py for this parameter type first."
+        )
 
-    filled_param_file = output_dir / f"filled_{param_file.name}"
-
-    if args.force_rebuild:
-        logger.info("--force_rebuild set: rebuilding merged geopackage from individual VPU files...")
-        merged_gdf = merge_vpu_geopackages(targets_dir, VPUS_DETAILED, merged_gpkg, args.simplify_tolerance, logger)
-    elif merged_gpkg.exists():
-        logger.info("Loading pre-built merged geopackage: %s", merged_gpkg)
-        try:
-            merged_gdf = gpd.read_file(merged_gpkg, layer="nhru")
-        except Exception as exc:
-            raise RuntimeError(
-                f"Failed to read merged geopackage: {merged_gpkg}\n"
-                "The file may be corrupt. Re-run notebooks/merge_vpu_targets.py "
-                "or pass --force_rebuild."
-            ) from exc
-        logger.info("Loaded %d features", len(merged_gdf))
-    else:
+    if not merged_gpkg.exists():
         raise FileNotFoundError(
             f"Merged geopackage not found: {merged_gpkg}\n"
-            "Run the notebooks/merge_vpu_targets.py notebook to produce it, "
-            "or pass --force_rebuild to build from individual VPU files."
+            "Run notebooks/merge_vpu_targets.py or scripts/prepare_fabric.py first."
         )
+
+    logger.info("Loading merged geopackage: %s", merged_gpkg)
+    try:
+        merged_gdf = gpd.read_file(merged_gpkg, layer="nhru")
+    except Exception as exc:
+        raise RuntimeError(
+            f"Failed to read merged geopackage: {merged_gpkg}\n"
+            "The file may be corrupt."
+        ) from exc
+    logger.info("Loaded %d features", len(merged_gdf))
+
+    filled_param_file = output_dir / f"filled_{param_file.name}"
 
     param_df, missing_ids = find_missing_ids(param_file, expected_max, logger)
 

@@ -1,2 +1,2 @@
-input_dir: "{data_root}/source_data/NHDPlus_Merged_Rasters"
-output_dir: "{data_root}/source_data/NHDPlus_Merged_Rasters"
+input_dir: "{data_root}/work/nhd_merged"
+output_dir: "{data_root}/work/nhd_merged"
