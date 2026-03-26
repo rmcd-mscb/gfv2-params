@@ -82,13 +82,44 @@ gfv2_param/
 
 ## Usage
 
-### Batch-based CONUS processing
+### 1. Initialize the data root
+
+Scaffold the directory tree and verify staged inputs:
+
+```bash
+python scripts/init_data_root.py
+python scripts/init_data_root.py --check
+```
+
+### 2. Stage external inputs
+
+The following externally-provided files must be placed in the scaffolded directories:
+
+| Destination | Required files |
+|---|---|
+| `input/fabric/` | `NHM_<VPU>_draft.gpkg` for each of the 21 VPUs: `01 02 03N 03S 03W 04 05 06 07 08 09 10L 10U 11 12 13 14 15 16 17 18` |
+| `input/soils_litho/` | `TEXT_PRMS.tif`, `AWC.tif`, `Lithology_exp_Konly_Project.shp` (+ sidecar files: `.dbf`, `.prj`, `.shx`) |
+| `input/lulc_veg/` | `RootDepth.tif`, `CNPY.tif`, `Imperv.tif` |
+| `input/nhm_default/` | NHM default parameter files (input to final merge step) |
+
+### 3. Download NHDPlus RPU rasters
+
+Downloads 7z archives from S3 and extracts to `work/nhd_extracted/`. Submit as a SLURM job (network-bound, ~112 GB):
+
+```bash
+mkdir -p logs
+sbatch slurm_batch/download_rpu_rasters.batch
+```
+
+This is idempotent — already-downloaded archives are skipped on resubmission.
+
+### 4. Run the pipeline (HPC / SLURM)
+See `slurm_batch/RUNME.md` for the full HPC workflow.
+
+### Single-batch run
 ```bash
 python scripts/create_zonal_params.py --config configs/elev_param.yml --batch_id 0042
 ```
-
-### HPC (SLURM)
-See `slurm_batch/RUNME.md` for the full HPC workflow.
 
 ## Custom Fabric
 

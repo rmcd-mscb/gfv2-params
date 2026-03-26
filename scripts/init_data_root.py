@@ -46,7 +46,7 @@ _TREE = [
           lulc/nalcms_2020/ North America land cover 2020 at 30 m
                             (NA_NALCMS_landcover_2020v2_30m.tif)
           nhm_default/      NHM default parameter files (input to final merge)
-          nhd/downloads/    Raw NHDPlus zip archives
+          nhd_downloads/    Raw NHDPlus zip archives
                             (downloadable via download/rpu_rasters.py)
         """,
     ),
@@ -56,7 +56,7 @@ _TREE = [
     ("input/lulc/nlcd_annual_imperv", None),
     ("input/lulc/nalcms_2020", None),
     ("input/nhm_default", None),
-    ("input/nhd/downloads", None),
+    ("input/nhd_downloads", None),
     # ---- work (intermediates) ----------------------------------------------
     (
         "work",

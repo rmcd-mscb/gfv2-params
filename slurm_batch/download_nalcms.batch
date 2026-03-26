@@ -1,0 +1,16 @@
+#!/bin/bash
+#SBATCH -p cpu
+#SBATCH -A impd
+#SBATCH --job-name=download_nalcms
+#SBATCH --output=logs/job_%j.out
+#SBATCH --error=logs/job_%j.err
+#SBATCH --time=02:00:00
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=1
+#SBATCH --mem=4G
+
+module load miniforge/latest
+conda activate geoenv
+
+cd /caldera/hovenweep/projects/usgs/water/impd/nhgf/gfv2-params
+python -m gfv2_params.download.nalcms_lulc

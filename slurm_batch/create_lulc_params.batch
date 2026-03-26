@@ -1,0 +1,19 @@
+#!/bin/bash
+#SBATCH -p cpu
+#SBATCH -A impd
+#SBATCH --job-name=nalcms_zonal
+#SBATCH --output=logs/job_%A_%a.out
+#SBATCH --error=logs/job_%A_%a.err
+#SBATCH --time=02:00:00
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=4
+#SBATCH --mem=32G
+
+module load miniforge/latest
+conda activate geoenv
+
+cd /caldera/hovenweep/projects/usgs/water/impd/nhgf/gfv2-params
+python scripts/create_zonal_params.py \
+    --config configs/nalcms_param.yml \
+    --base_config configs/base_config.yml \
+    --batch_id $SLURM_ARRAY_TASK_ID

@@ -36,8 +36,50 @@ gfv2_param/
 
 All commands below assume the repo root as your working directory, e.g.:
 ```bash
-cd /caldera/hovenweep/projects/usgs/water/impd/nhgf/gfv2_param/gfv2-params
+cd /caldera/hovenweep/projects/usgs/water/impd/nhgf/gfv2-params
 ```
+
+### Stage 0: Initialize data root and stage inputs
+
+Scaffold the full directory tree under your `data_root`:
+
+```bash
+python scripts/init_data_root.py
+```
+
+Verify that staged inputs are present:
+
+```bash
+python scripts/init_data_root.py --check
+```
+
+The following externally-provided files must be placed in the scaffolded directories before running `--check`:
+
+| Destination | Required files |
+|---|---|
+| `input/fabric/` | `NHM_<VPU>_draft.gpkg` for each of the 21 VPUs: `01 02 03N 03S 03W 04 05 06 07 08 09 10L 10U 11 12 13 14 15 16 17 18` |
+| `input/soils_litho/` | `TEXT_PRMS.tif`, `AWC.tif`, `Lithology_exp_Konly_Project.shp` (+ sidecar files: `.dbf`, `.prj`, `.shx`) |
+| `input/lulc_veg/` | `RootDepth.tif`, `CNPY.tif`, `Imperv.tif` |
+| `input/nhm_default/` | NHM default parameter files (input to final merge step) |
+
+The NALCMS 2020 land cover raster can be downloaded automatically (see below).
+
+**Download NHDPlus RPU rasters** from S3 (network-bound, ~112 GB, submit as a SLURM job):
+
+```bash
+mkdir -p logs
+sbatch slurm_batch/download_rpu_rasters.batch
+```
+
+**Download NALCMS 2020 land cover raster** from CEC (~2 GB zip, submit as a SLURM job):
+
+```bash
+sbatch slurm_batch/download_nalcms.batch
+```
+
+Both download scripts are idempotent — already-downloaded files are skipped on resubmission.
+
+Once all downloads complete, re-run `--check` to confirm all required inputs are present before proceeding.
 
 ### Stage 1: Raster preparation (VPU-based)
 
@@ -86,7 +128,12 @@ slurm_batch/submit_jobs.sh $BATCHES slurm_batch/create_zonal_slope_params.batch
 slurm_batch/submit_jobs.sh $BATCHES slurm_batch/create_zonal_aspect_params.batch
 slurm_batch/submit_jobs.sh $BATCHES slurm_batch/create_soils_params.batch
 slurm_batch/submit_jobs.sh $BATCHES slurm_batch/create_soilmoistmax_params.batch
+slurm_batch/submit_jobs.sh $BATCHES slurm_batch/create_lulc_params.batch
 ```
+
+The `create_lulc_params.batch` job produces per-HRU fractional land cover percentages for each
+NALCMS 2020 class (19 classes). Output: `{fabric}/params/nalcms_2020/` per batch, merged to
+`{fabric}/params/merged/nhm_nalcms_2020_lulc_params.csv`.
 
 ### Stage 5: Merge and validate
 
@@ -156,3 +203,6 @@ sacct -j <JOBID> -o JobID,State,Elapsed,MaxRSS
 | merge_output_params.batch | all param configs | merge_params.py |
 | merge_rpu_by_vpu.batch | merge_rpu_by_vpu.yml | merge_rpu_by_vpu.py |
 | compute_slope_aspect.batch | slope_aspect.yml | compute_slope_aspect.py |
+| download_rpu_rasters.batch | base_config.yml | gfv2_params.download.rpu_rasters |
+| download_nalcms.batch | base_config.yml | gfv2_params.download.nalcms_lulc |
+| create_lulc_params.batch | nalcms_param.yml | create_zonal_params.py |
