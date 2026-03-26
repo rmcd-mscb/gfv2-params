@@ -138,14 +138,17 @@ python scripts/prepare_fabric.py \
 
 Submit batch jobs using the wrapper script:
 
+Pass the corresponding param config as the 4th argument to auto-submit a merge job
+that runs immediately after each array job completes (`afterok` dependency):
+
 ```bash
 BATCHES=/path/to/gfv2/batches
-slurm_batch/submit_jobs.sh $BATCHES slurm_batch/create_zonal_elev_params.batch
-slurm_batch/submit_jobs.sh $BATCHES slurm_batch/create_zonal_slope_params.batch
-slurm_batch/submit_jobs.sh $BATCHES slurm_batch/create_zonal_aspect_params.batch
-slurm_batch/submit_jobs.sh $BATCHES slurm_batch/create_soils_params.batch
-slurm_batch/submit_jobs.sh $BATCHES slurm_batch/create_soilmoistmax_params.batch
-slurm_batch/submit_jobs.sh $BATCHES slurm_batch/create_lulc_params.batch
+slurm_batch/submit_jobs.sh $BATCHES slurm_batch/create_zonal_elev_params.batch configs/base_config.yml configs/elev_param.yml
+slurm_batch/submit_jobs.sh $BATCHES slurm_batch/create_zonal_slope_params.batch configs/base_config.yml configs/slope_param.yml
+slurm_batch/submit_jobs.sh $BATCHES slurm_batch/create_zonal_aspect_params.batch configs/base_config.yml configs/aspect_param.yml
+slurm_batch/submit_jobs.sh $BATCHES slurm_batch/create_soils_params.batch configs/base_config.yml configs/soils_param.yml
+slurm_batch/submit_jobs.sh $BATCHES slurm_batch/create_soilmoistmax_params.batch configs/base_config.yml configs/soilmoistmax_param.yml
+slurm_batch/submit_jobs.sh $BATCHES slurm_batch/create_lulc_params.batch configs/base_config.yml configs/nalcms_param.yml
 ```
 
 The `create_lulc_params.batch` job produces per-HRU fractional land cover percentages for each
@@ -154,11 +157,14 @@ NALCMS 2020 class (19 classes). Output: `{fabric}/params/nalcms_2020/` per batch
 
 ### Stage 5: Merge and validate
 
+If all Stage 4 jobs were submitted with the 4th merge-config argument (recommended), merges
+run automatically as chained SLURM jobs. To re-run all merges manually at once:
+
 ```bash
 sbatch slurm_batch/merge_output_params.batch
 ```
 
-Note: `merge_output_params.batch` merges all parameter types except ssflux (which is produced in Stage 6). Run individually if needed:
+Or individually:
 ```bash
 python scripts/merge_params.py --config configs/elev_param.yml --base_config configs/base_config.yml
 ```
@@ -206,7 +212,7 @@ Two cases depending on whether the fabric is already merged or comes as per-VPU 
 5. Submit parameter jobs, passing the fabric config as the third argument:
    ```bash
    BATCHES={data_root}/oregon/batches
-   slurm_batch/submit_jobs.sh $BATCHES slurm_batch/create_lulc_params.batch configs/base_config_oregon.yml
+   slurm_batch/submit_jobs.sh $BATCHES slurm_batch/create_lulc_params.batch configs/base_config_oregon.yml configs/nalcms_param.yml
    ```
 
 **Case B: VPU-based fabric** (per-VPU gpkgs that need merging — e.g., gfv2)
