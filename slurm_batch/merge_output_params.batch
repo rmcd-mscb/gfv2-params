@@ -12,12 +12,12 @@
 module load miniforge/latest
 conda activate geoenv
 
-REPO=/caldera/hovenweep/projects/usgs/water/impd/nhgf/gfv2_param/gfv2-params
-BASE_CONFIG=$REPO/configs/base_config.yml
+cd "$SLURM_SUBMIT_DIR"
+BASE_CONFIG=${BASE_CONFIG:-configs/base_config.yml}
 
-python $REPO/scripts/merge_params.py --config $REPO/configs/elev_param.yml --base_config $BASE_CONFIG
-python $REPO/scripts/merge_params.py --config $REPO/configs/slope_param.yml --base_config $BASE_CONFIG
-python $REPO/scripts/merge_params.py --config $REPO/configs/aspect_param.yml --base_config $BASE_CONFIG
-python $REPO/scripts/merge_params.py --config $REPO/configs/soils_param.yml --base_config $BASE_CONFIG
-python $REPO/scripts/merge_params.py --config $REPO/configs/soilmoistmax_param.yml --base_config $BASE_CONFIG
+python scripts/merge_params.py --config configs/elev_param.yml --base_config $BASE_CONFIG
+python scripts/merge_params.py --config configs/slope_param.yml --base_config $BASE_CONFIG
+python scripts/merge_params.py --config configs/aspect_param.yml --base_config $BASE_CONFIG
+python scripts/merge_params.py --config configs/soils_param.yml --base_config $BASE_CONFIG
+python scripts/merge_params.py --config configs/soilmoistmax_param.yml --base_config $BASE_CONFIG
 # Note: ssflux is merged separately in Stage 6 (after build_weights + ssflux batch jobs)

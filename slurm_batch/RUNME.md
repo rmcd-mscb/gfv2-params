@@ -39,6 +39,12 @@ All commands below assume the repo root as your working directory, e.g.:
 cd /caldera/hovenweep/projects/usgs/water/impd/nhgf/gfv2-params
 ```
 
+---
+
+## Part 1: Fabric-Independent Tasks
+
+These stages do not require a watershed fabric and can be run while fabric preparation proceeds in parallel. Complete all Part 1 stages before moving to Part 2.
+
 ### Stage 0: Initialize data root and stage inputs
 
 Scaffold the full directory tree under your `data_root`:
@@ -79,7 +85,7 @@ sbatch slurm_batch/download_nalcms.batch
 
 Both download scripts are idempotent — already-downloaded files are skipped on resubmission.
 
-Once all downloads complete, re-run `--check` to confirm all required inputs are present before proceeding.
+Note: `--check` only validates manually-staged inputs (soils, litho, lulc_veg). Verify downloads completed successfully by checking the job logs before proceeding.
 
 ### Stage 1: Raster preparation (VPU-based)
 
@@ -106,15 +112,26 @@ Pre-compute soil_moist_max raster:
 python scripts/build_derived_rasters.py --base_config configs/base_config.yml
 ```
 
+---
+
+## Part 2: Fabric-Dependent Tasks
+
+These stages require the merged fabric geopackage and the per-batch gpkgs produced by `prepare_fabric.py`. Complete Part 1 before proceeding.
+
 ### Stage 3: Prepare fabric (one-time per fabric)
 
-Spatially batch the merged fabric into per-batch geopackages:
+Merge per-VPU fabric geopackages into a single CONUS fabric:
+
+```bash
+marimo run notebooks/merge_vpu_targets.py
+```
+
+Then spatially batch the merged fabric into per-batch geopackages (`batch_size` is read from `base_config.yml`):
 
 ```bash
 python scripts/prepare_fabric.py \
-    --fabric_gpkg /path/to/gfv2_nhru_merged.gpkg \
-    --base_config configs/base_config.yml \
-    --batch_size 500
+    --fabric_gpkg {data_root}/gfv2/fabric/gfv2_nhru_merged.gpkg \
+    --base_config configs/base_config.yml
 ```
 
 ### Stage 4: Generate parameters (SLURM array jobs)
@@ -170,10 +187,38 @@ python scripts/merge_default_params.py --base_config configs/base_config.yml
 
 ## Custom Fabric (e.g., Oregon)
 
-1. Create `configs/base_config_oregon.yml` with `fabric: oregon` and appropriate `expected_max_hru_id`
-2. Place fabric gpkg in `input/fabrics/`
-3. Run prepare_fabric with `--base_config configs/base_config_oregon.yml`
-4. Run all stages with `--base_config configs/base_config_oregon.yml`
+Two cases depending on whether the fabric is already merged or comes as per-VPU gpkgs.
+
+**Case A: Pre-merged fabric** (single gpkg covering the full domain — e.g., Oregon)
+
+1. Create `configs/base_config_oregon.yml` with `fabric: oregon`, `expected_max_hru_id`, and `batch_size`
+2. Scaffold the fabric's output directories:
+   ```bash
+   python scripts/init_data_root.py --base_config configs/base_config_oregon.yml
+   ```
+3. Place the fabric gpkg directly in `{data_root}/oregon/fabric/` (NOT in `input/fabric/`)
+4. Prepare batches:
+   ```bash
+   python scripts/prepare_fabric.py \
+       --fabric_gpkg {data_root}/oregon/fabric/NHM_OR_draft.gpkg \
+       --base_config configs/base_config_oregon.yml
+   ```
+5. Submit parameter jobs, passing the fabric config as the third argument:
+   ```bash
+   BATCHES={data_root}/oregon/batches
+   slurm_batch/submit_jobs.sh $BATCHES slurm_batch/create_lulc_params.batch configs/base_config_oregon.yml
+   ```
+
+**Case B: VPU-based fabric** (per-VPU gpkgs that need merging — e.g., gfv2)
+
+1. Create `configs/base_config_<fabric>.yml` with `fabric: <name>`, `expected_max_hru_id`, and `batch_size`
+2. Place per-VPU gpkgs in `input/fabric/`
+3. Scaffold and merge:
+   ```bash
+   python scripts/init_data_root.py --base_config configs/base_config_<fabric>.yml
+   marimo run notebooks/merge_vpu_targets.py
+   ```
+4. Continue from Stage 3 above, passing `--base_config configs/base_config_<fabric>.yml`
 
 ## Partial Reruns
 

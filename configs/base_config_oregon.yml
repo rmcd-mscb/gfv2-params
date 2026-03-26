@@ -1,4 +1,4 @@
 data_root: /caldera/hovenweep/projects/usgs/water/impd/nhgf/gfv2_param_v2
-fabric: gfv2
-expected_max_hru_id: 361471
+fabric: oregon
+expected_max_hru_id: 16,814
 batch_size: 10000

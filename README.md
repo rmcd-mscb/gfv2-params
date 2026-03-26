@@ -102,19 +102,28 @@ The following externally-provided files must be placed in the scaffolded directo
 | `input/lulc_veg/` | `RootDepth.tif`, `CNPY.tif`, `Imperv.tif` |
 | `input/nhm_default/` | NHM default parameter files (input to final merge step) |
 
-### 3. Download NHDPlus RPU rasters
+### 3. Run fabric-independent tasks
 
-Downloads 7z archives from S3 and extracts to `work/nhd_extracted/`. Submit as a SLURM job (network-bound, ~112 GB):
+These stages do not require a watershed fabric and can run while fabric preparation proceeds in parallel. This includes downloading and merging NHD rasters, building VRTs, and computing derived rasters. See `slurm_batch/RUNME.md` **Part 1** for the full sequence.
+
+**Download NHDPlus RPU rasters** from S3 (~112 GB):
 
 ```bash
 mkdir -p logs
 sbatch slurm_batch/download_rpu_rasters.batch
 ```
 
-This is idempotent — already-downloaded archives are skipped on resubmission.
+**Download NALCMS 2020 land cover** from CEC (~2 GB):
 
-### 4. Run the pipeline (HPC / SLURM)
-See `slurm_batch/RUNME.md` for the full HPC workflow.
+```bash
+sbatch slurm_batch/download_nalcms.batch
+```
+
+Both scripts are idempotent — already-downloaded files are skipped on resubmission.
+
+### 4. Run fabric-dependent tasks
+
+Once raster prep is complete and the merged fabric is available, prepare the fabric batches and run parameter generation. See `slurm_batch/RUNME.md` **Part 2** for the full sequence.
 
 ### Single-batch run
 ```bash
@@ -123,12 +132,22 @@ python scripts/create_zonal_params.py --config configs/elev_param.yml --batch_id
 
 ## Custom Fabric
 
-To run the pipeline against a non-default fabric (e.g., a regional subset):
+To run the pipeline against a non-default fabric (e.g., a regional subset), there are two cases:
 
-1. Create `configs/base_config_oregon.yml` with `fabric: oregon` and the appropriate `expected_max_hru_id`.
-2. Place the fabric gpkg in `input/fabrics/`.
-3. Run `prepare_fabric.py` with `--base_config configs/base_config_oregon.yml`.
-4. Run all pipeline stages passing `--base_config configs/base_config_oregon.yml`.
+**Pre-merged fabric** (single gpkg covering the full domain — e.g., Oregon):
+
+1. Create `configs/base_config_oregon.yml` with `fabric: oregon`, `expected_max_hru_id`, and `batch_size`
+2. Scaffold the fabric output dirs: `python scripts/init_data_root.py --base_config configs/base_config_oregon.yml`
+3. Place the fabric gpkg in `{data_root}/oregon/fabric/` (not in `input/fabric/` — that is for raw per-VPU inputs only)
+4. Run `prepare_fabric.py` and all parameter jobs with `--base_config configs/base_config_oregon.yml`
+5. Pass the config to `submit_jobs.sh` as the third argument: `slurm_batch/submit_jobs.sh $BATCHES <script>.batch configs/base_config_oregon.yml`
+
+**VPU-based fabric** (per-VPU gpkgs that need merging — e.g., gfv2):
+
+1. Create `configs/base_config_<fabric>.yml` and place per-VPU gpkgs in `input/fabric/`
+2. Scaffold, merge with `marimo run notebooks/merge_vpu_targets.py`, then run `prepare_fabric.py` and all stages
+
+See `slurm_batch/RUNME.md` for the full step-by-step workflow.
 
 ## Configuration
 
