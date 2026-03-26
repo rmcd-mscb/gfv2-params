@@ -1,0 +1,59 @@
+"""Build CONUS-wide VRT files from per-VPU merged GeoTIFFs.
+
+Creates GDAL virtual rasters that reference per-VPU source files,
+allowing them to be read as a single CONUS-wide raster without
+duplicating data on disk.
+"""
+
+import argparse
+from pathlib import Path
+
+from osgeo import gdal
+
+from gfv2_params.config import load_base_config
+from gfv2_params.log import configure_logging
+
+RASTER_TYPES = {
+    "elevation": "NEDSnapshot_merged_fixed_*.tif",
+    "slope": "NEDSnapshot_merged_slope_*.tif",
+    "aspect": "NEDSnapshot_merged_aspect_*.tif",
+}
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Build CONUS-wide VRTs from per-VPU rasters.")
+    parser.add_argument("--base_config", default=None, help="Path to base_config.yml")
+    args = parser.parse_args()
+
+    logger = configure_logging("build_vrt")
+
+    base = load_base_config(Path(args.base_config) if args.base_config else None)
+    data_root = Path(base["data_root"])
+    nhd_merged_dir = data_root / "work" / "nhd_merged"
+
+    if not nhd_merged_dir.exists():
+        raise FileNotFoundError(f"NHD merged directory not found: {nhd_merged_dir}")
+
+    for vrt_name, pattern in RASTER_TYPES.items():
+        source_files = sorted(nhd_merged_dir.glob(f"*/{pattern}"))
+        if not source_files:
+            logger.warning("No source files found for %s (pattern: */%s)", vrt_name, pattern)
+            continue
+
+        vrt_path = nhd_merged_dir / f"{vrt_name}.vrt"
+        logger.info("Building %s from %d source files", vrt_path, len(source_files))
+
+        vrt_options = gdal.BuildVRTOptions(resolution="highest")
+        vrt_ds = gdal.BuildVRT(str(vrt_path), [str(f) for f in source_files], options=vrt_options)
+        if vrt_ds is None:
+            raise RuntimeError(f"gdal.BuildVRT failed for {vrt_name}")
+        vrt_ds.FlushCache()
+        del vrt_ds
+
+        logger.info("Written: %s (%d sources)", vrt_path, len(source_files))
+
+    logger.info("VRT build complete")
+
+
+if __name__ == "__main__":
+    main()
