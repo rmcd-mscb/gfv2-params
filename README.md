@@ -53,7 +53,7 @@ gfv2-params/
 
 ## Output Directory Structure
 
-The data root (`data_root`) is configured in `configs/base_config.yml` and resolves to the `gfv2_param/` directory. All source data and outputs live under this root:
+The data root (`data_root`) is set in `configs/base_config.yml` (currently pointing to a `gfv2_param/` directory on Hovenweep). All source data and outputs live under this root:
 
 ```
 gfv2_param/
@@ -62,10 +62,13 @@ gfv2_param/
 │   ├── NHDPlus_Extracted/          # Unzipped per-RPU rasters
 │   ├── NHDPlus_Merged_Rasters/
 │   │   └── <VPU>/                  # NEDSnapshot, Hydrodem, Fdr, Fac GeoTIFFs
+│   ├── data_layers/
+│   │   └── soils_litho/            # Soils rasters, lithology shapefile
 │   └── mrlc_nlcd_fract_impervious/ # NLCD fractional impervious cover rasters
 ├── targets/
 │   ├── NHM_<VPU>_draft.gpkg        # Input per-VPU watershed fabric (nhru layer)
 │   └── gfv2_nhru_merged.gpkg       # Merged nhru (produced by notebooks/merge_vpu_targets.py)
+├── weights/                        # Polygon-to-polygon weights (ssflux)
 └── nhm_params/
     ├── elevation/
     │   └── base_nhm_elevation_<VPU>_param.csv
@@ -83,7 +86,7 @@ gfv2_param/
     │   ├── nhm_*.csv
     │   └── filled_nhm_ssflux_params.csv
     ├── default/                    # Input NHM default parameter files
-    └── merged/                     # Final merged outputs per parameter
+    └── merged/                     # NHM default parameters rekeyed to nat_hru_id
         └── <param_name>_merged.csv
 ```
 

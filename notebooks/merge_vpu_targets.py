@@ -10,8 +10,8 @@ def _(mo):
     # Merge VPU nhru layers into a single GeoPackage
 
     Reads the `nhru` layer from each `NHM_<vpu>_draft.gpkg`, fixes invalid
-    geometries with `make_valid()`, simplifies, then writes a single output
-    GeoPackage.
+    geometries with `make_valid()`, simplifies, then validates geometry and
+    `nat_hru_id` contiguity before writing a single output GeoPackage.
     """)
     return
 
@@ -25,7 +25,9 @@ def _():
     import shapely
     import marimo as mo
 
-    return Path, gpd, mo, pd, shapely
+    from gfv2_params.config import VPUS_DETAILED, load_base_config
+
+    return Path, VPUS_DETAILED, gpd, load_base_config, mo, pd, shapely
 
 
 @app.cell
@@ -37,20 +39,16 @@ def _(mo):
 
 
 @app.cell
-def _(Path):
-    TARGETS_DIR = Path(
-        "/caldera/hovenweep/projects/usgs/water/impd/nhgf/gfv2_param/targets"
-    )
+def _(Path, VPUS_DETAILED, load_base_config):
+    _base = load_base_config()
+    TARGETS_DIR = Path(_base["data_root"]) / "targets"
     OUTPUT_PATH = TARGETS_DIR / "gfv2_nhru_merged.gpkg"
 
-    VPUS = [
-        "01", "02", "03N", "03S", "03W",
-        "04", "05", "06", "07", "08", "09",
-        "10L", "10U",
-        "11", "12", "13", "14", "15", "16", "17", "18",
-    ]
+    VPUS = VPUS_DETAILED
 
     # Simplification tolerance in map units (EPSG:5070 → metres).
+    # 10 m preserves more detail than the legacy 100 m used by
+    # merge_and_fill_params.py --force_rebuild.
     # Set to 0 or None to skip simplification.
     SIMPLIFY_TOLERANCE = 10.0
     PRESERVE_TOPOLOGY  = True
@@ -81,10 +79,23 @@ def _(
     pd,
     shapely,
 ):
+    if not TARGETS_DIR.exists():
+        raise FileNotFoundError(
+            f"Targets directory not found: {TARGETS_DIR}\n"
+            "Verify that data_root in configs/base_config.yml is correct "
+            "and the filesystem is mounted."
+        )
+
     _gdfs = []
+    _skipped = []
 
     for _vpu in VPUS:
         _path = TARGETS_DIR / f"NHM_{_vpu}_draft.gpkg"
+        if not _path.exists():
+            print(f"VPU {_vpu:4s}: MISSING — {_path}")
+            _skipped.append(_vpu)
+            continue
+
         _gdf = gpd.read_file(_path, layer="nhru")
         _gdf["source_vpu"] = _path.stem
 
@@ -94,6 +105,13 @@ def _(
             _gdf.loc[_invalid, "geometry"] = shapely.make_valid(
                 _gdf.loc[_invalid, "geometry"].values
             )
+            # make_valid can produce GeometryCollections; extract polygons only
+            _non_poly = ~_gdf.geometry.geom_type.isin(["Polygon", "MultiPolygon"])
+            if _non_poly.any():
+                print(f"  VPU {_vpu}: {_non_poly.sum()} non-polygon geometries after make_valid, extracting polygons")
+                _gdf.loc[_non_poly, "geometry"] = _gdf.loc[_non_poly, "geometry"].apply(
+                    lambda g: shapely.ops.unary_union([p for p in getattr(g, "geoms", [g]) if p.geom_type in ("Polygon", "MultiPolygon")]) if hasattr(g, "geoms") else g
+                )
 
         # Simplify
         if SIMPLIFY_TOLERANCE:
@@ -104,6 +122,12 @@ def _(
 
         _gdfs.append(_gdf)
         print(f"VPU {_vpu:4s}: {len(_gdf):>6,} HRUs")
+
+    if not _gdfs:
+        raise RuntimeError(f"No VPU GeoPackages were successfully loaded from {TARGETS_DIR}")
+
+    if _skipped:
+        print(f"\nWARNING: {len(_skipped)} VPU(s) skipped (missing): {_skipped}")
 
     nhru = gpd.GeoDataFrame(pd.concat(_gdfs, ignore_index=True), crs=_gdfs[0].crs)
     print(f"\nTotal: {len(nhru):,} HRUs  |  CRS: {nhru.crs}")
@@ -126,6 +150,11 @@ def _(nhru):
     print(f"valid  : {n_valid:,}")
     print(f"invalid: {n_invalid:,}")
     print(f"empty  : {n_empty:,}")
+
+    if n_invalid > 0:
+        raise ValueError(f"{n_invalid} invalid geometries remain after make_valid — inspect before writing output")
+    if n_empty > 0:
+        print(f"WARNING: {n_empty} empty geometries detected — these HRUs will have no spatial extent")
     return
 
 
@@ -179,11 +208,14 @@ def _(mo):
 @app.cell
 def _(OUTPUT_PATH, nhru):
     OUTPUT_PATH.parent.mkdir(parents=True, exist_ok=True)
+
+    # Write to a temp file first to avoid losing existing data if the write fails
+    _tmp = OUTPUT_PATH.with_suffix(".gpkg.tmp")
+    nhru.to_file(_tmp, layer="nhru", driver="GPKG")
+
     if OUTPUT_PATH.exists():
         OUTPUT_PATH.unlink()
-        print(f"Removed existing: {OUTPUT_PATH}")
-
-    nhru.to_file(OUTPUT_PATH, layer="nhru", driver="GPKG")
+    _tmp.rename(OUTPUT_PATH)
     print(f"Written {len(nhru):,} features → {OUTPUT_PATH}")
     return
 

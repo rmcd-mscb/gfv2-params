@@ -19,13 +19,15 @@ from gfv2_params.log import configure_logging
 
 
 def merge_vpu_geopackages(targets_dir, vpus, output_file, simplify_tolerance, logger):
-    logger.info("Merging VPU geopackages...")
+    logger.info("Merging VPU geopackages (legacy fallback — does not run make_valid)...")
     merged_gdfs = []
+    skipped = []
 
     for vpu in tqdm(vpus, desc="Merging VPU geopackages"):
         gpkg_file = targets_dir / f"NHM_{vpu}_draft.gpkg"
         if not gpkg_file.exists():
             logger.warning("%s not found, skipping...", gpkg_file)
+            skipped.append(vpu)
             continue
 
         gdf = gpd.read_file(gpkg_file, layer="nhru")
@@ -43,6 +45,12 @@ def merge_vpu_geopackages(targets_dir, vpus, output_file, simplify_tolerance, lo
 
     if not merged_gdfs:
         raise FileNotFoundError(f"No VPU geopackages found in {targets_dir}")
+
+    if skipped:
+        logger.warning(
+            "Only %d of %d VPU files found. Missing VPUs: %s. Output may be incomplete.",
+            len(merged_gdfs), len(vpus), skipped,
+        )
 
     merged_gdf = pd.concat(merged_gdfs, ignore_index=True)
     merged_gdf = merged_gdf.sort_values("nat_hru_id").reset_index(drop=True)
@@ -112,11 +120,13 @@ def main():
     parser.add_argument("--param_file", default=None)
     parser.add_argument("--output_dir", default=None)
     parser.add_argument("--simplify_tolerance", type=float, default=100,
-                        help="Only used with --force_rebuild (legacy VPU merge fallback).")
+                        help="Only used with --force_rebuild (legacy VPU merge fallback). "
+                             "Default 100 m; the notebook uses 10 m for higher detail.")
     parser.add_argument("--k_neighbors", type=int, default=1)
     parser.add_argument("--force_rebuild", action="store_true",
                         help="Rebuild the merged geopackage from individual VPU files "
-                             "instead of using the pre-built notebook output.")
+                             "instead of using the pre-built notebook output. "
+                             "Note: does not run make_valid on geometries (the notebook does).")
     args = parser.parse_args()
 
     logger = configure_logging("merge_and_fill_params")
@@ -151,7 +161,14 @@ def main():
         merged_gdf = merge_vpu_geopackages(targets_dir, VPUS_DETAILED, merged_gpkg, args.simplify_tolerance, logger)
     elif merged_gpkg.exists():
         logger.info("Loading pre-built merged geopackage: %s", merged_gpkg)
-        merged_gdf = gpd.read_file(merged_gpkg, layer="nhru")
+        try:
+            merged_gdf = gpd.read_file(merged_gpkg, layer="nhru")
+        except Exception as exc:
+            raise RuntimeError(
+                f"Failed to read merged geopackage: {merged_gpkg}\n"
+                "The file may be corrupt. Re-run notebooks/merge_vpu_targets.py "
+                "or pass --force_rebuild."
+            ) from exc
         logger.info("Loaded %d features", len(merged_gdf))
     else:
         raise FileNotFoundError(
