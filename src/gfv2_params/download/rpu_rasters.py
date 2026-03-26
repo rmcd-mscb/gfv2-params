@@ -222,8 +222,8 @@ def download_and_extract(dd, vpu, rpu, component, download_dir, extract_dir):
 def main():
     base = load_base_config()
     data_root = Path(base["data_root"])
-    download_dir = data_root / "source_data/NHDPlus_Downloads"
-    extract_dir = data_root / "source_data/NHDPlus_Extracted"
+    download_dir = data_root / "input/nhd_downloads"
+    extract_dir = data_root / "work/nhd_extracted"
     download_dir.mkdir(exist_ok=True)
     extract_dir.mkdir(exist_ok=True)
 

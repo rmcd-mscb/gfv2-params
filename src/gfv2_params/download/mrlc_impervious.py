@@ -39,7 +39,7 @@ def download_and_unzip(url, out_dir):
 def main():
     base = load_base_config()
     data_root = Path(base["data_root"])
-    output_dir = data_root / "source_data/mrlc_nlcd_fract_impervious"
+    output_dir = data_root / "input/mrlc_impervious"
     output_dir.mkdir(parents=True, exist_ok=True)
 
     for url in urls:
