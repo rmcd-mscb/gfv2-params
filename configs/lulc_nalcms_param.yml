@@ -1,0 +1,16 @@
+source_type: lulc
+lulc_source: nalcms
+scenario: observed
+year: 2020
+
+source_raster: "{data_root}/input/lulc_veg/{lulc_source}/nalcms_{year}_land_cover.tif"
+canopy_raster: "{data_root}/input/lulc_veg/{lulc_source}/nalcms_{year}_tree_canopy.tif"
+# No keep raster for NALCMS; evergreen retention derived from crosswalk
+crosswalk_file: "crosswalks/nalcms_nhm.csv"
+
+batch_dir: "{data_root}/{fabric}/batches"
+target_layer: nhru
+id_feature: nat_hru_id
+output_dir: "{data_root}/{fabric}/params"
+merged_file: nhm_lulc_params.csv
+categorical: true

@@ -206,6 +206,29 @@ def test_load_config_fabric_with_vpu():
         assert config["output_dir"] == "/fake/root/gfv2/work"
 
 
+def test_load_config_step_self_reference():
+    """Step config scalar values resolve as placeholders in other step values."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        base_config = Path(tmpdir) / "base_config.yml"
+        base_config.write_text(yaml.dump({
+            "data_root": "/fake/root",
+            "fabric": "gfv2",
+            "expected_max_hru_id": 100,
+        }))
+        step_config = Path(tmpdir) / "step.yml"
+        step_config.write_text(yaml.dump({
+            "source_type": "lulc",
+            "lulc_source": "foresce",
+            "scenario": "bau_rcp45",
+            "year": 2070,
+            "source_raster": "{data_root}/input/{lulc_source}/LULC_{scenario}_{year}.tif",
+            "batch_dir": "{data_root}/{fabric}/batches",
+        }))
+        config = load_config(step_config, base_config_path=base_config)
+        assert config["source_raster"] == "/fake/root/input/foresce/LULC_bau_rcp45_2070.tif"
+        assert config["batch_dir"] == "/fake/root/gfv2/batches"
+
+
 def test_load_config_without_fabric_still_works():
     """Existing configs without {fabric} placeholder should still work."""
     with tempfile.TemporaryDirectory() as tmpdir:

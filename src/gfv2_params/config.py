@@ -115,6 +115,14 @@ def load_config(
         replacements["vpu"] = gpkg_vpu
         replacements["raster_vpu"] = raster_vpu
 
+    # Allow step config scalar values to serve as placeholders.
+    # This enables patterns like: source_raster: ".../{lulc_source}/{scenario}_{year}.tif"
+    for key, value in step.items():
+        if isinstance(value, (str, int, float)) and key not in replacements:
+            str_val = str(value)
+            if "{" not in str_val:
+                replacements[key] = str_val
+
     # Resolve placeholders in step config
     resolved_step = _resolve_placeholders(step, replacements)
 

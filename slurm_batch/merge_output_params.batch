@@ -20,4 +20,5 @@ python $REPO/scripts/merge_params.py --config $REPO/configs/slope_param.yml --ba
 python $REPO/scripts/merge_params.py --config $REPO/configs/aspect_param.yml --base_config $BASE_CONFIG
 python $REPO/scripts/merge_params.py --config $REPO/configs/soils_param.yml --base_config $BASE_CONFIG
 python $REPO/scripts/merge_params.py --config $REPO/configs/soilmoistmax_param.yml --base_config $BASE_CONFIG
+python $REPO/scripts/merge_params.py --config $REPO/configs/lulc_foresce_param.yml --base_config $BASE_CONFIG
 # Note: ssflux is merged separately in Stage 6 (after build_weights + ssflux batch jobs)

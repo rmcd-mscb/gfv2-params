@@ -1,0 +1,17 @@
+source_type: lulc
+lulc_source: foresce
+scenario: bau_rcp45
+year: 2070
+
+source_raster: "{data_root}/input/lulc_veg/{lulc_source}/LULC_{scenario}_{year}.tif"
+canopy_raster: "{data_root}/input/lulc_veg/{lulc_source}/CNPY.tif"
+keep_raster: "{data_root}/input/lulc_veg/{lulc_source}/keep.tif"
+radtrn_raster: "{data_root}/work/derived_rasters/radtrn_{lulc_source}_{scenario}_{year}.tif"
+crosswalk_file: "crosswalks/foresce_nhm.csv"
+
+batch_dir: "{data_root}/{fabric}/batches"
+target_layer: nhru
+id_feature: nat_hru_id
+output_dir: "{data_root}/{fabric}/params"
+merged_file: nhm_lulc_params.csv
+categorical: true

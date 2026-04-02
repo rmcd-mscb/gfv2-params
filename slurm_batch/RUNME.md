@@ -64,6 +64,16 @@ Pre-compute soil_moist_max raster:
 python scripts/build_derived_rasters.py --base_config configs/base_config.yml
 ```
 
+### Stage 2c: Build LULC derived rasters (one-time)
+
+Pre-compute radiation transmission raster from LULC + canopy + keep:
+
+```bash
+python scripts/build_lulc_rasters.py \
+    --config configs/lulc_foresce_param.yml \
+    --base_config configs/base_config.yml
+```
+
 ### Stage 3: Prepare fabric (one-time per fabric)
 
 Spatially batch the merged fabric into per-batch geopackages:
@@ -86,6 +96,14 @@ slurm_batch/submit_jobs.sh $BATCHES slurm_batch/create_zonal_slope_params.batch
 slurm_batch/submit_jobs.sh $BATCHES slurm_batch/create_zonal_aspect_params.batch
 slurm_batch/submit_jobs.sh $BATCHES slurm_batch/create_soils_params.batch
 slurm_batch/submit_jobs.sh $BATCHES slurm_batch/create_soilmoistmax_params.batch
+slurm_batch/submit_jobs.sh $BATCHES slurm_batch/create_lulc_params.batch
+```
+
+To use an alternative LULC source (NLCD or NALCMS) instead of FORE-SCE:
+```bash
+slurm_batch/submit_jobs.sh $BATCHES slurm_batch/create_lulc_nlcd_params.batch
+# or
+slurm_batch/submit_jobs.sh $BATCHES slurm_batch/create_lulc_nalcms_params.batch
 ```
 
 ### Stage 5: Merge and validate
@@ -152,6 +170,9 @@ sacct -j <JOBID> -o JobID,State,Elapsed,MaxRSS
 | create_zonal_aspect_params.batch | aspect_param.yml | create_zonal_params.py |
 | create_soils_params.batch | soils_param.yml | create_soils_params.py |
 | create_soilmoistmax_params.batch | soilmoistmax_param.yml | create_soils_params.py |
+| create_lulc_params.batch | lulc_foresce_param.yml | create_lulc_params.py |
+| create_lulc_nlcd_params.batch | lulc_nlcd_param.yml | create_lulc_params.py |
+| create_lulc_nalcms_params.batch | lulc_nalcms_param.yml | create_lulc_params.py |
 | create_ssflux_params.batch | ssflux_param.yml | create_ssflux_params.py |
 | merge_output_params.batch | all param configs | merge_params.py |
 | merge_rpu_by_vpu.batch | merge_rpu_by_vpu.yml | merge_rpu_by_vpu.py |
