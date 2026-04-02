@@ -13,5 +13,5 @@ batch_dir: "{data_root}/{fabric}/batches"
 target_layer: nhru
 id_feature: nat_hru_id
 output_dir: "{data_root}/{fabric}/params"
-merged_file: nhm_lulc_params.csv
+merged_file: nhm_lulc_{lulc_source}_params.csv
 categorical: true

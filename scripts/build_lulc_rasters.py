@@ -29,9 +29,10 @@ def main():
 
     lulc_raster = Path(config["source_raster"])
     cnpy_raster = Path(config["canopy_raster"])
-    radtrn_raster = Path(config["radtrn_raster"])
 
-    # keep_raster is optional (NLCD/NALCMS may not have one)
+    # radtrn_raster and keep_raster are optional (NLCD/NALCMS may not have them)
+    radtrn_raster_str = config.get("radtrn_raster")
+    radtrn_raster = Path(radtrn_raster_str) if radtrn_raster_str else None
     keep_raster_str = config.get("keep_raster")
     keep_raster = Path(keep_raster_str) if keep_raster_str else None
 
@@ -40,7 +41,8 @@ def main():
     if not cnpy_raster.exists():
         raise FileNotFoundError(f"Canopy raster not found: {cnpy_raster}")
 
-    derived_dir = radtrn_raster.parent
+    data_root = Path(config["data_root"])
+    derived_dir = radtrn_raster.parent if radtrn_raster else data_root / "work" / "derived_rasters"
     derived_dir.mkdir(parents=True, exist_ok=True)
 
     # Step 1: Resample CNPY to LULC grid
@@ -68,7 +70,9 @@ def main():
             logger.info("Resampled keep raster already exists: %s", keep_resampled)
 
         # Step 3: Compute radiation transmission
-        if not radtrn_raster.exists() or args.force:
+        if radtrn_raster is None:
+            logger.warning("keep_raster is configured but radtrn_raster path is missing from config; skipping radtrn")
+        elif not radtrn_raster.exists() or args.force:
             logger.info("Computing radiation transmission raster...")
             compute_radtrn(
                 str(lulc_raster),
@@ -77,7 +81,7 @@ def main():
                 str(radtrn_raster),
             )
             logger.info("Written: %s", radtrn_raster)
-        else:
+        elif radtrn_raster is not None:
             logger.info("Radiation transmission raster already exists: %s", radtrn_raster)
     else:
         logger.info("No keep raster configured; skipping radtrn computation")
