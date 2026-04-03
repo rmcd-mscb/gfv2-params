@@ -16,6 +16,17 @@ from gfv2_params.log import configure_logging
 from gfv2_params.raster_ops import compute_radtrn, resample
 
 
+def _is_valid_raster(path: Path) -> bool:
+    """Return True if path exists and rasterio can open it."""
+    if not path.exists():
+        return False
+    try:
+        with rasterio.open(path):
+            return True
+    except Exception:
+        return False
+
+
 def _raster_info(path: Path) -> str:
     """Return a one-line summary of a raster: shape, CRS, pixel size, file size."""
     with rasterio.open(path) as src:
@@ -86,7 +97,7 @@ def main():
     # Step 1: Resample CNPY to LULC grid
     # ------------------------------------------------------------------
     cnpy_resampled = derived_dir / f"cnpy_resampled_{lulc_source}.tif"
-    if not cnpy_resampled.exists() or args.force:
+    if not _is_valid_raster(cnpy_resampled) or args.force:
         intermediate = derived_dir / "cnpy_resample_intermediate.tif"
         logger.info("--- Step 1/3: Resample canopy raster to LULC grid ---")
         logger.info("  Input    : %s", cnpy_raster)
@@ -111,7 +122,7 @@ def main():
             raise FileNotFoundError(f"Keep raster not found: {keep_raster}")
 
         keep_resampled = derived_dir / f"keep_resampled_{lulc_source}.tif"
-        if not keep_resampled.exists() or args.force:
+        if not _is_valid_raster(keep_resampled) or args.force:
             intermediate = derived_dir / "keep_resample_intermediate.tif"
             logger.info("--- Step 2/3: Resample keep raster to LULC grid ---")
             logger.info("  Input    : %s", keep_raster)
@@ -136,7 +147,7 @@ def main():
                 "keep_raster is configured but radtrn_raster path is missing "
                 "from config; skipping radtrn"
             )
-        elif not radtrn_raster.exists() or args.force:
+        elif not _is_valid_raster(radtrn_raster) or args.force:
             logger.info("--- Step 3/3: Compute radiation transmission raster ---")
             logger.info("  LULC   : %s", lulc_raster)
             logger.info("  CNPY   : %s", cnpy_resampled)
