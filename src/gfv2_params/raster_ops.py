@@ -1,8 +1,13 @@
+import logging
+import math
+import time
 from pathlib import Path
 
 import numpy as np
 import rasterio
 from osgeo import gdal, gdalconst
+
+logger = logging.getLogger(__name__)
 
 
 def resample(
@@ -40,13 +45,24 @@ def resample(
     dst.SetGeoTransform(tmpl_geotrans)
     dst.SetProjection(tmpl_proj)
 
+    logger.info(
+        "  GDAL ReprojectImage: %s -> %s  (%d x %d pixels)",
+        Path(src_path).name,
+        Path(intermediate_path).name,
+        width,
+        height,
+    )
+    t_gdal = time.time()
     err = gdal.ReprojectImage(src, dst, src_proj, tmpl_proj, gdalconst.GRA_NearestNeighbour)
     if err != 0:
         raise RuntimeError(f"GDAL ReprojectImage failed with error code {err}")
     del dst
     del src
     del tmpl
+    logger.info("  GDAL reproject done in %.0f s", time.time() - t_gdal)
 
+    logger.info("  Applying NoData mask and writing LZW output: %s", Path(output_path).name)
+    t_mask = time.time()
     with rasterio.open(intermediate_path) as src_rio:
         data = src_rio.read(1)
         profile = src_rio.profile
@@ -59,6 +75,10 @@ def resample(
 
         with rasterio.open(output_path, "w", **profile) as dst_rio:
             dst_rio.write(data.astype(rasterio.float64), 1)
+    logger.info("  NoData mask + write done in %.0f s", time.time() - t_mask)
+    # remove large intermediate
+    Path(intermediate_path).unlink(missing_ok=True)
+    logger.info("  Removed intermediate: %s", intermediate_path)
 
 
 def mult_rasters(
@@ -130,6 +150,16 @@ def compute_radtrn(
         profile.update(dtype=rasterio.float32, count=1, compress="lzw", nodata=0.0)
 
         height, width = lulc_src.shape
+        n_row_blocks = math.ceil(height / block_size)
+        n_col_blocks = math.ceil(width / block_size)
+        total_blocks = n_row_blocks * n_col_blocks
+        log_every = max(1, total_blocks // 10)  # ~10% increments
+        logger.info(
+            "  Grid: %d x %d pixels | block_size=%d | %d x %d = %d blocks",
+            height, width, block_size, n_row_blocks, n_col_blocks, total_blocks,
+        )
+        t_radtrn = time.time()
+        block_num = 0
 
         with rasterio.open(out_path, "w", **profile) as dst:
             for row_off in range(0, height, block_size):
@@ -144,6 +174,18 @@ def compute_radtrn(
 
                     result = np.where(lulc >= tree_threshold, cnpy * keep / 100.0, 0.0)
                     dst.write(result.astype(np.float32), 1, window=window)
+
+                    block_num += 1
+                    if block_num % log_every == 0 or block_num == total_blocks:
+                        pct = 100 * block_num / total_blocks
+                        elapsed = time.time() - t_radtrn
+                        rate = block_num / elapsed if elapsed > 0 else 0
+                        eta = (total_blocks - block_num) / rate if rate > 0 else 0
+                        logger.info(
+                            "  Block %d/%d (%.0f%%) | row_off=%d | elapsed=%.0fs | ETA=%.0fs",
+                            block_num, total_blocks, pct, row_off, elapsed, eta,
+                        )
+        logger.info("  compute_radtrn done in %.0f s", time.time() - t_radtrn)
 
 
 def deg_to_fraction(slope_deg: float) -> float:
