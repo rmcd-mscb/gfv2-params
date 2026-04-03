@@ -1,0 +1,20 @@
+source_type: nhm_v11
+# NHM v1.1 pre-derived LULC rasters (Wieczorek and Bock, 2021).
+# LULC.tif: 5-class raster with values 0=bare, 1=grass, 2=shrub,
+#            3=deciduous forest, 4=evergreen forest (NHM cov_type codes).
+# keep.tif: per-pixel winter leaf retention (0-100%).
+# CNPY.tif: per-pixel canopy cover (0-100%).
+# Download: sbatch slurm_batch/download_nhm_v11.batch
+
+source_raster: "{data_root}/input/lulc_veg/nhm_v11/LULC.tif"
+canopy_raster: "{data_root}/input/lulc_veg/nhm_v11/CNPY.tif"
+keep_raster: "{data_root}/input/lulc_veg/nhm_v11/keep.tif"
+radtrn_raster: "{data_root}/work/derived_rasters/radtrn_nhm_v11.tif"
+crosswalk_file: "crosswalks/nhm_v11_nhm.csv"
+
+batch_dir: "{data_root}/{fabric}/batches"
+target_layer: nhru
+id_feature: nat_hru_id
+output_dir: "{data_root}/{fabric}/params"
+merged_file: nhm_lulc_nhm_v11_params.csv
+categorical: true

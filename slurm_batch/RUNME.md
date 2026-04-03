@@ -20,6 +20,7 @@ gfv2_param/
 │   ├── mrlc_impervious/
 │   ├── soils_litho/
 │   ├── lulc_veg/
+│   │   └── nhm_v11/    # NHM v1.1 pre-derived LULC rasters (downloadable)
 │   └── nhm_defaults/
 ├── work/           # Reproducible intermediates (safe to delete)
 │   ├── nhd_extracted/
@@ -83,7 +84,14 @@ sbatch slurm_batch/download_rpu_rasters.batch
 sbatch slurm_batch/download_nalcms.batch
 ```
 
-Both download scripts are idempotent — already-downloaded files are skipped on resubmission.
+**Download NHM v1.1 LULC rasters** from ScienceBase item `5ebb182b82ce25b5136181cf`
+(`LULC.zip`, `keep.zip`, `CNPY.zip` — network-bound; submit as a SLURM job):
+
+```bash
+sbatch slurm_batch/download_nhm_v11.batch
+```
+
+All download scripts are idempotent — already-downloaded files are skipped on resubmission.
 
 Note: `--check` only validates manually-staged inputs (soils, litho, lulc_veg). Verify downloads completed successfully by checking the job logs before proceeding.
 
@@ -118,7 +126,7 @@ Pre-compute radiation transmission raster from LULC + canopy + keep:
 
 ```bash
 python scripts/build_lulc_rasters.py \
-    --config configs/lulc_foresce_param.yml \
+    --config configs/lulc_nhm_v11_param.yml \
     --base_config configs/base_config.yml
 ```
 
@@ -158,10 +166,10 @@ slurm_batch/submit_jobs.sh $BATCHES slurm_batch/create_zonal_slope_params.batch
 slurm_batch/submit_jobs.sh $BATCHES slurm_batch/create_zonal_aspect_params.batch
 slurm_batch/submit_jobs.sh $BATCHES slurm_batch/create_soils_params.batch
 slurm_batch/submit_jobs.sh $BATCHES slurm_batch/create_soilmoistmax_params.batch
-slurm_batch/submit_jobs.sh $BATCHES slurm_batch/create_lulc_params.batch
+slurm_batch/submit_jobs.sh $BATCHES slurm_batch/create_lulc_nhm_v11_params.batch
 ```
 
-To use an alternative LULC source (NLCD or NALCMS) instead of FORE-SCE:
+To use an alternative LULC source (NLCD or NALCMS) instead of NHM v1.1:
 ```bash
 slurm_batch/submit_jobs.sh $BATCHES slurm_batch/create_lulc_nlcd_params.batch
 # or

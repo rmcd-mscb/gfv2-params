@@ -40,11 +40,15 @@ _TREE = [
                              Lithology_exp_Konly_Project.*)
           lulc_veg/         Land use / land cover and vegetation rasters
                             (RootDepth.tif, CNPY.tif, Imperv.tif)
+          lulc_veg/nhm_v11/ NHM v1.1 pre-derived LULC rasters
+                            (LULC.tif, keep.tif, CNPY.tif)
+                            (downloadable via download/nhm_v11_lulc.py)
           lulc/nlcd_annual_imperv/
                             Annual NLCD fractional imperviousness rasters
                             (downloadable via download/mrlc_impervious.py)
           lulc/nalcms_2020/ North America land cover 2020 at 30 m
                             (NA_NALCMS_landcover_2020v2_30m.tif)
+                            (downloadable via download/nalcms_lulc.py)
           nhm_default/      NHM default parameter files (input to final merge)
           nhd_downloads/    Raw NHDPlus zip archives
                             (downloadable via download/rpu_rasters.py)
@@ -53,6 +57,7 @@ _TREE = [
     ("input/fabric", None),
     ("input/soils_litho", None),
     ("input/lulc_veg", None),
+    ("input/lulc_veg/nhm_v11", None),
     ("input/lulc/nlcd_annual_imperv", None),
     ("input/lulc/nalcms_2020", None),
     ("input/nhm_default", None),
