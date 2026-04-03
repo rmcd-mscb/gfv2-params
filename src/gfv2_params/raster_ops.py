@@ -39,7 +39,14 @@ def resample(
     driver = gdal.GetDriverByName("GTiff")
     if driver is None:
         raise RuntimeError("GDAL GTiff driver not available")
-    dst = driver.Create(intermediate_path, width, height, 1, gdalconst.GDT_Float32)
+    dst = driver.Create(
+        intermediate_path,
+        width,
+        height,
+        1,
+        gdalconst.GDT_Float32,
+        options=["COMPRESS=LZW", "TILED=YES", "BLOCKXSIZE=512", "BLOCKYSIZE=512"],
+    )
     if dst is None:
         raise RuntimeError(f"Failed to create output raster: {intermediate_path}")
     dst.SetGeoTransform(tmpl_geotrans)
@@ -61,20 +68,38 @@ def resample(
     del tmpl
     logger.info("  GDAL reproject done in %.0f s", time.time() - t_gdal)
 
-    logger.info("  Applying NoData mask and writing LZW output: %s", Path(output_path).name)
+    logger.info("  Applying NoData mask (block-wise) and writing LZW output: %s", Path(output_path).name)
     t_mask = time.time()
     with rasterio.open(intermediate_path) as src_rio:
-        data = src_rio.read(1)
         profile = src_rio.profile
-        profile.update(dtype=rasterio.float64, count=1, compress="lzw")
-
-        for val in mask_values:
-            data[data == val] = np.nan
-        if mask_negative:
-            data[data < 0] = np.nan
+        profile.update(
+            dtype=rasterio.float64,
+            count=1,
+            compress="lzw",
+            tiled=True,
+            blockxsize=512,
+            blockysize=512,
+        )
+        n_windows = sum(1 for _ in src_rio.block_windows(1))
+        log_every = max(1, n_windows // 10)
+        logger.info("  Masking %d windows", n_windows)
 
         with rasterio.open(output_path, "w", **profile) as dst_rio:
-            dst_rio.write(data.astype(rasterio.float64), 1)
+            for i, (_, window) in enumerate(src_rio.block_windows(1), start=1):
+                data = src_rio.read(1, window=window).astype(np.float64)
+                for val in mask_values:
+                    data[data == val] = np.nan
+                if mask_negative:
+                    data[data < 0] = np.nan
+                dst_rio.write(data, 1, window=window)
+                if i % log_every == 0 or i == n_windows:
+                    elapsed = time.time() - t_mask
+                    rate = i / elapsed if elapsed > 0 else 0
+                    eta = (n_windows - i) / rate if rate > 0 else 0
+                    logger.info(
+                        "  Mask window %d/%d (%.0f%%) | elapsed=%.0fs | ETA=%.0fs",
+                        i, n_windows, 100 * i / n_windows, elapsed, eta,
+                    )
     logger.info("  NoData mask + write done in %.0f s", time.time() - t_mask)
     # remove large intermediate
     Path(intermediate_path).unlink(missing_ok=True)
