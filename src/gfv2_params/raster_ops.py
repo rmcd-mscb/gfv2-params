@@ -45,7 +45,7 @@ def resample(
         height,
         1,
         gdalconst.GDT_Float32,
-        options=["COMPRESS=LZW", "TILED=YES", "BLOCKXSIZE=512", "BLOCKYSIZE=512"],
+        options=["COMPRESS=LZW", "TILED=YES", "BLOCKXSIZE=512", "BLOCKYSIZE=512", "BIGTIFF=YES"],
     )
     if dst is None:
         raise RuntimeError(f"Failed to create output raster: {intermediate_path}")
@@ -79,6 +79,7 @@ def resample(
             tiled=True,
             blockxsize=512,
             blockysize=512,
+            BIGTIFF="YES",
         )
         n_windows = sum(1 for _ in src_rio.block_windows(1))
         log_every = max(1, n_windows // 10)
