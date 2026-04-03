@@ -20,6 +20,7 @@ Extracts to: {data_root}/input/lulc_veg/nhm_v11/
 
 from pathlib import Path
 from zipfile import ZipFile
+import subprocess
 
 import requests
 import urllib3
@@ -82,11 +83,24 @@ def _extract_tifs(
     *renames* maps original basename → desired basename.  Applied after
     extraction so the sentinel check in ``download_and_extract`` passes.
     Returns the list of final paths.
+
+    Falls back to the system ``unzip`` binary when the zip uses Deflate64
+    (compression type 9), which Python's built-in zipfile does not support.
     """
     renames = renames or {}
+
+    # Detect whether any entry requires Deflate64 so we can choose a strategy.
+    with ZipFile(zip_path, "r") as zf:
+        all_names = zf.namelist()
+        tif_names = [n for n in all_names if n.lower().endswith(".tif")]
+        needs_deflate64 = any(zf.getinfo(n).compress_type == 9 for n in tif_names)
+
+    if needs_deflate64:
+        return _extract_tifs_unzip(zip_path, out_dir, tif_names, renames)
+
+    # Standard path — Python zipfile is sufficient.
     extracted = []
     with ZipFile(zip_path, "r") as zf:
-        tif_names = [n for n in zf.namelist() if n.lower().endswith(".tif")]
         for name in tif_names:
             src_name = Path(name).name
             final_name = renames.get(src_name, src_name)
@@ -101,6 +115,50 @@ def _extract_tifs(
                 logger.info("Renaming %s -> %s", src_name, final_name)
             dest.write_bytes(data)
             extracted.append(dest)
+    return extracted
+
+
+def _extract_tifs_unzip(
+    zip_path: Path,
+    out_dir: Path,
+    tif_names: list[str],
+    renames: dict[str, str],
+) -> list[Path]:
+    """Extract TIFs using the system ``unzip`` binary (Deflate64 fallback).
+
+    Extracts flat (``-j``) into *out_dir*, then applies *renames*.
+    """
+    logger.info(
+        "Deflate64 compression detected in %s; using system unzip", zip_path.name
+    )
+    # Extract only the tif members, flat into out_dir.
+    members = [Path(n).name for n in tif_names]
+    already_done = [m for m in members if (out_dir / renames.get(m, m)).exists()]
+    to_extract = [m for m in members if m not in already_done]
+
+    if already_done:
+        for m in already_done:
+            logger.info("Already extracted: %s — skipping", renames.get(m, m))
+
+    if to_extract:
+        cmd = ["unzip", "-j", "-o", str(zip_path)] + to_extract + ["-d", str(out_dir)]
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+            raise RuntimeError(
+                f"unzip failed for {zip_path.name}:\n{result.stderr}"
+            )
+        logger.info("unzip extracted: %s", ", ".join(to_extract))
+
+    extracted = []
+    for src_name in members:
+        final_name = renames.get(src_name, src_name)
+        src_path = out_dir / src_name
+        dest_path = out_dir / final_name
+        if src_path.exists() and src_name != final_name:
+            logger.info("Renaming %s -> %s", src_name, final_name)
+            src_path.rename(dest_path)
+        if dest_path.exists():
+            extracted.append(dest_path)
     return extracted
 
 
