@@ -1,0 +1,8 @@
+source_type: nalcms_2020
+source_raster: "{data_root}/input/lulc/nalcms_2020/NA_NALCMS_landcover_2020v2_30m.tif"
+batch_dir: "{data_root}/{fabric}/batches"
+target_layer: nhru
+id_feature: nat_hru_id
+output_dir: "{data_root}/{fabric}/params"
+merged_file: nhm_nalcms_2020_lulc_params.csv
+categorical: true

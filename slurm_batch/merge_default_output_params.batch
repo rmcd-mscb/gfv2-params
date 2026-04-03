@@ -13,7 +13,5 @@
 module load miniforge/latest
 conda activate geoenv
 
-python /caldera/hovenweep/projects/usgs/water/impd/nhgf/gfv2_param/gfv2-params/scripts/merge_default_params.py \
---dict /caldera/hovenweep/projects/usgs/water/impd/nhgf/gfv2_param/nhm_params/paramdb_dict/paramDB_DataDictionary_07_16_2025.csv \
---base_dir /caldera/hovenweep/projects/usgs/water/impd/nhgf/gfv2_param/nhm_params/default \
---output_dir /caldera/hovenweep/projects/usgs/water/impd/nhgf/gfv2_param/nhm_params/nhm_default_params_merged
+cd "$SLURM_SUBMIT_DIR"
+python scripts/merge_default_params.py \
