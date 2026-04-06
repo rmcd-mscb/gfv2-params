@@ -9,19 +9,18 @@ import rioxarray
 from gfv2_params.config import load_config
 from gfv2_params.log import configure_logging
 
-# The per-VPU merged DEM tiles declare nodata=-9999 in their metadata, but the
-# actual nodata pixel value is -99.99.  This mismatch arises because the source
-# RPU data is in centimetres (nodata=-9999 cm) and merge_rpu_by_vpu.py divides
-# by 100 to convert to metres without updating the nodata declaration
-# (-9999 cm / 100 = -99.99 m).  Consequently every "nodata" pixel in the output
-# tile holds the value -99.99, not -9999.
+# The per-VPU merged DEM tiles (written by merge_rpu_by_vpu.py) declare and use
+# nodata=-99.99: the source RPU data is in centimetres (nodata=-9999 cm), divided
+# by 100 to convert to metres (-99.99 m), and the nodata declaration is updated
+# to match (-99.99) by merge_rpu_by_vpu.py.
 #
-# Everything downstream must use -99.99 as the effective nodata value:
-#   • build_vrt.py uses srcNodata="-99.99" so GDAL treats those pixels as
-#     transparent when building the CONUS VRT.
-#   • compute_slope_aspect (this script) must pass no_data=-99.99 to RichDEM so
-#     it ignores the VPU rectangular fill region rather than treating it as
-#     valid flat terrain (which produces spurious slope=0 / aspect=0 output).
+# Downstream nodata conventions:
+#   • rd.LoadGDAL must use no_data=-99.99 so RichDEM masks the VPU rectangular
+#     fill region rather than treating it as valid flat terrain, which would
+#     produce spurious slope=0 / aspect=0 output.
+#   • The _fixed_ tile is written with fillna(-9999) / write_nodata(-9999) so
+#     build_vrt.py can use srcNodata="-9999" for the elevation VRT — the same
+#     value RichDEM SaveGDAL writes for slope/aspect tiles.
 DEM_NODATA = -99.99
 
 
@@ -48,19 +47,22 @@ def main():
     if not dem_path.exists():
         raise FileNotFoundError(f"DEM not found: {dem_path}")
 
-    if not args.force and slope_out.exists() and aspect_out.exists():
-        logger.info("Outputs already exist, skipping (use --force to overwrite): %s", slope_out)
-        return
-
-    # The _fixed_ tile fills declared-nodata (-9999) with -9999 so that the
-    # rioxarray masked array round-trip is lossless.  The -99.99 fill pixels are
-    # intentionally left as-is: the elevation VRT reads these tiles and relies on
-    # srcNodata="-99.99" (in build_vrt.py) to treat them as transparent.
+    # Always regenerate the _fixed_ tile — it is a fast rioxarray copy and its
+    # nodata convention must stay in sync with build_vrt.py's srcNodata value.
+    # The _fixed_ tile is a re-encoded GeoTIFF of the merged DEM with nodata=-9999.
+    # merge_rpu_by_vpu.py now correctly declares nodata=-99.99, so open_rasterio
+    # with masked=True will represent those pixels as NaN; fillna(-9999) converts
+    # them to -9999 and write_nodata(-9999) declares that in the output.  This
+    # aligns with build_vrt.py's srcNodata="-9999" used for the elevation VRT.
     logger.info("Creating fixed nodata NEDSnapshot")
     da = rioxarray.open_rasterio(dem_path, masked=True).squeeze()
     da_fixed = da.fillna(-9999)
     da_fixed.rio.write_nodata(-9999, inplace=True)
     da_fixed.rio.to_raster(dem_fixed_path)
+
+    if not args.force and slope_out.exists() and aspect_out.exists():
+        logger.info("Slope/aspect outputs already exist, skipping (use --force to overwrite): %s", slope_out)
+        return
 
     # Load the raw DEM for terrain analysis.  Pass DEM_NODATA=-99.99 so RichDEM
     # recognises the actual fill pixels as nodata and does not compute slope/aspect

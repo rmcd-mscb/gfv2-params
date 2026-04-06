@@ -19,14 +19,12 @@ RASTER_TYPES = {
     "aspect": "NEDSnapshot_merged_aspect_*.tif",
 }
 
-# Per-type fill values used as srcNodata in the VRT.
-# elevation: _fixed_ tiles have -99.99 fill (raw nodata -9999 divided by 100 during merge)
-# slope/aspect: RichDEM SaveGDAL writes -9999 fill (RichDEM's own nodata convention)
-RASTER_NODATA = {
-    "elevation": "-99.99",
-    "slope": "-9999",
-    "aspect": "-9999",
-}
+# All three VRT types use srcNodata="-9999" because:
+#   elevation: _fixed_ tiles are written by compute_slope_aspect.py with fillna(-9999)
+#              and write_nodata(-9999), so -9999 is the fill value GDAL must treat as
+#              transparent when compositing VPU tiles in the VRT.
+#   slope/aspect: RichDEM SaveGDAL always writes -9999 as its nodata value.
+VRT_SRCNODATA = "-9999"
 
 
 def main():
@@ -53,12 +51,11 @@ def main():
         vrt_path = nhd_merged_dir / f"{vrt_name}.vrt"
         logger.info("Building %s from %d source files", vrt_path, len(source_files))
 
-        # srcNodata makes GDAL treat the VPU-tile fill value as transparent when
-        # compositing overlapping sources. Elevation _fixed_ tiles use -99.99 fill
-        # (raw -9999 cm divided by 100 during merge, nodata declaration not updated).
-        # Slope/aspect tiles are written by RichDEM SaveGDAL which uses -9999 as its
-        # own nodata convention regardless of what was passed to LoadGDAL.
-        vrt_options = gdal.BuildVRTOptions(resolution="highest", srcNodata=RASTER_NODATA[vrt_name])
+        # srcNodata tells GDAL to treat that pixel value as transparent when
+        # compositing overlapping VPU source tiles.  All three types use -9999:
+        # elevation _fixed_ tiles are written with nodata=-9999 by compute_slope_aspect;
+        # slope/aspect tiles use -9999 because RichDEM SaveGDAL always writes that value.
+        vrt_options = gdal.BuildVRTOptions(resolution="highest", srcNodata=VRT_SRCNODATA)
         vrt_ds = gdal.BuildVRT(str(vrt_path), [str(f) for f in source_files], options=vrt_options)
         if vrt_ds is None:
             raise RuntimeError(f"gdal.BuildVRT failed for {vrt_name}")
