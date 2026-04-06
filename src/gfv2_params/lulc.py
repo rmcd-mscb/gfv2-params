@@ -1,8 +1,11 @@
 """LULC parameterization: crosswalk-mediated cover type and interception parameters."""
 
+import logging
 from pathlib import Path
 
 import pandas as pd
+
+logger = logging.getLogger(__name__)
 
 REQUIRED_CROSSWALK_COLUMNS = {
     "lu_code",
@@ -78,6 +81,20 @@ def class_percentages_from_histogram(histogram_df: pd.DataFrame) -> pd.DataFrame
     return long
 
 
+def _warn_unmatched_codes(class_perc_df: pd.DataFrame, crosswalk: pd.DataFrame) -> None:
+    """Log a warning if any lu_codes in the class percentages are missing from the crosswalk."""
+    raster_codes = set(class_perc_df["lu_code"].unique())
+    crosswalk_codes = set(crosswalk.index)
+    unmatched = raster_codes - crosswalk_codes
+    if unmatched:
+        logger.warning(
+            "LULC raster contains %d class code(s) not in crosswalk: %s. "
+            "These classes will be ignored in parameter calculations.",
+            len(unmatched),
+            sorted(unmatched),
+        )
+
+
 def assign_cov_type(class_perc_df: pd.DataFrame, crosswalk: pd.DataFrame, id_col: str = "nat_hru_id") -> pd.DataFrame:
     """Assign dominant NHM cover type per HRU via decision tree.
 
@@ -103,10 +120,15 @@ def assign_cov_type(class_perc_df: pd.DataFrame, crosswalk: pd.DataFrame, id_col
     pd.DataFrame
         Columns: [<id_col>, cov_type]. One row per HRU.
     """
-    # Merge class percentages with cover types
+    _warn_unmatched_codes(class_perc_df, crosswalk)
+
+    # Merge class percentages with cover types; drop unmatched codes
     merged = class_perc_df.merge(
         crosswalk[["nhm_cov_type"]], left_on="lu_code", right_index=True, how="left",
     )
+    merged = merged.dropna(subset=["nhm_cov_type"])
+    merged["nhm_cov_type"] = merged["nhm_cov_type"].astype(int)
+
     # Aggregate: total percentage per (HRU, nhm_cov_type)
     agg = merged.groupby([id_col, "nhm_cov_type"])["perc"].sum().reset_index()
 
@@ -164,6 +186,8 @@ def compute_interception(
     pd.DataFrame
         Columns: [<id_col>, srain_intcp, wrain_intcp, snow_intcp].
     """
+    _warn_unmatched_codes(class_perc_df, crosswalk)
+
     intcp_cols = ["srain_intcp", "wrain_intcp", "snow_intcp"]
     merged = class_perc_df.merge(
         crosswalk[["nhm_cov_type"] + intcp_cols],
@@ -171,6 +195,7 @@ def compute_interception(
         right_index=True,
         how="left",
     )
+    merged = merged.dropna(subset=["nhm_cov_type"])
 
     # Zero out bare/developed classes
     bare_mask = merged["nhm_cov_type"] == 0
@@ -214,12 +239,15 @@ def compute_covden(
     pd.DataFrame
         Columns: [<id_col>, covden_sum, covden_win].
     """
+    _warn_unmatched_codes(class_perc_df, crosswalk)
+
     merged = class_perc_df.merge(
         crosswalk[["nhm_cov_type", "nhm_covden_win"]],
         left_on="lu_code",
         right_index=True,
         how="left",
     )
+    merged = merged.dropna(subset=["nhm_cov_type"])
     merged = merged.merge(canopy_mean_df, on=id_col, how="left")
 
     # Zero out bare/developed classes
@@ -270,12 +298,15 @@ def compute_retention(
     pd.DataFrame
         Columns: [<id_col>, retention].  One row per HRU.
     """
+    _warn_unmatched_codes(class_perc_df, crosswalk)
+
     merged = class_perc_df.merge(
         crosswalk[["nhm_cov_type", "evergreen_retention"]],
         left_on="lu_code",
         right_index=True,
         how="left",
     )
+    merged = merged.dropna(subset=["nhm_cov_type"])
 
     # Bare / developed classes contribute zero retention
     bare_mask = merged["nhm_cov_type"] == 0

@@ -12,5 +12,5 @@
 module load miniforge/latest
 conda activate geoenv
 
-cd /caldera/hovenweep/projects/usgs/water/impd/nhgf/gfv2-params
+cd "$SLURM_SUBMIT_DIR"
 python -m gfv2_params.download.nalcms_lulc

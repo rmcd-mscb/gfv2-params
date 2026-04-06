@@ -1,17 +1,18 @@
 #!/bin/bash
 #SBATCH -p cpu
 #SBATCH -A impd
-#SBATCH --job-name=proc_prism
-#SBATCH --output=logs/job_%A_%a.out
-#SBATCH --error=logs/job_%A_%a.err
-#SBATCH --time=01:00:00        # Adjust as needed
-#SBATCH --ntasks=1             # Single task per job
-#SBATCH --cpus-per-task=2      # Adjust based on your script's CPU usage
-#SBATCH --mem=128G              # Adjust based on memory needs
+#SBATCH --job-name=merge_defaults
+#SBATCH --output=logs/job_%j.out
+#SBATCH --error=logs/job_%j.err
+#SBATCH --time=01:00:00
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=2
+#SBATCH --mem=64G
 
-# Load required modules
 module load miniforge/latest
 conda activate geoenv
 
 cd "$SLURM_SUBMIT_DIR"
-python scripts/merge_default_params.py \
+BASE_CONFIG=${BASE_CONFIG:-configs/base_config.yml}
+
+python scripts/merge_default_params.py --base_config "$BASE_CONFIG"

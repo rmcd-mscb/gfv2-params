@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH -p cpu
 #SBATCH -A impd
-#SBATCH --job-name=proc_nhd_topo
+#SBATCH --job-name=slope_aspect
 #SBATCH --output=logs/job_%A_%a.out
 #SBATCH --error=logs/job_%A_%a.err
 #SBATCH --array=0-17            # Array index range (0 to len(vpus)-1)

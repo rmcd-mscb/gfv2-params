@@ -177,12 +177,20 @@ def main():
     logger.info("Cover density parameters computed")
 
     # --- Step 5: Merge and write ---
+    expected_hrus = class_perc[id_feature].nunique()
     result = (
         cov_type_df
         .merge(intcp_df, on=id_feature)
         .merge(covden_df, on=id_feature)
         .merge(retention_df, on=id_feature)
     )
+    if len(result) != expected_hrus:
+        logger.warning(
+            "Row count mismatch after merge: expected %d HRUs, got %d. "
+            "Some HRUs may have been dropped.",
+            expected_hrus,
+            len(result),
+        )
     result = result.sort_values(id_feature).set_index(id_feature)
 
     result_csv = output_dir / f"{file_prefix}.csv"

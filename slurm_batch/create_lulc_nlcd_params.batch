@@ -12,7 +12,10 @@
 module load miniforge/latest
 conda activate geoenv
 
-python /caldera/hovenweep/projects/usgs/water/impd/nhgf/gfv2_param/gfv2-params/scripts/create_lulc_params.py \
-    --config /caldera/hovenweep/projects/usgs/water/impd/nhgf/gfv2_param/gfv2-params/configs/lulc_nlcd_param.yml \
-    --base_config /caldera/hovenweep/projects/usgs/water/impd/nhgf/gfv2_param/gfv2-params/configs/base_config.yml \
+cd "$SLURM_SUBMIT_DIR"
+BASE_CONFIG=${BASE_CONFIG:-configs/base_config.yml}
+
+python scripts/create_lulc_params.py \
+    --config configs/lulc_nlcd_param.yml \
+    --base_config "$BASE_CONFIG" \
     --batch_id $SLURM_ARRAY_TASK_ID

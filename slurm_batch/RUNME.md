@@ -247,7 +247,7 @@ Two cases depending on whether the fabric is already merged or comes as per-VPU 
 5. Submit parameter jobs, passing the fabric config as the third argument:
    ```bash
    BATCHES={data_root}/oregon/batches
-   slurm_batch/submit_jobs.sh $BATCHES slurm_batch/create_lulc_params.batch configs/base_config_oregon.yml configs/nalcms_param.yml
+   slurm_batch/submit_jobs.sh $BATCHES slurm_batch/create_lulc_params.batch configs/base_config_oregon.yml configs/lulc_nalcms_param.yml
    ```
 
 **Case B: VPU-based fabric** (per-VPU gpkgs that need merging — e.g., gfv2)
@@ -280,18 +280,23 @@ sacct -j <JOBID> -o JobID,State,Elapsed,MaxRSS
 
 | Batch file | Config | Script |
 |---|---|---|
+| merge_rpu_by_vpu.batch | merge_rpu_by_vpu.yml | merge_rpu_by_vpu.py |
+| compute_slope_aspect.batch | slope_aspect.yml | compute_slope_aspect.py |
+| build_derived_rasters.batch | base_config.yml | build_derived_rasters.py |
+| build_lulc_rasters.batch | lulc_nhm_v11_param.yml | build_lulc_rasters.py |
 | create_zonal_elev_params.batch | elev_param.yml | create_zonal_params.py |
 | create_zonal_slope_params.batch | slope_param.yml | create_zonal_params.py |
 | create_zonal_aspect_params.batch | aspect_param.yml | create_zonal_params.py |
 | create_soils_params.batch | soils_param.yml | create_soils_params.py |
 | create_soilmoistmax_params.batch | soilmoistmax_param.yml | create_soils_params.py |
+| create_lulc_nhm_v11_params.batch | lulc_nhm_v11_param.yml | create_lulc_params.py |
 | create_lulc_params.batch | lulc_foresce_param.yml | create_lulc_params.py |
 | create_lulc_nlcd_params.batch | lulc_nlcd_param.yml | create_lulc_params.py |
 | create_lulc_nalcms_params.batch | lulc_nalcms_param.yml | create_lulc_params.py |
 | create_ssflux_params.batch | ssflux_param.yml | create_ssflux_params.py |
 | merge_output_params.batch | all param configs | merge_params.py |
-| merge_rpu_by_vpu.batch | merge_rpu_by_vpu.yml | merge_rpu_by_vpu.py |
-| compute_slope_aspect.batch | slope_aspect.yml | compute_slope_aspect.py |
+| merge_params.batch | (via MERGE_CONFIG env) | merge_params.py |
+| merge_default_output_params.batch | base_config.yml | merge_default_params.py |
 | download_rpu_rasters.batch | base_config.yml | gfv2_params.download.rpu_rasters |
 | download_nalcms.batch | base_config.yml | gfv2_params.download.nalcms_lulc |
-| create_lulc_params.batch | nalcms_param.yml | create_zonal_params.py |
+| download_nhm_v11.batch | base_config.yml | gfv2_params.download.nhm_v11_lulc |
