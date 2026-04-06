@@ -74,15 +74,20 @@ def main():
                 merged = merged.astype("float32")
                 merged = merged.where(~merged.isnull(), nodata_val)
                 merged = merged / 100.0
+                # After ÷100 the fill pixels are -99.99, not -9999.
+                # Declare the actual fill value so downstream consumers
+                # (build_vrt.py, compute_slope_aspect.py) can trust the metadata.
+                nodata_val = nodata_val / 100.0  # -99.99
                 merged.rio.write_nodata(nodata_val, inplace=True)
-                logger.info("Converted NEDSnapshot from centimeters to meters.")
+                logger.info("Converted NEDSnapshot from centimeters to meters (nodata=%.2f).", nodata_val)
 
             case "Hydrodem":
                 nodata_val = -9999
                 merged = merged.astype("float32")
                 merged = merged.where(~merged.isnull(), nodata_val)
                 merged = merged / 100.0
-                logger.info("Converted Hydrodem from centimeters to meters.")
+                nodata_val = nodata_val / 100.0  # -99.99
+                logger.info("Converted Hydrodem from centimeters to meters (nodata=%.2f).", nodata_val)
 
             case "FdrFac_Fdr":
                 nodata_val = 255
