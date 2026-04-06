@@ -95,10 +95,11 @@ def _pairwise_merge(rpu_paths, base_path, method, logger):
         next_rpu = rxr.open_rasterio(str(rpu_path), masked=True).squeeze()
 
         logger.info("  Merging RPU %d into result...", i)
-        result = merge_arrays([result, next_rpu], method=method)
+        old_result = result
+        result = merge_arrays([old_result, next_rpu], method=method)
 
-        # Explicitly free the consumed RPU
-        del next_rpu
+        # Explicitly free the consumed RPU and previous result
+        del old_result, next_rpu
         gc.collect()
 
     return result
@@ -189,30 +190,28 @@ def main():
 
         merged = _pairwise_merge(rpus, base_path, method, logger)
 
-        crs = rxr.open_rasterio(
-            str(base_path / rpus[0].lstrip("/")), masked=True,
-        ).squeeze().rio.crs
+        # Read CRS from metadata only — no pixel data loaded
+        with rasterio.open(str(base_path / rpus[0].lstrip("/"))) as crs_src:
+            crs = crs_src.crs
 
         match dataset_name:
-            case "NEDSnapshot":
+            case "NEDSnapshot" | "Hydrodem":
                 nodata_val = -9999
-                merged = merged.astype("float32")
-                merged = merged.where(~merged.isnull(), nodata_val)
-                merged = merged / 100.0
+                # In-place operations on the underlying numpy array to avoid
+                # creating 3 separate copies (astype + where + divide).
+                data = merged.values
+                nan_mask = np.isnan(data)
+                data = data.astype(np.float32)
+                data[nan_mask] = nodata_val
+                data /= 100.0
                 # After ÷100 the fill pixels are -99.99, not -9999.
                 # Declare the actual fill value so downstream consumers
                 # (build_vrt.py, compute_slope_aspect.py) can trust the metadata.
                 nodata_val = nodata_val / 100.0  # -99.99
+                merged.values[:] = data
+                del data, nan_mask
                 merged.rio.write_nodata(nodata_val, inplace=True)
-                logger.info("Converted NEDSnapshot from centimeters to meters (nodata=%.2f).", nodata_val)
-
-            case "Hydrodem":
-                nodata_val = -9999
-                merged = merged.astype("float32")
-                merged = merged.where(~merged.isnull(), nodata_val)
-                merged = merged / 100.0
-                nodata_val = nodata_val / 100.0  # -99.99
-                logger.info("Converted Hydrodem from centimeters to meters (nodata=%.2f).", nodata_val)
+                logger.info("Converted %s from centimeters to meters (nodata=%.2f).", dataset_name, nodata_val)
 
             case "FdrFac_Fdr":
                 nodata_val = 255
@@ -221,6 +220,9 @@ def main():
             case "FdrFac_Fac":
                 nodata_val = -9999
                 merged = merged.fillna(nodata_val).astype("int32")
+
+            case _:
+                raise ValueError(f"Unknown dataset_name: {dataset_name}")
 
         logger.info("Writing raster: %s", output)
 
