@@ -14,8 +14,9 @@
 module load miniforge/latest
 conda activate geoenv
 
+cd "$SLURM_SUBMIT_DIR"
 vpus=("01" "02" "03" "04" "05" "06" "07" "08" "09" "10" "11" "12" "13" "14" "15" "16" "17" "18")
 vpu=${vpus[$SLURM_ARRAY_TASK_ID]}  # Select variable based on array index
 
-
-python /caldera/hovenweep/projects/usgs/water/impd/nhgf/gfv2_param/gfv2-params/scripts/compute_slope_aspect.py --config /caldera/hovenweep/projects/usgs/water/impd/nhgf/gfv2_param/gfv2-params/configs/slope_aspect.yml --vpu $vpu
+FORCE=${FORCE:+--force}
+python scripts/compute_slope_aspect.py --config configs/slope_aspect.yml --vpu $vpu $FORCE

@@ -23,10 +23,10 @@ def crosswalk_path(tmp_path):
     csv.write_text(
         "lu_code,lu_desc,nhm_cov_type,srain_intcp,wrain_intcp,snow_intcp,nhm_covden_win,evergreen_retention\n"
         "0,NoData,0,0.0,0.0,0.0,0.0,-1\n"
-        "1,Grass,1,0.02,0.02,0.02,0.0,-1\n"
-        "2,Shrub,2,0.03,0.03,0.03,0.3,-1\n"
-        "3,Deciduous,3,0.05,0.02,0.05,0.5,-1\n"
-        "4,Evergreen,3,0.05,0.05,0.05,0.0,-1\n"
+        "1,Grass,1,0.02,0.02,0.02,0.8,-1\n"
+        "2,Shrub,2,0.03,0.03,0.03,0.7,-1\n"
+        "3,Deciduous,3,0.05,0.02,0.05,0.6,-1\n"
+        "4,Evergreen,3,0.05,0.05,0.05,1.0,-1\n"
     )
     return csv
 
@@ -205,7 +205,7 @@ def test_compute_interception_bare_zero(crosswalk):
 def test_compute_covden(crosswalk):
     perc = pd.DataFrame({
         "nat_hru_id": [1, 1],
-        "lu_code": [3, 4],  # deciduous(covden_win=0.5) + evergreen(covden_win=0.0)
+        "lu_code": [3, 4],  # deciduous(nhm_covden_win=0.6) + evergreen(nhm_covden_win=1.0)
         "perc": [50.0, 50.0],
     })
     canopy = pd.DataFrame({"nat_hru_id": [1], "canopy_mean": [80.0]})
@@ -213,11 +213,11 @@ def test_compute_covden(crosswalk):
 
     # covden_sum = 0.50 * 0.80 + 0.50 * 0.80 = 0.40 + 0.40 = 0.80
     assert result.loc[0, "covden_sum"] == pytest.approx(0.80)
-    # covden_win:
-    #   deciduous: 0.40 * (1 - 0.5) = 0.20
-    #   evergreen: 0.40 * (1 - 0.0) = 0.40
-    #   total = 0.60
-    assert result.loc[0, "covden_win"] == pytest.approx(0.60)
+    # covden_win (nhm_covden_win is a winter retention fraction):
+    #   deciduous: 0.40 * 0.6 = 0.24
+    #   evergreen: 0.40 * 1.0 = 0.40
+    #   total = 0.64
+    assert result.loc[0, "covden_win"] == pytest.approx(0.64)
 
 
 def test_compute_covden_bare_zero(crosswalk):

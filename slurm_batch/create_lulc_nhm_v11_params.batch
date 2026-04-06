@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH -p cpu
 #SBATCH -A impd
-#SBATCH --job-name=soils
+#SBATCH --job-name=lulc_nhm_v11
 #SBATCH --output=logs/job_%A_%a.out
 #SBATCH --error=logs/job_%A_%a.err
 #SBATCH --time=02:00:00
@@ -15,7 +15,7 @@ conda activate geoenv
 cd "$SLURM_SUBMIT_DIR"
 BASE_CONFIG=${BASE_CONFIG:-configs/base_config.yml}
 
-python scripts/create_soils_params.py \
-    --config configs/soils_param.yml \
+python scripts/create_lulc_params.py \
+    --config configs/lulc_nhm_v11_param.yml \
     --base_config "$BASE_CONFIG" \
     --batch_id $SLURM_ARRAY_TASK_ID

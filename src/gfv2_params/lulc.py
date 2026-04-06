@@ -194,7 +194,7 @@ def compute_covden(
     """Compute summer and winter canopy density per HRU.
 
     covden_sum = sum(perc/100 * canopy_mean/100) for non-bare classes.
-    covden_win = sum(perc/100 * canopy_mean/100 * (1 - nhm_covden_win)).
+    covden_win = sum(perc/100 * canopy_mean/100 * nhm_covden_win).
 
     Parameters
     ----------
@@ -202,6 +202,8 @@ def compute_covden(
         Long-format with columns [<id_col>, lu_code, perc].
     crosswalk : pd.DataFrame
         Crosswalk with nhm_cov_type and nhm_covden_win columns.
+        nhm_covden_win is a winter retention fraction (0.0 = no winter canopy;
+        1.0 = fully evergreen, all canopy retained in winter).
     canopy_mean_df : pd.DataFrame
         Columns: [<id_col>, canopy_mean]. Zonal mean of canopy raster per HRU.
     id_col : str
@@ -225,7 +227,7 @@ def compute_covden(
     merged.loc[bare_mask, "canopy_mean"] = 0.0
 
     merged["covden_sum"] = merged["perc"] * 0.01 * merged["canopy_mean"] * 0.01
-    merged["covden_win"] = merged["covden_sum"] * (1.0 - merged["nhm_covden_win"])
+    merged["covden_win"] = merged["covden_sum"] * merged["nhm_covden_win"]
 
     result = merged.groupby(id_col)[["covden_sum", "covden_win"]].sum().reset_index()
     return result

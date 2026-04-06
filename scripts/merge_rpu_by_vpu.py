@@ -15,6 +15,8 @@ def main():
     parser = argparse.ArgumentParser(description="Merge NHD rasters by VPU and dataset type.")
     parser.add_argument("--config", required=True, help="Path to merge_rpu_by_vpu.yml")
     parser.add_argument("--vpu", required=True, help="VPU code, e.g., 01")
+    parser.add_argument("--force", action="store_true",
+                        help="Overwrite existing output files")
     args = parser.parse_args()
 
     logger = configure_logging("merge_rpu_by_vpu")
@@ -38,7 +40,7 @@ def main():
         output_file = values.get("output")
         output = base_path / output_file.lstrip("/")
 
-        if output.exists():
+        if output.exists() and not args.force:
             logger.info("Output already exists, skipping: %s", output)
             continue
 
