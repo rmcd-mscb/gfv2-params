@@ -62,22 +62,25 @@ The data root (`data_root`) is set in `configs/base_config.yml`. All source data
 
 ```
 gfv2_param/
-├── input/          # External data (manually staged or downloaded)
-│   ├── fabrics/    # Per-VPU and custom watershed fabric gpkgs
-│   ├── nhd_downloads/
-│   ├── mrlc_impervious/
-│   ├── soils_litho/
-│   ├── lulc_veg/
-│   └── nhm_defaults/
-├── work/           # Reproducible intermediates (safe to delete)
-│   ├── nhd_extracted/
-│   ├── nhd_merged/     # Per-VPU GeoTIFFs + CONUS VRTs
-│   ├── derived_rasters/
-│   └── weights/
-└── {fabric}/       # Per-fabric outputs (e.g., gfv2/, oregon/)
-    ├── fabric/     # Merged fabric gpkg
-    ├── batches/    # Per-batch gpkgs + manifest
-    └── params/     # Parameter outputs + merged + filled
+├── input/                          # External data (manually staged or downloaded)
+│   ├── fabric/                     # Per-VPU watershed fabric gpkgs
+│   ├── soils_litho/                # TEXT_PRMS.tif, AWC.tif, Lithology_exp_Konly_Project.*
+│   ├── lulc_veg/                   # RootDepth.tif, CNPY.tif, Imperv.tif
+│   │   └── nhm_v11/               # NHM v1.1 pre-derived LULC (downloadable)
+│   ├── lulc/
+│   │   ├── nlcd_annual_imperv/     # NLCD fractional imperviousness (downloadable)
+│   │   └── nalcms_2020/            # NALCMS 2020 land cover (downloadable)
+│   ├── nhm_default/                # NHM default parameter files
+│   └── nhd_downloads/              # Raw NHDPlus zip archives (downloadable)
+├── work/                           # Reproducible intermediates (safe to delete)
+│   ├── nhd_extracted/              # Unzipped per-RPU rasters
+│   ├── nhd_merged/                 # Per-VPU GeoTIFFs + CONUS VRTs
+│   ├── derived_rasters/            # soil_moist_max.tif, radtrn, resampled CNPY/keep
+│   └── weights/                    # P2P polygon weights for ssflux
+└── {fabric}/                       # Per-fabric outputs (e.g., gfv2/, oregon/)
+    ├── fabric/                     # Merged fabric gpkg
+    ├── batches/                    # Per-batch gpkgs + manifest
+    └── params/                     # Parameter outputs + merged/ + filled
 ```
 
 ## Usage
