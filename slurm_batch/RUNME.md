@@ -104,9 +104,23 @@ sbatch slurm_batch/merge_rpu_by_vpu.batch
 sbatch slurm_batch/compute_slope_aspect.batch
 ```
 
+### Stage 1b: Build border DEM fill (one-time)
+
+Download Copernicus GLO-30 tiles and build elevation/slope/aspect fill rasters
+for HRUs that extend into Canada or Mexico beyond NHDPlus coverage:
+
+```bash
+sbatch slurm_batch/build_border_dem.batch
+```
+
+This creates fill rasters in `work/nhd_merged/copernicus_fill/`. The subsequent
+`build_vrt.py` step composites these behind the NHDPlus tiles, so NHDPlus takes
+priority where it has valid data and Copernicus fills the border gaps. Can run
+in parallel with Stage 1.
+
 ### Stage 2a: Build VRTs (one-time)
 
-Combine per-VPU rasters into CONUS-wide virtual rasters:
+Combine per-VPU rasters and optional Copernicus fill into virtual rasters:
 
 ```bash
 python scripts/build_vrt.py --base_config configs/base_config.yml
@@ -282,6 +296,7 @@ sacct -j <JOBID> -o JobID,State,Elapsed,MaxRSS
 |---|---|---|
 | merge_rpu_by_vpu.batch | merge_rpu_by_vpu.yml | merge_rpu_by_vpu.py |
 | compute_slope_aspect.batch | slope_aspect.yml | compute_slope_aspect.py |
+| build_border_dem.batch | base_config.yml | build_border_dem.py |
 | build_derived_rasters.batch | base_config.yml | build_derived_rasters.py |
 | build_lulc_rasters.batch | lulc_nhm_v11_param.yml | build_lulc_rasters.py |
 | create_zonal_elev_params.batch | elev_param.yml | create_zonal_params.py |
