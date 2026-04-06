@@ -25,11 +25,11 @@ BORDER_ZONES = {
     "mexico": (25.0, 33.0, -118.0, -96.0),
 }
 
-# Copernicus GLO-30 nodata: the COG tiles declare nodata=0 in their metadata.
-# Sea-level pixels along coastlines could legitimately be 0, but the border
-# zones (Great Lakes, Rio Grande) are inland so this is not a practical concern.
-# Where NHDPlus has valid data it takes priority via VRT source ordering anyway.
-COPERNICUS_NODATA = 0
+# Copernicus GLO-30 nodata: the COG tiles declare NO nodata value (None).
+# We do not set srcNodata in gdal.Warp — all Copernicus pixel values
+# (including legitimate 0m sea-level elevations) pass through as-is.
+# The VRT source ordering ensures NHDPlus takes priority wherever it has
+# valid data; Copernicus only contributes in the border gaps.
 
 # Output nodata must match the pipeline convention (build_vrt.py srcNodata).
 OUTPUT_NODATA = -9999
@@ -108,7 +108,6 @@ def main():
             xRes=30,
             yRes=30,
             resampleAlg="bilinear",
-            srcNodata=COPERNICUS_NODATA,
             dstNodata=OUTPUT_NODATA,
             outputType=gdal.GDT_Float32,
             creationOptions=[
