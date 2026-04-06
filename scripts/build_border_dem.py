@@ -25,9 +25,10 @@ BORDER_ZONES = {
     "mexico": (25.0, 33.0, -118.0, -96.0),
 }
 
-# Copernicus GLO-30 nodata: the COG tiles typically have no declared nodata,
-# but ocean/void pixels are 0.  Since border zones are inland (Great Lakes,
-# Rio Grande), legitimate 0-elevation pixels are unlikely.
+# Copernicus GLO-30 nodata: the COG tiles declare nodata=0 in their metadata.
+# Sea-level pixels along coastlines could legitimately be 0, but the border
+# zones (Great Lakes, Rio Grande) are inland so this is not a practical concern.
+# Where NHDPlus has valid data it takes priority via VRT source ordering anyway.
 COPERNICUS_NODATA = 0
 
 # Output nodata must match the pipeline convention (build_vrt.py srcNodata).
@@ -63,7 +64,7 @@ def main():
     aspect_out = fill_dir / "NEDSnapshot_merged_aspect_copernicus.tif"
 
     # --- Step 1: Compute tile list and download ---
-    logger.info("=== Step 1/4: Download Copernicus GLO-30 tiles ===")
+    logger.info("=== Step 1/3: Download Copernicus GLO-30 tiles ===")
     all_labels = []
     for zone_name, (south, north, west, east) in BORDER_ZONES.items():
         labels = tiles_for_bbox(south, north, west, east)
@@ -83,8 +84,8 @@ def main():
         logger.error("No tiles downloaded — cannot build border DEM")
         return
 
-    # --- Step 2: Mosaic raw tiles into a temporary VRT ---
-    logger.info("=== Step 2/4: Mosaic → reproject to EPSG:5070 ===")
+    # --- Step 2: Mosaic raw tiles and reproject ---
+    logger.info("=== Step 2/3: Mosaic → reproject to EPSG:5070 ===")
     raw_vrt = fill_dir / "copernicus_raw.vrt"
     vrt_ds = gdal.BuildVRT(
         str(raw_vrt),
@@ -96,7 +97,7 @@ def main():
     del vrt_ds
     logger.info("  Raw VRT: %s (%d sources)", raw_vrt, len(tile_paths))
 
-    # --- Step 3: Warp to EPSG:5070, 30m, nodata=-9999 ---
+    # Warp to EPSG:5070, 30m, nodata=-9999
     if not elev_out.exists() or args.force:
         logger.info("  Warping to EPSG:5070 at 30m (bilinear)...")
         t2 = time.time()
@@ -127,9 +128,9 @@ def main():
     else:
         logger.info("  Elevation fill already exists: %s", elev_out)
 
-    # --- Step 4: Compute slope and aspect via RichDEM ---
+    # --- Step 3: Compute slope and aspect via RichDEM ---
     if not slope_out.exists() or not aspect_out.exists() or args.force:
-        logger.info("=== Step 3/4: Compute slope/aspect via RichDEM ===")
+        logger.info("=== Step 3/3: Compute slope/aspect via RichDEM ===")
         logger.info("  Loading DEM: %s", elev_out)
         t3 = time.time()
         dem = rd.LoadGDAL(str(elev_out), no_data=OUTPUT_NODATA)
@@ -147,8 +148,10 @@ def main():
     else:
         logger.info("  Slope/aspect outputs already exist — skipping")
 
-    # Clean up raw VRT (intermediate)
-    raw_vrt.unlink(missing_ok=True)
+    # Clean up raw VRT (intermediate, only if we created it this run)
+    if raw_vrt.exists():
+        raw_vrt.unlink()
+        logger.info("  Cleaned up intermediate VRT: %s", raw_vrt)
 
     logger.info("=== build_border_dem complete in %s ===", _elapsed(t_start))
     logger.info("  Outputs in: %s", fill_dir)
