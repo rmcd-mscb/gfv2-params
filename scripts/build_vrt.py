@@ -1,8 +1,10 @@
-"""Build CONUS-wide VRT files from per-VPU merged GeoTIFFs.
+"""Build VRT files from per-VPU merged GeoTIFFs and optional fill layers.
 
 Creates GDAL virtual rasters that reference per-VPU source files,
-allowing them to be read as a single CONUS-wide raster without
-duplicating data on disk.
+allowing them to be read as a single raster without duplicating data
+on disk.  If a ``copernicus_fill`` subdirectory exists under
+``nhd_merged/``, its tiles are appended as lower-priority fill sources
+(NHDPlus VPU tiles take priority in overlapping regions).
 """
 
 import argparse
@@ -41,15 +43,34 @@ def main():
     if not nhd_merged_dir.exists():
         raise FileNotFoundError(f"NHD merged directory not found: {nhd_merged_dir}")
 
+    # Fill subdirectories whose tiles should be appended AFTER the primary
+    # NHDPlus VPU tiles.  GDAL VRT uses first-source-wins for overlapping
+    # pixels, so listing NHDPlus first ensures it takes priority and fill
+    # sources only contribute where NHDPlus has nodata.
+    FILL_DIRS = {"copernicus_fill"}
+
     built_count = 0
     for vrt_name, pattern in RASTER_TYPES.items():
-        source_files = sorted(nhd_merged_dir.glob(f"*/{pattern}"))
+        # Primary NHDPlus VPU tiles (high priority)
+        primary_files = sorted(
+            f for f in nhd_merged_dir.glob(f"*/{pattern}")
+            if f.parent.name not in FILL_DIRS
+        )
+        # Fill tiles (low priority — appended after primary)
+        fill_files = []
+        for fill_dir_name in sorted(FILL_DIRS):
+            fill_files.extend(sorted(nhd_merged_dir.glob(f"{fill_dir_name}/{pattern}")))
+
+        source_files = primary_files + fill_files
         if not source_files:
             logger.warning("No source files found for %s (pattern: */%s)", vrt_name, pattern)
             continue
 
         vrt_path = nhd_merged_dir / f"{vrt_name}.vrt"
-        logger.info("Building %s from %d source files", vrt_path, len(source_files))
+        n_fill = len(fill_files)
+        fill_msg = f" + {n_fill} fill" if n_fill else ""
+        logger.info("Building %s from %d source files (%d primary%s)",
+                     vrt_path, len(source_files), len(primary_files), fill_msg)
 
         # srcNodata tells GDAL to treat that pixel value as transparent when
         # compositing overlapping VPU source tiles.  All three types use -9999:

@@ -62,6 +62,8 @@ _TREE = [
     ("input/lulc/nalcms_2020", None),
     ("input/nhm_default", None),
     ("input/nhd_downloads", None),
+    ("input/copernicus_dem", None),
+    ("input/copernicus_dem/raw", None),
     # ---- work (intermediates) ----------------------------------------------
     (
         "work",
