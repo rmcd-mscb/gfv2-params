@@ -106,7 +106,9 @@ def main():
         logger.info("  Output   : %s", cnpy_resampled)
         logger.info("  (This step creates a CONUS-scale GeoTIFF and may take 30-60 min)")
         t1 = time.time()
-        resample(str(cnpy_raster), str(lulc_raster), str(intermediate), str(cnpy_resampled))
+        # mask_values=(128,) — do NOT mask 0; value 0 = no canopy, a valid measurement
+        resample(str(cnpy_raster), str(lulc_raster), str(intermediate), str(cnpy_resampled),
+                 mask_values=(128,))
         logger.info("  Done in %s — written: %s", _elapsed(t1), cnpy_resampled)
         logger.info("  Result: %s", _raster_info(cnpy_resampled))
     else:
@@ -131,7 +133,9 @@ def main():
             logger.info("  Output   : %s", keep_resampled)
             logger.info("  (This step creates a CONUS-scale GeoTIFF and may take 30-60 min)")
             t2 = time.time()
-            resample(str(keep_raster), str(lulc_raster), str(intermediate), str(keep_resampled))
+            # mask_values=(128,) — do NOT mask 0; value 0 = fully deciduous, a valid measurement
+            resample(str(keep_raster), str(lulc_raster), str(intermediate), str(keep_resampled),
+                     mask_values=(128,))
             logger.info("  Done in %s — written: %s", _elapsed(t2), keep_resampled)
             logger.info("  Result: %s", _raster_info(keep_resampled))
         else:

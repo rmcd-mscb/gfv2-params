@@ -22,6 +22,11 @@ def resample(
 
     Writes the result to intermediate_path, applies NoData masking,
     and saves the final raster to output_path.
+
+    WARNING — default mask_values=(128, 0) masks pixel value 0:
+      - Correct for RootDepth (0 = cropland = no natural root depth)
+      - WRONG for CNPY (0 = no tree canopy, a valid measurement)
+    Pass mask_values=(128,) when resampling CNPY to preserve non-forest pixels.
     """
     src = gdal.Open(src_path, gdalconst.GA_ReadOnly)
     if src is None:
@@ -80,6 +85,7 @@ def resample(
             blockxsize=512,
             blockysize=512,
             BIGTIFF="YES",
+            nodata=np.nan,  # declare NaN as nodata so GDAL excludes it from average resampling
         )
         n_windows = sum(1 for _ in src_rio.block_windows(1))
         log_every = max(1, n_windows // 10)

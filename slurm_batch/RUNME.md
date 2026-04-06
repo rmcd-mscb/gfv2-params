@@ -114,10 +114,16 @@ python scripts/build_vrt.py --base_config configs/base_config.yml
 
 ### Stage 2b: Build derived rasters (one-time)
 
-Pre-compute soil_moist_max raster:
+Pre-compute `rd_250_raw.tif` and `soil_moist_max.tif`:
 
 ```bash
-python scripts/build_derived_rasters.py --base_config configs/base_config.yml
+sbatch slurm_batch/build_derived_rasters.batch
+```
+
+To use a different base config, override `BASE_CONFIG`:
+
+```bash
+BASE_CONFIG=configs/base_config_oregon.yml sbatch slurm_batch/build_derived_rasters.batch
 ```
 
 ### Stage 2c: Build LULC derived rasters (one-time)
@@ -125,9 +131,13 @@ python scripts/build_derived_rasters.py --base_config configs/base_config.yml
 Pre-compute radiation transmission raster from LULC + canopy + keep:
 
 ```bash
-python scripts/build_lulc_rasters.py \
-    --config configs/lulc_nhm_v11_param.yml \
-    --base_config configs/base_config.yml
+sbatch slurm_batch/build_lulc_rasters.batch
+```
+
+To use a different LULC source, override `LULC_CONFIG`:
+
+```bash
+LULC_CONFIG=configs/lulc_nalcms_param.yml sbatch slurm_batch/build_lulc_rasters.batch
 ```
 
 ---

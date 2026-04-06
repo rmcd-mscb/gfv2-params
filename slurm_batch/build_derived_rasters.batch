@@ -1,10 +1,10 @@
 #!/bin/bash
 #SBATCH -p cpu
 #SBATCH -A impd
-#SBATCH --job-name=build_lulc_rasters
+#SBATCH --job-name=build_derived_rasters
 #SBATCH --output=logs/job_%j.out
 #SBATCH --error=logs/job_%j.err
-#SBATCH --time=04:00:00
+#SBATCH --time=02:00:00
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=96G
@@ -14,9 +14,7 @@ conda activate geoenv
 
 cd "$SLURM_SUBMIT_DIR"
 BASE_CONFIG=${BASE_CONFIG:-configs/base_config.yml}
-LULC_CONFIG=${LULC_CONFIG:-configs/lulc_nhm_v11_param.yml}
 
-python scripts/build_lulc_rasters.py \
-    --config "$LULC_CONFIG" \
+python scripts/build_derived_rasters.py \
     --base_config "$BASE_CONFIG" \
     --force
