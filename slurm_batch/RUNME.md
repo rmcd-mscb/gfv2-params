@@ -115,8 +115,11 @@ sbatch slurm_batch/build_border_dem.batch
 
 This creates fill rasters in `work/nhd_merged/copernicus_fill/`. The subsequent
 `build_vrt.py` step composites these behind the NHDPlus tiles, so NHDPlus takes
-priority where it has valid data and Copernicus fills the border gaps. Can run
-in parallel with Stage 1.
+priority where it has valid data and Copernicus fills the border gaps.
+
+**Dependency:** Must run AFTER Stage 1 completes, because it needs the
+NHDPlus `_fixed_` elevation tiles produced by `compute_slope_aspect.py` to
+build a seamless composite elevation surface for slope/aspect computation.
 
 ### Stage 2a: Build VRTs (one-time)
 
