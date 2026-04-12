@@ -74,10 +74,7 @@ def main():
         logger.info("Building %s from %d source files (%d primary%s)",
                      vrt_path, len(source_files), len(primary_files), fill_msg)
 
-        # srcNodata tells GDAL to treat that pixel value as transparent when
-        # compositing overlapping VPU source tiles.  All three types use -9999:
-        # elevation _fixed_ tiles are written with nodata=-9999 by compute_slope_aspect;
-        # slope/aspect tiles use -9999 because RichDEM SaveGDAL always writes that value.
+        # srcNodata: see VRT_SRCNODATA constant above for rationale.
         vrt_options = gdal.BuildVRTOptions(resolution="highest", srcNodata=VRT_SRCNODATA)
         vrt_ds = gdal.BuildVRT(str(vrt_path), [str(f) for f in source_files], options=vrt_options)
         if vrt_ds is None:
