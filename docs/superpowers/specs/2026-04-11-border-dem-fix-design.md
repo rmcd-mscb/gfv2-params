@@ -19,8 +19,10 @@ elevation-derived parameters. Three root causes were identified:
 2. **Slope/aspect computed independently per source** — `build_border_dem.py`
    computes slope/aspect on the Copernicus elevation raster alone, and
    `compute_slope_aspect.py` computes on each VPU DEM alone. At the boundary
-   between the two sources, RichDEM's 3x3 moving window hits nodata on one side,
-   producing edge artifacts in the derivative rasters.
+   between the two sources, each raster's edge pixels have nodata neighbors in
+   the 3x3 window, so RichDEM writes nodata for those edge pixels. This creates
+   a one-pixel-wide gap in slope/aspect coverage at the NHDPlus/Copernicus
+   boundary where neither source produces valid derivatives.
 
 3. **Single monolithic raster approach** — The Copernicus warp produces one
    GeoTIFF covering all of Canada (41–55°N) and Mexico (25–33°N). While this ran
@@ -58,6 +60,9 @@ source_files = primary_files + fill_files
 source_files = fill_files + primary_files
 ```
 
+Also update the stale code comments (lines 46-49) that incorrectly describe
+the compositing as "first-source-wins" to accurately state "last-source-wins."
+
 ### Change 2: Padded Copernicus Slope/Aspect Computation
 
 **File:** `scripts/build_border_dem.py`
@@ -81,10 +86,18 @@ includes NHDPlus data in the overlap zone, eliminating seam artifacts.
      Canada/Mexico, continuous data at the boundary
    - `srcNodata="-9999"` for both sources ensures nodata pixels are transparent
 4. Compute slope/aspect via RichDEM on the composite raster
-5. Mask the slope/aspect output to only retain pixels in the fill zone — pixels
-   where the original Copernicus elevation has valid data and NHDPlus does not.
-   This prevents the fill raster from containing redundant values in the overlap
-   zone that could conflict with per-VPU RichDEM outputs.
+5. Mask the slope/aspect output to only retain pixels in the fill zone.
+   The fill zone is defined as: pixels where the warped Copernicus elevation
+   raster (from step 2) has a valid value (not -9999) AND the NHDPlus
+   elevation VRT (built from `_fixed_` tiles only, without fill layers) has
+   nodata (-9999). Implementation:
+   - Open the Copernicus elevation (step 2 output) and read as array
+   - Open the NHDPlus-only elevation VRT and read the same extent
+   - Build a boolean mask: `fill_mask = (copernicus != -9999) & (nhdplus == -9999)`
+   - Apply: set slope/aspect pixels where `~fill_mask` to -9999
+   - Write masked output with nodata=-9999 (pipeline convention)
+   This prevents the fill raster from containing redundant values in the
+   overlap zone that could conflict with per-VPU RichDEM outputs.
 
 **Memory consideration:** The composite raster has the same extent as the
 current Copernicus warp output, which already ran successfully on HPC. The
@@ -92,8 +105,13 @@ NHDPlus overlay fills values in the overlap zone but does not increase the
 raster dimensions.
 
 **Dependency:** This step must run after `compute_slope_aspect.py` (per-VPU),
-because it needs the NHDPlus `_fixed_` elevation tiles. The existing pipeline
-ordering already satisfies this (Stage 1 before Stage 1b).
+because it needs the NHDPlus `_fixed_` elevation tiles. Note: `RUNME.md`
+currently states Stage 1b can run in parallel with Stage 1 — this must be
+updated to document the new sequential dependency (Stage 1 must complete
+before Stage 1b).
+
+Update the module docstring in `build_border_dem.py` to describe the new
+composite approach (NHDPlus padding before slope/aspect computation).
 
 ### Change 3: Visualization Notebook
 
@@ -142,8 +160,9 @@ derivatives.
 
 | File | Action | Description |
 |---|---|---|
-| `scripts/build_vrt.py` | Modify | Reverse source ordering (fill first, primary last) |
-| `scripts/build_border_dem.py` | Modify | Add NHDPlus padding before slope/aspect; mask to fill zone |
+| `scripts/build_vrt.py` | Modify | Reverse source ordering (fill first, primary last); fix stale comments |
+| `scripts/build_border_dem.py` | Modify | Add NHDPlus padding before slope/aspect; mask to fill zone; update docstring |
+| `slurm_batch/RUNME.md` | Modify | Update Stage 1b dependency (now requires Stage 1 to complete first) |
 | `notebooks/check_border_dem.py` | Create | Marimo validation notebook |
 
 ## Files NOT Changed
@@ -172,7 +191,7 @@ limit. The tradeoff is a slight algorithm difference vs RichDEM (Horn's method
 vs RichDEM's implementation), which could produce marginally different values
 at the NHDPlus/Copernicus boundary compared to per-VPU outputs.
 
-**Fallback C — tiled with overlap:** Divide the merged elevation VRT into
+**Fallback B — tiled with overlap:** Divide the merged elevation VRT into
 manageable tiles with ~10-pixel overlap, compute slope/aspect per tile via
 RichDEM, crop the overlap margins, and mosaic. Most complex to implement but
 preserves algorithmic consistency with per-VPU outputs.
