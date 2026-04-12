@@ -108,15 +108,14 @@ def _mask_to_fill_zone(
     """
     # Read the raw computed raster
     raw_ds = gdal.Open(str(raw_raster))
-    raw_band = raw_ds.GetRasterBand(1)
-    raw_data = raw_band.ReadAsArray().astype(np.float32)
+    raw_data = raw_ds.GetRasterBand(1).ReadAsArray().astype(np.float32)
     geotransform = raw_ds.GetGeoTransform()
     projection = raw_ds.GetProjection()
     rows, cols = raw_data.shape
     del raw_ds
 
-    # The raw raster has composite extent (union of Copernicus + NHDPlus).
-    # Both Copernicus and NHDPlus must be warped to match this extent.
+    # The raw raster has the Copernicus extent (clipped in Step 4).
+    # Both Copernicus and NHDPlus must be warped to match this same extent.
     output_bounds = [
         geotransform[0],
         geotransform[3] + rows * geotransform[5],
@@ -255,29 +254,28 @@ def main():
     else:
         logger.info("  Elevation fill already exists: %s", elev_out)
 
-    # --- Step 3: Build composite elevation (Copernicus + NHDPlus) ---
-    logger.info("=== Step 3/5: Build composite elevation VRT ===")
+    # --- Steps 3-5: Build composite, compute slope/aspect, mask ---
     nhdplus_vrt = fill_dir / "nhdplus_only.vrt"
     composite_vrt = fill_dir / "composite_elevation.vrt"
-
-    _build_nhdplus_vrt(nhd_merged_dir, nhdplus_vrt)
-    logger.info("  NHDPlus-only VRT: %s", nhdplus_vrt)
-
-    _build_composite_vrt(elev_out, nhdplus_vrt, composite_vrt)
-    logger.info("  Composite VRT: %s", composite_vrt)
-
-    # Clip composite to Copernicus extent — the composite VRT covers the
-    # union of NHDPlus (all CONUS) + Copernicus, but we only need slope/aspect
-    # for the Copernicus extent. Loading the full union into RichDEM would be
-    # an unnecessary memory burden. The NHDPlus data in the overlap zone is
-    # still included (it falls within the Copernicus bounds at 41-55°N).
     composite_clipped = fill_dir / "composite_elevation_clipped.tif"
-
-    # --- Step 4: Compute slope/aspect from composite ---
     slope_raw = fill_dir / "slope_raw.tif"
     aspect_raw = fill_dir / "aspect_raw.tif"
 
     if not slope_out.exists() or not aspect_out.exists() or args.force:
+        # --- Step 3: Build composite elevation (Copernicus + NHDPlus) ---
+        logger.info("=== Step 3/5: Build composite elevation VRT ===")
+
+        _build_nhdplus_vrt(nhd_merged_dir, nhdplus_vrt)
+        logger.info("  NHDPlus-only VRT: %s", nhdplus_vrt)
+
+        _build_composite_vrt(elev_out, nhdplus_vrt, composite_vrt)
+        logger.info("  Composite VRT: %s", composite_vrt)
+
+        # Clip composite to Copernicus extent — the composite VRT covers the
+        # union of NHDPlus (all CONUS) + Copernicus, but we only need slope/aspect
+        # for the Copernicus extent. Loading the full union into RichDEM would be
+        # an unnecessary memory burden. The NHDPlus data in the overlap zone is
+        # still included (it falls within the Copernicus bounds at 41-55°N).
         logger.info("=== Step 4/5: Compute slope/aspect from composite via RichDEM ===")
 
         # Get Copernicus extent to clip the composite

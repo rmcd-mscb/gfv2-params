@@ -1,6 +1,5 @@
 """Tests for build_border_dem composite elevation and fill masking."""
 
-import struct
 from pathlib import Path
 
 import numpy as np
