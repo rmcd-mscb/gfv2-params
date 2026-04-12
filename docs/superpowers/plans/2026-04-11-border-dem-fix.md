@@ -18,7 +18,7 @@
 - Modify: `scripts/build_vrt.py:46-64`
 - Test: `tests/test_build_vrt.py` (new)
 
-- [ ] **Step 1: Write failing test for VRT source ordering**
+- [ ] **Step 1: Write validation tests for VRT source ordering**
 
 Create `tests/test_build_vrt.py` with a test that verifies fill files are listed before primary files in the output source list. We test the ordering logic by extracting it into a helper or by testing the VRT XML output. Since the logic is inline in `main()`, test via a unit-style approach by creating temp GeoTIFFs and verifying the VRT XML source order.
 
@@ -181,7 +181,7 @@ data takes priority wherever it has valid values."
 - Modify: `scripts/build_border_dem.py`
 - Test: `tests/test_build_border_dem.py` (new)
 
-- [ ] **Step 1: Write failing tests for composite and masking logic**
+- [ ] **Step 1: Write validation tests for composite and masking logic**
 
 Create `tests/test_build_border_dem.py`. These tests verify:
 (a) The composite VRT lists Copernicus first, NHDPlus `_fixed_` tiles last
