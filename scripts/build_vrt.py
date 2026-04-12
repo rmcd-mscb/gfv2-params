@@ -3,8 +3,10 @@
 Creates GDAL virtual rasters that reference per-VPU source files,
 allowing them to be read as a single raster without duplicating data
 on disk.  If a ``copernicus_fill`` subdirectory exists under
-``nhd_merged/``, its tiles are appended as lower-priority fill sources
-(NHDPlus VPU tiles take priority in overlapping regions).
+``nhd_merged/``, its tiles are listed as lower-priority fill sources
+before the primary NHDPlus VPU tiles.  GDAL VRT compositing is
+last-source-wins, so NHDPlus takes priority and fill sources only
+contribute where NHDPlus has nodata.
 """
 
 import argparse
@@ -43,25 +45,25 @@ def main():
     if not nhd_merged_dir.exists():
         raise FileNotFoundError(f"NHD merged directory not found: {nhd_merged_dir}")
 
-    # Fill subdirectories whose tiles should be appended AFTER the primary
-    # NHDPlus VPU tiles.  GDAL VRT uses first-source-wins for overlapping
-    # pixels, so listing NHDPlus first ensures it takes priority and fill
+    # Fill subdirectories whose tiles should be listed BEFORE the primary
+    # NHDPlus VPU tiles.  GDAL VRT uses last-source-wins for overlapping
+    # pixels, so listing NHDPlus last ensures it takes priority and fill
     # sources only contribute where NHDPlus has nodata.
     FILL_DIRS = {"copernicus_fill"}
 
     built_count = 0
     for vrt_name, pattern in RASTER_TYPES.items():
-        # Primary NHDPlus VPU tiles (high priority)
+        # Primary NHDPlus VPU tiles (listed last = highest priority)
         primary_files = sorted(
             f for f in nhd_merged_dir.glob(f"*/{pattern}")
             if f.parent.name not in FILL_DIRS
         )
-        # Fill tiles (low priority — appended after primary)
+        # Fill tiles (listed first = lowest priority)
         fill_files = []
         for fill_dir_name in sorted(FILL_DIRS):
             fill_files.extend(sorted(nhd_merged_dir.glob(f"{fill_dir_name}/{pattern}")))
 
-        source_files = primary_files + fill_files
+        source_files = fill_files + primary_files
         if not source_files:
             logger.warning("No source files found for %s (pattern: */%s)", vrt_name, pattern)
             continue
@@ -72,10 +74,7 @@ def main():
         logger.info("Building %s from %d source files (%d primary%s)",
                      vrt_path, len(source_files), len(primary_files), fill_msg)
 
-        # srcNodata tells GDAL to treat that pixel value as transparent when
-        # compositing overlapping VPU source tiles.  All three types use -9999:
-        # elevation _fixed_ tiles are written with nodata=-9999 by compute_slope_aspect;
-        # slope/aspect tiles use -9999 because RichDEM SaveGDAL always writes that value.
+        # srcNodata: see VRT_SRCNODATA constant above for rationale.
         vrt_options = gdal.BuildVRTOptions(resolution="highest", srcNodata=VRT_SRCNODATA)
         vrt_ds = gdal.BuildVRT(str(vrt_path), [str(f) for f in source_files], options=vrt_options)
         if vrt_ds is None:
