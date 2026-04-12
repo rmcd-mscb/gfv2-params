@@ -3,8 +3,10 @@
 Creates GDAL virtual rasters that reference per-VPU source files,
 allowing them to be read as a single raster without duplicating data
 on disk.  If a ``copernicus_fill`` subdirectory exists under
-``nhd_merged/``, its tiles are appended as lower-priority fill sources
-(NHDPlus VPU tiles take priority in overlapping regions).
+``nhd_merged/``, its tiles are listed as lower-priority fill sources
+before the primary NHDPlus VPU tiles.  GDAL VRT compositing is
+last-source-wins, so NHDPlus takes priority and fill sources only
+contribute where NHDPlus has nodata.
 """
 
 import argparse

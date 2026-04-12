@@ -4,7 +4,7 @@ import struct
 from pathlib import Path
 
 import pytest
-from osgeo import gdal
+from osgeo import gdal, osr
 
 
 def _make_tiny_tif(path: Path, value: float, nodata: float = -9999.0) -> None:
@@ -12,7 +12,6 @@ def _make_tiny_tif(path: Path, value: float, nodata: float = -9999.0) -> None:
     driver = gdal.GetDriverByName("GTiff")
     ds = driver.Create(str(path), 2, 2, 1, gdal.GDT_Float32)
     ds.SetGeoTransform([0, 30, 0, 0, 0, -30])
-    from osgeo import osr
     srs = osr.SpatialReference()
     srs.ImportFromEPSG(5070)
     ds.SetProjection(srs.ExportToWkt())
