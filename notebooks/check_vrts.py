@@ -1,26 +1,25 @@
 import marimo
 
-__generated_with = "0.13.11"
+__generated_with = "0.23.5"
 app = marimo.App(width="full")
 
 
 @app.cell
 def _():
     import marimo as mo
+
     return (mo,)
 
 
 @app.cell
 def _(mo):
-    mo.md(
-        r"""
-        # VRT Quick-Look: elevation · slope · aspect
+    mo.md(r"""
+    # VRT Quick-Look: elevation · slope · aspect
 
-        Decimated overview read of the three CONUS VRTs produced by `build_vrt.py`.
-        Uses rasterio's `out_shape` to read a thumbnail (~2000 px on the longest axis)
-        so the full raster is never loaded into memory.
-        """
-    )
+    Decimated overview read of the three CONUS VRTs produced by `build_vrt.py`.
+    Uses rasterio's `out_shape` to read a thumbnail (~2000 px on the longest axis)
+    so the full raster is never loaded into memory.
+    """)
     return
 
 
@@ -43,12 +42,11 @@ def _():
         ("slope",     "YlOrRd",   "degrees", 2, 98),
         ("aspect",    "hsv",      "degrees", 0, 100),
     ]
-
-    return NHD_MERGED, LAYERS, TARGET_PX, Path, plt, np, rasterio, Resampling
+    return LAYERS, NHD_MERGED, Resampling, TARGET_PX, np, plt, rasterio
 
 
 @app.cell
-def _(NHD_MERGED, LAYERS, TARGET_PX, plt, np, rasterio, Resampling, mo):
+def _(LAYERS, NHD_MERGED, Resampling, TARGET_PX, mo, np, plt, rasterio):
     def _read_overview(path, target_px=TARGET_PX):
         """Return a masked 2-D float32 thumbnail of *path*."""
         with rasterio.open(path) as src:
@@ -106,3 +104,8 @@ def _(NHD_MERGED, LAYERS, TARGET_PX, plt, np, rasterio, Resampling, mo):
         _out = fig
 
     _out
+    return
+
+
+if __name__ == "__main__":
+    app.run()
