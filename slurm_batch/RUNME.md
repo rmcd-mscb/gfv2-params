@@ -267,13 +267,17 @@ python scripts/merge_params.py --config configs/elev_param.yml --base_config con
 
 ### Stage 6: SSFlux (depends on merged slope)
 
-Pre-compute weights, then run batch jobs:
+A single batch job handles the full ssflux workflow: pre-compute weights, submit the
+ssflux array job, and automatically chain a merge job via `afterok` dependency:
 
 ```bash
-python scripts/build_weights.py --config configs/ssflux_param.yml --base_config configs/base_config.yml
-slurm_batch/submit_jobs.sh $BATCHES slurm_batch/create_ssflux_params.batch
-python scripts/merge_params.py --config configs/ssflux_param.yml --base_config configs/base_config.yml
+BATCHES={data_root}/gfv2/batches \
+  sbatch slurm_batch/build_weights.batch
 ```
+
+The job sequence is:
+1. `build_weights.py` — computes CONUS-wide P2P lithology weights
+2. `submit_jobs.sh` — submits the ssflux array; merge job is chained automatically
 
 ### Stage 7: KNN gap-fill
 
@@ -355,6 +359,7 @@ sacct -j <JOBID> -o JobID,State,Elapsed,MaxRSS
 | create_lulc_params.batch | lulc_foresce_param.yml | create_lulc_params.py |
 | create_lulc_nlcd_params.batch | lulc_nlcd_param.yml | create_lulc_params.py |
 | create_lulc_nalcms_params.batch | lulc_nalcms_param.yml | create_lulc_params.py |
+| build_weights.batch | ssflux_param.yml | build_weights.py → create_ssflux_params.py → merge_params.py |
 | create_ssflux_params.batch | ssflux_param.yml | create_ssflux_params.py |
 | merge_output_params.batch | all param configs | merge_params.py |
 | merge_params.batch | (via MERGE_CONFIG env) | merge_params.py |
