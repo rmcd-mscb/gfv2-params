@@ -23,11 +23,14 @@ from gfv2_params.log import configure_logging
 #              fillna(-9999) and write_nodata(-9999).
 #   slope/aspect: RichDEM SaveGDAL always writes -9999.
 #   fdr: NHDPlus FDR tiles are Byte rasters with nodata=255 (D8 codes are 1-128).
+#   twi: merge_rpu_by_vpu.py's TWI case writes float32 and remaps the source
+#        -FLT_MAX sentinel to -9999.
 RASTER_TYPES = {
     "elevation": ("NEDSnapshot_merged_fixed_*.tif", "-9999"),
     "slope": ("NEDSnapshot_merged_slope_*.tif", "-9999"),
     "aspect": ("NEDSnapshot_merged_aspect_*.tif", "-9999"),
     "fdr": ("Fdr_merged_*.tif", "255"),
+    "twi": ("Twi_merged_*.tif", "-9999"),
 }
 
 

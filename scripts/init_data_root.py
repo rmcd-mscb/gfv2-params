@@ -55,6 +55,12 @@ _TREE = [
           depstor/          Per-fabric depression-storage inputs:
                             <fabric>_segments_wbodies.gpkg (layers nsegment, v2_wb)
                             <fabric>_fdr.tif (D8 flow direction, Esri pointer)
+          twi/<rpu>/        Per-RPU topographic wetness index rasters
+                            (twi.tif + .tfw/.aux.xml/.ovr/.xml sidecars).
+                            Provenance: USGS ScienceBase 5f5154ba82ce4c3d12386a02
+                            (https://www.sciencebase.gov/catalog/item/5f5154ba82ce4c3d12386a02 —
+                            non-public link). Stage with scripts/stage_twi.sh,
+                            which reads from a shared cluster mirror by default.
         """,
     ),
     ("input/fabric", None),
@@ -68,6 +74,7 @@ _TREE = [
     ("input/copernicus_dem", None),
     ("input/copernicus_dem/raw", None),
     ("input/depstor", None),
+    ("input/twi", None),
     # ---- work (intermediates) ----------------------------------------------
     (
         "work",
@@ -184,6 +191,9 @@ def validate_inputs(data_root: Path, fabric: str, logger) -> None:
         data_root / "input" / "lulc_veg" / "RootDepth.tif",
         data_root / "input" / "depstor" / f"{fabric}_segments_wbodies.gpkg",
         data_root / "input" / "depstor" / f"{fabric}_fdr.tif",
+        # Sentinel for the per-RPU TWI staging step. Run scripts/stage_twi.sh
+        # if missing.
+        data_root / "input" / "twi" / "01a" / "twi.tif",
     ]
     missing = [p for p in required if not p.exists()]
     if missing:

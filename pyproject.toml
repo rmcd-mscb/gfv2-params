@@ -123,6 +123,7 @@ intake-xarray = "*"
 intake-parquet = "*"
 s3fs = "*"
 ipykernel = "*"
+nbformat = "*"  # for `marimo export ipynb` round-trip
 
 [tool.pixi.feature.dev.dependencies]
 pytest = "*"

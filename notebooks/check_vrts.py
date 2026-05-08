@@ -14,10 +14,10 @@ def _():
 @app.cell
 def _(mo):
     mo.md(r"""
-    # VRT Quick-Look: elevation · slope · aspect
+    # VRT Quick-Look: elevation · slope · aspect · fdr · twi
 
-    Decimated overview read of the three CONUS VRTs produced by `build_vrt.py`.
-    Uses rasterio's `out_shape` to read a thumbnail (~2000 px on the longest axis)
+    Decimated overview read of the CONUS VRTs produced by `build_vrt.py`.
+    Uses rasterio's `out_shape` to read a thumbnail (~500 px on the longest axis)
     so the full raster is never loaded into memory.
     """)
     return
@@ -38,9 +38,11 @@ def _():
     TARGET_PX = 500
 
     LAYERS = [
-        ("elevation", "terrain",  "m",       2, 98),
-        ("slope",     "YlOrRd",   "degrees", 2, 98),
-        ("aspect",    "hsv",      "degrees", 0, 100),
+        ("elevation", "terrain",       "m",        2, 98),
+        ("slope",     "YlOrRd",        "degrees",  2, 98),
+        ("aspect",    "hsv",           "degrees",  0, 100),
+        ("fdr",       "nipy_spectral", "D8 code",  0, 100),
+        ("twi",       "viridis",       "unitless", 2, 98),
     ]
     return LAYERS, NHD_MERGED, Resampling, TARGET_PX, np, plt, rasterio
 
@@ -74,8 +76,16 @@ def _(LAYERS, NHD_MERGED, Resampling, TARGET_PX, mo, np, plt, rasterio):
             kind="warn",
         )
     else:
-        fig, axes = plt.subplots(1, 3, figsize=(22, 7))
-        for ax, (name, cmap, unit, lo, hi) in zip(axes, LAYERS):
+        n = len(LAYERS)
+        ncols = min(n, 3)
+        nrows = (n + ncols - 1) // ncols
+        fig, axes = plt.subplots(
+            nrows, ncols,
+            figsize=(7.3 * ncols, 7 * nrows),
+            squeeze=False,
+        )
+        flat_axes = axes.ravel()
+        for ax, (name, cmap, unit, lo, hi) in zip(flat_axes, LAYERS):
             arr = _read_overview(NHD_MERGED / f"{name}.vrt")
             valid = arr.compressed()
             vmin, vmax = np.percentile(valid, [lo, hi])
@@ -94,6 +104,10 @@ def _(LAYERS, NHD_MERGED, Resampling, TARGET_PX, mo, np, plt, rasterio):
             )
             ax.axis("off")
             fig.colorbar(im, ax=ax, fraction=0.03, pad=0.02, label=unit)
+
+        # Hide any unused panels in the trailing row.
+        for ax in flat_axes[n:]:
+            ax.axis("off")
 
         fig.suptitle(
             f"CONUS VRTs — {NHD_MERGED}",

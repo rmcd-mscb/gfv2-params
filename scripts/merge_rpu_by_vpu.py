@@ -49,8 +49,10 @@ def main():
             d = base_path / d.lstrip("/")
             logger.info("Reading raster from: %s", d)
             if not d.exists():
-                raise FileNotFoundError(f"Input raster folder not found: {d}")
-            if not (d / "hdr.adf").exists():
+                raise FileNotFoundError(f"Input raster not found: {d}")
+            # ESRI Grid directories (NHD source datasets) need an hdr.adf;
+            # single-file rasters (e.g. TWI .tif) are read directly by rasterio.
+            if d.is_dir() and not (d / "hdr.adf").exists():
                 raise ValueError(f"Folder {d} does not appear to be a valid ESRI Grid raster")
             ds = rxr.open_rasterio(str(d), masked=True).squeeze()
             datasets.append(ds)
@@ -97,6 +99,15 @@ def main():
                 nodata_val = -9999
                 merged = merged.fillna(nodata_val).astype("int32")
 
+            case "TWI":
+                # TWI is a unitless float (log of upslope contributing area / slope).
+                # Source rasters declare nodata=-FLT_MAX (~-3.4e38); remap to -9999
+                # to match NEDSnapshot/Hydrodem conventions for downstream consumers.
+                # No unit conversion (TWI is dimensionless — do NOT divide by 100).
+                nodata_val = -9999
+                merged = merged.astype("float32")
+                merged = merged.where(merged > -1e30, nodata_val)
+
             case _:
                 raise ValueError(f"Unknown dataset_name: {dataset_name}")
 
@@ -106,11 +117,15 @@ def main():
         merged.rio.write_crs(datasets[0].rio.crs, inplace=True)
         merged.rio.write_nodata(nodata_val, inplace=True)
 
+        # BIGTIFF=YES: several CONUS VPUs land in the 3-4 GB range and VPU 10
+        # exceeds the classic 4 GB TIFF cap. Force BigTIFF for all merges to
+        # avoid CPLE_AppDefinedError on the heaviest VPUs; the format overhead
+        # for smaller VPUs is a few bytes (8-byte vs 4-byte offsets).
         match dataset_name:
-            case "NEDSnapshot" | "Hydrodem":
-                merged.rio.to_raster(output, compress="lzw", predictor=2, tiled=True, blockxsize=512, blockysize=512)
+            case "NEDSnapshot" | "Hydrodem" | "TWI":
+                merged.rio.to_raster(output, compress="lzw", predictor=2, tiled=True, blockxsize=512, blockysize=512, BIGTIFF="YES")
             case "FdrFac_Fdr" | "FdrFac_Fac":
-                merged.rio.to_raster(output, compress="lzw", tiled=True, blockxsize=512, blockysize=512)
+                merged.rio.to_raster(output, compress="lzw", tiled=True, blockxsize=512, blockysize=512, BIGTIFF="YES")
 
         logger.info("Wrote raster: %s", output)
 

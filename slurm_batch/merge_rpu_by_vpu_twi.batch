@@ -1,0 +1,23 @@
+#!/bin/bash
+#SBATCH -p cpu
+#SBATCH -A impd
+#SBATCH --job-name=merge_rpu_twi
+#SBATCH --output=logs/job_%A_%a.out
+#SBATCH --error=logs/job_%A_%a.err
+#SBATCH --array=0-17                # 18 VPUs (01-18)
+#SBATCH --time=02:00:00
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=2
+#SBATCH --mem=128G                  # VPU 10 (9 RPUs) OOMed at 64G; rioxarray.merge has ~5x amplification
+
+cd "$SLURM_SUBMIT_DIR"
+[ -f .pixi-activate.sh ] || { echo "ERROR: missing .pixi-activate.sh — run scripts/refresh_pixi_activation.sh" >&2; exit 1; }
+source .pixi-activate.sh
+
+vpus=("01" "02" "03" "04" "05" "06" "07" "08" "09" "10" "11" "12" "13" "14" "15" "16" "17" "18")
+vpu=${vpus[$SLURM_ARRAY_TASK_ID]}
+
+FORCE=${FORCE:+--force}
+python scripts/merge_rpu_by_vpu.py \
+    --config configs/merge_rpu_by_vpu_twi.yml \
+    --vpu "$vpu" $FORCE

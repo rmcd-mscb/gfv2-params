@@ -179,6 +179,11 @@ cython_debug/
 # Pixi-managed environments (regenerated from pixi.lock)
 .pixi/
 
+# Pre-baked pixi activation scripts (machine-specific absolute paths;
+# regenerate with scripts/refresh_pixi_activation.sh)
+/.pixi-activate.sh
+/.pixi-activate-notebooks.sh
+
 # repo specific
 output/
 logs/
