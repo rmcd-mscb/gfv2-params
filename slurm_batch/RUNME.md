@@ -68,6 +68,7 @@ The following externally-provided files must be placed in the scaffolded directo
 | `input/soils_litho/` | `TEXT_PRMS.tif`, `AWC.tif`, `Lithology_exp_Konly_Project.shp` (+ sidecar files: `.dbf`, `.prj`, `.shx`) |
 | `input/lulc_veg/` | `RootDepth.tif`, `CNPY.tif`, `Imperv.tif` |
 | `input/nhm_default/` | NHM default parameter files (input to final merge step) |
+| `input/depstor/` | Per-fabric: `<fabric>_segments_wbodies.gpkg` (layers `nsegment`, `v2_wb`); `<fabric>_fdr.tif` (D8 flow direction, Esri pointer encoding) |
 
 The NALCMS 2020 land cover raster can be downloaded automatically (see below).
 
@@ -157,6 +158,36 @@ To use a different LULC source, override `LULC_CONFIG`:
 LULC_CONFIG=configs/lulc_nalcms_param.yml sbatch slurm_batch/build_lulc_rasters.batch
 ```
 
+### Stage 2d: Build depstor rasters (per fabric)
+
+Build the depression-storage intermediate rasters on the elevation-VRT template
+grid. Outputs go to `{fabric}/depstor_rasters/` and feed the new Stage 4
+zonal-stats jobs (`dprst_frac`, `imperv_frac`, `onstream_storage_frac`,
+`drains_to_dprst_frac`).
+
+Inputs (manually staged per fabric):
+- `input/depstor/<fabric>_segments_wbodies.gpkg` (layers `nsegment`, `v2_wb`)
+- `input/depstor/<fabric>_fdr.tif` (D8 flow direction, Esri pointer)
+- Reuses existing `input/lulc_veg/Imperv.tif` and `work/nhd_merged/elevation.vrt`.
+
+Run in order — each step writes intermediates the next consumes:
+
+```bash
+sbatch slurm_batch/build_depstor_imperv.batch
+sbatch slurm_batch/build_depstor_streambuffer.batch
+sbatch slurm_batch/build_depstor_waterbody.batch
+sbatch slurm_batch/build_depstor_dprst.batch        # depends on the three above
+sbatch slurm_batch/build_depstor_routing.batch       # depends on dprst + staged FDR
+```
+
+Steps 1-3 are independent of each other and can run concurrently. Step 4
+combines them and must wait. Step 5 runs WhiteboxTools `Watershed` against the
+staged FDR + the dprst output and is the most memory- and time-intensive.
+
+Note: Stage 2d depends on Stage 2a (the elevation VRT exists) but is otherwise
+fabric-independent of the rest of Part 1. It can run in parallel with Part 2's
+fabric prep.
+
 ---
 
 ## Part 2: Fabric-Dependent Tasks
@@ -206,6 +237,19 @@ slurm_batch/submit_jobs.sh $BATCHES slurm_batch/create_lulc_nalcms_params.batch
 The `create_lulc_params.batch` job produces per-HRU fractional land cover percentages for each
 NALCMS 2020 class (19 classes). Output: `{fabric}/params/nalcms_2020/` per batch, merged to
 `{fabric}/params/merged/nhm_nalcms_2020_lulc_params.csv`.
+
+Depression-storage zonal stats (require Stage 2d outputs):
+
+```bash
+slurm_batch/submit_jobs.sh $BATCHES slurm_batch/create_dprst_frac_params.batch
+slurm_batch/submit_jobs.sh $BATCHES slurm_batch/create_imperv_frac_params.batch
+slurm_batch/submit_jobs.sh $BATCHES slurm_batch/create_onstream_storage_frac_params.batch
+slurm_batch/submit_jobs.sh $BATCHES slurm_batch/create_drains_to_dprst_frac_params.batch
+```
+
+Each produces a per-HRU fraction in [0, 1]. With `categorical: false` on a uint8
+binary raster, the gdptools exactextract mean equals the fraction of HRU area
+covered by 1-valued cells.
 
 ### Stage 5: Merge and validate
 
@@ -318,3 +362,12 @@ sacct -j <JOBID> -o JobID,State,Elapsed,MaxRSS
 | download_rpu_rasters.batch | base_config.yml | gfv2_params.download.rpu_rasters |
 | download_nalcms.batch | base_config.yml | gfv2_params.download.nalcms_lulc |
 | download_nhm_v11.batch | base_config.yml | gfv2_params.download.nhm_v11_lulc |
+| build_depstor_imperv.batch | depstor_imperv_raster.yml | build_depstor_imperv.py |
+| build_depstor_streambuffer.batch | depstor_streambuffer_raster.yml | build_depstor_streambuffer.py |
+| build_depstor_waterbody.batch | depstor_waterbody_raster.yml | build_depstor_waterbody.py |
+| build_depstor_dprst.batch | depstor_dprst_raster.yml | build_depstor_dprst.py |
+| build_depstor_routing.batch | depstor_routing_raster.yml | build_depstor_routing.py |
+| create_dprst_frac_params.batch | dprst_frac_param.yml | create_zonal_params.py |
+| create_imperv_frac_params.batch | imperv_frac_param.yml | create_zonal_params.py |
+| create_onstream_storage_frac_params.batch | onstream_storage_frac_param.yml | create_zonal_params.py |
+| create_drains_to_dprst_frac_params.batch | drains_to_dprst_frac_param.yml | create_zonal_params.py |

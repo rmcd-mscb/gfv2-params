@@ -19,8 +19,10 @@ dependencies = [
     "pooch",
     "py7zr",
     "scikit-learn",
+    "scipy",
     "pyyaml",
     "tqdm",
+    "whitebox",
 ]
 
 [project.optional-dependencies]

@@ -11,4 +11,5 @@ dependencies:
   - llvmlite
   - richdem
   - exactextract
+  - scipy
   - pip
