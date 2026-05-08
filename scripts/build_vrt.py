@@ -17,18 +17,18 @@ from osgeo import gdal
 from gfv2_params.config import load_base_config
 from gfv2_params.log import configure_logging
 
+# Maps VRT name -> (glob pattern, srcNodata for BuildVRT).
+# srcNodata rationale:
+#   elevation: _fixed_ tiles are written by compute_slope_aspect.py with
+#              fillna(-9999) and write_nodata(-9999).
+#   slope/aspect: RichDEM SaveGDAL always writes -9999.
+#   fdr: NHDPlus FDR tiles are Byte rasters with nodata=255 (D8 codes are 1-128).
 RASTER_TYPES = {
-    "elevation": "NEDSnapshot_merged_fixed_*.tif",
-    "slope": "NEDSnapshot_merged_slope_*.tif",
-    "aspect": "NEDSnapshot_merged_aspect_*.tif",
+    "elevation": ("NEDSnapshot_merged_fixed_*.tif", "-9999"),
+    "slope": ("NEDSnapshot_merged_slope_*.tif", "-9999"),
+    "aspect": ("NEDSnapshot_merged_aspect_*.tif", "-9999"),
+    "fdr": ("Fdr_merged_*.tif", "255"),
 }
-
-# All three VRT types use srcNodata="-9999" because:
-#   elevation: _fixed_ tiles are written by compute_slope_aspect.py with fillna(-9999)
-#              and write_nodata(-9999), so -9999 is the fill value GDAL must treat as
-#              transparent when compositing VPU tiles in the VRT.
-#   slope/aspect: RichDEM SaveGDAL always writes -9999 as its nodata value.
-VRT_SRCNODATA = "-9999"
 
 
 def main():
@@ -52,7 +52,7 @@ def main():
     FILL_DIRS = {"copernicus_fill"}
 
     built_count = 0
-    for vrt_name, pattern in RASTER_TYPES.items():
+    for vrt_name, (pattern, src_nodata) in RASTER_TYPES.items():
         # Primary NHDPlus VPU tiles (listed last = highest priority)
         primary_files = sorted(
             f for f in nhd_merged_dir.glob(f"*/{pattern}")
@@ -74,8 +74,8 @@ def main():
         logger.info("Building %s from %d source files (%d primary%s)",
                      vrt_path, len(source_files), len(primary_files), fill_msg)
 
-        # srcNodata: see VRT_SRCNODATA constant above for rationale.
-        vrt_options = gdal.BuildVRTOptions(resolution="highest", srcNodata=VRT_SRCNODATA)
+        # srcNodata: see RASTER_TYPES table above for per-type rationale.
+        vrt_options = gdal.BuildVRTOptions(resolution="highest", srcNodata=src_nodata)
         vrt_ds = gdal.BuildVRT(str(vrt_path), [str(f) for f in source_files], options=vrt_options)
         if vrt_ds is None:
             raise RuntimeError(f"gdal.BuildVRT failed for {vrt_name}")
