@@ -8,7 +8,7 @@
 #SBATCH --time=02:00:00
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=2
-#SBATCH --mem=64G                   # VPU 10 has 9 RPUs at ~1.5 GB/tile float32; bump if OOM
+#SBATCH --mem=128G                  # VPU 10 (9 RPUs) OOMed at 64G; rioxarray.merge has ~5x amplification
 
 cd "$SLURM_SUBMIT_DIR"
 eval "$(pixi shell-hook --locked)"
