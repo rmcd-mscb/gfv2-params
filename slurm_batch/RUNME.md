@@ -2,11 +2,35 @@
 
 ## Prerequisites
 
+This pipeline uses [pixi](https://pixi.sh) for environment management. Install
+pixi once per user (see https://pixi.sh/latest/installation/) and ensure
+`~/.pixi/bin` is on your `PATH`. From the repo root:
+
 ```bash
-module load miniforge/latest
-conda activate geoenv
-pip install -e .
+pixi install
 ```
+
+This materialises `.pixi/envs/default/` from `pixi.lock` (config lives in
+`pyproject.toml` under `[tool.pixi.*]`). The slurm batch scripts in this
+directory call `eval "$(pixi shell-hook --frozen)"` to activate; no further
+setup is needed for batch jobs.
+
+For interactive use:
+
+```bash
+pixi shell                       # default env
+pixi shell -e notebooks          # default + marimo, plotly, hvplot, ...
+pixi shell -e dev                # default + pytest, ruff, pre-commit
+```
+
+Run a one-off command in the env without an interactive shell:
+
+```bash
+pixi run python scripts/build_vrt.py --base_config configs/base_config.yml
+```
+
+> **Migrating from `geoenv`?** The legacy `environment.yml` is retained as a
+> deprecated fallback only. New work should use pixi.
 
 ## Data Directory Layout
 

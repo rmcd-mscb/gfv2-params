@@ -176,6 +176,9 @@ cython_debug/
 # Marimo metadata (not needed in repo)
 .marimo/
 
+# Pixi-managed environments (regenerated from pixi.lock)
+.pixi/
+
 # repo specific
 output/
 logs/
