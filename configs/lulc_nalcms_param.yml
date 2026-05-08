@@ -3,8 +3,8 @@ lulc_source: nalcms
 scenario: observed
 year: 2020
 
-source_raster: "{data_root}/input/lulc_veg/{lulc_source}/nalcms_{year}_land_cover.tif"
-canopy_raster: "{data_root}/input/lulc_veg/{lulc_source}/nalcms_{year}_tree_canopy.tif"
+source_raster: "{data_root}/input/lulc/{lulc_source}_{year}/NA_NALCMS_landcover_2020v2_30m.tif"
+canopy_raster: "{data_root}/input/lulc_veg/CNPY.tif"
 # No keep raster for NALCMS; evergreen retention derived from crosswalk
 crosswalk_file: "crosswalks/nalcms_nhm.csv"
 
