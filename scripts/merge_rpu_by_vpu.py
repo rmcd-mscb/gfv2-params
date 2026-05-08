@@ -117,11 +117,15 @@ def main():
         merged.rio.write_crs(datasets[0].rio.crs, inplace=True)
         merged.rio.write_nodata(nodata_val, inplace=True)
 
+        # BIGTIFF=YES: several CONUS VPUs land in the 3-4 GB range and VPU 10
+        # exceeds the classic 4 GB TIFF cap. Force BigTIFF for all merges to
+        # avoid CPLE_AppDefinedError on the heaviest VPUs; the format overhead
+        # for smaller VPUs is a few bytes (8-byte vs 4-byte offsets).
         match dataset_name:
             case "NEDSnapshot" | "Hydrodem" | "TWI":
-                merged.rio.to_raster(output, compress="lzw", predictor=2, tiled=True, blockxsize=512, blockysize=512)
+                merged.rio.to_raster(output, compress="lzw", predictor=2, tiled=True, blockxsize=512, blockysize=512, BIGTIFF="YES")
             case "FdrFac_Fdr" | "FdrFac_Fac":
-                merged.rio.to_raster(output, compress="lzw", tiled=True, blockxsize=512, blockysize=512)
+                merged.rio.to_raster(output, compress="lzw", tiled=True, blockxsize=512, blockysize=512, BIGTIFF="YES")
 
         logger.info("Wrote raster: %s", output)
 
