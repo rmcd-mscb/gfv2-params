@@ -1,0 +1,24 @@
+#!/bin/bash
+#SBATCH -p cpu
+#SBATCH -A impd
+#SBATCH --job-name=stage_twi
+#SBATCH --output=logs/job_%j.out
+#SBATCH --error=logs/job_%j.err
+#SBATCH --time=00:30:00         # 30 GB intra-fs cp; ~5 min on healthy lustre + safety
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=1       # cp -p is single-threaded
+#SBATCH --mem=8G                # generous; cp uses negligible user-space RAM
+
+cd "$SLURM_SUBMIT_DIR"
+eval "$(pixi shell-hook --locked)"
+
+# Optional override of the source path (default is the impd-group mirror baked
+# into stage_twi.sh):
+#   SRC=/alt/path/to/data_bins sbatch slurm_batch/stage_twi.batch
+SRC=${SRC:-}
+
+if [ -n "$SRC" ]; then
+    bash scripts/stage_twi.sh "$SRC"
+else
+    bash scripts/stage_twi.sh
+fi

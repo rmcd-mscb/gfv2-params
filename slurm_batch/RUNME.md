@@ -132,9 +132,20 @@ bash scripts/stage_twi.sh
 bash scripts/stage_twi.sh /alt/path/to/data_bins
 ```
 
+This is a ~30 GB single-threaded `cp` against the shared filesystem. Running it
+on a login node is borderline (busy login nodes don't love sustained I/O) — the
+recommended path for an unattended run is the slurm wrapper:
+
+```bash
+sbatch slurm_batch/stage_twi.batch
+# or with an alternate source:
+SRC=/alt/path/to/data_bins sbatch slurm_batch/stage_twi.batch
+```
+
 The script handles HRU06a's uppercase `TWI.*` source filenames by normalizing
 to lowercase in the destination so the merge config can reference all 18 VPUs
-without per-RPU casing exceptions. Idempotent.
+without per-RPU casing exceptions. Idempotent — re-running skips files already
+present and newer than the source.
 
 Note: `--check` only validates manually-staged inputs (soils, litho, lulc_veg, twi). Verify downloads completed successfully by checking the job logs before proceeding.
 
@@ -401,6 +412,7 @@ sacct -j <JOBID> -o JobID,State,Elapsed,MaxRSS
 |---|---|---|
 | merge_rpu_by_vpu.batch | merge_rpu_by_vpu.yml | merge_rpu_by_vpu.py |
 | merge_rpu_by_vpu_twi.batch | merge_rpu_by_vpu_twi.yml | merge_rpu_by_vpu.py |
+| stage_twi.batch | (uses base_config.yml indirectly) | scripts/stage_twi.sh |
 | compute_slope_aspect.batch | slope_aspect.yml | compute_slope_aspect.py |
 | build_border_dem.batch | base_config.yml | build_border_dem.py |
 | build_derived_rasters.batch | base_config.yml | build_derived_rasters.py |
