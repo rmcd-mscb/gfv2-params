@@ -93,6 +93,7 @@ The following externally-provided files must be placed in the scaffolded directo
 | `input/lulc_veg/` | `RootDepth.tif`, `CNPY.tif`, `Imperv.tif` |
 | `input/nhm_default/` | NHM default parameter files (input to final merge step) |
 | `input/depstor/` | Per-fabric: `<fabric>_segments_wbodies.gpkg` (layers `nsegment`, `v2_wb`); `<fabric>_fdr.tif` (D8 flow direction, Esri pointer encoding) |
+| `input/twi/<rpu>/` | Per-RPU TWI raster `twi.tif` (+ `.tfw`, `.aux.xml`, `.ovr`, `.xml` sidecars). Stage with `bash scripts/stage_twi.sh` (see below). |
 
 The NALCMS 2020 land cover raster can be downloaded automatically (see below).
 
@@ -118,7 +119,24 @@ sbatch slurm_batch/download_nhm_v11.batch
 
 All download scripts are idempotent — already-downloaded files are skipped on resubmission.
 
-Note: `--check` only validates manually-staged inputs (soils, litho, lulc_veg). Verify downloads completed successfully by checking the job logs before proceeding.
+**Stage per-RPU TWI rasters** — provenance is USGS ScienceBase item
+`5f5154ba82ce4c3d12386a02`
+(<https://www.sciencebase.gov/catalog/item/5f5154ba82ce4c3d12386a02> — **not a
+public link**; access is gated). For impd-group users, an operational mirror
+lives on the shared cluster filesystem; the staging script reads from it by
+default and copies into `input/twi/<rpu>/twi.tif`:
+
+```bash
+bash scripts/stage_twi.sh
+# or pass an alternate source:
+bash scripts/stage_twi.sh /alt/path/to/data_bins
+```
+
+The script handles HRU06a's uppercase `TWI.*` source filenames by normalizing
+to lowercase in the destination so the merge config can reference all 18 VPUs
+without per-RPU casing exceptions. Idempotent.
+
+Note: `--check` only validates manually-staged inputs (soils, litho, lulc_veg, twi). Verify downloads completed successfully by checking the job logs before proceeding.
 
 ### Stage 1: Raster preparation (VPU-based)
 
@@ -145,6 +163,18 @@ priority where it has valid data and Copernicus fills the border gaps.
 **Dependency:** Must run AFTER Stage 1 completes, because it needs the
 NHDPlus `_fixed_` elevation tiles produced by `compute_slope_aspect.py` to
 build a seamless composite elevation surface for slope/aspect computation.
+
+### Stage 1c: Merge TWI by VPU
+
+Merge the per-RPU TWI rasters staged in Stage 0 into per-VPU GeoTIFFs:
+
+```bash
+sbatch slurm_batch/merge_rpu_by_vpu_twi.batch
+```
+
+Produces `work/nhd_merged/<vpu>/Twi_merged_<vpu>.tif` for each of the 18 VPUs.
+Independent of Stage 1 / 1b — can run as soon as the TWI staging in Stage 0 is
+complete.
 
 ### Stage 2a: Build VRTs (one-time)
 
@@ -370,6 +400,7 @@ sacct -j <JOBID> -o JobID,State,Elapsed,MaxRSS
 | Batch file | Config | Script |
 |---|---|---|
 | merge_rpu_by_vpu.batch | merge_rpu_by_vpu.yml | merge_rpu_by_vpu.py |
+| merge_rpu_by_vpu_twi.batch | merge_rpu_by_vpu_twi.yml | merge_rpu_by_vpu.py |
 | compute_slope_aspect.batch | slope_aspect.yml | compute_slope_aspect.py |
 | build_border_dem.batch | base_config.yml | build_border_dem.py |
 | build_derived_rasters.batch | base_config.yml | build_derived_rasters.py |
