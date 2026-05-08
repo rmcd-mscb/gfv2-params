@@ -33,9 +33,9 @@ def _():
     import rasterio
     from rasterio.enums import Resampling
 
-    NHD_MERGED = Path(
-        "/caldera/hovenweep/projects/usgs/water/impd/nhgf/gfv2_param_v2/work/nhd_merged"
-    )
+    from gfv2_params.config import load_base_config
+
+    NHD_MERGED = Path(load_base_config()["data_root"]) / "work" / "nhd_merged"
     TARGET_PX = 500
 
     LAYERS = [

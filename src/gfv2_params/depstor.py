@@ -97,8 +97,9 @@ def clump_regions(binary_arr: np.ndarray) -> np.ndarray:
     """Label connected components in a binary raster (8-connectivity).
 
     Replaces depstor's broken `wbe.clump(diag=True)` (DepStor.py:657-661).
-    Treats any cell != 255 (nodata) as foreground if its value is 1.
-    Returns int32 labels with 0 = background/nodata.
+    Treats cells with value 1 as foreground; anything else (including the
+    255 nodata sentinel) is background. Returns int32 labels with 0 =
+    background/nodata.
     """
     foreground = (binary_arr == 1)
     structure = np.ones((3, 3), dtype=bool)  # 8-connectivity

@@ -89,7 +89,7 @@ _TREE = [
                                NEDSnapshot_merged_aspect_*.tif)
           nhd_merged/*.vrt    CONUS-wide GDAL virtual rasters built by
                               build_vrt.py (elevation.vrt, slope.vrt,
-                              aspect.vrt)
+                              aspect.vrt, fdr.vrt)
           derived_rasters/    Derived rasters written during parameter
                               computation (e.g. soil_moist_max.tif)
           weights/            Polygon-to-polygon weight tables built by
