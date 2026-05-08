@@ -22,7 +22,14 @@
 set -euo pipefail
 
 SRC=${1:-/caldera/hovenweep/projects/usgs/water/impd/nhgf/data_creation/nhm_data_bins/data_bins}
-DEST_ROOT=$(pixi run python -c "import yaml; print(yaml.safe_load(open('configs/base_config.yml'))['data_root'])")
+# Read data_root from the project config without invoking pixi — keeps this
+# script independent of env activation state and avoids re-introducing the
+# pixi process race that the slurm batches now sidestep via .pixi-activate.sh.
+DEST_ROOT=$(awk '/^data_root:/ {print $2}' configs/base_config.yml)
+if [ -z "$DEST_ROOT" ]; then
+    echo "Error: could not parse data_root from configs/base_config.yml" >&2
+    exit 1
+fi
 DEST="$DEST_ROOT/input/twi"
 
 if [ ! -d "$SRC" ]; then
