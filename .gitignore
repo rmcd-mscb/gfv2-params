@@ -179,3 +179,7 @@ cython_debug/
 # repo specific
 output/
 logs/
+
+# stray working copies at repo root (canonical homes are scripts/ and src/)
+/create_lulc_params.py
+/gfv2_params/
