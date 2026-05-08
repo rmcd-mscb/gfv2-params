@@ -9,10 +9,8 @@
 #SBATCH --cpus-per-task=2
 #SBATCH --mem=32G
 
-module load miniforge/latest
-conda activate geoenv
-
 cd "$SLURM_SUBMIT_DIR"
+eval "$(pixi shell-hook --locked)"
 BASE_CONFIG=${BASE_CONFIG:-configs/base_config.yml}
 
 python scripts/create_zonal_params.py \

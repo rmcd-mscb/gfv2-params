@@ -1,3 +1,8 @@
+# DEPRECATED — kept for users without pixi installed.
+# Pixi (configured in pyproject.toml [tool.pixi.*]) is the canonical
+# environment manager going forward. See slurm_batch/RUNME.md for
+# the recommended workflow. This file is no longer used by any of
+# the tracked slurm batch scripts and may be removed in a future PR.
 name: geoenv
 channels:
   - conda-forge

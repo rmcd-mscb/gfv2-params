@@ -8,7 +8,7 @@ version = "0.1.0"
 description = "PRMS/NHM parameter generation from watershed fabric polygons"
 requires-python = ">=3.12"
 dependencies = [
-    "gdptools==0.3.11",
+    "gdptools>=0.3.13",
     "pandas",
     "numpy",
     "geopandas",
@@ -27,7 +27,7 @@ dependencies = [
 
 [project.optional-dependencies]
 notebooks = [
-    "marimo[recommended]",
+    "marimo",
     "plotly",
     "matplotlib",
     "hvplot",
@@ -49,6 +49,91 @@ dev = [
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/gfv2_params"]
+
+# ---------------------------------------------------------------------------
+# Pixi — canonical environment management (issue #39).
+#
+# Strategy:
+#   - [project.dependencies] is the pip-only fallback list (kept so
+#     `pip install gfv2-params` still works for non-pixi users via the
+#     deprecated environment.yml flow).
+#   - [tool.pixi.dependencies] is the canonical conda-forge list. It
+#     duplicates the package names from [project.dependencies] for those
+#     that have conda counterparts, plus the system / native-binary libs
+#     (gdal, rasterio, pyproj, numba, llvmlite, richdem, exactextract)
+#     that pip-only installs would silently miss.
+#   - [tool.pixi.pypi-dependencies] is intentionally minimal: just the
+#     editable install of this project. Anything that *can* come from
+#     conda-forge does.
+#   - solve-group = "default" on all four environments forces dev/notebooks
+#     transitive deps to resolve consistently with production. Slightly
+#     over-constrained for our small dep set but avoids drift.
+#
+# Adding a new dep:
+#   - If pure-python and pypi-only: add to [project.dependencies] AND
+#     [tool.pixi.pypi-dependencies].
+#   - If on conda-forge: add to [project.dependencies] AND
+#     [tool.pixi.dependencies]. Re-run `pixi install` to refresh pixi.lock.
+#
+# Run `pixi install` to materialise envs under `.pixi/envs/`.
+# ---------------------------------------------------------------------------
+[tool.pixi.workspace]
+channels = ["conda-forge"]
+platforms = ["linux-64"]
+
+[tool.pixi.dependencies]
+python = "3.12.*"
+gdal = "*"
+rasterio = "*"
+geopandas = "*"
+pyproj = "*"
+numba = "*"
+llvmlite = "*"
+richdem = "*"
+exactextract = "*"
+scipy = "*"
+pandas = "*"
+numpy = "*"
+xarray = "*"
+rioxarray = "*"
+rasterstats = "*"
+spatialpandas = "*"
+pooch = "*"
+py7zr = "*"
+scikit-learn = "*"
+pyyaml = "*"
+tqdm = "*"
+gdptools = ">=0.3.13"
+whitebox = "*"
+
+[tool.pixi.pypi-dependencies]
+gfv2-params = { path = ".", editable = true }
+
+[tool.pixi.feature.notebooks.dependencies]
+marimo = "*"
+plotly = "*"
+matplotlib-base = "*"
+hvplot = "*"
+geoviews = "*"
+datashader = "*"
+dask = "*"
+distributed = "*"
+intake = "*"
+intake-xarray = "*"
+intake-parquet = "*"
+s3fs = "*"
+ipykernel = "*"
+
+[tool.pixi.feature.dev.dependencies]
+pytest = "*"
+pre-commit = "*"
+ruff = "*"
+
+[tool.pixi.environments]
+default = { features = [], solve-group = "default" }
+notebooks = { features = ["notebooks"], solve-group = "default" }
+dev = { features = ["dev"], solve-group = "default" }
+all = { features = ["notebooks", "dev"], solve-group = "default" }
 
 [tool.isort]
 profile = "black"

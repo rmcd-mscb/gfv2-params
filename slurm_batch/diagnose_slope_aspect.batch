@@ -9,10 +9,8 @@
 #SBATCH --cpus-per-task=2
 #SBATCH --mem=16G
 
-module load miniforge/latest
-conda activate geoenv
-
 cd "$SLURM_SUBMIT_DIR"
+eval "$(pixi shell-hook --locked)"
 
 python - <<'PYEOF'
 import rasterio

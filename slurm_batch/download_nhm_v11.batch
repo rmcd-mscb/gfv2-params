@@ -9,8 +9,6 @@
 #SBATCH --cpus-per-task=1
 #SBATCH --mem=8G
 
-module load miniforge/latest
-conda activate geoenv
-
-cd $SLURM_SUBMIT_DIR
+cd "$SLURM_SUBMIT_DIR"
+eval "$(pixi shell-hook --locked)"
 python -m gfv2_params.download.nhm_v11_lulc
