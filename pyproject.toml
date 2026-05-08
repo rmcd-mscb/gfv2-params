@@ -47,6 +47,9 @@ dev = [
     "ruff",
 ]
 
+[tool.hatch.build.targets.wheel]
+packages = ["src/gfv2_params"]
+
 [tool.isort]
 profile = "black"
 line_length = 120
