@@ -10,5 +10,5 @@
 #SBATCH --mem=4G
 
 cd "$SLURM_SUBMIT_DIR"
-eval "$(pixi shell-hook --frozen)"
+eval "$(pixi shell-hook --locked)"
 python -m gfv2_params.download.rpu_rasters

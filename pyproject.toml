@@ -52,9 +52,30 @@ packages = ["src/gfv2_params"]
 
 # ---------------------------------------------------------------------------
 # Pixi — canonical environment management (issue #39).
-# Conda channel for compute libraries with native binaries; pypi for
-# pure-python packages and the editable install of this project. Run
-# `pixi install` to materialise envs under `.pixi/envs/`.
+#
+# Strategy:
+#   - [project.dependencies] is the pip-only fallback list (kept so
+#     `pip install gfv2-params` still works for non-pixi users via the
+#     deprecated environment.yml flow).
+#   - [tool.pixi.dependencies] is the canonical conda-forge list. It
+#     duplicates the package names from [project.dependencies] for those
+#     that have conda counterparts, plus the system / native-binary libs
+#     (gdal, rasterio, pyproj, numba, llvmlite, richdem, exactextract)
+#     that pip-only installs would silently miss.
+#   - [tool.pixi.pypi-dependencies] is intentionally minimal: just the
+#     editable install of this project. Anything that *can* come from
+#     conda-forge does.
+#   - solve-group = "default" on all four environments forces dev/notebooks
+#     transitive deps to resolve consistently with production. Slightly
+#     over-constrained for our small dep set but avoids drift.
+#
+# Adding a new dep:
+#   - If pure-python and pypi-only: add to [project.dependencies] AND
+#     [tool.pixi.pypi-dependencies].
+#   - If on conda-forge: add to [project.dependencies] AND
+#     [tool.pixi.dependencies]. Re-run `pixi install` to refresh pixi.lock.
+#
+# Run `pixi install` to materialise envs under `.pixi/envs/`.
 # ---------------------------------------------------------------------------
 [tool.pixi.workspace]
 channels = ["conda-forge"]

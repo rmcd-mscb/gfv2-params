@@ -10,7 +10,7 @@
 #SBATCH --mem=16G
 
 cd "$SLURM_SUBMIT_DIR"
-eval "$(pixi shell-hook --frozen)"
+eval "$(pixi shell-hook --locked)"
 
 python - <<'PYEOF'
 import rasterio

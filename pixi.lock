@@ -3073,7 +3073,7 @@ packages:
 - pypi: ./
   name: gfv2-params
   version: 0.1.0
-  sha256: 6a8ffca5aff8fa747fb9ff3a6a3205eb6dfd3e005b1c5c0590575614c5c9c841
+  sha256: 38bcea8792c2e35c931f8a5dae952ae8b82bd661972a6610d6bea92d561ca4e3
   requires_dist:
   - gdptools>=0.3.13
   - pandas

@@ -10,7 +10,7 @@
 #SBATCH --mem=192G
 
 cd "$SLURM_SUBMIT_DIR"
-eval "$(pixi shell-hook --frozen)"
+eval "$(pixi shell-hook --locked)"
 BASE_CONFIG=${BASE_CONFIG:-configs/base_config.yml}
 
 python scripts/build_depstor_routing.py \

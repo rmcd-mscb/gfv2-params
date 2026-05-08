@@ -10,5 +10,5 @@
 #SBATCH --mem=8G
 
 cd "$SLURM_SUBMIT_DIR"
-eval "$(pixi shell-hook --frozen)"
+eval "$(pixi shell-hook --locked)"
 python -m gfv2_params.download.nhm_v11_lulc
