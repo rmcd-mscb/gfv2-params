@@ -12,7 +12,8 @@
 
 # Load required modules
 cd "$SLURM_SUBMIT_DIR"
-eval "$(pixi shell-hook --locked)"
+[ -f .pixi-activate.sh ] || { echo "ERROR: missing .pixi-activate.sh — run scripts/refresh_pixi_activation.sh" >&2; exit 1; }
+source .pixi-activate.sh
 vpus=("01" "02" "03" "04" "05" "06" "07" "08" "09" "10" "11" "12" "13" "14" "15" "16" "17" "18")
 vpu=${vpus[$SLURM_ARRAY_TASK_ID]}  # Select variable based on array index
 

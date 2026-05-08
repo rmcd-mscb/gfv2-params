@@ -10,7 +10,8 @@
 #SBATCH --mem=96G
 
 cd "$SLURM_SUBMIT_DIR"
-eval "$(pixi shell-hook --locked)"
+[ -f .pixi-activate.sh ] || { echo "ERROR: missing .pixi-activate.sh — run scripts/refresh_pixi_activation.sh" >&2; exit 1; }
+source .pixi-activate.sh
 BASE_CONFIG=${BASE_CONFIG:-configs/base_config.yml}
 LULC_CONFIG=${LULC_CONFIG:-configs/lulc_nhm_v11_param.yml}
 

@@ -10,5 +10,6 @@
 #SBATCH --mem=8G
 
 cd "$SLURM_SUBMIT_DIR"
-eval "$(pixi shell-hook --locked)"
+[ -f .pixi-activate.sh ] || { echo "ERROR: missing .pixi-activate.sh — run scripts/refresh_pixi_activation.sh" >&2; exit 1; }
+source .pixi-activate.sh
 python -m gfv2_params.download.nhm_v11_lulc
