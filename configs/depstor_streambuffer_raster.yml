@@ -1,0 +1,11 @@
+# Build the depression-storage stream-buffer binary raster.
+#
+# Reads the staged fabric-specific segments+wbodies gpkg and rasterizes a
+# `buffer_distance`-metre buffer around each stream segment onto the
+# elevation-VRT template grid.
+
+template_raster: "{data_root}/work/nhd_merged/elevation.vrt"
+segments_gpkg: "{data_root}/input/depstor/{fabric}_segments_wbodies.gpkg"
+segments_layer: nsegment
+output_raster: "{data_root}/{fabric}/depstor_rasters/stream_buffer.tif"
+buffer_distance: 60

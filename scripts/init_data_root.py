@@ -52,6 +52,9 @@ _TREE = [
           nhm_default/      NHM default parameter files (input to final merge)
           nhd_downloads/    Raw NHDPlus zip archives
                             (downloadable via download/rpu_rasters.py)
+          depstor/          Per-fabric depression-storage inputs:
+                            <fabric>_segments_wbodies.gpkg (layers nsegment, v2_wb)
+                            <fabric>_fdr.tif (D8 flow direction, Esri pointer)
         """,
     ),
     ("input/fabric", None),
@@ -64,6 +67,7 @@ _TREE = [
     ("input/nhd_downloads", None),
     ("input/copernicus_dem", None),
     ("input/copernicus_dem/raw", None),
+    ("input/depstor", None),
     # ---- work (intermediates) ----------------------------------------------
     (
         "work",
@@ -85,7 +89,7 @@ _TREE = [
                                NEDSnapshot_merged_aspect_*.tif)
           nhd_merged/*.vrt    CONUS-wide GDAL virtual rasters built by
                               build_vrt.py (elevation.vrt, slope.vrt,
-                              aspect.vrt)
+                              aspect.vrt, fdr.vrt)
           derived_rasters/    Derived rasters written during parameter
                               computation (e.g. soil_moist_max.tif)
           weights/            Polygon-to-polygon weight tables built by
@@ -115,6 +119,13 @@ def _fabric_tree(fabric: str) -> list:
                           ({fabric}_nhru_merged.gpkg)
               batches/    Spatially-partitioned batch GeoPackages produced by
                           prepare_fabric.py (used by zonal stats scripts)
+              depstor_rasters/
+                          Per-fabric depression-storage intermediate rasters
+                          produced by build_depstor_*.py
+                          (imperv_binary.tif, stream_buffer.tif,
+                           wbody_binary.tif, wbody_regions.tif,
+                           dprst_binary.tif, onstream_binary.tif,
+                           drains_to_dprst.tif)
               params/     Per-VPU and merged parameter CSVs produced by
                           create_zonal_params.py, create_soils_params.py,
                           create_ssflux_params.py, merge_params.py, and
@@ -126,6 +137,7 @@ def _fabric_tree(fabric: str) -> list:
         ),
         (f"{fabric}/fabric", None),
         (f"{fabric}/batches", None),
+        (f"{fabric}/depstor_rasters", None),
         (f"{fabric}/params", None),
         (f"{fabric}/params/merged", None),
     ]
@@ -170,6 +182,8 @@ def validate_inputs(data_root: Path, fabric: str, logger) -> None:
         data_root / "input" / "soils_litho" / "AWC.tif",
         data_root / "input" / "soils_litho" / "Lithology_exp_Konly_Project.shp",
         data_root / "input" / "lulc_veg" / "RootDepth.tif",
+        data_root / "input" / "depstor" / f"{fabric}_segments_wbodies.gpkg",
+        data_root / "input" / "depstor" / f"{fabric}_fdr.tif",
     ]
     missing = [p for p in required if not p.exists()]
     if missing:

@@ -181,6 +181,7 @@ def _(
     _cmaps = {"elevation": "terrain", "slope": "YlOrRd", "aspect": "hsv"}
     _units = {"elevation": "m", "slope": "degrees", "aspect": "degrees"}
 
+    _out = None
     if _vrt_path.exists():
         _data, _, _meta = windowed_decimated_read(_vrt_path, _bounds)
         _stretched, _vmin, _vmax = percentile_stretch(_data)
@@ -209,7 +210,7 @@ def _(
         _ax_hist.set_ylabel("density")
 
         _h, _w = _meta["shape"]
-        _info = (
+        _text = (
             f"Full grid : {_h:,} x {_w:,} px\n"
             f"Pixel size: {_meta['res_m']:.1f} m\n"
             f"NoData    : {_meta['nodata']}\n"
@@ -219,14 +220,15 @@ def _(
             f"Max       : {_valid.max():.4g}"
         )
         _ax_img.text(
-            1.01, 0.5, _info, transform=_ax_img.transAxes, fontsize=8,
+            1.01, 0.5, _text, transform=_ax_img.transAxes, fontsize=8,
             verticalalignment="center", family="monospace",
             bbox=dict(boxstyle="round", facecolor="lightyellow", alpha=0.8),
         )
         plt.tight_layout()
-        _fig
+        _out = _fig
     else:
         print(f"VRT not found: {_vrt_path}")
+    _out
 
 
 @app.cell
@@ -251,6 +253,7 @@ def _(
         for name, cmap, units in _layers
         if (NHD_MERGED / f"{name}.vrt").exists()
     ]
+    _out = None
     if _available:
         _fig, _axes = plt.subplots(
             1, len(_available), figsize=(8 * len(_available), 6),
@@ -271,9 +274,10 @@ def _(
             plt.colorbar(_im, ax=_ax, fraction=0.03, pad=0.02, label=_units)
         plt.suptitle("Slope/Aspect — check for seam artifacts", fontsize=13)
         plt.tight_layout()
-        _fig
+        _out = _fig
     else:
         print("No slope/aspect VRTs found yet.")
+    _out
 
 
 @app.cell
@@ -292,6 +296,7 @@ def _(mo):
 @app.cell
 def _(FABRIC_DIR, gpd, mo, np, plt):
     _merged_gpkg = FABRIC_DIR / "gfv2_nhru_merged.gpkg"
+    _out = None
     if _merged_gpkg.exists():
         _gdf = gpd.read_file(_merged_gpkg, layer="nhru")
         _gdf["centroid_y"] = _gdf.geometry.centroid.y
@@ -306,7 +311,7 @@ def _(FABRIC_DIR, gpd, mo, np, plt):
         _n_mexico = _mexico_mask.sum()
         _n_total = len(_gdf)
 
-        mo.md(
+        _info = mo.md(
             f"**Fabric:** {_n_total:,} total HRUs | "
             f"**Canada border:** {_n_canada:,} | "
             f"**Mexico border:** {_n_mexico:,}"
@@ -329,9 +334,12 @@ def _(FABRIC_DIR, gpd, mo, np, plt):
             _ax.set_title("Border HRUs identified by centroid latitude")
             _ax.axis("off")
             plt.tight_layout()
-            _fig
+            _out = mo.vstack([_info, _fig])
+        else:
+            _out = _info
     else:
         print(f"Merged fabric not found: {_merged_gpkg}")
+    _out
 
 
 @app.cell
@@ -368,6 +376,7 @@ def _(
             mask=~_both_valid,
         )
 
+        _out = None
         if _diff.count() > 0:
             _valid = _diff.compressed()
             _vmax = max(abs(np.percentile(_valid, 2)), abs(np.percentile(_valid, 98)))
@@ -394,21 +403,22 @@ def _(
             _ax_hist.set_xlabel("m (NHDPlus - Copernicus)")
             _ax_hist.set_ylabel("density")
 
-            _info = (
+            _text = (
                 f"Overlap px: {_valid.size:,}\n"
                 f"Mean diff : {_valid.mean():.3f} m\n"
                 f"Std diff  : {_valid.std():.3f} m\n"
                 f"Max |diff|: {np.abs(_valid).max():.3f} m"
             )
             _ax_img.text(
-                1.01, 0.5, _info, transform=_ax_img.transAxes, fontsize=9,
+                1.01, 0.5, _text, transform=_ax_img.transAxes, fontsize=9,
                 verticalalignment="center", family="monospace",
                 bbox=dict(boxstyle="round", facecolor="lightyellow", alpha=0.8),
             )
             plt.tight_layout()
-            _fig
+            _out = _fig
         else:
             print("No overlapping valid pixels found in this region.")
+        _out
     else:
         _missing = []
         if not _elev_vrt.exists():

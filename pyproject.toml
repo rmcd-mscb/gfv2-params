@@ -19,8 +19,10 @@ dependencies = [
     "pooch",
     "py7zr",
     "scikit-learn",
+    "scipy",
     "pyyaml",
     "tqdm",
+    "whitebox",
 ]
 
 [project.optional-dependencies]
@@ -44,6 +46,9 @@ dev = [
     "pre-commit",
     "ruff",
 ]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/gfv2_params"]
 
 [tool.isort]
 profile = "black"

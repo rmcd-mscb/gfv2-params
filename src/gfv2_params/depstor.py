@@ -1,0 +1,194 @@
+"""Raster-creation utilities for the depression-storage pipeline.
+
+Ported from depstor's RasterPipeline (depstor/scripts/DepStor.py:42-410), but
+operating on numpy arrays + a shared raster template. The depstor "rasterize
+HRU polygons and tag cells with HRU IDs" pattern is intentionally NOT carried
+over — gdptools handles HRU overlay directly during zonal aggregation.
+
+All raster outputs use the conventions:
+- uint8 binary masks: value 1 = present, value 255 = nodata
+- int32 region labels: value 0 = nodata
+- ZSTD-compressed, tiled 256x256
+"""
+
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Optional
+
+import numpy as np
+import rasterio
+from rasterio.crs import CRS
+from rasterio.coords import BoundingBox
+from rasterio.features import rasterize as rio_rasterize
+from rasterio.transform import Affine
+from scipy import ndimage
+
+
+@dataclass
+class RasterInfo:
+    """Spatial metadata for the template raster."""
+    crs: CRS
+    width: int
+    height: int
+    transform: Affine
+    nodata: Optional[float]
+    bounds: BoundingBox
+
+    @classmethod
+    def from_path(cls, path: Path) -> "RasterInfo":
+        with rasterio.open(path) as src:
+            return cls(
+                crs=src.crs,
+                width=src.width,
+                height=src.height,
+                transform=src.transform,
+                nodata=src.nodata,
+                bounds=src.bounds,
+            )
+
+
+def rasterize_binary(gdf, info: RasterInfo, all_touched: bool = False) -> np.ndarray:
+    """Burn polygons in `gdf` to a uint8 binary raster aligned to `info`.
+
+    Returns an array shaped (info.height, info.width) where 1 = covered by any
+    geometry and 255 = uncovered (nodata convention).
+    Geometries are reprojected to `info.crs` first if needed.
+    """
+    if gdf.crs is None:
+        raise ValueError("Input GeoDataFrame has no CRS")
+    if info.crs is None:
+        raise ValueError("RasterInfo has no CRS")
+    if gdf.crs != info.crs:
+        gdf = gdf.to_crs(info.crs)
+
+    valid = gdf[gdf.geometry.notna() & ~gdf.geometry.is_empty]
+    if valid.empty:
+        return np.full((info.height, info.width), 255, dtype=np.uint8)
+
+    shapes = ((geom, 1) for geom in valid.geometry)
+    out = rio_rasterize(
+        shapes=shapes,
+        out_shape=(info.height, info.width),
+        transform=info.transform,
+        fill=255,
+        dtype=np.uint8,
+        all_touched=all_touched,
+    )
+    return out
+
+
+def threshold_above(values: np.ndarray, threshold: float, src_nodata) -> np.ndarray:
+    """Return uint8 binary mask: 1 where values >= threshold, else 255 (nodata).
+
+    Nodata pixels in the source map to 255 in the output.
+    """
+    if src_nodata is not None and isinstance(src_nodata, float) and np.isnan(src_nodata):
+        valid = ~np.isnan(values)
+    elif src_nodata is not None:
+        valid = values != src_nodata
+    else:
+        valid = np.ones_like(values, dtype=bool)
+
+    above = valid & (values >= threshold)
+    return np.where(above, np.uint8(1), np.uint8(255))
+
+
+def clump_regions(binary_arr: np.ndarray) -> np.ndarray:
+    """Label connected components in a binary raster (8-connectivity).
+
+    Replaces depstor's broken `wbe.clump(diag=True)` (DepStor.py:657-661).
+    Treats cells with value 1 as foreground; anything else (including the
+    255 nodata sentinel) is background. Returns int32 labels with 0 =
+    background/nodata.
+    """
+    foreground = (binary_arr == 1)
+    structure = np.ones((3, 3), dtype=bool)  # 8-connectivity
+    labels, _ = ndimage.label(foreground, structure=structure)
+    return labels.astype(np.int32)
+
+
+def regions_touching_mask(regions: np.ndarray, mask: np.ndarray) -> set[int]:
+    """Return the set of region IDs that share at least one cell with `mask`.
+
+    `regions`: int32 label array (0 = background).
+    `mask`: uint8 binary (1 = present, 255 = nodata).
+    """
+    touched = regions[mask == 1]
+    ids = set(int(v) for v in np.unique(touched) if v != 0)
+    return ids
+
+
+def regions_to_binary(regions: np.ndarray, keep_ids: set[int]) -> np.ndarray:
+    """Convert a region-label raster back to a uint8 binary mask.
+
+    Cells whose region ID is in `keep_ids` become 1; all others become 255.
+    """
+    if not keep_ids:
+        return np.full(regions.shape, 255, dtype=np.uint8)
+    keep = np.isin(regions, list(keep_ids))
+    return np.where(keep, np.uint8(1), np.uint8(255))
+
+
+def write_uint8_binary(arr: np.ndarray, info: RasterInfo, out_path: Path) -> None:
+    """Write a uint8 binary mask using the template spatial metadata."""
+    out_path = Path(out_path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    profile = {
+        "driver": "GTiff",
+        "height": info.height,
+        "width": info.width,
+        "count": 1,
+        "dtype": "uint8",
+        "crs": info.crs,
+        "transform": info.transform,
+        "nodata": 255,
+        "compress": "ZSTD",
+        "tiled": True,
+        "blockxsize": 256,
+        "blockysize": 256,
+        "BIGTIFF": "YES",
+    }
+    with rasterio.open(out_path, "w", **profile) as dst:
+        dst.write(arr.astype(np.uint8), 1)
+
+
+def write_int32_regions(arr: np.ndarray, info: RasterInfo, out_path: Path) -> None:
+    """Write an int32 region-label raster using the template spatial metadata."""
+    out_path = Path(out_path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    profile = {
+        "driver": "GTiff",
+        "height": info.height,
+        "width": info.width,
+        "count": 1,
+        "dtype": "int32",
+        "crs": info.crs,
+        "transform": info.transform,
+        "nodata": 0,
+        "compress": "ZSTD",
+        "tiled": True,
+        "blockxsize": 256,
+        "blockysize": 256,
+        "BIGTIFF": "YES",
+    }
+    with rasterio.open(out_path, "w", **profile) as dst:
+        dst.write(arr.astype(np.int32), 1)
+
+
+def read_aligned_uint8(path: Path, info: RasterInfo) -> np.ndarray:
+    """Read a uint8 raster, asserting it matches the template grid exactly.
+
+    Use this when consuming intermediates we wrote ourselves with
+    `write_uint8_binary`. Raises if the input does not align with `info`.
+    """
+    with rasterio.open(path) as src:
+        if (src.width, src.height) != (info.width, info.height):
+            raise ValueError(
+                f"Raster {path} has shape ({src.width}x{src.height}); "
+                f"expected ({info.width}x{info.height})"
+            )
+        if src.crs != info.crs:
+            raise ValueError(f"Raster {path} CRS {src.crs} != template CRS {info.crs}")
+        if src.transform != info.transform:
+            raise ValueError(f"Raster {path} transform mismatch with template")
+        return src.read(1)

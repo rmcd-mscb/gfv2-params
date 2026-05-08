@@ -179,3 +179,8 @@ cython_debug/
 # repo specific
 output/
 logs/
+
+# abock's stray working copies, renamed out of the way so they don't shadow
+# imports from the repo root (canonical homes are scripts/ and src/)
+/_gfv2_params_legacy/
+/_create_lulc_params_legacy.py

@@ -1,0 +1,13 @@
+# Build the drains-to-depression binary raster via WhiteboxTools Watershed.
+#
+# Requires a per-fabric staged FDR raster (D8 flow direction, Esri pointer
+# encoding) at `input/depstor/{fabric}_fdr.tif`. The FDR is reprojected onto
+# the dprst grid (rioxarray.reproject_match), then WhiteboxTools delineates
+# which depression each cell drains into. The resulting per-depression labels
+# are collapsed to uint8 binary (1 = drains to any depression, 255 = no/nodata).
+
+template_raster: "{data_root}/work/nhd_merged/elevation.vrt"
+fdr_raster: "{data_root}/input/depstor/{fabric}_fdr.tif"
+dprst_raster: "{data_root}/{fabric}/depstor_rasters/dprst_binary.tif"
+output_raster: "{data_root}/{fabric}/depstor_rasters/drains_to_dprst.tif"
+keep_intermediates: false
