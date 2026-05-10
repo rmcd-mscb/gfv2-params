@@ -1,0 +1,2 @@
+input_dir: "{data_root}/work/nhd_merged"
+output_dir: "{data_root}/work/nhd_merged"
