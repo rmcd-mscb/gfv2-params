@@ -97,12 +97,17 @@ def _run_wbt(runner: str, tool: str, args: list[str], logger) -> None:
 
 
 def _fix_dem_nodata(dem_src: Path, dem_fixed: Path, logger) -> None:
-    """Re-encode Hydrodem with nodata=-9999 for WhiteboxTools/richdem consistency.
+    """Re-encode Hydrodem for downstream WhiteboxTools / richdem consumption.
 
-    Compression note: LZW *without* predictor=2. WhiteboxTools' built-in TIFF
-    reader silently produces garbage when the input uses horizontal-differencing
-    predictor (the file reads fine in GDAL/rasterio but every WBT downstream
-    step propagates corrupt elevations through the pipeline).
+    Two things happen here:
+    1. Nodata is remapped from the source's -99.99 (cm/100 sentinel) to -9999,
+       so WhiteboxTools and richdem pick up an unambiguous value (a float
+       -99.99 comparison is risky).
+    2. The output is written with LZW compression *without* predictor=2.
+       WhiteboxTools' built-in TIFF reader silently produces garbage when the
+       input uses horizontal-differencing predictor (the file reads fine in
+       GDAL/rasterio but every WBT downstream step propagates corrupt
+       elevations through the pipeline).
     """
     logger.info(
         "Re-encoding Hydrodem nodata: %s -> %s (nodata %s -> %s)",
@@ -172,6 +177,10 @@ def _compute_twi(fac_path: Path, slope_deg: rd.rdarray, twi_out: Path, logger) -
     with rasterio.open(fac_path) as fac_ds:
         fac = fac_ds.read(1).astype(np.float64)
         fac_nd = fac_ds.nodata
+        # predictor=2 is safe here because the TWI output is consumed by
+        # GDAL-based tools only (build_vrt.py, marimo notebooks, QGIS) — never
+        # passed to a WhiteboxTools subprocess. The fixed/filled DEM avoids
+        # predictor=2 specifically because WBT can't read it.
         twi_profile = {
             "driver": "GTiff",
             "dtype": "float32",
@@ -190,10 +199,11 @@ def _compute_twi(fac_path: Path, slope_deg: rd.rdarray, twi_out: Path, logger) -
         }
 
     slope_arr = np.asarray(slope_deg, dtype=np.float64)
-    slope_nd = float(getattr(slope_deg, "no_data", DEM_NODATA) or DEM_NODATA)
+    slope_nd_raw = getattr(slope_deg, "no_data", None)
+    slope_nd = float(DEM_NODATA if slope_nd_raw is None else slope_nd_raw)
 
     valid = np.isfinite(fac) & np.isfinite(slope_arr)
-    if fac_nd is not None and not (isinstance(fac_nd, float) and np.isnan(fac_nd)):
+    if fac_nd is not None and np.isfinite(fac_nd):
         valid &= fac != fac_nd
     valid &= slope_arr != slope_nd
     # Filter near-vertical slopes — physically impossible (>89°) and arise from
