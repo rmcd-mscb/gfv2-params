@@ -1,0 +1,10 @@
+# VPU01 validation overlay for depstor routing (drains-to-dprst) raster (issue #38).
+# Uses the per-VPU Fdr_merged_01.tif (51 MB) directly instead of the CONUS
+# work/nhd_merged/fdr.vrt — sidesteps the chunked-reproject work tracked in
+# issue #41 entirely, since the VPU01 FDR fits comfortably in memory.
+
+template_raster: "{data_root}/work/nhd_merged/01/Hydrodem_merged_01.tif"
+fdr_raster: "{data_root}/work/nhd_merged/01/Fdr_merged_01.tif"
+dprst_raster: "{data_root}/{fabric}/depstor_rasters/dprst_binary.tif"
+output_raster: "{data_root}/{fabric}/depstor_rasters/drains_to_dprst.tif"
+keep_intermediates: false
