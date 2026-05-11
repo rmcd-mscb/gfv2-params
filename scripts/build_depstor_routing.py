@@ -62,6 +62,9 @@ def _reproject_fdr_with_rioxarray(fdr_path: Path, dprst_path: Path, out_path: Pa
     dprst_da = xr.open_dataarray(dprst_path, engine="rasterio").squeeze("band", drop=True)
     fdr_aligned = fdr_da.rio.reproject_match(dprst_da)
     fdr_aligned = fdr_aligned.rio.write_nodata(np.uint8(255))
+    # xarray >= 2023 refuses to encode if _FillValue is in both attrs and
+    # encoding. reproject_match preserves it in attrs from the source raster.
+    fdr_aligned.attrs.pop("_FillValue", None)
     fdr_aligned.rio.to_raster(
         out_path,
         driver="GTiff",
