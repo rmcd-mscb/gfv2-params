@@ -142,10 +142,23 @@ def _watershed_to_binary(watershed_path: Path, info: RasterInfo, out_path: Path,
         valid = data != src_nodata
     binary = np.where(valid, np.uint8(1), np.uint8(255))
     n_in = int((binary == 1).sum())
+    pct_drains = 100 * n_in / binary.size
+    # Sanity check: most real drainage networks route <1% of cells into
+    # depressions (most flow paths terminate at streams or the basin outlet).
+    # Coverage > 50% almost certainly means pour-points were mis-encoded —
+    # see the WBT pour-points nodata bug fixed in PR #56 (the symptom was
+    # 100% coverage with `ExitCode=0` and an otherwise-valid GeoTIFF).
+    if pct_drains > 50:
+        logger.warning(
+            "Drains-to-dprst coverage is %.2f%% of the grid — unusually high. "
+            "Check that the pour-points raster uses nodata=0 (not 255) and "
+            "that the FDR is correctly aligned to the dprst grid.",
+            pct_drains,
+        )
     write_uint8_binary(binary, info, out_path)
     logger.info(
         "  Drains-to-dprst mask written: %s (%d cells, %.4f%% of grid)",
-        out_path, n_in, 100 * n_in / binary.size,
+        out_path, n_in, pct_drains,
     )
 
 

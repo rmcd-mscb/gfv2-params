@@ -14,6 +14,10 @@ from gfv2_params.log import configure_logging
 # Opt into the GDAL 4.0 default behaviour of raising Python exceptions
 # instead of returning C-style error codes. Silences the FutureWarning
 # emitted by osgeo when neither UseExceptions/DontUseExceptions is set.
+# NB: GDAL state is process-global — importing this module from a notebook
+# or test harness will flip exception handling on for the whole process.
+# That is the desired behaviour (GDAL 4.0's default) and what the slurm
+# batches expect, but worth knowing if anyone embeds this script elsewhere.
 gdal.UseExceptions()
 osr.UseExceptions()
 
