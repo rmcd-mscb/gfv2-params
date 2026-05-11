@@ -1,0 +1,21 @@
+#!/bin/bash
+#SBATCH -p cpu
+#SBATCH -A impd
+#SBATCH --job-name=dem_derivatives
+#SBATCH --output=logs/job_%A_%a.out
+#SBATCH --error=logs/job_%A_%a.err
+#SBATCH --array=0-17            # Array index range (0 to len(vpus)-1)
+#SBATCH --time=04:00:00         # breach + D8 + accumulation + 3 richdem passes + TWI
+#SBATCH --ntasks=1              # Single task per job
+#SBATCH --cpus-per-task=4       # WhiteboxTools respects --max_procs=-1
+#SBATCH --mem=192G              # Filled DEM + intermediates; VPU 10 margin
+
+# Load required modules
+cd "$SLURM_SUBMIT_DIR"
+[ -f .pixi-activate.sh ] || { echo "ERROR: missing .pixi-activate.sh — run scripts/refresh_pixi_activation.sh" >&2; exit 1; }
+source .pixi-activate.sh
+vpus=("01" "02" "03" "04" "05" "06" "07" "08" "09" "10" "11" "12" "13" "14" "15" "16" "17" "18")
+vpu=${vpus[$SLURM_ARRAY_TASK_ID]}  # Select VPU based on array index
+
+FORCE=${FORCE:+--force}
+python scripts/compute_dem_derivatives.py --config configs/compute_dem_derivatives.yml --vpu $vpu $FORCE

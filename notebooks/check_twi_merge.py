@@ -14,16 +14,24 @@ def _():
 @app.cell
 def _(mo):
     mo.md(r"""
-    # TWI per-VPU merge QA/QC
+    # TWI per-VPU QA/QC (open-source pipeline)
 
     Sanity checks for the per-VPU `Twi_merged_<vpu>.tif` outputs produced by
-    `slurm_batch/merge_rpu_by_vpu_twi.batch`. Confirms presence, metadata,
-    value ranges, and renders decimated thumbnails so seam artifacts at RPU
-    boundaries are visible.
+    `slurm_batch/compute_dem_derivatives.batch` (issue #52: open-source
+    reproduction of the ArcPy TWI recipe via richdem fill + WhiteboxTools D8 +
+    numpy log formula). Confirms presence, metadata, value ranges, and renders
+    decimated thumbnails so flow-routing artifacts (e.g., endorheic-basin
+    spillways, cross-RPU drainage corridors) are visible.
 
     Expected after a complete run: 18 outputs under
     `{data_root}/work/nhd_merged/<vpu>/Twi_merged_<vpu>.tif`, each Float32 with
-    nodata=-9999 and valid values in roughly the 3–22 range.
+    nodata=-9999 and valid values roughly in [-2, 26]. Some negative TWI is
+    expected for very steep low-fac cells; cells with slope ≥ 89° are masked
+    in compute_dem_derivatives.py to suppress fill artifacts in deep closed
+    basins.
+
+    For pixel-wise comparison against the ArcPy `Twi_merged_<vpu>.tif`
+    reference, see `notebooks/diff_twi_hydrodem_vs_merged.py`.
     """)
     return
 
@@ -122,14 +130,16 @@ def _(NHD_MERGED, VPUS, mo, np, rasterio):
     if len(_df) > 0:
         for _c in ("min", "max", "mean", "std", "p1", "p99"):
             _df[_c] = _df[_c].round(3)
-        # Flag any out-of-range values: TWI should be in roughly 0-25.
-        _suspicious = _df[(_df["min"] < 0) | (_df["max"] > 30)]
+        # Flag VPUs outside the expected ~[-2, 28] range. Some negative TWI is
+        # expected for very steep low-fac cells; values < -10 or > 30 suggest
+        # fill artifacts that escaped the slope < 89° filter.
+        _suspicious = _df[(_df["min"] < -10) | (_df["max"] > 30)]
         _hdr = mo.md(
             f"**Value-range stats** ({len(_df)} VPUs sampled at ~1000-px resolution).  "
             + (
-                f"⚠️ **{len(_suspicious)} VPU(s) outside the expected ~0-25 range**: {list(_suspicious['vpu'])}"
+                f"⚠️ **{len(_suspicious)} VPU(s) outside the expected ~[-2, 28] range**: {list(_suspicious['vpu'])}"
                 if len(_suspicious) > 0 else
-                "All VPUs within the expected ~0-25 range ✓"
+                "All VPUs within the expected ~[-2, 28] range ✓"
             )
         )
         _out = mo.vstack([_hdr, mo.ui.table(_df, page_size=18, selection=None)])
@@ -226,10 +236,10 @@ def _(NHD_MERGED, VPUS, np, plt, rasterio):
             f"CONUS-wide TWI distribution from {len(_samples)} VPUs "
             f"(decimated; n={len(all_valid):,})"
         )
-        _ax.axvline(0, color="red", linestyle="--", alpha=0.5,
-                    label="0 (suspect if < 0)")
-        _ax.axvline(25, color="red", linestyle="--", alpha=0.5,
-                    label="25 (suspect if > 25)")
+        _ax.axvline(-10, color="red", linestyle="--", alpha=0.5,
+                    label="-10 (suspect below)")
+        _ax.axvline(30, color="red", linestyle="--", alpha=0.5,
+                    label="30 (suspect above)")
         _ax.legend()
         _out = _fig
     else:

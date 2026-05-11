@@ -21,10 +21,15 @@ from gfv2_params.log import configure_logging
 # srcNodata rationale:
 #   elevation: _fixed_ tiles are written by compute_slope_aspect.py with
 #              fillna(-9999) and write_nodata(-9999).
-#   slope/aspect: RichDEM SaveGDAL always writes -9999.
+#   slope/aspect: RichDEM SaveGDAL always writes -9999 (NED-based, raw DEM).
 #   fdr: NHDPlus FDR tiles are Byte rasters with nodata=255 (D8 codes are 1-128).
 #   twi: merge_rpu_by_vpu.py's TWI case writes float32 and remaps the source
-#        -FLT_MAX sentinel to -9999.
+#        -FLT_MAX sentinel to -9999. **DO NOT SWAP** this to the open-source
+#        Twi_hydrodem_*.tif produced by compute_dem_derivatives.py: PRMS
+#        parameter extraction (carea_max, smidx_coef) thresholds TWI at
+#        calibrated values (8.0, 15.6) that depend on the original ArcPy TWI
+#        distribution shape. Swapping the source would invalidate those
+#        thresholds. See PR #54 discussion.
 RASTER_TYPES = {
     "elevation": ("NEDSnapshot_merged_fixed_*.tif", "-9999"),
     "slope": ("NEDSnapshot_merged_slope_*.tif", "-9999"),
