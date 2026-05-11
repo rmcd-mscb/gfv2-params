@@ -1,11 +1,19 @@
 """Open-source TWI/FDR/FAC/slope/aspect from per-VPU merged Hydrodem.
 
+**Status: parallel-artifact pipeline, not the canonical TWI source.** The
+canonical CONUS TWI for downstream PRMS parameter extraction
+(carea_max, smidx_coef) remains `Twi_merged_<vpu>.tif` from
+merge_rpu_by_vpu.py, because the threshold values used in those parameters
+(8.0 and 15.6) were calibrated against the original ArcPy TWI distribution
+shape — swapping the source would invalidate those thresholds. This script
+exists as a self-contained open-source recipe that can be re-run on any DEM
+(future cross-border work, #53; future PRMS-threshold recalibration, etc.).
+
 Reproduces the ArcPy recipe (Fill -> FlowDirection -> FlowAccumulation -> Slope
 -> TWI) using richdem (FillDepressions+epsilon, slope_degrees,
 slope_percentage, aspect) and WhiteboxTools (D8Pointer with Esri encoding,
-D8FlowAccumulation). The ArcPy reference outputs are the per-VPU
-Twi_merged_<vpu>.tif produced by merge_rpu_by_vpu.py (PR #50, issue #40);
-characterization lives in notebooks/diff_twi_hydrodem_vs_merged.py.
+D8FlowAccumulation). Characterization vs ArcPy ground truth lives in
+notebooks/diff_twi_hydrodem_vs_merged.py.
 
 Why richdem for fill (not whitebox): whitebox FillDepressions --fix_flats
 iterates a flat-resolution pass that scales poorly with the size of contiguous

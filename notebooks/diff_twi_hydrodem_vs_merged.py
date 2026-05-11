@@ -16,25 +16,32 @@ def _(mo):
     mo.md(r"""
     # TWI: open-source (Hydrodem-derived) vs ArcPy (`Twi_merged`) — characterization
 
-    Pixel-wise comparison between the open-source `Twi_hydrodem_<vpu>.tif` (produced
-    by `scripts/compute_dem_derivatives.py`: WhiteboxTools `FillDepressions
-    --fix_flats` → `D8Pointer --esri_pntr` → `D8FlowAccumulation` and richdem
-    slope/aspect on the filled Hydrodem) and the ArcPy reference
+    Pixel-wise comparison between the open-source `Twi_hydrodem_<vpu>.tif`
+    (produced by `scripts/compute_dem_derivatives.py`: richdem
+    `FillDepressions+epsilon` → WhiteboxTools `D8Pointer --esri_pntr` →
+    `D8FlowAccumulation` and richdem slope/aspect) and the ArcPy reference
     `Twi_merged_<vpu>.tif` (per-RPU TWI tiles merged per-VPU by PR #50).
 
-    The open-source product is treated as the canonical going forward (issue #52).
-    This notebook is for **characterization** of the divergence, not pass/fail —
-    pixel-level parity between two independent re-implementations of the recipe is
-    not the goal. Expected sources of divergence:
+    **The ArcPy `Twi_merged` remains the canonical TWI** for downstream PRMS
+    parameter extraction. The downstream consumer (`carea_max`, `smidx_coef`
+    in `0b_TB_depr_stor.py`) thresholds TWI at calibrated values (8.0 and 15.6)
+    that depend on the original ArcPy distribution shape; swapping the TWI
+    source would invalidate those thresholds. This notebook characterizes
+    *where and how* the two products differ — useful background for any
+    future recalibration or for downstream consumers that don't depend on
+    the calibrated thresholds.
 
-    - WBT D8 with `fix_flats` resolves flats via small gradient; ArcPy's
-      `FlowDirection FORCE` resolves flats via Garbrecht & Martz iteration —
-      different propagation patterns through filled depressions.
-    - richdem Horn 1981 slope vs Esri's Horn 1981 implementation differ at
-      edges and where adjacent cells are nodata.
-    - The per-RPU `slope.tif` distributed by Esri reports max ≈ 151 (impossible
-      for true degrees, where max is 90), so it's unclear precisely what slope
-      encoding ArcPy used internally.
+    Known sources of divergence in the open-source product:
+    - **Flat-basin / endorheic artifact**: richdem epsilon imprints a synthetic
+      gradient across flats; D8 routes all flat-region drainage into a single
+      spillover. Visible as a wide bright "rind" in VPU 09 (Souris-Red-Rainy
+      prairie) and as artificial channels in VPU 18 (Mojave, Death Valley).
+      ArcPy avoided this by computing flow per-RPU.
+    - **Slope-algorithm differences**: richdem Horn vs Esri Horn produce
+      slightly different slope distributions at edges and on filled cells.
+    - **Per-RPU `slope.tif`** distributed by Esri reports max ≈ 151 (impossible
+      for true degrees) — it's unclear precisely what slope encoding ArcPy
+      used internally.
     """)
     return
 

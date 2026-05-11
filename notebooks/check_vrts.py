@@ -37,22 +37,12 @@ def _():
     NHD_MERGED = Path(load_base_config()["data_root"]) / "work" / "nhd_merged"
     TARGET_PX = 500
 
-    # NED-based and NHDPlus rasters (existing, unchanged) plus the open-source
-    # per-VPU products from compute_dem_derivatives.py (issue #52). The "twi"
-    # VRT is now sourced from Twi_hydrodem_*.tif (richdem-fill + WBT D8 + numpy
-    # TWI) — the per-RPU ArcPy `Twi_merged_*.tif` reference is kept on disk for
-    # diff-vs-ground-truth in notebooks/diff_twi_hydrodem_vs_merged.py.
     LAYERS = [
-        ("elevation",          "terrain",       "m",        2, 98),
-        ("slope",              "YlOrRd",        "degrees",  2, 98),
-        ("aspect",             "hsv",           "degrees",  0, 100),
-        ("fdr",                "nipy_spectral", "D8 code",  0, 100),
-        ("twi",                "viridis",       "unitless", 2, 98),
-        ("slope_hydrodem",     "YlOrRd",        "degrees",  2, 98),
-        ("slope_pct_hydrodem", "YlOrRd",        "% rise",   2, 98),
-        ("aspect_hydrodem",    "hsv",           "degrees",  0, 100),
-        ("fdr_hydrodem",       "nipy_spectral", "D8 code",  0, 100),
-        ("fac_hydrodem",       "magma",         "cells",    2, 99),
+        ("elevation", "terrain",       "m",        2, 98),
+        ("slope",     "YlOrRd",        "degrees",  2, 98),
+        ("aspect",    "hsv",           "degrees",  0, 100),
+        ("fdr",       "nipy_spectral", "D8 code",  0, 100),
+        ("twi",       "viridis",       "unitless", 2, 98),
     ]
     return LAYERS, NHD_MERGED, Resampling, TARGET_PX, np, plt, rasterio
 

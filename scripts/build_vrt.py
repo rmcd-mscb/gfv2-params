@@ -23,26 +23,19 @@ from gfv2_params.log import configure_logging
 #              fillna(-9999) and write_nodata(-9999).
 #   slope/aspect: RichDEM SaveGDAL always writes -9999 (NED-based, raw DEM).
 #   fdr: NHDPlus FDR tiles are Byte rasters with nodata=255 (D8 codes are 1-128).
-#   twi: compute_dem_derivatives.py writes float32 with nodata=-9999 from the
-#        open-source pipeline (richdem fill + WBT D8 + log((fac+1)*10/(tan+0.01))).
-#        Replaces the per-RPU ArcPy `Twi_merged_*.tif` product as the canonical
-#        CONUS TWI raster (issue #52).
-#   *_hydrodem (slope/slope_pct/aspect/fdr/fac): open-source per-VPU rasters
-#        from compute_dem_derivatives.py, sourced from the Hydrodem stream-burned
-#        DEM. Parallel artifacts to the NED-based slope/aspect and NHDPlus fdr —
-#        useful for downstream consumers that need flow-routing-consistent terrain
-#        derivatives.
+#   twi: merge_rpu_by_vpu.py's TWI case writes float32 and remaps the source
+#        -FLT_MAX sentinel to -9999. **DO NOT SWAP** this to the open-source
+#        Twi_hydrodem_*.tif produced by compute_dem_derivatives.py: PRMS
+#        parameter extraction (carea_max, smidx_coef) thresholds TWI at
+#        calibrated values (8.0, 15.6) that depend on the original ArcPy TWI
+#        distribution shape. Swapping the source would invalidate those
+#        thresholds. See PR #54 discussion.
 RASTER_TYPES = {
     "elevation": ("NEDSnapshot_merged_fixed_*.tif", "-9999"),
     "slope": ("NEDSnapshot_merged_slope_*.tif", "-9999"),
     "aspect": ("NEDSnapshot_merged_aspect_*.tif", "-9999"),
     "fdr": ("Fdr_merged_*.tif", "255"),
-    "twi": ("Twi_hydrodem_*.tif", "-9999"),
-    "fdr_hydrodem": ("Fdr_hydrodem_*.tif", "-32768"),
-    "fac_hydrodem": ("Fac_hydrodem_*.tif", "-32768"),
-    "slope_hydrodem": ("Slope_hydrodem_*.tif", "-9999"),
-    "slope_pct_hydrodem": ("Slope_pct_hydrodem_*.tif", "-9999"),
-    "aspect_hydrodem": ("Aspect_hydrodem_*.tif", "-9999"),
+    "twi": ("Twi_merged_*.tif", "-9999"),
 }
 
 
