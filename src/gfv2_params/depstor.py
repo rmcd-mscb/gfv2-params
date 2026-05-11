@@ -8,7 +8,8 @@ over — gdptools handles HRU overlay directly during zonal aggregation.
 All raster outputs use the conventions:
 - uint8 binary masks: value 1 = present, value 255 = nodata
 - int32 region labels: value 0 = nodata
-- ZSTD-compressed, tiled 256x256
+- LZW-compressed, tiled 256x256 (LZW chosen over ZSTD because
+  WhiteboxTools only reads PACKBITS/LZW/DEFLATE)
 """
 
 from dataclasses import dataclass
@@ -142,7 +143,7 @@ def write_uint8_binary(arr: np.ndarray, info: RasterInfo, out_path: Path) -> Non
         "crs": info.crs,
         "transform": info.transform,
         "nodata": 255,
-        "compress": "ZSTD",
+        "compress": "LZW",
         "tiled": True,
         "blockxsize": 256,
         "blockysize": 256,
@@ -165,7 +166,7 @@ def write_int32_regions(arr: np.ndarray, info: RasterInfo, out_path: Path) -> No
         "crs": info.crs,
         "transform": info.transform,
         "nodata": 0,
-        "compress": "ZSTD",
+        "compress": "LZW",
         "tiled": True,
         "blockxsize": 256,
         "blockysize": 256,
