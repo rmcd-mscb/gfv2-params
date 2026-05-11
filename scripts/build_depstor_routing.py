@@ -78,6 +78,26 @@ def _reproject_fdr_with_rioxarray(fdr_path: Path, dprst_path: Path, out_path: Pa
     )
 
 
+def _prepare_pour_points(dprst_path: Path, out_path: Path, logger) -> None:
+    """Convert dprst_binary.tif (uint8: 1=pour, 255=nodata) into a 0/1 raster
+    with nodata=0 for WhiteboxTools.
+
+    WBT's Watershed tool reads the raw raster values and treats every non-zero
+    value as a pour-point — it does not consult the GeoTIFF NoData tag for the
+    pour-points input. The 255 (nodata) cells in dprst_binary.tif therefore
+    leak in as 76,878 watershed-1 cells + 811M watershed-255 cells, which
+    collapses the resulting binary to 100% coverage.
+    """
+    logger.info("  Converting dprst_binary.tif (1/255) -> 0/1 pour-points (nodata=0)...")
+    with rasterio.open(dprst_path) as src:
+        data = src.read(1)
+        profile = src.profile.copy()
+    pour = np.where(data == 1, np.uint8(1), np.uint8(0))
+    profile.update(nodata=0, compress="LZW")
+    with rasterio.open(out_path, "w", **profile) as dst:
+        dst.write(pour, 1)
+
+
 def _run_whitebox_watershed(fdr_path: Path, pour_pts_path: Path, output_path: Path, logger) -> None:
     runner = _find_whitebox_tools_binary()
     logger.info("  WhiteboxTools binary: %s", runner)
@@ -167,26 +187,30 @@ def main():
     info = RasterInfo.from_path(template_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     fdr_aligned = output_path.parent / "fdr_aligned.tif"
+    pour_pts = output_path.parent / "dprst_pourpts.tif"
     watershed_raw = output_path.parent / "hru_to_dprst_labels.tif"
 
     try:
-        logger.info("--- Step 1/3: Align FDR to template grid ---")
+        logger.info("--- Step 1/4: Align FDR to template grid ---")
         t1 = time.time()
         _reproject_fdr_with_rioxarray(fdr_path, dprst_path, fdr_aligned, logger)
         logger.info("  FDR aligned in %s: %s", _elapsed(t1), fdr_aligned)
 
-        logger.info("--- Step 2/3: Run WhiteboxTools Watershed ---")
+        logger.info("--- Step 2/4: Prepare pour-points for WhiteboxTools ---")
+        _prepare_pour_points(dprst_path, pour_pts, logger)
+
+        logger.info("--- Step 3/4: Run WhiteboxTools Watershed ---")
         t2 = time.time()
-        _run_whitebox_watershed(fdr_aligned, dprst_path, watershed_raw, logger)
+        _run_whitebox_watershed(fdr_aligned, pour_pts, watershed_raw, logger)
         logger.info("  Watershed done in %s: %s", _elapsed(t2), watershed_raw)
 
-        logger.info("--- Step 3/3: Collapse labels to uint8 binary ---")
+        logger.info("--- Step 4/4: Collapse labels to uint8 binary ---")
         t3 = time.time()
         _watershed_to_binary(watershed_raw, info, output_path, logger)
         logger.info("  Binary mask written in %s", _elapsed(t3))
     finally:
         if not keep_intermediates:
-            for p in (fdr_aligned, watershed_raw):
+            for p in (fdr_aligned, pour_pts, watershed_raw):
                 if p.exists():
                     p.unlink()
                     logger.debug("  Cleaned up: %s", p)
