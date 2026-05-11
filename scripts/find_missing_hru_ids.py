@@ -89,11 +89,12 @@ def main():
     parser = argparse.ArgumentParser(description="Find missing nat_hru_id values in CSV file")
     parser.add_argument("csv_file", help="Path to the CSV file")
     parser.add_argument("--output", "-o", help="Path to output text file (optional)")
+    parser.add_argument("--fabric", default=None, help="Fabric name (overrides FABRIC env / default_fabric)")
     args = parser.parse_args()
 
     logger = configure_logging("find_missing_hru_ids")
 
-    base = load_base_config()
+    base = load_base_config(fabric=args.fabric)
     expected_max = base["expected_max_hru_id"]
 
     find_missing_nat_hru_ids(args.csv_file, expected_max, args.output, logger)

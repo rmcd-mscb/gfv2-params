@@ -19,13 +19,17 @@ def main():
     parser = argparse.ArgumentParser(description="Prepare fabric for batch processing.")
     parser.add_argument("--fabric_gpkg", required=True, help="Path to merged fabric geopackage")
     parser.add_argument("--base_config", default=None, help="Path to base_config.yml")
+    parser.add_argument("--fabric", default=None, help="Fabric name (overrides FABRIC env / default_fabric)")
     parser.add_argument("--batch_size", type=int, default=None, help="Target features per batch (overrides base_config.yml)")
     parser.add_argument("--layer", default="nhru", help="Layer name in the geopackage (default nhru)")
     args = parser.parse_args()
 
     logger = configure_logging("prepare_fabric")
 
-    base = load_base_config(Path(args.base_config) if args.base_config else None)
+    base = load_base_config(
+        Path(args.base_config) if args.base_config else None,
+        fabric=args.fabric,
+    )
     batch_size = args.batch_size if args.batch_size is not None else base.get("batch_size", 500)
     data_root = base["data_root"]
     fabric = base["fabric"]

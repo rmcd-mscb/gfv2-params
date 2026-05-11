@@ -18,7 +18,7 @@ from pathlib import Path
 
 import geopandas as gpd
 
-from gfv2_params.config import load_config
+from gfv2_params.config import load_config, require_profile_key
 from gfv2_params.depstor import (
     RasterInfo,
     clump_regions,
@@ -49,6 +49,7 @@ def main():
     parser = argparse.ArgumentParser(description="Build depstor wbody_binary.tif and wbody_regions.tif.")
     parser.add_argument("--config", required=True, help="Path to depstor_waterbody_raster.yml")
     parser.add_argument("--base_config", default=None, help="Path to base_config.yml")
+    parser.add_argument("--fabric", default=None, help="Fabric name (overrides FABRIC env / default_fabric)")
     parser.add_argument("--force", action="store_true", help="Overwrite existing outputs")
     args = parser.parse_args()
 
@@ -58,11 +59,12 @@ def main():
     config = load_config(
         Path(args.config),
         base_config_path=Path(args.base_config) if args.base_config else None,
+        fabric=args.fabric,
     )
 
-    template_path = Path(config["template_raster"])
-    waterbody_gpkg = Path(config["waterbody_gpkg"])
-    waterbody_layer = config.get("waterbody_layer", "v2_wb")
+    template_path = Path(require_profile_key(config, "template_raster", "build_depstor_waterbody"))
+    waterbody_gpkg = Path(require_profile_key(config, "waterbody_gpkg", "build_depstor_waterbody"))
+    waterbody_layer = require_profile_key(config, "waterbody_layer", "build_depstor_waterbody")
     binary_path = Path(config["wbody_binary_raster"])
     regions_path = Path(config["wbody_regions_raster"])
     min_area = float(config.get("min_area_threshold", 900.0))

@@ -28,13 +28,14 @@ def main():
     parser = argparse.ArgumentParser(description="Compute slope and aspect rasters from DEM.")
     parser.add_argument("--config", required=True, help="Path to config YAML file")
     parser.add_argument("--vpu", required=True, help="VPU code, e.g., 01")
+    parser.add_argument("--fabric", default=None, help="Fabric name (overrides FABRIC env / default_fabric)")
     parser.add_argument("--force", action="store_true",
                         help="Overwrite existing output files")
     args = parser.parse_args()
 
     logger = configure_logging("compute_slope_aspect")
 
-    config = load_config(Path(args.config), vpu=args.vpu)
+    config = load_config(Path(args.config), vpu=args.vpu, fabric=args.fabric)
     input_dir = Path(config["input_dir"])
     output_dir = Path(config["output_dir"])
     output_dir.mkdir(parents=True, exist_ok=True)

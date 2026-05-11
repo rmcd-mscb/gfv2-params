@@ -227,11 +227,12 @@ def main():
     )
     parser.add_argument("--config", required=True, help="Path to config YAML file")
     parser.add_argument("--vpu", required=True, help="VPU code, e.g., 06")
+    parser.add_argument("--fabric", default=None, help="Fabric name (overrides FABRIC env / default_fabric)")
     parser.add_argument("--force", action="store_true", help="Overwrite existing outputs")
     args = parser.parse_args()
 
     logger = configure_logging("compute_dem_derivatives")
-    config = load_config(Path(args.config), vpu=args.vpu)
+    config = load_config(Path(args.config), vpu=args.vpu, fabric=args.fabric)
 
     input_dir = Path(config["input_dir"])
     output_dir = Path(config["output_dir"])

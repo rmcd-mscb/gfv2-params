@@ -75,12 +75,14 @@ def main():
     parser = argparse.ArgumentParser(description="Merge per-batch parameter CSVs.")
     parser.add_argument("--config", required=True, help="Path to YAML config file")
     parser.add_argument("--base_config", default=None, help="Path to base_config.yml")
+    parser.add_argument("--fabric", default=None, help="Fabric name (overrides FABRIC env / default_fabric)")
     args = parser.parse_args()
 
     logger = configure_logging("merge_params")
     config = load_config(
         Path(args.config),
         base_config_path=Path(args.base_config) if args.base_config else None,
+        fabric=args.fabric,
     )
     process_files(config, logger)
 

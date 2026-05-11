@@ -12,6 +12,7 @@ from gfv2_params.config import (
     _resolve_placeholders,
     load_base_config,
     load_config,
+    require_profile_key,
     resolve_vpu,
 )
 
@@ -243,3 +244,151 @@ def test_load_config_without_fabric_still_works():
         }))
         config = load_config(step_config, base_config_path=base_config)
         assert config["source_raster"] == "/fake/root/rasters/dem.tif"
+
+
+# ---------------------------------------------------------------------------
+# Fabric profile tests
+# ---------------------------------------------------------------------------
+
+def _profiles_base_config(tmpdir: str) -> Path:
+    """Write a fabrics-profile-style base_config and return its path."""
+    base_config = Path(tmpdir) / "base_config.yml"
+    base_config.write_text(yaml.dump({
+        "data_root": "/fake/root",
+        "default_fabric": "gfv2",
+        "fabrics": {
+            "gfv2": {
+                "expected_max_hru_id": 361471,
+                "batch_size": 10000,
+                "template_raster": "{data_root}/work/elevation.vrt",
+                "waterbody_layer": "v2_wb",
+            },
+            "gfv2_vpu01": {
+                "expected_max_hru_id": 11278,
+                "batch_size": 2000,
+                "template_raster": "{data_root}/work/01/Hydrodem_merged_01.tif",
+                "waterbody_layer": "wbs",
+            },
+        },
+    }))
+    return base_config
+
+
+def test_load_config_selects_fabric_profile():
+    """Explicit fabric kwarg picks the right profile."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        base_config = _profiles_base_config(tmpdir)
+        step_config = Path(tmpdir) / "step.yml"
+        step_config.write_text(yaml.dump({
+            "output_dir": "{data_root}/{fabric}/params",
+        }))
+        config = load_config(step_config, base_config_path=base_config, fabric="gfv2_vpu01")
+        assert config["fabric"] == "gfv2_vpu01"
+        assert config["expected_max_hru_id"] == 11278
+        assert config["batch_size"] == 2000
+        assert config["waterbody_layer"] == "wbs"
+        assert config["template_raster"] == "/fake/root/work/01/Hydrodem_merged_01.tif"
+        assert config["output_dir"] == "/fake/root/gfv2_vpu01/params"
+
+
+def test_load_config_uses_default_fabric():
+    """Without explicit fabric or env, default_fabric in base config is used."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        base_config = _profiles_base_config(tmpdir)
+        step_config = Path(tmpdir) / "step.yml"
+        step_config.write_text(yaml.dump({
+            "output_dir": "{data_root}/{fabric}/params",
+        }))
+        config = load_config(step_config, base_config_path=base_config)
+        assert config["fabric"] == "gfv2"
+        assert config["expected_max_hru_id"] == 361471
+
+
+def test_load_config_fabric_from_env(monkeypatch):
+    """FABRIC env var selects profile when no kwarg is passed."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        base_config = _profiles_base_config(tmpdir)
+        step_config = Path(tmpdir) / "step.yml"
+        step_config.write_text(yaml.dump({
+            "output_dir": "{data_root}/{fabric}/params",
+        }))
+        monkeypatch.setenv("FABRIC", "gfv2_vpu01")
+        config = load_config(step_config, base_config_path=base_config)
+        assert config["fabric"] == "gfv2_vpu01"
+
+
+def test_load_config_explicit_fabric_overrides_env(monkeypatch):
+    """Explicit kwarg wins over FABRIC env var."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        base_config = _profiles_base_config(tmpdir)
+        step_config = Path(tmpdir) / "step.yml"
+        step_config.write_text(yaml.dump({
+            "output_dir": "{data_root}/{fabric}/params",
+        }))
+        monkeypatch.setenv("FABRIC", "gfv2_vpu01")
+        config = load_config(step_config, base_config_path=base_config, fabric="gfv2")
+        assert config["fabric"] == "gfv2"
+
+
+def test_load_config_unknown_fabric_raises():
+    """Unknown fabric name raises ValueError listing valid choices."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        base_config = _profiles_base_config(tmpdir)
+        step_config = Path(tmpdir) / "step.yml"
+        step_config.write_text(yaml.dump({"output_dir": "{data_root}"}))
+        with pytest.raises(ValueError, match="Fabric 'atlantis' not in"):
+            load_config(step_config, base_config_path=base_config, fabric="atlantis")
+
+
+def test_load_config_no_fabric_anywhere_raises(monkeypatch):
+    """If base has no default_fabric, no env, no kwarg -> ValueError."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        base_config = Path(tmpdir) / "base_config.yml"
+        base_config.write_text(yaml.dump({
+            "data_root": "/fake/root",
+            "fabrics": {
+                "gfv2": {"expected_max_hru_id": 100},
+            },
+        }))
+        step_config = Path(tmpdir) / "step.yml"
+        step_config.write_text(yaml.dump({"output_dir": "{data_root}"}))
+        monkeypatch.delenv("FABRIC", raising=False)
+        with pytest.raises(ValueError, match="No fabric resolved"):
+            load_config(step_config, base_config_path=base_config)
+
+
+def test_require_profile_key_missing_raises():
+    """require_profile_key raises a clear error when profile omits a key."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        base_config = Path(tmpdir) / "base_config.yml"
+        base_config.write_text(yaml.dump({
+            "data_root": "/fake/root",
+            "default_fabric": "oregon",
+            "fabrics": {
+                "oregon": {"expected_max_hru_id": 16814},
+            },
+        }))
+        step_config = Path(tmpdir) / "step.yml"
+        step_config.write_text(yaml.dump({"output_dir": "{data_root}"}))
+        config = load_config(step_config, base_config_path=base_config)
+        with pytest.raises(KeyError, match="Fabric profile 'oregon' does not define 'template_raster'"):
+            require_profile_key(config, "template_raster", "build_depstor_imperv")
+
+
+def test_require_profile_key_present_returns_value():
+    """require_profile_key returns the value when present."""
+    config = {"fabric": "gfv2", "template_raster": "/path/to/dem.vrt"}
+    assert require_profile_key(config, "template_raster", "build_x") == "/path/to/dem.vrt"
+
+
+def test_load_base_config_with_fabric_profile():
+    """load_base_config flattens the active fabric profile."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        base_config = _profiles_base_config(tmpdir)
+        config = load_base_config(base_config, fabric="gfv2_vpu01")
+        assert config["fabric"] == "gfv2_vpu01"
+        assert config["expected_max_hru_id"] == 11278
+        assert config["batch_size"] == 2000
+        # Template raster from profile is not placeholder-resolved here
+        # (load_base_config doesn't run placeholder resolution); it stays raw.
+        assert "{data_root}" in config["template_raster"]

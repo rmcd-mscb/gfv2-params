@@ -1,3 +1,4 @@
+import os
 import re
 from pathlib import Path
 
@@ -32,15 +33,65 @@ def resolve_vpu(vpu: str) -> tuple[str, str]:
     return raster_vpu, gpkg_vpu
 
 
-def load_base_config(base_config_path: Path | None = None) -> dict:
-    """Load only the base config (data_root, targets_dir, etc.).
+def load_base_config(
+    base_config_path: Path | None = None,
+    fabric: str | None = None,
+) -> dict:
+    """Load the base config (data_root, fabric profile, etc.).
+
+    If the base config has a `fabrics:` mapping, the active fabric profile
+    is flattened onto the top-level dict (profile keys win). Fabric
+    resolution order: explicit kwarg -> FABRIC env var -> default_fabric
+    in base config.
 
     Use this when a script needs base paths but does not use a per-step
     YAML config (e.g., merge_and_fill_params, find_missing_hru_ids).
     """
     if base_config_path is None:
         base_config_path = _DEFAULT_BASE_CONFIG
-    return _load_yaml(base_config_path)
+    base = _load_yaml(base_config_path)
+    return _resolve_fabric_profile(base, fabric)
+
+
+def _resolve_fabric_profile(base: dict, fabric: str | None) -> dict:
+    """Flatten the active fabric profile onto the base config.
+
+    If base has no `fabrics:` key, returns base unchanged (legacy path —
+    removed once all configs migrate to the profiles schema).
+    """
+    if "fabrics" not in base:
+        return base
+
+    profiles = base.get("fabrics") or {}
+    fabric = fabric or os.environ.get("FABRIC") or base.get("default_fabric")
+    if fabric is None:
+        raise ValueError(
+            "No fabric resolved: pass fabric=, set FABRIC env, or add "
+            "default_fabric to base_config.yml."
+        )
+    if fabric not in profiles:
+        raise ValueError(
+            f"Fabric '{fabric}' not in base_config.yml fabrics: "
+            f"{sorted(profiles)}"
+        )
+
+    profile = profiles[fabric]
+    flat = {k: v for k, v in base.items() if k != "fabrics"}
+    flat.update(profile)
+    flat["fabric"] = fabric
+    return flat
+
+
+def require_profile_key(config: dict, key: str, script_name: str) -> object:
+    """Read a fabric-profile-only key, raising a clear error if absent."""
+    if key not in config:
+        fabric = config.get("fabric", "<unknown>")
+        raise KeyError(
+            f"Fabric profile '{fabric}' does not define '{key}', which is "
+            f"required by {script_name}. Add it to the profile in "
+            f"configs/base_config.yml."
+        )
+    return config[key]
 
 
 def _load_yaml(path: Path) -> dict:
@@ -75,6 +126,7 @@ def load_config(
     step_config_path: Path,
     vpu: str | None = None,
     base_config_path: Path | None = None,
+    fabric: str | None = None,
 ) -> dict:
     """Load base config + step config, resolve placeholders.
 
@@ -89,6 +141,10 @@ def load_config(
     base_config_path : Path, optional
         Path to base_config.yml. Defaults to configs/base_config.yml
         relative to the package installation.
+    fabric : str, optional
+        Active fabric name (e.g., "gfv2", "gfv2_vpu01"). Used when the
+        base config has a `fabrics:` mapping. Resolution order:
+        explicit kwarg -> FABRIC env var -> default_fabric in base config.
 
     Returns
     -------
@@ -101,6 +157,7 @@ def load_config(
         base_config_path = _DEFAULT_BASE_CONFIG
 
     base = _load_yaml(base_config_path)
+    base = _resolve_fabric_profile(base, fabric)
     step = _load_yaml(step_config_path)
 
     data_root = base["data_root"]
@@ -123,11 +180,14 @@ def load_config(
             if "{" not in str_val:
                 replacements[key] = str_val
 
-    # Resolve placeholders in step config
+    # Resolve placeholders in fabric-profile values flattened onto base
+    # (e.g., template_raster: "{data_root}/work/01/Hydrodem_merged_01.tif").
+    # Step config values can override these and are resolved next.
+    resolved_base = _resolve_placeholders(base, replacements)
     resolved_step = _resolve_placeholders(step, replacements)
 
     # Merge: base config provides defaults, step config overrides
-    merged = {**base, **resolved_step}
+    merged = {**resolved_base, **resolved_step}
 
     # Add vpu to config if provided
     if vpu is not None:

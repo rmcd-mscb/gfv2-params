@@ -236,7 +236,10 @@ def main():
     args = parser.parse_args()
 
     logger = configure_logging("init_data_root")
-    base = load_base_config(Path(args.base_config) if args.base_config else None)
+    base = load_base_config(
+        Path(args.base_config) if args.base_config else None,
+        fabric=args.fabric,
+    )
 
     data_root = Path(args.data_root) if args.data_root else Path(base["data_root"])
     fabric = args.fabric if args.fabric else base["fabric"]

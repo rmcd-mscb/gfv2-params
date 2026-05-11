@@ -26,6 +26,7 @@ def main():
     parser = argparse.ArgumentParser(description="Create zonal parameters from raster data.")
     parser.add_argument("--config", required=True, help="Path to config YAML file")
     parser.add_argument("--base_config", default=None, help="Path to base_config.yml")
+    parser.add_argument("--fabric", default=None, help="Fabric name (overrides FABRIC env / default_fabric)")
     parser.add_argument("--batch_id", type=int, required=True, help="Batch ID (from SLURM_ARRAY_TASK_ID)")
     args = parser.parse_args()
 
@@ -34,6 +35,7 @@ def main():
     config = load_config(
         Path(args.config),
         base_config_path=Path(args.base_config) if args.base_config else None,
+        fabric=args.fabric,
     )
     source_type = config["source_type"]
     categorical = config.get("categorical", False)
