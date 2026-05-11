@@ -1,0 +1,10 @@
+# VPU01 validation overlay for per-HRU onstream_storage_frac zonal stat (issue #38).
+
+source_type: onstream_storage_frac
+source_raster: "{data_root}/{fabric}/depstor_rasters/onstream_binary.tif"
+batch_dir: "{data_root}/{fabric}/batches"
+target_layer: nhru
+id_feature: nat_hru_id
+output_dir: "{data_root}/{fabric}/params"
+merged_file: nhm_onstream_storage_frac_params_vpu01.csv
+categorical: false

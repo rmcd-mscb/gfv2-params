@@ -6,9 +6,20 @@ from pathlib import Path
 import geopandas as gpd
 import rioxarray
 from gdptools import UserTiffData, ZonalGen
+from osgeo import gdal, osr
 
 from gfv2_params.config import load_config
 from gfv2_params.log import configure_logging
+
+# Opt into the GDAL 4.0 default behaviour of raising Python exceptions
+# instead of returning C-style error codes. Silences the FutureWarning
+# emitted by osgeo when neither UseExceptions/DontUseExceptions is set.
+# NB: GDAL state is process-global — importing this module from a notebook
+# or test harness will flip exception handling on for the whole process.
+# That is the desired behaviour (GDAL 4.0's default) and what the slurm
+# batches expect, but worth knowing if anyone embeds this script elsewhere.
+gdal.UseExceptions()
+osr.UseExceptions()
 
 
 def main():
@@ -56,17 +67,17 @@ def main():
     # Build file prefix for output
     file_prefix = f"base_nhm_{source_type}_{fabric}_batch_{args.batch_id:04d}_param"
 
-    # Create zonal stats
+    # Create zonal stats (gdptools 0.3.13+ keyword names)
     data = UserTiffData(
-        var=source_type,
-        ds=ned_da,
-        proj_ds=ned_da.rio.crs,
-        x_coord="x",
-        y_coord="y",
+        source_var=source_type,
+        source_ds=ned_da,
+        source_crs=ned_da.rio.crs,
+        source_x_coord="x",
+        source_y_coord="y",
         band=1,
         bname="band",
-        f_feature=nhru_gdf,
-        id_feature=id_feature,
+        target_gdf=nhru_gdf,
+        target_id=id_feature,
     )
 
     zonal_gen = ZonalGen(
