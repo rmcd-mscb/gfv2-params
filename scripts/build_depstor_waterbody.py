@@ -17,6 +17,8 @@ import time
 from pathlib import Path
 
 import geopandas as gpd
+import pyogrio
+from rasterio.crs import CRS as RioCRS
 from rasterio.warp import transform_bounds
 
 from gfv2_params.config import load_config, require_config_key
@@ -54,20 +56,40 @@ def _load_waterbodies(path: Path, layer: str | None, info: RasterInfo, logger):
     load time from ~30 s to <1 s; on a full-CONUS template it's a no-op
     (bbox encloses the full extent).
 
-    The bbox must be in the file's CRS. We peek at the file CRS via a
-    one-row read, then project the buffered template bounds with
-    `transform_bounds` (no-op when CRSes match — the production case today).
+    The bbox must be in the file's CRS. We peek at the file CRS via
+    `pyogrio.read_info` (metadata-only, no feature read) and short-circuit
+    `transform_bounds` when CRSes match (the production case today). For a
+    future waterbodies source in a different CRS the bounds are projected
+    with edge densification so we don't under-cover from corner-only sampling.
     """
-    buf = WATERBODY_LOAD_BBOX_BUFFER_M
     b = info.bounds
+    if b.right <= b.left or b.top <= b.bottom:
+        # Degenerate or inverted template bounds would yield an empty/invalid
+        # bbox filter that silently drops every feature. Catch it loudly.
+        raise ValueError(
+            f"Template bounds are degenerate or inverted: "
+            f"left={b.left}, right={b.right}, bottom={b.bottom}, top={b.top}"
+        )
+
+    buf = WATERBODY_LOAD_BBOX_BUFFER_M
     buffered = (b.left - buf, b.bottom - buf, b.right + buf, b.top + buf)
 
-    file_crs = gpd.read_file(path, layer=layer, rows=1).crs
-    bbox = transform_bounds(info.crs, file_crs, *buffered, densify_pts=21)
-    logger.info(
-        "  Waterbody load bbox (file CRS %s, buffer %.0f m): %s",
-        file_crs, buf, tuple(round(v, 1) for v in bbox),
-    )
+    # Metadata-only CRS peek — doesn't read any features.
+    file_crs_str = pyogrio.read_info(path, layer=layer)["crs"]
+    file_crs = RioCRS.from_user_input(file_crs_str) if file_crs_str else None
+
+    if file_crs is not None and file_crs == info.crs:
+        bbox = buffered
+        logger.info(
+            "  Waterbody load bbox (file CRS matches template %s, buffer %.0f m): %s",
+            file_crs_str, buf, tuple(round(v, 1) for v in bbox),
+        )
+    else:
+        bbox = transform_bounds(info.crs, file_crs, *buffered, densify_pts=21)
+        logger.info(
+            "  Waterbody load bbox (projected template -> file CRS %s, buffer %.0f m): %s",
+            file_crs_str, buf, tuple(round(v, 1) for v in bbox),
+        )
 
     try:
         return gpd.read_file(path, layer=layer, bbox=bbox, use_arrow=True)

@@ -43,8 +43,11 @@ fabrics:
     segments_gpkg: "{data_root}/input/fabric/NHM_01_draft.gpkg"
 
   oregon:
-    # Depstor inputs not yet staged for oregon. Depstor scripts will raise
-    # a clear "fabric profile 'oregon' missing 'template_raster'" error if
-    # invoked with --fabric oregon until the inputs are wired up.
+    # Depstor inputs not yet staged for oregon. The fabric inherits the
+    # top-level waterbody_gpkg / waterbody_layer defaults, but the
+    # fabric-specific keys it would also need (template_raster, fdr_raster,
+    # twi_raster, segments_gpkg) are absent — depstor scripts will fail
+    # loudly with "fabric profile 'oregon' missing 'template_raster'" when
+    # invoked with --fabric oregon until those are wired up.
     expected_max_hru_id: 16814
     batch_size: 10000

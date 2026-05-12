@@ -362,6 +362,38 @@ def test_load_config_top_level_keys_inherited_by_fabrics():
             assert config["waterbody_layer"] == "waterbodies"
 
 
+def test_load_config_fabric_partial_override():
+    """A fabric overriding ONE of several top-level keys still inherits the rest.
+
+    Inheritance is per-key (Python dict.update semantics), not all-or-nothing —
+    so a fabric can opt out of one canonical default while keeping the others.
+    """
+    with tempfile.TemporaryDirectory() as tmpdir:
+        base_config = Path(tmpdir) / "base_config.yml"
+        base_config.write_text(yaml.dump({
+            "data_root": "/fake/root",
+            "default_fabric": "alpha",
+            "waterbody_gpkg": "{data_root}/input/canonical_wbodies.gpkg",
+            "waterbody_layer": "waterbodies",
+            "fabrics": {
+                "alpha": {"expected_max_hru_id": 100, "batch_size": 10},
+                # Beta overrides only waterbody_layer; waterbody_gpkg should
+                # still come from the top-level default.
+                "beta": {
+                    "expected_max_hru_id": 200,
+                    "batch_size": 20,
+                    "waterbody_layer": "local_wb",
+                },
+            },
+        }))
+        step_config = Path(tmpdir) / "step.yml"
+        step_config.write_text(yaml.dump({}))
+
+        beta = load_config(step_config, base_config_path=base_config, fabric="beta")
+        assert beta["waterbody_gpkg"] == "/fake/root/input/canonical_wbodies.gpkg"
+        assert beta["waterbody_layer"] == "local_wb"
+
+
 def test_load_config_fabric_override_beats_top_level():
     """Per-fabric profile keys override top-level defaults of the same name."""
     with tempfile.TemporaryDirectory() as tmpdir:
