@@ -59,7 +59,8 @@ def test_load_config_without_vpu():
             "data_root": "/fake/root",
             "targets_dir": "targets",
             "output_dir": "nhm_params",
-            "expected_max_hru_id": 100,
+            "default_fabric": "test",
+            "fabrics": {"test": {"expected_max_hru_id": 100}},
         }))
 
         step_config = Path(tmpdir) / "step.yml"
@@ -87,7 +88,8 @@ def test_load_config_with_vpu_resolves_placeholders():
             "data_root": "/fake/root",
             "targets_dir": "targets",
             "output_dir": "nhm_params",
-            "expected_max_hru_id": 100,
+            "default_fabric": "test",
+            "fabrics": {"test": {"expected_max_hru_id": 100}},
         }))
 
         step_config = Path(tmpdir) / "step.yml"
@@ -108,19 +110,21 @@ def test_load_config_with_vpu_resolves_placeholders():
 
 
 def test_load_base_config():
-    """load_base_config returns only base config keys."""
+    """load_base_config returns base config keys + active fabric profile."""
     with tempfile.TemporaryDirectory() as tmpdir:
         base_config = Path(tmpdir) / "base_config.yml"
         base_config.write_text(yaml.dump({
             "data_root": "/fake/root",
             "targets_dir": "targets",
             "output_dir": "nhm_params",
-            "expected_max_hru_id": 100,
+            "default_fabric": "test",
+            "fabrics": {"test": {"expected_max_hru_id": 100}},
         }))
 
         config = load_base_config(base_config)
         assert config["data_root"] == "/fake/root"
         assert config["expected_max_hru_id"] == 100
+        assert config["fabric"] == "test"
 
 
 def test_resolve_vpu_lowercase():
@@ -164,13 +168,13 @@ def test_resolve_placeholders_unresolved():
 
 
 def test_load_config_resolves_fabric_placeholder():
-    """Config with {fabric} placeholder should resolve from base config."""
+    """Config with {fabric} placeholder should resolve from active profile."""
     with tempfile.TemporaryDirectory() as tmpdir:
         base_config = Path(tmpdir) / "base_config.yml"
         base_config.write_text(yaml.dump({
             "data_root": "/fake/root",
-            "fabric": "gfv2",
-            "expected_max_hru_id": 100,
+            "default_fabric": "gfv2",
+            "fabrics": {"gfv2": {"expected_max_hru_id": 100}},
         }))
         step_config = Path(tmpdir) / "step.yml"
         step_config.write_text(yaml.dump({
@@ -194,8 +198,8 @@ def test_load_config_fabric_with_vpu():
         base_config = Path(tmpdir) / "base_config.yml"
         base_config.write_text(yaml.dump({
             "data_root": "/fake/root",
-            "fabric": "gfv2",
-            "expected_max_hru_id": 100,
+            "default_fabric": "gfv2",
+            "fabrics": {"gfv2": {"expected_max_hru_id": 100}},
         }))
         step_config = Path(tmpdir) / "step.yml"
         step_config.write_text(yaml.dump({
@@ -213,8 +217,8 @@ def test_load_config_step_self_reference():
         base_config = Path(tmpdir) / "base_config.yml"
         base_config.write_text(yaml.dump({
             "data_root": "/fake/root",
-            "fabric": "gfv2",
-            "expected_max_hru_id": 100,
+            "default_fabric": "gfv2",
+            "fabrics": {"gfv2": {"expected_max_hru_id": 100}},
         }))
         step_config = Path(tmpdir) / "step.yml"
         step_config.write_text(yaml.dump({
@@ -230,20 +234,21 @@ def test_load_config_step_self_reference():
         assert config["batch_dir"] == "/fake/root/gfv2/batches"
 
 
-def test_load_config_without_fabric_still_works():
-    """Existing configs without {fabric} placeholder should still work."""
+def test_load_config_legacy_base_without_fabrics_raises():
+    """Base config without `fabrics:` mapping raises a clear error."""
     with tempfile.TemporaryDirectory() as tmpdir:
         base_config = Path(tmpdir) / "base_config.yml"
         base_config.write_text(yaml.dump({
             "data_root": "/fake/root",
+            "fabric": "legacy",
             "expected_max_hru_id": 100,
         }))
         step_config = Path(tmpdir) / "step.yml"
         step_config.write_text(yaml.dump({
             "source_raster": "{data_root}/rasters/dem.tif",
         }))
-        config = load_config(step_config, base_config_path=base_config)
-        assert config["source_raster"] == "/fake/root/rasters/dem.tif"
+        with pytest.raises(ValueError, match="no `fabrics:` mapping"):
+            load_config(step_config, base_config_path=base_config)
 
 
 # ---------------------------------------------------------------------------

@@ -54,15 +54,14 @@ def load_base_config(
 
 
 def _resolve_fabric_profile(base: dict, fabric: str | None) -> dict:
-    """Flatten the active fabric profile onto the base config.
-
-    If base has no `fabrics:` key, returns base unchanged (legacy path —
-    removed once all configs migrate to the profiles schema).
-    """
-    if "fabrics" not in base:
-        return base
-
+    """Flatten the active fabric profile onto the base config."""
     profiles = base.get("fabrics") or {}
+    if not profiles:
+        raise ValueError(
+            "base_config.yml has no `fabrics:` mapping. Define at least one "
+            "fabric profile (see configs/base_config.yml)."
+        )
+
     fabric = fabric or os.environ.get("FABRIC") or base.get("default_fabric")
     if fabric is None:
         raise ValueError(
