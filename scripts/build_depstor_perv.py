@@ -31,6 +31,11 @@ def _elapsed(t0: float) -> str:
     return f"{m}m {s:02d}s" if m else f"{s}s"
 
 
+def compute_perv_binary(imperv: np.ndarray, dprst: np.ndarray) -> np.ndarray:
+    """Cell is pervious where it is NOT impervious AND NOT depression-storage."""
+    return np.where((imperv != 1) & (dprst != 1), np.uint8(1), np.uint8(255))
+
+
 def main():
     parser = argparse.ArgumentParser(description="Build depstor perv_binary.tif.")
     parser.add_argument("--config", required=True, help="Path to depstor_perv_raster.yml")
@@ -77,7 +82,7 @@ def main():
 
     logger.info("--- Step 2/2: Build perv_binary (NOT imperv AND NOT dprst) ---")
     t2 = time.time()
-    perv = np.where((imperv_binary != 1) & (dprst_binary != 1), np.uint8(1), np.uint8(255))
+    perv = compute_perv_binary(imperv_binary, dprst_binary)
     write_uint8_binary(perv, info, perv_path)
     n_perv = int((perv == 1).sum())
     logger.info(

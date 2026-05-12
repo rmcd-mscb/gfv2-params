@@ -280,10 +280,10 @@ sbatch slurm_batch/build_depstor_routing.batch      # depends on dprst + staged 
 ```
 
 Steps 1-3 are independent of each other and can run concurrently. Step 4
-combines them and must wait. Steps 5 and 6 each depend on outputs from earlier
-steps and can run in parallel with one another. Step 6 (`build_depstor_routing`)
-runs WhiteboxTools `Watershed` against the staged FDR + the dprst output and is
-the most memory- and time-intensive.
+combines them and must wait. Steps 5 and 6 both wait for Step 4 (`dprst`) to
+finish, then can run in parallel with one another. Step 6
+(`build_depstor_routing`) runs WhiteboxTools `Watershed` against the staged FDR
++ the dprst output and is the most memory- and time-intensive.
 
 Note: Stage 2d depends on Stage 2a (the elevation VRT exists) but is otherwise
 fabric-independent of the rest of Part 1. It can run in parallel with Part 2's
