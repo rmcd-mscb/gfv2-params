@@ -17,6 +17,7 @@ import time
 from pathlib import Path
 
 import geopandas as gpd
+from rasterio.warp import transform_bounds
 
 from gfv2_params.config import load_config, require_config_key
 from gfv2_params.depstor import (
@@ -28,6 +29,15 @@ from gfv2_params.depstor import (
 )
 from gfv2_params.log import configure_logging
 
+# Defensive buffer (m) added to the template bounds when filtering the
+# waterbody load. OGR's bbox spatial filter uses each polygon's envelope, so
+# polygons crossing the template boundary will already be included — the
+# buffer is insurance against floating-point rounding at the boundary and
+# small envelope/extent mismatches from CRS reprojection at file scope.
+# 1 km ≈ 33 cells at 30 m: generous against fp slop, negligible vs the load
+# time saved by spatial-index push-down.
+WATERBODY_LOAD_BBOX_BUFFER_M = 1000.0
+
 
 def _elapsed(t0: float) -> str:
     secs = time.time() - t0
@@ -35,14 +45,37 @@ def _elapsed(t0: float) -> str:
     return f"{m}m {s:02d}s" if m else f"{s}s"
 
 
-def _load_waterbodies(path: Path, layer: str | None, logger):
+def _load_waterbodies(path: Path, layer: str | None, info: RasterInfo, logger):
+    """Load waterbody polygons whose envelope intersects the template extent.
+
+    Pushes the bbox filter down to OGR's spatial index (R-tree in the
+    geopackage) so only polygons near the template are read. For the
+    448k-feature CONUS waterbodies file on a VPU-scale template this drops
+    load time from ~30 s to <1 s; on a full-CONUS template it's a no-op
+    (bbox encloses the full extent).
+
+    The bbox must be in the file's CRS. We peek at the file CRS via a
+    one-row read, then project the buffered template bounds with
+    `transform_bounds` (no-op when CRSes match — the production case today).
+    """
+    buf = WATERBODY_LOAD_BBOX_BUFFER_M
+    b = info.bounds
+    buffered = (b.left - buf, b.bottom - buf, b.right + buf, b.top + buf)
+
+    file_crs = gpd.read_file(path, layer=layer, rows=1).crs
+    bbox = transform_bounds(info.crs, file_crs, *buffered, densify_pts=21)
+    logger.info(
+        "  Waterbody load bbox (file CRS %s, buffer %.0f m): %s",
+        file_crs, buf, tuple(round(v, 1) for v in bbox),
+    )
+
     try:
-        return gpd.read_file(path, layer=layer, use_arrow=True)
+        return gpd.read_file(path, layer=layer, bbox=bbox, use_arrow=True)
     except Exception:
         logger.warning(
             "PyArrow unavailable for vector load; falling back to fiona."
         )
-        return gpd.read_file(path, layer=layer)
+        return gpd.read_file(path, layer=layer, bbox=bbox)
 
 
 def main():
@@ -90,7 +123,7 @@ def main():
 
     logger.info("--- Step 1/4: Load and filter water bodies ---")
     t1 = time.time()
-    wb_gdf = _load_waterbodies(waterbody_gpkg, waterbody_layer, logger)
+    wb_gdf = _load_waterbodies(waterbody_gpkg, waterbody_layer, info, logger)
     if wb_gdf.crs != info.crs:
         logger.info("  Reprojecting wbodies from %s to %s", wb_gdf.crs, info.crs)
         wb_gdf = wb_gdf.to_crs(info.crs)
