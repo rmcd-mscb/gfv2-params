@@ -1,12 +1,30 @@
 """Create zonal parameters (elevation, slope, aspect) from rasters by HRU polygon."""
 
 import argparse
+import os
+import sys
+import time
 from pathlib import Path
+
+# Pre-import heartbeats so a future hang in the geo-library import chain
+# (rasterio/GDAL/PROJ/pyogrio init under shared-FS metadata contention,
+# observed once on VPU01 issue-#61 array run with zero stdout from one task)
+# can be localised. Printed unconditionally with flush=True so SLURM's
+# stdout/stderr line buffering doesn't swallow them.
+print(
+    f"[startup pid={os.getpid()} host={os.uname().nodename} "
+    f"task={os.environ.get('SLURM_ARRAY_TASK_ID', '-')}] "
+    f"python {sys.version.split()[0]} interpreter up, importing geo libs...",
+    flush=True,
+)
+_t_imports = time.time()
 
 import geopandas as gpd
 import rioxarray
 from gdptools import UserTiffData, ZonalGen
 from osgeo import gdal, osr
+
+print(f"[startup] geo-library imports complete in {time.time() - _t_imports:.1f}s", flush=True)
 
 from gfv2_params.config import load_config
 from gfv2_params.log import configure_logging

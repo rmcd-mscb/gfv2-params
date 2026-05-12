@@ -90,6 +90,14 @@ FABRIC=gfv2_vpu01 sbatch --time=01:00:00 --mem=16G slurm_batch/build_depstor_imp
 `submit_jobs.sh` accepts fabric as its 5th positional argument and forwards it
 via `--export=ALL,FABRIC=...` to the array job (and the chained merge job).
 
+It also accepts an optional 6th argument (or `SUBMIT_JOBS_MAX_CONCURRENT` env
+var) capping how many array tasks run at once — defaults to 4. The cap exists
+because concurrent geo-library imports (rasterio / GDAL / PROJ / pyogrio) can
+deadlock under shared-FS metadata contention when many tasks start
+simultaneously; one of eight VPU01 array tasks hung indefinitely during the
+issue-#61 smoke test. Set to `0` (or `off`) to disable the cap. For CONUS the
+default of 4 trades ~1 wave of wall-clock time for reliability.
+
 ## Pipeline Stages
 
 All commands below assume the repo root as your working directory, e.g.:
