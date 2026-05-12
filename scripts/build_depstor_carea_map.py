@@ -148,17 +148,23 @@ def main():
 
         # Nearest-neighbour warping is exact only when origin offsets are
         # whole-cell multiples — otherwise we'd be silently snapping to the
-        # wrong source pixel. Verify before opening the VRT.
+        # wrong source pixel. Verify before opening the VRT. The transforms
+        # carry float64 rasterio truncation noise (~1e-9), so check that the
+        # fractional pixel offset is near zero rather than exactly zero.
         col_offset = twi_src.transform.c - info.transform.c
         row_offset = twi_src.transform.f - info.transform.f
         cell_x = info.transform.a
         cell_y = info.transform.e
-        if col_offset % cell_x != 0 or row_offset % cell_y != 0:
+        col_frac = (col_offset / cell_x) - round(col_offset / cell_x)
+        row_frac = (row_offset / cell_y) - round(row_offset / cell_y)
+        if abs(col_frac) > 1e-6 or abs(row_frac) > 1e-6:
             raise ValueError(
                 f"TWI origin not whole-cell-aligned with template: "
                 f"col_offset={col_offset}, row_offset={row_offset}, "
-                f"cell=({cell_x}, {cell_y}). Nearest-neighbour resampling "
-                f"would lose alignment — re-stage the TWI on the template grid."
+                f"cell=({cell_x}, {cell_y}), fractional pixel offset = "
+                f"({col_frac:.2e}, {row_frac:.2e}). Nearest-neighbour "
+                f"resampling would lose alignment — re-stage the TWI on the "
+                f"template grid."
             )
 
         vrt_options = {
