@@ -13,6 +13,7 @@ fabrics:
     batch_size: 10000
     template_raster: "{data_root}/work/nhd_merged/elevation.vrt"
     fdr_raster: "{data_root}/input/depstor/{fabric}_fdr.tif"
+    twi_raster: "{data_root}/work/nhd_merged/twi.vrt"
     segments_gpkg: "{data_root}/input/depstor/{fabric}_segments_wbodies.gpkg"
     waterbody_gpkg: "{data_root}/input/depstor/{fabric}_segments_wbodies.gpkg"
     waterbody_layer: v2_wb
@@ -25,6 +26,7 @@ fabrics:
     batch_size: 2000
     template_raster: "{data_root}/work/nhd_merged/01/Hydrodem_merged_01.tif"
     fdr_raster: "{data_root}/work/nhd_merged/01/Fdr_merged_01.tif"
+    twi_raster: "{data_root}/work/nhd_merged/01/Twi_merged_01.tif"
     segments_gpkg: "{data_root}/input/fabric/NHM_01_draft.gpkg"
     waterbody_gpkg: "{data_root}/input/fabric/NHM_01_draft.gpkg"
     waterbody_layer: wbs

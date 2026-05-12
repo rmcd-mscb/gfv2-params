@@ -94,6 +94,53 @@ def threshold_above(values: np.ndarray, threshold: float, src_nodata) -> np.ndar
     return np.where(above, np.uint8(1), np.uint8(255))
 
 
+def intersect_binaries(a: np.ndarray, b: np.ndarray) -> np.ndarray:
+    """Return uint8 binary mask: 1 where both inputs are 1, else 255 (nodata).
+
+    Inputs are the 1/255 binary convention used throughout depstor outputs.
+    """
+    mask = (a == 1) & (b == 1)
+    out = np.full_like(a, 255, dtype=np.uint8)
+    out[mask] = 1
+    return out
+
+
+def compute_carea_map_binary(
+    perv: np.ndarray,
+    onstream: np.ndarray,
+    twi: np.ndarray,
+    threshold: float,
+    twi_nodata,
+) -> np.ndarray:
+    """Build the binary carea_map mask used for getCarea-style PRMS params.
+
+    Per cell, returns 1 where the cell is pervious AND either (a) TWI exceeds
+    the threshold or (b) the cell is on-stream storage; 255 otherwise. Mirrors
+    `getCareaMap` in the ArcPy reference (docs/0b_TB_depr_stor.py:315-350) but
+    drops HRU-ID tagging — HRU identity is recovered at zonal-stats time.
+
+    Short-circuits on the perv test first so NaN / sentinel TWI values in
+    non-perv cells do not pollute the result. Handles both NaN and the
+    -9999-style sentinel nodata that the merged TWI rasters carry.
+    """
+    is_perv = perv == 1
+    is_onstream = onstream == 1
+
+    if twi_nodata is not None and isinstance(twi_nodata, float) and np.isnan(twi_nodata):
+        twi_valid = ~np.isnan(twi)
+    elif twi_nodata is not None:
+        twi_valid = (twi != twi_nodata) & ~np.isnan(twi)
+    else:
+        twi_valid = ~np.isnan(twi)
+
+    above_thresh = twi_valid & (twi > threshold)
+    keep = is_perv & (above_thresh | is_onstream)
+
+    out = np.full(perv.shape, 255, dtype=np.uint8)
+    out[keep] = 1
+    return out
+
+
 def clump_regions(binary_arr: np.ndarray) -> np.ndarray:
     """Label connected components in a binary raster (8-connectivity).
 
