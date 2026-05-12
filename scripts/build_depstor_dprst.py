@@ -27,7 +27,7 @@ from pathlib import Path
 import numpy as np
 import rasterio
 
-from gfv2_params.config import load_config, require_profile_key
+from gfv2_params.config import load_config, require_config_key
 from gfv2_params.depstor import (
     RasterInfo,
     read_aligned_uint8,
@@ -61,7 +61,7 @@ def main():
         fabric=args.fabric,
     )
 
-    template_path = Path(require_profile_key(config, "template_raster", "build_depstor_dprst"))
+    template_path = Path(require_config_key(config, "template_raster", "build_depstor_dprst"))
     wbody_binary_path = Path(config["wbody_binary_raster"])
     wbody_regions_path = Path(config["wbody_regions_raster"])
     stream_buffer_path = Path(config["stream_buffer_raster"])

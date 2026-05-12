@@ -242,7 +242,7 @@ def main():
     )
 
     data_root = Path(args.data_root) if args.data_root else Path(base["data_root"])
-    fabric = args.fabric if args.fabric else base["fabric"]
+    fabric = base["fabric"]
 
     logger.info("data_root : %s", data_root)
     logger.info("fabric    : %s", fabric)

@@ -39,10 +39,10 @@ def load_base_config(
 ) -> dict:
     """Load the base config (data_root, fabric profile, etc.).
 
-    If the base config has a `fabrics:` mapping, the active fabric profile
-    is flattened onto the top-level dict (profile keys win). Fabric
-    resolution order: explicit kwarg -> FABRIC env var -> default_fabric
-    in base config.
+    The active fabric profile is flattened onto the top-level dict (profile
+    keys win), then `{data_root}` and `{fabric}` placeholders in any value
+    are resolved. Fabric resolution order: explicit kwarg -> FABRIC env var
+    -> default_fabric in base config.
 
     Use this when a script needs base paths but does not use a per-step
     YAML config (e.g., merge_and_fill_params, find_missing_hru_ids).
@@ -50,7 +50,9 @@ def load_base_config(
     if base_config_path is None:
         base_config_path = _DEFAULT_BASE_CONFIG
     base = _load_yaml(base_config_path)
-    return _resolve_fabric_profile(base, fabric)
+    base = _resolve_fabric_profile(base, fabric)
+    replacements = {"data_root": base["data_root"], "fabric": base["fabric"]}
+    return _resolve_placeholders(base, replacements)
 
 
 def _resolve_fabric_profile(base: dict, fabric: str | None) -> dict:
@@ -81,14 +83,19 @@ def _resolve_fabric_profile(base: dict, fabric: str | None) -> dict:
     return flat
 
 
-def require_profile_key(config: dict, key: str, script_name: str) -> object:
-    """Read a fabric-profile-only key, raising a clear error if absent."""
+def require_config_key(config: dict, key: str, script_name: str) -> object:
+    """Read a required config key, raising a clear error if absent.
+
+    Used by scripts for keys that are expected to come from the active
+    fabric profile in base_config.yml. The error message points the user
+    there, since that's where these keys live by convention.
+    """
     if key not in config:
         fabric = config.get("fabric", "<unknown>")
         raise KeyError(
-            f"Fabric profile '{fabric}' does not define '{key}', which is "
-            f"required by {script_name}. Add it to the profile in "
-            f"configs/base_config.yml."
+            f"Required key '{key}' missing from merged config for "
+            f"{script_name}. Expected from fabric profile '{fabric}' "
+            f"in configs/base_config.yml."
         )
     return config[key]
 

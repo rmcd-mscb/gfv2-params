@@ -15,7 +15,7 @@ from pathlib import Path
 
 import geopandas as gpd
 
-from gfv2_params.config import load_config, require_profile_key
+from gfv2_params.config import load_config, require_config_key
 from gfv2_params.depstor import RasterInfo, rasterize_binary, write_uint8_binary
 from gfv2_params.log import configure_logging
 
@@ -54,8 +54,8 @@ def main():
         fabric=args.fabric,
     )
 
-    template_path = Path(require_profile_key(config, "template_raster", "build_depstor_streambuffer"))
-    segments_gpkg = Path(require_profile_key(config, "segments_gpkg", "build_depstor_streambuffer"))
+    template_path = Path(require_config_key(config, "template_raster", "build_depstor_streambuffer"))
+    segments_gpkg = Path(require_config_key(config, "segments_gpkg", "build_depstor_streambuffer"))
     segments_layer = config.get("segments_layer", "nsegment")
     output_path = Path(config["output_raster"])
     buffer_distance = float(config.get("buffer_distance", 60))

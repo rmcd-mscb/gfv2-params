@@ -24,7 +24,7 @@ import rasterio
 import rioxarray  # noqa: F401  (registers .rio accessor)
 import xarray as xr
 
-from gfv2_params.config import load_config, require_profile_key
+from gfv2_params.config import load_config, require_config_key
 from gfv2_params.depstor import RasterInfo, write_uint8_binary
 from gfv2_params.log import configure_logging
 
@@ -179,8 +179,8 @@ def main():
         fabric=args.fabric,
     )
 
-    template_path = Path(require_profile_key(config, "template_raster", "build_depstor_routing"))
-    fdr_path = Path(require_profile_key(config, "fdr_raster", "build_depstor_routing"))
+    template_path = Path(require_config_key(config, "template_raster", "build_depstor_routing"))
+    fdr_path = Path(require_config_key(config, "fdr_raster", "build_depstor_routing"))
     dprst_path = Path(config["dprst_raster"])
     output_path = Path(config["output_raster"])
     keep_intermediates = bool(config.get("keep_intermediates", False))

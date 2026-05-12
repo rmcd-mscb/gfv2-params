@@ -18,7 +18,7 @@ from pathlib import Path
 
 import geopandas as gpd
 
-from gfv2_params.config import load_config, require_profile_key
+from gfv2_params.config import load_config, require_config_key
 from gfv2_params.depstor import (
     RasterInfo,
     clump_regions,
@@ -62,9 +62,9 @@ def main():
         fabric=args.fabric,
     )
 
-    template_path = Path(require_profile_key(config, "template_raster", "build_depstor_waterbody"))
-    waterbody_gpkg = Path(require_profile_key(config, "waterbody_gpkg", "build_depstor_waterbody"))
-    waterbody_layer = require_profile_key(config, "waterbody_layer", "build_depstor_waterbody")
+    template_path = Path(require_config_key(config, "template_raster", "build_depstor_waterbody"))
+    waterbody_gpkg = Path(require_config_key(config, "waterbody_gpkg", "build_depstor_waterbody"))
+    waterbody_layer = require_config_key(config, "waterbody_layer", "build_depstor_waterbody")
     binary_path = Path(config["wbody_binary_raster"])
     regions_path = Path(config["wbody_regions_raster"])
     min_area = float(config.get("min_area_threshold", 900.0))

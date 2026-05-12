@@ -7,12 +7,11 @@ import yaml
 from gfv2_params.config import (
     VPUS_DETAILED,
     VPUS_SIMPLE,
-    VPU_RASTER_MAP,
     _load_yaml,
     _resolve_placeholders,
     load_base_config,
     load_config,
-    require_profile_key,
+    require_config_key,
     resolve_vpu,
 )
 
@@ -362,8 +361,8 @@ def test_load_config_no_fabric_anywhere_raises(monkeypatch):
             load_config(step_config, base_config_path=base_config)
 
 
-def test_require_profile_key_missing_raises():
-    """require_profile_key raises a clear error when profile omits a key."""
+def test_require_config_key_missing_raises():
+    """require_config_key raises a clear error when key is absent."""
     with tempfile.TemporaryDirectory() as tmpdir:
         base_config = Path(tmpdir) / "base_config.yml"
         base_config.write_text(yaml.dump({
@@ -376,24 +375,23 @@ def test_require_profile_key_missing_raises():
         step_config = Path(tmpdir) / "step.yml"
         step_config.write_text(yaml.dump({"output_dir": "{data_root}"}))
         config = load_config(step_config, base_config_path=base_config)
-        with pytest.raises(KeyError, match="Fabric profile 'oregon' does not define 'template_raster'"):
-            require_profile_key(config, "template_raster", "build_depstor_imperv")
+        with pytest.raises(KeyError, match="Required key 'template_raster' missing"):
+            require_config_key(config, "template_raster", "build_depstor_imperv")
 
 
-def test_require_profile_key_present_returns_value():
-    """require_profile_key returns the value when present."""
+def test_require_config_key_present_returns_value():
+    """require_config_key returns the value when present."""
     config = {"fabric": "gfv2", "template_raster": "/path/to/dem.vrt"}
-    assert require_profile_key(config, "template_raster", "build_x") == "/path/to/dem.vrt"
+    assert require_config_key(config, "template_raster", "build_x") == "/path/to/dem.vrt"
 
 
 def test_load_base_config_with_fabric_profile():
-    """load_base_config flattens the active fabric profile."""
+    """load_base_config flattens the active profile and resolves placeholders."""
     with tempfile.TemporaryDirectory() as tmpdir:
         base_config = _profiles_base_config(tmpdir)
         config = load_base_config(base_config, fabric="gfv2_vpu01")
         assert config["fabric"] == "gfv2_vpu01"
         assert config["expected_max_hru_id"] == 11278
         assert config["batch_size"] == 2000
-        # Template raster from profile is not placeholder-resolved here
-        # (load_base_config doesn't run placeholder resolution); it stays raw.
-        assert "{data_root}" in config["template_raster"]
+        # {data_root} and {fabric} placeholders are resolved here too.
+        assert config["template_raster"] == "/fake/root/work/01/Hydrodem_merged_01.tif"

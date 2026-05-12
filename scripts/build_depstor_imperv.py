@@ -14,7 +14,7 @@ from pathlib import Path
 import rasterio
 from osgeo import gdal, gdalconst
 
-from gfv2_params.config import load_config, require_profile_key
+from gfv2_params.config import load_config, require_config_key
 from gfv2_params.depstor import RasterInfo, threshold_above, write_uint8_binary
 from gfv2_params.log import configure_logging
 
@@ -71,7 +71,7 @@ def main():
         fabric=args.fabric,
     )
 
-    template_path = Path(require_profile_key(config, "template_raster", "build_depstor_imperv"))
+    template_path = Path(require_config_key(config, "template_raster", "build_depstor_imperv"))
     imperv_path = Path(config["imperv_raster"])
     output_path = Path(config["output_raster"])
     threshold = float(config.get("imperv_threshold", 50))
