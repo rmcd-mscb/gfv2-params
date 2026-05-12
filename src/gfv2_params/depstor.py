@@ -110,7 +110,7 @@ def compute_carea_map_binary(
     onstream: np.ndarray,
     twi: np.ndarray,
     threshold: float,
-    twi_nodata,
+    twi_nodata: Optional[float],
 ) -> np.ndarray:
     """Build the binary carea_map mask used for getCarea-style PRMS params.
 

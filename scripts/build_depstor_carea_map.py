@@ -14,11 +14,15 @@ onstream, and (reprojected) TWI strips:
 
 TWI input is reprojected on the fly via rasterio WarpedVRT — the source TWI
 sits on the same 30 m grid as the template but with a different extent/origin,
-so nearest-neighbour resampling is exact (no fractional shift).
+so nearest-neighbour resampling is exact (no fractional shift). Template cells
+outside the source TWI extent receive the TWI nodata sentinel, so they fail
+the `twi_valid` check in compute_carea_map_binary and end up as 255 in the
+output regardless of their perv/onstream status.
 """
 
 import argparse
 import time
+from contextlib import ExitStack
 from pathlib import Path
 
 import numpy as np
@@ -133,13 +137,29 @@ def main():
     counts = [0 for _ in runs]
     profile = _uint8_binary_profile(info)
 
-    with rasterio.open(perv_path) as perv_src, \
-         rasterio.open(onstream_path) as onstream_src, \
-         rasterio.open(twi_path) as twi_src:
+    with ExitStack() as stack:
+        perv_src = stack.enter_context(rasterio.open(perv_path))
+        onstream_src = stack.enter_context(rasterio.open(onstream_path))
+        twi_src = stack.enter_context(rasterio.open(twi_path))
         _assert_aligned(perv_src, info, "perv")
         _assert_aligned(onstream_src, info, "onstream")
         if twi_src.crs != info.crs:
             raise ValueError(f"TWI CRS {twi_src.crs} != template CRS {info.crs}")
+
+        # Nearest-neighbour warping is exact only when origin offsets are
+        # whole-cell multiples — otherwise we'd be silently snapping to the
+        # wrong source pixel. Verify before opening the VRT.
+        col_offset = twi_src.transform.c - info.transform.c
+        row_offset = twi_src.transform.f - info.transform.f
+        cell_x = info.transform.a
+        cell_y = info.transform.e
+        if col_offset % cell_x != 0 or row_offset % cell_y != 0:
+            raise ValueError(
+                f"TWI origin not whole-cell-aligned with template: "
+                f"col_offset={col_offset}, row_offset={row_offset}, "
+                f"cell=({cell_x}, {cell_y}). Nearest-neighbour resampling "
+                f"would lose alignment — re-stage the TWI on the template grid."
+            )
 
         vrt_options = {
             "crs": info.crs,
@@ -151,23 +171,19 @@ def main():
         }
         twi_nodata = twi_src.nodata
 
-        # Open all output rasters together so we can write per strip into each.
-        dsts = [rasterio.open(out, "w", **profile) for _, out, _ in runs]
-        try:
-            with WarpedVRT(twi_src, **vrt_options) as twi_vrt:
-                for row_off in range(0, info.height, STRIP_ROWS):
-                    h = min(STRIP_ROWS, info.height - row_off)
-                    window = Window(0, row_off, info.width, h)
-                    perv = perv_src.read(1, window=window)
-                    onstream = onstream_src.read(1, window=window)
-                    twi = twi_vrt.read(1, window=window)
-                    for i, (thresh, _, _) in enumerate(runs):
-                        out = compute_carea_map_binary(perv, onstream, twi, thresh, twi_nodata)
-                        dsts[i].write(out, 1, window=window)
-                        counts[i] += int((out == 1).sum())
-        finally:
-            for d in dsts:
-                d.close()
+        twi_vrt = stack.enter_context(WarpedVRT(twi_src, **vrt_options))
+        dsts = [stack.enter_context(rasterio.open(out, "w", **profile)) for _, out, _ in runs]
+
+        for row_off in range(0, info.height, STRIP_ROWS):
+            h = min(STRIP_ROWS, info.height - row_off)
+            window = Window(0, row_off, info.width, h)
+            perv = perv_src.read(1, window=window)
+            onstream = onstream_src.read(1, window=window)
+            twi = twi_vrt.read(1, window=window)
+            for i, (thresh, _, _) in enumerate(runs):
+                out = compute_carea_map_binary(perv, onstream, twi, thresh, twi_nodata)
+                dsts[i].write(out, 1, window=window)
+                counts[i] += int((out == 1).sum())
 
     total = info.height * info.width
     for (thresh, out, label), n in zip(runs, counts):
