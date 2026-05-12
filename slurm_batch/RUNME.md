@@ -65,6 +65,31 @@ gfv2_param/
     └── params/     # Parameter outputs + merged + filled
 ```
 
+## Selecting a fabric
+
+Fabric identities and their per-fabric inputs (`template_raster`, `fdr_raster`,
+`waterbody_gpkg`/layer, `expected_max_hru_id`, `batch_size`) live as profiles
+in a single `configs/base_config.yml` under a `fabrics:` mapping. The active
+profile is selected via:
+
+1. `--fabric <name>` CLI flag on any script, OR
+2. `FABRIC` env var passed through sbatch, OR
+3. `default_fabric` in `configs/base_config.yml` (currently `gfv2`).
+
+Slurm batches default to `gfv2`. To run the same batch against a different
+fabric, set `FABRIC` and (optionally) override resource asks at submission:
+
+```bash
+# CONUS gfv2 — default
+sbatch slurm_batch/build_depstor_imperv.batch
+
+# VPU01 validation overlay — smaller; override resources
+FABRIC=gfv2_vpu01 sbatch --time=01:00:00 --mem=16G slurm_batch/build_depstor_imperv.batch
+```
+
+`submit_jobs.sh` accepts fabric as its 5th positional argument and forwards it
+via `--export=ALL,FABRIC=...` to the array job (and the chained merge job).
+
 ## Pipeline Stages
 
 All commands below assume the repo root as your working directory, e.g.:
@@ -211,10 +236,10 @@ Pre-compute `rd_250_raw.tif` and `soil_moist_max.tif`:
 sbatch slurm_batch/build_derived_rasters.batch
 ```
 
-To use a different base config, override `BASE_CONFIG`:
+To use a different fabric, override `FABRIC`:
 
 ```bash
-BASE_CONFIG=configs/base_config_oregon.yml sbatch slurm_batch/build_derived_rasters.batch
+FABRIC=oregon sbatch slurm_batch/build_derived_rasters.batch
 ```
 
 ### Stage 2c: Build LULC derived rasters (one-time)
@@ -364,40 +389,48 @@ python scripts/merge_and_fill_params.py --base_config configs/base_config.yml
 python scripts/merge_default_params.py --base_config configs/base_config.yml
 ```
 
-## Custom Fabric (e.g., Oregon)
+## Adding a new fabric (e.g., Oregon)
 
-Two cases depending on whether the fabric is already merged or comes as per-VPU gpkgs.
+A new fabric is added by appending a profile to `configs/base_config.yml` —
+one file edit, no new YAMLs. Two cases depending on whether the fabric is
+already merged or comes as per-VPU gpkgs.
 
 **Case A: Pre-merged fabric** (single gpkg covering the full domain — e.g., Oregon)
 
-1. Create `configs/base_config_oregon.yml` with `fabric: oregon`, `expected_max_hru_id`, and `batch_size`
+1. Add a profile under `fabrics:` in `configs/base_config.yml`. Required keys
+   are `expected_max_hru_id` and `batch_size`. If the depstor pipeline will be
+   run for this fabric, also set `template_raster`, `fdr_raster`,
+   `segments_gpkg`, `waterbody_gpkg`, and `waterbody_layer`. The `oregon`
+   profile shows the minimum (no depstor inputs yet).
 2. Scaffold the fabric's output directories:
    ```bash
-   python scripts/init_data_root.py --base_config configs/base_config_oregon.yml
+   python scripts/init_data_root.py --fabric oregon
    ```
 3. Place the fabric gpkg directly in `{data_root}/oregon/fabric/` (NOT in `input/fabric/`)
 4. Prepare batches:
    ```bash
    python scripts/prepare_fabric.py \
        --fabric_gpkg {data_root}/oregon/fabric/NHM_OR_draft.gpkg \
-       --base_config configs/base_config_oregon.yml
+       --fabric oregon
    ```
-5. Submit parameter jobs, passing the fabric config as the third argument:
+5. Submit parameter jobs, passing the fabric as the 5th positional arg to
+   submit_jobs.sh (or via `FABRIC` env on direct sbatch calls):
    ```bash
    BATCHES={data_root}/oregon/batches
-   slurm_batch/submit_jobs.sh $BATCHES slurm_batch/create_lulc_params.batch configs/base_config_oregon.yml configs/lulc_nalcms_param.yml
+   slurm_batch/submit_jobs.sh $BATCHES slurm_batch/create_lulc_params.batch \
+       configs/base_config.yml configs/lulc_nalcms_param.yml oregon
    ```
 
 **Case B: VPU-based fabric** (per-VPU gpkgs that need merging — e.g., gfv2)
 
-1. Create `configs/base_config_<fabric>.yml` with `fabric: <name>`, `expected_max_hru_id`, and `batch_size`
+1. Add a profile under `fabrics:` in `configs/base_config.yml`
 2. Place per-VPU gpkgs in `input/fabric/`
 3. Scaffold and merge:
    ```bash
-   python scripts/init_data_root.py --base_config configs/base_config_<fabric>.yml
+   python scripts/init_data_root.py --fabric <name>
    marimo run notebooks/merge_vpu_targets.py
    ```
-4. Continue from Stage 3 above, passing `--base_config configs/base_config_<fabric>.yml`
+4. Continue from Stage 3 above, passing `--fabric <name>` (or `FABRIC=<name>` env)
 
 ## Partial Reruns
 

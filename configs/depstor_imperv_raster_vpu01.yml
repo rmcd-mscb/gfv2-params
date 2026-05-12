@@ -1,8 +1,0 @@
-# VPU01 validation overlay for depstor imperviousness raster (issue #38).
-# Same logic as depstor_imperv_raster.yml but snaps to the VPU01 hydrodem grid
-# (25,845 x 31,405) instead of the CONUS elevation.vrt.
-
-template_raster: "{data_root}/work/nhd_merged/01/Hydrodem_merged_01.tif"
-imperv_raster: "{data_root}/input/lulc_veg/Imperv.tif"
-output_raster: "{data_root}/{fabric}/depstor_rasters/imperv_binary.tif"
-imperv_threshold: 50

@@ -2,8 +2,9 @@
 # and on-stream-storage rasters. Region-level masking: a wbody region must NOT
 # touch the stream buffer or impervious mask in any cell to qualify as
 # depression storage.
+#
+# template_raster comes from the active fabric profile in base_config.yml.
 
-template_raster: "{data_root}/work/nhd_merged/elevation.vrt"
 wbody_binary_raster: "{data_root}/{fabric}/depstor_rasters/wbody_binary.tif"
 wbody_regions_raster: "{data_root}/{fabric}/depstor_rasters/wbody_regions.tif"
 stream_buffer_raster: "{data_root}/{fabric}/depstor_rasters/stream_buffer.tif"

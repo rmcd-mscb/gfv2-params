@@ -1,4 +1,37 @@
+# Single source of truth for fabric identities and per-fabric inputs.
+# Active fabric resolution: --fabric CLI arg -> FABRIC env var -> default_fabric.
+# Process configs (configs/*.yml) are fabric-agnostic; they pull
+# template_raster, fdr_raster, and segments/waterbody gpkg+layer from the
+# active profile via load_config().
+
 data_root: /caldera/hovenweep/projects/usgs/water/impd/nhgf/gfv2_param_v2
-fabric: gfv2
-expected_max_hru_id: 361471
-batch_size: 10000
+default_fabric: gfv2
+
+fabrics:
+  gfv2:
+    expected_max_hru_id: 361471
+    batch_size: 10000
+    template_raster: "{data_root}/work/nhd_merged/elevation.vrt"
+    fdr_raster: "{data_root}/input/depstor/{fabric}_fdr.tif"
+    segments_gpkg: "{data_root}/input/depstor/{fabric}_segments_wbodies.gpkg"
+    waterbody_gpkg: "{data_root}/input/depstor/{fabric}_segments_wbodies.gpkg"
+    waterbody_layer: v2_wb
+
+  gfv2_vpu01:
+    # VPU01 validation overlay (issue #38). Uses the per-VPU staged inputs
+    # under work/nhd_merged/01/ and the NHM_01_draft fabric gpkg directly,
+    # sidestepping the chunked CONUS reproject (issue #41).
+    expected_max_hru_id: 11278
+    batch_size: 2000
+    template_raster: "{data_root}/work/nhd_merged/01/Hydrodem_merged_01.tif"
+    fdr_raster: "{data_root}/work/nhd_merged/01/Fdr_merged_01.tif"
+    segments_gpkg: "{data_root}/input/fabric/NHM_01_draft.gpkg"
+    waterbody_gpkg: "{data_root}/input/fabric/NHM_01_draft.gpkg"
+    waterbody_layer: wbs
+
+  oregon:
+    # Depstor inputs not yet staged for oregon. Depstor scripts will raise
+    # a clear "fabric profile 'oregon' missing 'template_raster'" error if
+    # invoked with --fabric oregon until the inputs are wired up.
+    expected_max_hru_id: 16814
+    batch_size: 10000

@@ -1,11 +1,11 @@
 # Build the depression-storage imperviousness binary raster.
 #
-# Threshold the staged Imperv.tif and snap to the elevation-VRT grid.
-# Cells with imperv >= imperv_threshold (percent) are marked 1; otherwise 255 (nodata).
-# Output is a fabric-scoped uint8 binary GeoTIFF used downstream by
-# build_depstor_dprst.py and aggregated per HRU via create_zonal_params.py.
+# Threshold the staged Imperv.tif at imperv_threshold (default 50%), warp/snap
+# to the active fabric's template_raster grid, and write a uint8 binary raster
+# (1 = impervious, 255 = nodata) to {fabric}/depstor_rasters/imperv_binary.tif.
+#
+# template_raster comes from the active fabric profile in base_config.yml.
 
-template_raster: "{data_root}/work/nhd_merged/elevation.vrt"
 imperv_raster: "{data_root}/input/lulc_veg/Imperv.tif"
 output_raster: "{data_root}/{fabric}/depstor_rasters/imperv_binary.tif"
 imperv_threshold: 50
