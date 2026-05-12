@@ -1,0 +1,10 @@
+# Cell-wise intersection of drains_to_dprst with perv_binary.
+#
+# Output `drains_perv_binary.tif` is 1 where a cell drains into a depression
+# AND is pervious; 255 otherwise. Aggregated downstream by create_zonal_params
+# into `drains_perv_frac`; combined with `perv_frac` by derive_depstor_ratios
+# to produce PRMS `sro_to_dprst_perv` (issue #61, depstor workflow item 12).
+
+input_a_raster: "{data_root}/{fabric}/depstor_rasters/drains_to_dprst.tif"
+input_b_raster: "{data_root}/{fabric}/depstor_rasters/perv_binary.tif"
+output_raster: "{data_root}/{fabric}/depstor_rasters/drains_perv_binary.tif"

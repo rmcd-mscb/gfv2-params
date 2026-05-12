@@ -1,0 +1,15 @@
+# Cell-wise intersection of drains_to_dprst with imperv_binary.
+#
+# Output `drains_imperv_binary.tif` is 1 where a cell drains into a depression
+# AND is impervious; 255 otherwise. Aggregated downstream by create_zonal_params
+# into `drains_imperv_frac`; combined with `imperv_frac` by derive_depstor_ratios
+# to produce PRMS `sro_to_dprst_imperv` (issue #61, depstor workflow item 13).
+#
+# Note: the original ArcPy `getSro_to_dprst_imperv` (docs/0b_TB_depr_stor.py:129)
+# has a bug where the false-branch returns the full HRU raster — its commented
+# form on line 128 matches the documented intent, which is what we implement
+# here (parallel to the perv case).
+
+input_a_raster: "{data_root}/{fabric}/depstor_rasters/drains_to_dprst.tif"
+input_b_raster: "{data_root}/{fabric}/depstor_rasters/imperv_binary.tif"
+output_raster: "{data_root}/{fabric}/depstor_rasters/drains_imperv_binary.tif"

@@ -25,4 +25,13 @@ python scripts/merge_params.py --config configs/dprst_frac_param.yml --base_conf
 python scripts/merge_params.py --config configs/onstream_storage_frac_param.yml --base_config $BASE_CONFIG
 python scripts/merge_params.py --config configs/drains_to_dprst_frac_param.yml --base_config $BASE_CONFIG
 python scripts/merge_params.py --config configs/perv_frac_param.yml --base_config $BASE_CONFIG
+python scripts/merge_params.py --config configs/drains_perv_frac_param.yml --base_config $BASE_CONFIG
+python scripts/merge_params.py --config configs/drains_imperv_frac_param.yml --base_config $BASE_CONFIG
+python scripts/merge_params.py --config configs/carea_t8_frac_param.yml --base_config $BASE_CONFIG
+python scripts/merge_params.py --config configs/carea_t156_frac_param.yml --base_config $BASE_CONFIG
 # Note: ssflux is merged separately in Stage 6 (after build_weights + ssflux batch jobs)
+
+# Depstor Level-5 ratio params (issue #61) — derived from the four fraction
+# CSVs above plus the existing perv/imperv fractions. Runs after all merges
+# because each ratio joins two of the merged CSVs by nat_hru_id.
+python scripts/derive_depstor_ratios.py --config configs/depstor_ratio_params.yml --base_config $BASE_CONFIG

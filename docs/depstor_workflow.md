@@ -215,7 +215,7 @@ The workflow is broken up into 5 levels:
 
 **Note:** TWI raster is an input at this level.
 
-11. **getCarea_map**
+11. **getCarea_map** — *implemented (issue #61)*
     - Returns a raster of HRU IDs where there is `pervAreaTotal` and TWI is
       above a certain value, otherwise returns NULL. For areas less than the
       TWI threshold that are also classified as on-stream storage, the HRU ID
@@ -229,8 +229,14 @@ The workflow is broken up into 5 levels:
       is on-stream storage, give HRU ID
     - **Output**
       - `Carea_map`
+    - **gfv2-params**: produced as a uint8 binary mask (1 = cell qualifies,
+      255 = nodata) by [`scripts/build_depstor_carea_map.py`](../scripts/build_depstor_carea_map.py)
+      via [`compute_carea_map_binary`](../src/gfv2_params/depstor.py). The
+      ArcPy HRU-ID burn is dropped — HRU identity is recovered downstream by
+      `create_zonal_params.py` via gdptools polygon overlay. Built at both
+      PRMS thresholds (8.0 and 15.6) in one pass.
 
-12. **getSro_to_dprst_perv**
+12. **getSro_to_dprst_perv** — *implemented (issue #61)*
     - Surface runoff to depression storage for pervious surfaces. Returns
       proportion of pervious area draining to depression storage.
     - **Inputs**
@@ -241,8 +247,13 @@ The workflow is broken up into 5 levels:
       need to document this section better.
     - **Outputs**
       - `Sro_to_dprst_perv` (dataframe)
+    - **gfv2-params**: per-cell intersection built by [`scripts/build_depstor_intersect.py`](../scripts/build_depstor_intersect.py)
+      (config: `depstor_drains_perv_raster.yml`). Per-HRU ratio computed by
+      [`scripts/derive_depstor_ratios.py`](../scripts/derive_depstor_ratios.py)
+      from the `drains_perv_frac` and `perv_frac` merged fraction CSVs:
+      `sro_to_dprst_perv = count(drains_perv_binary per HRU) / count(perv_binary per HRU)`.
 
-13. **getSro_to_dprst_imperv**
+13. **getSro_to_dprst_imperv** — *implemented (issue #61)*
     - Calculates Surface runoff to depression storage for impervious surfaces.
       Returns proportion of impervious area draining to depression storage.
     - **Inputs**
@@ -251,6 +262,11 @@ The workflow is broken up into 5 levels:
     - Basically same as `getSro_to_dprst_perv` but impervious
     - **Outputs**
       - `Sro_to_dprst_imperv` (dataframe)
+    - **gfv2-params**: same pipeline as item 12, swapping `perv_binary` for
+      `imperv_binary`. We implement the *documented intent* (parallel to
+      perv) rather than the ArcPy active code at `docs/0b_TB_depr_stor.py:142-149`,
+      which appears to be buggy (its commented-out form on line 128 matches
+      the doc-stated formula).
 
 ---
 
@@ -263,7 +279,7 @@ The workflow is broken up into 5 levels:
     - **Outputs**
       - `zoneCounts` (data frame)
 
-15. **getCarea**
+15. **getCarea** — *implemented (issue #61)*
     - Function: Computes proportion of pervious area that contributes to the
       stream
     - **Inputs**
@@ -277,16 +293,28 @@ The workflow is broken up into 5 levels:
     - Does some joins and easy math
     - **Outputs**
       - `Carea` (dataframe)
+    - **gfv2-params**: pair-wise per-HRU ratio computed by
+      [`scripts/derive_depstor_ratios.py`](../scripts/derive_depstor_ratios.py)
+      from merged fraction CSVs:
+      `ratio = count(carea_map_t<X>_binary per HRU) / count(perv_binary per HRU)`,
+      clamped at 1.0.
 
-16. **getSmidx**
+16. **getSmidx** — *implemented (issue #61)*
     - Computes Soil Moisture Index Coefficient with `getCarea` function and a
       TWI threshold of **15.6**
     - Returns dataframe
+    - **gfv2-params**: `nhm_smidx_coef_params.csv` written by
+      [`scripts/derive_depstor_ratios.py`](../scripts/derive_depstor_ratios.py).
+      `smidx_exp` is *not* produced by this pipeline (the ArcPy source only
+      derives `smidx_coef`); it needs a separate sourcing decision (typically
+      a fixed NHM default).
 
-17. **getCarea** *(reused; presumably `getCarea_max`)*
+17. **getCarea** *(reused; presumably `getCarea_max`)* — *implemented (issue #61)*
     - Computes Soil Moisture Index Coefficient with `getCarea` function and a
       TWI threshold of **8**
     - Returns dataframe
+    - **gfv2-params**: `nhm_carea_max_params.csv` written by
+      [`scripts/derive_depstor_ratios.py`](../scripts/derive_depstor_ratios.py).
 
 18. **getHRU_percent_imperv**
     - Compute the impervious fraction of the HRUs
