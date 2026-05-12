@@ -192,3 +192,7 @@ logs/
 # imports from the repo root (canonical homes are scripts/ and src/)
 /_gfv2_params_legacy/
 /_create_lulc_params_legacy.py
+
+# WSL/Windows security sidecar files dropped next to downloaded artifacts
+*:Zone.Identifier
+*:sec.endpointdlp

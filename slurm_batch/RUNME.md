@@ -275,12 +275,15 @@ sbatch slurm_batch/build_depstor_imperv.batch
 sbatch slurm_batch/build_depstor_streambuffer.batch
 sbatch slurm_batch/build_depstor_waterbody.batch
 sbatch slurm_batch/build_depstor_dprst.batch        # depends on the three above
-sbatch slurm_batch/build_depstor_routing.batch       # depends on dprst + staged FDR
+sbatch slurm_batch/build_depstor_perv.batch         # depends on imperv + dprst
+sbatch slurm_batch/build_depstor_routing.batch      # depends on dprst + staged FDR
 ```
 
 Steps 1-3 are independent of each other and can run concurrently. Step 4
-combines them and must wait. Step 5 runs WhiteboxTools `Watershed` against the
-staged FDR + the dprst output and is the most memory- and time-intensive.
+combines them and must wait. Steps 5 and 6 both wait for Step 4 (`dprst`) to
+finish, then can run in parallel with one another. Step 6
+(`build_depstor_routing`) runs WhiteboxTools `Watershed` against the staged FDR
++ the dprst output and is the most memory- and time-intensive.
 
 Note: Stage 2d depends on Stage 2a (the elevation VRT exists) but is otherwise
 fabric-independent of the rest of Part 1. It can run in parallel with Part 2's
@@ -343,6 +346,7 @@ slurm_batch/submit_jobs.sh $BATCHES slurm_batch/create_dprst_frac_params.batch
 slurm_batch/submit_jobs.sh $BATCHES slurm_batch/create_imperv_frac_params.batch
 slurm_batch/submit_jobs.sh $BATCHES slurm_batch/create_onstream_storage_frac_params.batch
 slurm_batch/submit_jobs.sh $BATCHES slurm_batch/create_drains_to_dprst_frac_params.batch
+slurm_batch/submit_jobs.sh $BATCHES slurm_batch/create_perv_frac_params.batch
 ```
 
 Each produces a per-HRU fraction in [0, 1]. With `categorical: false` on a uint8
@@ -479,8 +483,10 @@ sacct -j <JOBID> -o JobID,State,Elapsed,MaxRSS
 | build_depstor_streambuffer.batch | depstor_streambuffer_raster.yml | build_depstor_streambuffer.py |
 | build_depstor_waterbody.batch | depstor_waterbody_raster.yml | build_depstor_waterbody.py |
 | build_depstor_dprst.batch | depstor_dprst_raster.yml | build_depstor_dprst.py |
+| build_depstor_perv.batch | depstor_perv_raster.yml | build_depstor_perv.py |
 | build_depstor_routing.batch | depstor_routing_raster.yml | build_depstor_routing.py |
 | create_dprst_frac_params.batch | dprst_frac_param.yml | create_zonal_params.py |
 | create_imperv_frac_params.batch | imperv_frac_param.yml | create_zonal_params.py |
 | create_onstream_storage_frac_params.batch | onstream_storage_frac_param.yml | create_zonal_params.py |
 | create_drains_to_dprst_frac_params.batch | drains_to_dprst_frac_param.yml | create_zonal_params.py |
+| create_perv_frac_params.batch | perv_frac_param.yml | create_zonal_params.py |

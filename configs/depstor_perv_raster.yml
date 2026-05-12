@@ -1,0 +1,18 @@
+# Build the pervious-area binary raster.
+#
+# A cell is pervious where it is NOT impervious AND NOT depression-storage.
+# Source: depstor workflow Level Three, `GetPervAreaTotal`
+# (docs/depstor_workflow.md) — "Get raster with HRU IDs in areas that are not
+# impervious or depressions. Basically a con operation to label stuff."
+# The depstor python implementation uses `remove_all_overlap=True` which
+# zeroes out entire HRUs containing any imperv/dprst cell; that diverges from
+# the documented design intent, and we implement the PRMS-standard cell-wise
+# interpretation instead.
+#
+# The output `perv_binary.tif` is consumed downstream by Levels 4-5
+# (getCarea_map, getZonecount-based smidx/carea_max, and the
+# sro_to_dprst_perv per-HRU zone counts) — see issue #61.
+
+imperv_raster: "{data_root}/{fabric}/depstor_rasters/imperv_binary.tif"
+dprst_raster: "{data_root}/{fabric}/depstor_rasters/dprst_binary.tif"
+perv_raster: "{data_root}/{fabric}/depstor_rasters/perv_binary.tif"
