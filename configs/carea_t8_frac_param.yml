@@ -1,0 +1,15 @@
+# Per-HRU carea_map fraction at TWI threshold 8.0 (the `carea_max` input).
+#
+# Aggregates carea_map_t8_binary.tif (uint8 1/255) — pervious cells where TWI
+# exceeds 8.0 OR the cell is on-stream storage. Per-HRU mean = fraction of HRU
+# cells in carea_map. Combined with `perv_frac` by derive_depstor_ratios and
+# clamped to 1.0 to give PRMS `carea_max` (issue #61, depstor workflow item 17).
+
+source_type: carea_t8_frac
+source_raster: "{data_root}/{fabric}/depstor_rasters/carea_map_t8_binary.tif"
+batch_dir: "{data_root}/{fabric}/batches"
+target_layer: nhru
+id_feature: nat_hru_id
+output_dir: "{data_root}/{fabric}/params"
+merged_file: nhm_carea_t8_frac_params.csv
+categorical: false

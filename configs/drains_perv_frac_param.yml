@@ -1,0 +1,15 @@
+# Per-HRU drains-to-depression-AND-pervious fraction.
+#
+# Aggregates drains_perv_binary.tif (uint8 1/255) — cells that drain into a
+# depression AND are pervious. Per-HRU mean = fraction of HRU cells satisfying
+# both conditions. Combined with `perv_frac` by derive_depstor_ratios to give
+# PRMS `sro_to_dprst_perv` (issue #61, depstor workflow item 12).
+
+source_type: drains_perv_frac
+source_raster: "{data_root}/{fabric}/depstor_rasters/drains_perv_binary.tif"
+batch_dir: "{data_root}/{fabric}/batches"
+target_layer: nhru
+id_feature: nat_hru_id
+output_dir: "{data_root}/{fabric}/params"
+merged_file: nhm_drains_perv_frac_params.csv
+categorical: false
