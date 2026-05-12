@@ -261,11 +261,13 @@ LULC_CONFIG=configs/lulc_nalcms_param.yml sbatch slurm_batch/build_lulc_rasters.
 Build the depression-storage intermediate rasters on the elevation-VRT template
 grid. Outputs go to `{fabric}/depstor_rasters/` and feed the new Stage 4
 zonal-stats jobs (`dprst_frac`, `imperv_frac`, `onstream_storage_frac`,
-`drains_to_dprst_frac`).
+`drains_to_dprst_frac`, `perv_frac`, `drains_perv_frac`, `drains_imperv_frac`,
+`carea_t8_frac`, `carea_t156_frac`).
 
 Inputs (manually staged per fabric):
 - `input/depstor/<fabric>_segments_wbodies.gpkg` (layers `nsegment`, `v2_wb`)
 - `input/depstor/<fabric>_fdr.tif` (D8 flow direction, Esri pointer)
+- Per-fabric `twi_raster` (from `base_config.yml`) — issue #61 carea_map step.
 - Reuses existing `input/lulc_veg/Imperv.tif` and `work/nhd_merged/elevation.vrt`.
 
 Run in order — each step writes intermediates the next consumes:
@@ -274,9 +276,14 @@ Run in order — each step writes intermediates the next consumes:
 sbatch slurm_batch/build_depstor_imperv.batch
 sbatch slurm_batch/build_depstor_streambuffer.batch
 sbatch slurm_batch/build_depstor_waterbody.batch
-sbatch slurm_batch/build_depstor_dprst.batch        # depends on the three above
-sbatch slurm_batch/build_depstor_perv.batch         # depends on imperv + dprst
-sbatch slurm_batch/build_depstor_routing.batch      # depends on dprst + staged FDR
+sbatch slurm_batch/build_depstor_dprst.batch          # depends on the three above
+sbatch slurm_batch/build_depstor_perv.batch           # depends on imperv + dprst
+sbatch slurm_batch/build_depstor_routing.batch        # depends on dprst + staged FDR
+
+# Issue #61 Level-4/5 intermediates (depend on routing + perv + onstream + TWI):
+sbatch slurm_batch/build_depstor_drains_perv.batch    # drains_to_dprst x perv
+sbatch slurm_batch/build_depstor_drains_imperv.batch  # drains_to_dprst x imperv
+sbatch slurm_batch/build_depstor_carea_map.batch      # carea_map at TWI = 8.0 and 15.6
 ```
 
 Steps 1-3 are independent of each other and can run concurrently. Step 4
@@ -284,6 +291,11 @@ combines them and must wait. Steps 5 and 6 both wait for Step 4 (`dprst`) to
 finish, then can run in parallel with one another. Step 6
 (`build_depstor_routing`) runs WhiteboxTools `Watershed` against the staged FDR
 + the dprst output and is the most memory- and time-intensive.
+
+The three issue-#61 build steps depend on the outputs above (`drains_to_dprst`,
+`perv_binary`, `onstream_binary`) and on the per-fabric `twi_raster`. They are
+all streaming uint8/float32 ops; the carea_map step uses `WarpedVRT` to align
+TWI to the template grid on the fly.
 
 Note: Stage 2d depends on Stage 2a (the elevation VRT exists) but is otherwise
 fabric-independent of the rest of Part 1. It can run in parallel with Part 2's
@@ -347,6 +359,13 @@ slurm_batch/submit_jobs.sh $BATCHES slurm_batch/create_imperv_frac_params.batch
 slurm_batch/submit_jobs.sh $BATCHES slurm_batch/create_onstream_storage_frac_params.batch
 slurm_batch/submit_jobs.sh $BATCHES slurm_batch/create_drains_to_dprst_frac_params.batch
 slurm_batch/submit_jobs.sh $BATCHES slurm_batch/create_perv_frac_params.batch
+
+# Issue #61 Level-5 fractions — paired with the matching denominators above
+# (perv_frac, imperv_frac) by derive_depstor_ratios in Stage 5:
+slurm_batch/submit_jobs.sh $BATCHES slurm_batch/create_drains_perv_frac_params.batch
+slurm_batch/submit_jobs.sh $BATCHES slurm_batch/create_drains_imperv_frac_params.batch
+slurm_batch/submit_jobs.sh $BATCHES slurm_batch/create_carea_t8_frac_params.batch
+slurm_batch/submit_jobs.sh $BATCHES slurm_batch/create_carea_t156_frac_params.batch
 ```
 
 Each produces a per-HRU fraction in [0, 1]. With `categorical: false` on a uint8
@@ -485,8 +504,16 @@ sacct -j <JOBID> -o JobID,State,Elapsed,MaxRSS
 | build_depstor_dprst.batch | depstor_dprst_raster.yml | build_depstor_dprst.py |
 | build_depstor_perv.batch | depstor_perv_raster.yml | build_depstor_perv.py |
 | build_depstor_routing.batch | depstor_routing_raster.yml | build_depstor_routing.py |
+| build_depstor_drains_perv.batch | depstor_drains_perv_raster.yml | build_depstor_intersect.py |
+| build_depstor_drains_imperv.batch | depstor_drains_imperv_raster.yml | build_depstor_intersect.py |
+| build_depstor_carea_map.batch | depstor_carea_map_raster.yml | build_depstor_carea_map.py |
 | create_dprst_frac_params.batch | dprst_frac_param.yml | create_zonal_params.py |
 | create_imperv_frac_params.batch | imperv_frac_param.yml | create_zonal_params.py |
 | create_onstream_storage_frac_params.batch | onstream_storage_frac_param.yml | create_zonal_params.py |
 | create_drains_to_dprst_frac_params.batch | drains_to_dprst_frac_param.yml | create_zonal_params.py |
 | create_perv_frac_params.batch | perv_frac_param.yml | create_zonal_params.py |
+| create_drains_perv_frac_params.batch | drains_perv_frac_param.yml | create_zonal_params.py |
+| create_drains_imperv_frac_params.batch | drains_imperv_frac_param.yml | create_zonal_params.py |
+| create_carea_t8_frac_params.batch | carea_t8_frac_param.yml | create_zonal_params.py |
+| create_carea_t156_frac_params.batch | carea_t156_frac_param.yml | create_zonal_params.py |
+| merge_output_params.batch (final step) | depstor_ratio_params.yml | derive_depstor_ratios.py |
