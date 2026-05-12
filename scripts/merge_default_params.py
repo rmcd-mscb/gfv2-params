@@ -85,11 +85,15 @@ def main():
     parser.add_argument("--base_dir", default=None, help="Base directory containing parameter files")
     parser.add_argument("--output_dir", default=None, help="Output directory for merged files")
     parser.add_argument("--base_config", default=None, help="Path to base_config.yml")
+    parser.add_argument("--fabric", default=None, help="Fabric name (overrides FABRIC env / default_fabric)")
     args = parser.parse_args()
 
     logger = configure_logging("merge_default_params")
 
-    base = load_base_config(Path(args.base_config) if args.base_config else None)
+    base = load_base_config(
+        Path(args.base_config) if args.base_config else None,
+        fabric=args.fabric,
+    )
     data_root = base["data_root"]
     fabric = base["fabric"]
 

@@ -42,11 +42,15 @@ RASTER_TYPES = {
 def main():
     parser = argparse.ArgumentParser(description="Build CONUS-wide VRTs from per-VPU rasters.")
     parser.add_argument("--base_config", default=None, help="Path to base_config.yml")
+    parser.add_argument("--fabric", default=None, help="Fabric name (overrides FABRIC env / default_fabric)")
     args = parser.parse_args()
 
     logger = configure_logging("build_vrt")
 
-    base = load_base_config(Path(args.base_config) if args.base_config else None)
+    base = load_base_config(
+        Path(args.base_config) if args.base_config else None,
+        fabric=args.fabric,
+    )
     data_root = Path(base["data_root"])
     nhd_merged_dir = data_root / "work" / "nhd_merged"
 

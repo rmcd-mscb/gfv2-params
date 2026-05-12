@@ -50,6 +50,7 @@ def main():
     parser = argparse.ArgumentParser(description="Build LULC derived rasters.")
     parser.add_argument("--config", required=True, help="Path to LULC step config YAML")
     parser.add_argument("--base_config", default=None, help="Path to base_config.yml")
+    parser.add_argument("--fabric", default=None, help="Fabric name (overrides FABRIC env / default_fabric)")
     parser.add_argument("--force", action="store_true", help="Overwrite existing files")
     args = parser.parse_args()
 
@@ -59,6 +60,7 @@ def main():
     config = load_config(
         Path(args.config),
         base_config_path=Path(args.base_config) if args.base_config else None,
+        fabric=args.fabric,
     )
 
     lulc_source = config.get("lulc_source", "lulc")

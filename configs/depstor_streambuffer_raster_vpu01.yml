@@ -1,9 +1,0 @@
-# VPU01 validation overlay for depstor stream-buffer raster (issue #38).
-# Reads nsegment lines from the VPU01 draft fabric gpkg instead of the staged
-# {fabric}_segments_wbodies.gpkg used at CONUS scale.
-
-template_raster: "{data_root}/work/nhd_merged/01/Hydrodem_merged_01.tif"
-segments_gpkg: "{data_root}/input/fabric/NHM_01_draft.gpkg"
-segments_layer: nsegment
-output_raster: "{data_root}/{fabric}/depstor_rasters/stream_buffer.tif"
-buffer_distance: 60

@@ -1,15 +1,15 @@
 # Build the depression-storage water-body binary raster + connected-component
 # region labels.
 #
-# Reads the staged fabric-specific segments+wbodies gpkg, filters wbodies by
-# minimum area, and burns them onto the elevation-VRT template grid. A
+# Reads the active fabric's waterbody_gpkg/layer, filters wbodies by minimum
+# area, and burns them onto the active fabric's template_raster grid. A
 # scipy.ndimage.label pass (8-connectivity) gives each connected wbody a unique
 # region ID — used downstream by build_depstor_dprst.py to apply region-level
 # masks (a region is excluded entirely if any cell touches a stream/imperv).
+#
+# template_raster, waterbody_gpkg, and waterbody_layer come from the active
+# fabric profile in base_config.yml.
 
-template_raster: "{data_root}/work/nhd_merged/elevation.vrt"
-waterbody_gpkg: "{data_root}/input/depstor/{fabric}_segments_wbodies.gpkg"
-waterbody_layer: v2_wb
 wbody_binary_raster: "{data_root}/{fabric}/depstor_rasters/wbody_binary.tif"
 wbody_regions_raster: "{data_root}/{fabric}/depstor_rasters/wbody_regions.tif"
 min_area_threshold: 900.0

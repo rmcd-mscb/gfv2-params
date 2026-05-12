@@ -86,6 +86,7 @@ def fill_missing_values_knn(param_df, missing_ids, merged_gdf, param_column, k, 
 def main():
     parser = argparse.ArgumentParser(description="Fill missing parameter values using KNN interpolation.")
     parser.add_argument("--base_config", default=None, help="Path to base_config.yml")
+    parser.add_argument("--fabric", default=None, help="Fabric name (overrides FABRIC env / default_fabric)")
     parser.add_argument("--merged_gpkg", default=None, help="Path to merged nhru geopackage")
     parser.add_argument("--param_file", default=None, help="Path to merged parameter CSV to fill")
     parser.add_argument("--output_dir", default=None, help="Output directory for filled file")
@@ -94,7 +95,10 @@ def main():
 
     logger = configure_logging("merge_and_fill_params")
 
-    base = load_base_config(Path(args.base_config) if args.base_config else None)
+    base = load_base_config(
+        Path(args.base_config) if args.base_config else None,
+        fabric=args.fabric,
+    )
     data_root = base["data_root"]
     fabric = base["fabric"]
     expected_max = base["expected_max_hru_id"]

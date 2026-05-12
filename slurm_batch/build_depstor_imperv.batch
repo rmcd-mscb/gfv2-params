@@ -8,12 +8,20 @@
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=64G
+#
+# Defaults are CONUS-sized. For smaller fabrics, override resources at submission.
+# Extra args after the batch path are forwarded to the python script via "$@",
+# so e.g. --force can be passed through to rebuild an existing output:
+#   FABRIC=gfv2_vpu01 sbatch --time=01:00:00 --mem=16G slurm_batch/build_depstor_imperv.batch --force
 
 cd "$SLURM_SUBMIT_DIR"
 [ -f .pixi-activate.sh ] || { echo "ERROR: missing .pixi-activate.sh — run scripts/refresh_pixi_activation.sh" >&2; exit 1; }
 source .pixi-activate.sh
 BASE_CONFIG=${BASE_CONFIG:-configs/base_config.yml}
+FABRIC=${FABRIC:-gfv2}
 
 python scripts/build_depstor_imperv.py \
     --config configs/depstor_imperv_raster.yml \
-    --base_config "$BASE_CONFIG"
+    --base_config "$BASE_CONFIG" \
+    --fabric "$FABRIC" \
+    "$@"

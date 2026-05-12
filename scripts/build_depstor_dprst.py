@@ -27,7 +27,7 @@ from pathlib import Path
 import numpy as np
 import rasterio
 
-from gfv2_params.config import load_config
+from gfv2_params.config import load_config, require_config_key
 from gfv2_params.depstor import (
     RasterInfo,
     read_aligned_uint8,
@@ -48,6 +48,7 @@ def main():
     parser = argparse.ArgumentParser(description="Build depstor dprst_binary.tif and onstream_binary.tif.")
     parser.add_argument("--config", required=True, help="Path to depstor_dprst_raster.yml")
     parser.add_argument("--base_config", default=None, help="Path to base_config.yml")
+    parser.add_argument("--fabric", default=None, help="Fabric name (overrides FABRIC env / default_fabric)")
     parser.add_argument("--force", action="store_true", help="Overwrite existing outputs")
     args = parser.parse_args()
 
@@ -57,9 +58,10 @@ def main():
     config = load_config(
         Path(args.config),
         base_config_path=Path(args.base_config) if args.base_config else None,
+        fabric=args.fabric,
     )
 
-    template_path = Path(config["template_raster"])
+    template_path = Path(require_config_key(config, "template_raster", "build_depstor_dprst"))
     wbody_binary_path = Path(config["wbody_binary_raster"])
     wbody_regions_path = Path(config["wbody_regions_raster"])
     stream_buffer_path = Path(config["stream_buffer_raster"])

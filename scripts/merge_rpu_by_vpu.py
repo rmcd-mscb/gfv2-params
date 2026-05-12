@@ -15,6 +15,7 @@ def main():
     parser = argparse.ArgumentParser(description="Merge NHD rasters by VPU and dataset type.")
     parser.add_argument("--config", required=True, help="Path to merge_rpu_by_vpu.yml")
     parser.add_argument("--vpu", required=True, help="VPU code, e.g., 01")
+    parser.add_argument("--fabric", default=None, help="Fabric name (overrides FABRIC env / default_fabric)")
     parser.add_argument("--force", action="store_true",
                         help="Overwrite existing output files")
     args = parser.parse_args()
@@ -23,7 +24,7 @@ def main():
 
     # Load base config for data_root (this config has a unique nested structure,
     # so we load it separately via yaml rather than through load_config)
-    base = load_base_config()
+    base = load_base_config(fabric=args.fabric)
     base_path = Path(base["data_root"])
 
     # Load the RPU merge config (VPU-keyed nested structure)
