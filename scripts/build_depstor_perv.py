@@ -19,10 +19,16 @@ import time
 from pathlib import Path
 
 import numpy as np
+import rasterio
+from rasterio.windows import Window
 
 from gfv2_params.config import load_config, require_config_key
-from gfv2_params.depstor import RasterInfo, read_aligned_uint8, write_uint8_binary
+from gfv2_params.depstor import RasterInfo
 from gfv2_params.log import configure_logging
+
+# Multiple of the 256-row output tile size — strip writes align with tile
+# boundaries so LZW compression sees full tiles.
+STRIP_ROWS = 1024
 
 
 def _elapsed(t0: float) -> str:
@@ -33,7 +39,41 @@ def _elapsed(t0: float) -> str:
 
 def compute_perv_binary(imperv: np.ndarray, dprst: np.ndarray) -> np.ndarray:
     """Cell is pervious where it is NOT impervious AND NOT depression-storage."""
-    return np.where((imperv != 1) & (dprst != 1), np.uint8(1), np.uint8(255))
+    mask = imperv == 1
+    mask |= dprst == 1
+    out = np.full_like(imperv, 1)
+    out[mask] = 255
+    return out
+
+
+def _uint8_binary_profile(info: RasterInfo) -> dict:
+    return {
+        "driver": "GTiff",
+        "height": info.height,
+        "width": info.width,
+        "count": 1,
+        "dtype": "uint8",
+        "crs": info.crs,
+        "transform": info.transform,
+        "nodata": 255,
+        "compress": "LZW",
+        "tiled": True,
+        "blockxsize": 256,
+        "blockysize": 256,
+        "BIGTIFF": "YES",
+    }
+
+
+def _assert_aligned(src, info: RasterInfo, name: str) -> None:
+    if (src.width, src.height) != (info.width, info.height):
+        raise ValueError(
+            f"{name} shape ({src.width}x{src.height}) != template "
+            f"({info.width}x{info.height})"
+        )
+    if src.crs != info.crs:
+        raise ValueError(f"{name} CRS {src.crs} != template CRS {info.crs}")
+    if src.transform != info.transform:
+        raise ValueError(f"{name} transform mismatch with template")
 
 
 def main():
@@ -73,21 +113,32 @@ def main():
         return
 
     info = RasterInfo.from_path(template_path)
+    perv_path.parent.mkdir(parents=True, exist_ok=True)
 
-    logger.info("--- Step 1/2: Read aligned inputs ---")
+    logger.info("--- Streaming perv_binary over %d-row strips ---", STRIP_ROWS)
     t1 = time.time()
-    imperv_binary = read_aligned_uint8(imperv_path, info)
-    dprst_binary = read_aligned_uint8(dprst_path, info)
-    logger.info("  Inputs read in %s", _elapsed(t1))
+    n_perv = 0
+    profile = _uint8_binary_profile(info)
 
-    logger.info("--- Step 2/2: Build perv_binary (NOT imperv AND NOT dprst) ---")
-    t2 = time.time()
-    perv = compute_perv_binary(imperv_binary, dprst_binary)
-    write_uint8_binary(perv, info, perv_path)
-    n_perv = int((perv == 1).sum())
+    with rasterio.open(imperv_path) as imperv_src, \
+         rasterio.open(dprst_path) as dprst_src, \
+         rasterio.open(perv_path, "w", **profile) as dst:
+        _assert_aligned(imperv_src, info, "imperv")
+        _assert_aligned(dprst_src, info, "dprst")
+
+        for row_off in range(0, info.height, STRIP_ROWS):
+            h = min(STRIP_ROWS, info.height - row_off)
+            window = Window(0, row_off, info.width, h)
+            imperv = imperv_src.read(1, window=window)
+            dprst = dprst_src.read(1, window=window)
+            perv = compute_perv_binary(imperv, dprst)
+            dst.write(perv, 1, window=window)
+            n_perv += int((perv == 1).sum())
+
+    total = info.height * info.width
     logger.info(
-        "  %d cells marked pervious (%.4f%% of grid). Written in %s",
-        n_perv, 100 * n_perv / perv.size, _elapsed(t2),
+        "  %d cells marked pervious (%.4f%% of grid). Built in %s",
+        n_perv, 100 * n_perv / total, _elapsed(t1),
     )
 
     logger.info("=== build_depstor_perv complete in %s ===", _elapsed(t_start))
