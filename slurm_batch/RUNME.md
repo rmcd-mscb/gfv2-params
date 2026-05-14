@@ -68,12 +68,9 @@ gfv2_param/
 ## Selecting a fabric
 
 Fabric identities and their per-fabric inputs (`template_raster`, `fdr_raster`,
-`twi_raster`, `segments_gpkg`, `expected_max_hru_id`, `batch_size`) live as
-profiles in a single `configs/base_config.yml` under a `fabrics:` mapping.
-Canonical CONUS-wide inputs (`waterbody_gpkg`, `waterbody_layer`) live as
-top-level keys outside the `fabrics:` block; they flow into every fabric's
-resolved config via `_resolve_fabric_profile`, with the profile able to
-override any key by re-declaring it. The active profile is selected via:
+`waterbody_gpkg`/layer, `expected_max_hru_id`, `batch_size`) live as profiles
+in a single `configs/base_config.yml` under a `fabrics:` mapping. The active
+profile is selected via:
 
 1. `--fabric <name>` CLI flag on any script, OR
 2. `FABRIC` env var passed through sbatch, OR
@@ -433,10 +430,8 @@ already merged or comes as per-VPU gpkgs.
 
 1. Add a profile under `fabrics:` in `configs/base_config.yml`. Required keys
    are `expected_max_hru_id` and `batch_size`. If the depstor pipeline will be
-   run for this fabric, also set `template_raster`, `fdr_raster`, `twi_raster`,
-   and `segments_gpkg`. The `waterbody_gpkg` and `waterbody_layer` defaults are
-   inherited from the top-level base config (CONUS NHD waterbodies) — declare
-   them under the fabric only if you need a per-fabric override. The `oregon`
+   run for this fabric, also set `template_raster`, `fdr_raster`,
+   `segments_gpkg`, `waterbody_gpkg`, and `waterbody_layer`. The `oregon`
    profile shows the minimum (no depstor inputs yet).
 2. Scaffold the fabric's output directories:
    ```bash
