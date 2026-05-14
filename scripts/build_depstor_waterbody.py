@@ -17,9 +17,6 @@ import time
 from pathlib import Path
 
 import geopandas as gpd
-import pyogrio
-from rasterio.crs import CRS as RioCRS
-from rasterio.warp import transform_bounds
 
 from gfv2_params.config import load_config, require_config_key
 from gfv2_params.depstor import (
@@ -31,15 +28,6 @@ from gfv2_params.depstor import (
 )
 from gfv2_params.log import configure_logging
 
-# Defensive buffer (m) added to the template bounds when filtering the
-# waterbody load. OGR's bbox spatial filter uses each polygon's envelope, so
-# polygons crossing the template boundary will already be included — the
-# buffer is insurance against floating-point rounding at the boundary and
-# small envelope/extent mismatches from CRS reprojection at file scope.
-# 1 km ≈ 33 cells at 30 m: generous against fp slop, negligible vs the load
-# time saved by spatial-index push-down.
-WATERBODY_LOAD_BBOX_BUFFER_M = 1000.0
-
 
 def _elapsed(t0: float) -> str:
     secs = time.time() - t0
@@ -47,57 +35,14 @@ def _elapsed(t0: float) -> str:
     return f"{m}m {s:02d}s" if m else f"{s}s"
 
 
-def _load_waterbodies(path: Path, layer: str | None, info: RasterInfo, logger):
-    """Load waterbody polygons whose envelope intersects the template extent.
-
-    Pushes the bbox filter down to OGR's spatial index (R-tree in the
-    geopackage) so only polygons near the template are read. For the
-    448k-feature CONUS waterbodies file on a VPU-scale template this drops
-    load time from ~30 s to <1 s; on a full-CONUS template it's a no-op
-    (bbox encloses the full extent).
-
-    The bbox must be in the file's CRS. We peek at the file CRS via
-    `pyogrio.read_info` (metadata-only, no feature read) and short-circuit
-    `transform_bounds` when CRSes match (the production case today). For a
-    future waterbodies source in a different CRS the bounds are projected
-    with edge densification so we don't under-cover from corner-only sampling.
-    """
-    b = info.bounds
-    if b.right <= b.left or b.top <= b.bottom:
-        # Degenerate or inverted template bounds would yield an empty/invalid
-        # bbox filter that silently drops every feature. Catch it loudly.
-        raise ValueError(
-            f"Template bounds are degenerate or inverted: "
-            f"left={b.left}, right={b.right}, bottom={b.bottom}, top={b.top}"
-        )
-
-    buf = WATERBODY_LOAD_BBOX_BUFFER_M
-    buffered = (b.left - buf, b.bottom - buf, b.right + buf, b.top + buf)
-
-    # Metadata-only CRS peek — doesn't read any features.
-    file_crs_str = pyogrio.read_info(path, layer=layer)["crs"]
-    file_crs = RioCRS.from_user_input(file_crs_str) if file_crs_str else None
-
-    if file_crs is not None and file_crs == info.crs:
-        bbox = buffered
-        logger.info(
-            "  Waterbody load bbox (file CRS matches template %s, buffer %.0f m): %s",
-            file_crs_str, buf, tuple(round(v, 1) for v in bbox),
-        )
-    else:
-        bbox = transform_bounds(info.crs, file_crs, *buffered, densify_pts=21)
-        logger.info(
-            "  Waterbody load bbox (projected template -> file CRS %s, buffer %.0f m): %s",
-            file_crs_str, buf, tuple(round(v, 1) for v in bbox),
-        )
-
+def _load_waterbodies(path: Path, layer: str | None, logger):
     try:
-        return gpd.read_file(path, layer=layer, bbox=bbox, use_arrow=True)
+        return gpd.read_file(path, layer=layer, use_arrow=True)
     except Exception:
         logger.warning(
             "PyArrow unavailable for vector load; falling back to fiona."
         )
-        return gpd.read_file(path, layer=layer, bbox=bbox)
+        return gpd.read_file(path, layer=layer)
 
 
 def main():
@@ -145,7 +90,7 @@ def main():
 
     logger.info("--- Step 1/4: Load and filter water bodies ---")
     t1 = time.time()
-    wb_gdf = _load_waterbodies(waterbody_gpkg, waterbody_layer, info, logger)
+    wb_gdf = _load_waterbodies(waterbody_gpkg, waterbody_layer, logger)
     if wb_gdf.crs != info.crs:
         logger.info("  Reprojecting wbodies from %s to %s", wb_gdf.crs, info.crs)
         wb_gdf = wb_gdf.to_crs(info.crs)
