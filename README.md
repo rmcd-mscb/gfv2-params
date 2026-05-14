@@ -6,54 +6,85 @@ Given a watershed fabric of polygons (HRUs), this pipeline computes parameters f
 
 ## Setup
 
-### 1. Create conda environment (compiled GIS dependencies)
+This project uses [pixi](https://pixi.sh) for environment management. Install pixi
+once per user (see https://pixi.sh/latest/installation/) and ensure `~/.pixi/bin`
+is on your `PATH`. From the repo root:
 
 ```bash
-conda env create -f environment.yml
-conda activate geoenv
+pixi install
+bash scripts/refresh_pixi_activation.sh
 ```
 
-### 2. Install the package
+`pixi install` materialises `.pixi/envs/default/` from `pixi.lock` (config lives
+in `pyproject.toml` under `[tool.pixi.*]`). The activation refresh pre-bakes
+`.pixi-activate.sh` so SLURM batches can `source` it without racing on
+`pixi shell-hook` under array submission. Re-run the refresh script any time
+`pyproject.toml` or `pixi.lock` change.
+
+For interactive use:
 
 ```bash
-pip install -e .
-# Or with notebook dependencies:
-pip install -e ".[notebooks]"
+pixi shell                       # default env
+pixi shell -e notebooks          # default + marimo, plotly, hvplot, ...
+pixi shell -e dev                # default + pytest, ruff, pre-commit
 ```
+
+The legacy `environment.yml` / `geoenv` conda environment is retained as a
+deprecated fallback only — new work should use pixi.
 
 ## Project Structure
 
 ```
 gfv2-params/
 ├── src/gfv2_params/          # Installable Python package
-│   ├── config.py             # Config loading, VPU definitions
+│   ├── config.py             # Config loading, fabric profile resolution
 │   ├── raster_ops.py         # Raster utilities (resample, multiply, slope conversion)
+│   ├── batching.py           # Spatial batching helpers
+│   ├── lulc.py               # LULC reclassification helpers
+│   ├── depstor.py            # Depression-storage raster helpers (binarize, intersect, write)
 │   ├── log.py                # Logging setup
 │   └── download/             # Data download utilities
 ├── scripts/                  # CLI processing scripts
-│   ├── create_zonal_params.py      # Elevation, slope, aspect parameters
-│   ├── create_soils_params.py      # Soils and soil moisture max
-│   ├── create_ssflux_params.py     # Subsurface flux parameters
-│   ├── merge_rpu_by_vpu.py         # Merge RPU rasters by VPU
-│   ├── compute_slope_aspect.py     # Derive slope/aspect from DEM
+│   ├── init_data_root.py           # Scaffold data-root tree; verify staged inputs
+│   ├── stage_twi.sh                # Stage per-RPU TWI rasters from shared FS
 │   ├── prepare_fabric.py           # Spatially batch fabric into per-batch gpkgs
 │   ├── build_vrt.py                # Build CONUS-wide virtual rasters
+│   ├── build_border_dem.py         # Copernicus GLO-30 border-fill elevation
 │   ├── build_derived_rasters.py    # Pre-compute derived rasters (e.g., soil_moist_max)
+│   ├── build_lulc_rasters.py       # Pre-compute LULC-derived rasters
 │   ├── build_weights.py            # Pre-compute polygon-to-polygon weights
+│   ├── compute_slope_aspect.py     # Derive slope/aspect from DEM
+│   ├── compute_dem_derivatives.py  # Open-source TWI/FDR/FAC/slope/aspect from Hydrodem
+│   ├── merge_rpu_by_vpu.py         # Merge RPU rasters by VPU
+│   ├── create_zonal_params.py      # Elevation, slope, aspect, depstor-fraction parameters
+│   ├── create_soils_params.py      # Soils and soil moisture max
+│   ├── create_lulc_params.py       # LULC fractional parameters
+│   ├── create_ssflux_params.py     # Subsurface flux parameters
+│   ├── build_depstor_imperv.py        # Depression-storage Level-2/3 binary builders
+│   ├── build_depstor_streambuffer.py
+│   ├── build_depstor_waterbody.py
+│   ├── build_depstor_dprst.py
+│   ├── build_depstor_perv.py
+│   ├── build_depstor_routing.py       # WhiteboxTools watershed → drains_to_dprst
+│   ├── build_depstor_intersect.py     # drains × {perv,imperv} Level-4 builders
+│   ├── build_depstor_carea_map.py     # Contributing-area mask at TWI thresholds
+│   ├── derive_depstor_ratios.py       # Level-5 ratio params from merged fractions
 │   ├── merge_params.py             # Merge per-batch CSVs
 │   ├── merge_default_params.py     # Merge NHM default params
 │   ├── merge_and_fill_params.py    # KNN gap-filling
 │   └── find_missing_hru_ids.py     # Identify missing HRU IDs
 ├── configs/                  # YAML configuration files
-│   ├── base_config.yml       # Data root and shared settings
-│   └── *.yml                 # Per-step configs with template placeholders
+│   ├── base_config.yml       # Data root + fabric profiles (single source of truth)
+│   └── *.yml                 # Fabric-agnostic per-step configs with template placeholders
 ├── slurm_batch/              # HPC SLURM batch scripts
 │   ├── submit_jobs.sh        # SLURM array job submission wrapper
-│   └── RUNME.md              # HPC workflow documentation
-├── notebooks/                # Marimo interactive notebooks
+│   └── RUNME.md              # HPC workflow documentation (authoritative)
+├── docs/                     # Pipeline reference docs (depstor workflow, validation, port summary)
+├── notebooks/                # Marimo interactive notebooks (incl. VPU01 QA/QC)
 ├── tests/                    # Unit tests
-├── pyproject.toml            # Package configuration
-└── environment.yml           # Conda environment (compiled deps only)
+├── pyproject.toml            # Package + pixi config
+├── pixi.lock                 # Pinned pixi environment
+└── environment.yml           # Legacy conda environment (deprecated fallback)
 ```
 
 ## Output Directory Structure
@@ -66,20 +97,26 @@ gfv2_param/
 │   ├── fabric/                     # Per-VPU watershed fabric gpkgs
 │   ├── soils_litho/                # TEXT_PRMS.tif, AWC.tif, Lithology_exp_Konly_Project.*
 │   ├── lulc_veg/                   # RootDepth.tif, CNPY.tif, Imperv.tif
-│   │   └── nhm_v11/               # NHM v1.1 pre-derived LULC (downloadable)
+│   │   └── nhm_v11/                # NHM v1.1 pre-derived LULC (downloadable)
 │   ├── lulc/
 │   │   ├── nlcd_annual_imperv/     # NLCD fractional imperviousness (downloadable)
 │   │   └── nalcms_2020/            # NALCMS 2020 land cover (downloadable)
+│   ├── depstor/                    # Per-fabric depression-storage inputs
+│   │   ├── <fabric>_segments_wbodies.gpkg   # nsegment + v2_wb layers
+│   │   └── <fabric>_fdr.tif        # D8 flow direction (Esri pointer)
+│   ├── twi/<rpu>/                  # Per-RPU TWI (twi.tif + sidecars; staged via stage_twi.sh)
 │   ├── nhm_default/                # NHM default parameter files
 │   └── nhd_downloads/              # Raw NHDPlus zip archives (downloadable)
 ├── work/                           # Reproducible intermediates (safe to delete)
 │   ├── nhd_extracted/              # Unzipped per-RPU rasters
-│   ├── nhd_merged/                 # Per-VPU GeoTIFFs + CONUS VRTs
+│   ├── nhd_merged/                 # Per-VPU GeoTIFFs + CONUS VRTs (incl. twi.vrt)
+│   │   └── copernicus_fill/        # Border-DEM fill (Canada/Mexico) for elevation VRT
 │   ├── derived_rasters/            # soil_moist_max.tif, radtrn, resampled CNPY/keep
 │   └── weights/                    # P2P polygon weights for ssflux
-└── {fabric}/                       # Per-fabric outputs (e.g., gfv2/, oregon/)
+└── {fabric}/                       # Per-fabric outputs (e.g., gfv2/, gfv2_vpu01/, oregon/)
     ├── fabric/                     # Merged fabric gpkg
     ├── batches/                    # Per-batch gpkgs + manifest
+    ├── depstor_rasters/            # Depression-storage intermediate rasters (per fabric)
     └── params/                     # Parameter outputs + merged/ + filled
 ```
 
@@ -104,6 +141,8 @@ The following externally-provided files must be placed in the scaffolded directo
 | `input/soils_litho/` | `TEXT_PRMS.tif`, `AWC.tif`, `Lithology_exp_Konly_Project.shp` (+ sidecar files: `.dbf`, `.prj`, `.shx`) |
 | `input/lulc_veg/` | `RootDepth.tif`, `CNPY.tif`, `Imperv.tif` |
 | `input/nhm_default/` | NHM default parameter files (input to final merge step) |
+| `input/depstor/` | Per-fabric: `<fabric>_segments_wbodies.gpkg` (layers `nsegment`, `v2_wb`) and `<fabric>_fdr.tif` (D8 flow direction, Esri pointer encoding) |
+| `input/twi/<rpu>/` | Per-RPU `twi.tif` (+ `.tfw`, `.aux.xml`, `.ovr`, `.xml` sidecars). Stage with `bash scripts/stage_twi.sh` (or `sbatch slurm_batch/stage_twi.batch` for an unattended run). |
 
 ### 3. Run fabric-independent tasks
 
@@ -135,26 +174,54 @@ python scripts/create_zonal_params.py --config configs/elev_param.yml --batch_id
 
 ## Custom Fabric
 
-To run the pipeline against a non-default fabric (e.g., a regional subset), there are two cases:
+Fabrics are defined as profiles inside `configs/base_config.yml` under the
+`fabrics:` mapping — one file edit, no new YAMLs. The active profile is selected
+via (highest precedence first):
+
+1. `--fabric <name>` CLI flag on any script
+2. `FABRIC` env var passed through `sbatch`
+3. `default_fabric` in `configs/base_config.yml`
 
 **Pre-merged fabric** (single gpkg covering the full domain — e.g., Oregon):
 
-1. Create `configs/base_config_oregon.yml` with `fabric: oregon`, `expected_max_hru_id`, and `batch_size`
-2. Scaffold the fabric output dirs: `python scripts/init_data_root.py --base_config configs/base_config_oregon.yml`
-3. Place the fabric gpkg in `{data_root}/oregon/fabric/` (not in `input/fabric/` — that is for raw per-VPU inputs only)
-4. Run `prepare_fabric.py` and all parameter jobs with `--base_config configs/base_config_oregon.yml`
-5. Pass the config to `submit_jobs.sh` as the third argument: `slurm_batch/submit_jobs.sh $BATCHES <script>.batch configs/base_config_oregon.yml`
+1. Add a profile under `fabrics:` in `configs/base_config.yml`. Required keys
+   are `expected_max_hru_id` and `batch_size`. If the depstor pipeline will be
+   run, also set `template_raster`, `fdr_raster`, `twi_raster`, `segments_gpkg`,
+   `waterbody_gpkg`, and `waterbody_layer`.
+2. Scaffold output dirs: `python scripts/init_data_root.py --fabric oregon`
+3. Place the fabric gpkg directly in `{data_root}/oregon/fabric/` (NOT in `input/fabric/`)
+4. Run `prepare_fabric.py --fabric oregon` and submit jobs via
+   `slurm_batch/submit_jobs.sh $BATCHES <script>.batch <base_config> <merge_config> oregon`
+   (fabric is the 5th positional arg to `submit_jobs.sh`).
 
 **VPU-based fabric** (per-VPU gpkgs that need merging — e.g., gfv2):
 
-1. Create `configs/base_config_<fabric>.yml` and place per-VPU gpkgs in `input/fabric/`
-2. Scaffold, merge with `marimo run notebooks/merge_vpu_targets.py`, then run `prepare_fabric.py` and all stages
+1. Add a profile under `fabrics:` and place per-VPU gpkgs in `input/fabric/`
+2. Scaffold, merge with `marimo run notebooks/merge_vpu_targets.py`, then run
+   `prepare_fabric.py` and all stages with `--fabric <name>` (or `FABRIC=<name>`).
 
 See `slurm_batch/RUNME.md` for the full step-by-step workflow.
 
+## Depression-storage pipeline
+
+The depstor pipeline (Levels 2-5) builds intermediate binary/fraction rasters
+on the elevation-VRT template grid, then runs zonal stats to produce per-HRU
+fraction params (`dprst_frac`, `imperv_frac`, `onstream_storage_frac`,
+`drains_to_dprst_frac`, `perv_frac`, `drains_perv_frac`, `drains_imperv_frac`,
+`carea_t8_frac`, `carea_t156_frac`). Level-5 ratios are derived from the merged
+fractions by `derive_depstor_ratios.py`.
+
+See [docs/depstor_workflow.md](docs/depstor_workflow.md) for the design notes
+and [docs/depstor_port_summary.md](docs/depstor_port_summary.md) for the
+ArcPy-to-open-source port summary. Stage 2d in `slurm_batch/RUNME.md` lists the
+build order and dependencies.
+
 ## Configuration
 
-`configs/base_config.yml` defines the data root path and active fabric name. Per-step configs use `{data_root}` and `{fabric}` template placeholders that are resolved at runtime. The `{vpu}` and `{raster_vpu}` placeholders remain available for VPU-based raster prep scripts.
+`configs/base_config.yml` is the single source of truth for the data root and
+fabric profiles. Per-step configs are fabric-agnostic — they use `{data_root}`,
+`{fabric}`, `{vpu}`, and `{raster_vpu}` template placeholders that are resolved
+at runtime against the active profile.
 
 ## Logging
 
