@@ -3,9 +3,24 @@
 # Process configs (configs/*.yml) are fabric-agnostic; they pull
 # template_raster, fdr_raster, and segments/waterbody gpkg+layer from the
 # active profile via load_config().
+#
+# Top-level keys outside the `fabrics:` block (data_root, waterbody_gpkg,
+# waterbody_layer, ...) flow into every fabric's resolved config via
+# _resolve_fabric_profile in src/gfv2_params/config.py — a fabric profile can
+# override any of them by re-declaring the key under its own block. Use the
+# top-level pattern for canonical inputs that are the same CONUS-wide; reach
+# for a per-fabric override only when the input is genuinely fabric-specific
+# (e.g. a per-VPU template raster or fabric-specific segments gpkg).
 
 data_root: /caldera/hovenweep/projects/usgs/water/impd/nhgf/gfv2_param_v2
 default_fabric: gfv2
+
+# CONUS-wide NHD waterbodies (issue #65) — 448k polygons in EPSG:5070,
+# columns: GNIS_ID, GNIS_NAME, COMID, FTYPE, member_comid, area_sqkm.
+# Inherited by every fabric below; override per-fabric only if a smaller
+# pre-clipped layer is needed for performance (e.g. a VPU-scale validation run).
+waterbody_gpkg: "{data_root}/input/nhd/conus_waterbodies.gpkg"
+waterbody_layer: waterbodies
 
 fabrics:
   gfv2:
@@ -15,8 +30,6 @@ fabrics:
     fdr_raster: "{data_root}/input/depstor/{fabric}_fdr.tif"
     twi_raster: "{data_root}/work/nhd_merged/twi.vrt"
     segments_gpkg: "{data_root}/input/depstor/{fabric}_segments_wbodies.gpkg"
-    waterbody_gpkg: "{data_root}/input/depstor/{fabric}_segments_wbodies.gpkg"
-    waterbody_layer: v2_wb
 
   gfv2_vpu01:
     # VPU01 validation overlay (issue #38). Uses the per-VPU staged inputs
@@ -28,12 +41,13 @@ fabrics:
     fdr_raster: "{data_root}/work/nhd_merged/01/Fdr_merged_01.tif"
     twi_raster: "{data_root}/work/nhd_merged/01/Twi_merged_01.tif"
     segments_gpkg: "{data_root}/input/fabric/NHM_01_draft.gpkg"
-    waterbody_gpkg: "{data_root}/input/fabric/NHM_01_draft.gpkg"
-    waterbody_layer: wbs
 
   oregon:
-    # Depstor inputs not yet staged for oregon. Depstor scripts will raise
-    # a clear "fabric profile 'oregon' missing 'template_raster'" error if
-    # invoked with --fabric oregon until the inputs are wired up.
+    # Depstor inputs not yet staged for oregon. The fabric inherits the
+    # top-level waterbody_gpkg / waterbody_layer defaults, but the
+    # fabric-specific keys it would also need (template_raster, fdr_raster,
+    # twi_raster, segments_gpkg) are absent — depstor scripts will fail
+    # loudly with "fabric profile 'oregon' missing 'template_raster'" when
+    # invoked with --fabric oregon until those are wired up.
     expected_max_hru_id: 16814
     batch_size: 10000
