@@ -44,7 +44,7 @@ def _elapsed(t0: float) -> str:
 def _load_waterbodies(path: Path, layer: str | None, logger):
     try:
         return gpd.read_file(path, layer=layer, use_arrow=True)
-    except Exception:
+    except ImportError:
         logger.warning(
             "PyArrow unavailable for vector load; falling back to fiona."
         )

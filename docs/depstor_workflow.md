@@ -92,6 +92,15 @@ The workflow is broken up into 5 levels:
    and `carea_max` parameters that control runoff partitioning
 5. **Level Five:** Profit (i.e., generate the parameter files)
 
+**gfv2-params land mask (PR #69, issue #68):** Before any Level One/Two builder
+runs, `build_depstor_landmask.py` rasterises the `nhru` polygon fabric to the
+template grid → `land_mask.tif` (uint8 1/255). Every depstor raster builder
+masks its output against it. This replaced an earlier DEM-nodata mask that
+bulged into the ocean (the hydro-conditioned DEM carries valid elevations over
+coastal water; the FDR has the same blobs). The HRU fabric is the
+authoritative modeling domain and is exactly what `create_zonal_params`
+aggregates to downstream.
+
 ---
 
 ### Level One — Preprocessing and setting environments (Finished 2/17)

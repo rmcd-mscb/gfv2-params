@@ -139,10 +139,10 @@ def compute_carea_map_binary(
     (docs/0b_TB_depr_stor.py:315-350) but drops HRU-ID tagging — HRU identity
     is recovered at zonal-stats time.
 
-    `land_valid` is the template-DEM land mask (see `land_mask`). It is applied
-    explicitly rather than relying on the perv gate alone — the on-stream
-    branch can otherwise rescue off-land cells, and a stale perv_binary should
-    not be able to leak ocean into carea_map.
+    `land_valid` is the rasterised HRU-fabric land mask (see `read_land_mask`).
+    It is applied explicitly rather than relying on the perv gate alone — the
+    on-stream branch can otherwise rescue off-land cells, and a stale
+    perv_binary should not be able to leak ocean into carea_map.
 
     Short-circuits on the perv test first so NaN / sentinel TWI values in
     non-perv cells do not pollute the result. Handles both NaN and the

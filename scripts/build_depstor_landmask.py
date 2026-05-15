@@ -34,9 +34,31 @@ def _elapsed(t0: float) -> str:
 def _load_hru(path: Path, layer: str, logger):
     try:
         return gpd.read_file(path, layer=layer, use_arrow=True)
-    except Exception:
+    except ImportError:
         logger.warning("PyArrow unavailable for vector load; falling back to fiona.")
         return gpd.read_file(path, layer=layer)
+
+
+def build_landmask(
+    template_path: Path,
+    hru_gpkg: Path,
+    hru_layer: str,
+    output_path: Path,
+    logger,
+):
+    """Rasterise the HRU fabric to a uint8 1/255 land mask at the template grid.
+
+    Pulled out of main() so unit tests can exercise the build without going
+    through argument parsing and config-file resolution.
+    """
+    info = RasterInfo.from_path(template_path)
+    hru_gdf = _load_hru(hru_gpkg, hru_layer, logger)
+    hru_gdf = hru_gdf[hru_gdf.geometry.notna() & ~hru_gdf.geometry.is_empty]
+    # all_touched=True: be inclusive at the outer coastline so thin edge HRUs
+    # are not clipped. create_zonal_params is the precise arbiter downstream.
+    binary = rasterize_binary(hru_gdf, info, all_touched=True)
+    write_uint8_binary(binary, info, output_path)
+    return binary, len(hru_gdf)
 
 
 def main():
@@ -78,22 +100,12 @@ def main():
     info = RasterInfo.from_path(template_path)
     logger.info("Template grid: %dx%d, CRS=%s", info.width, info.height, info.crs)
 
-    logger.info("--- Step 1/2: Load HRU fabric ---")
     t1 = time.time()
-    hru_gdf = _load_hru(hru_gpkg, hru_layer, logger)
-    hru_gdf = hru_gdf[hru_gdf.geometry.notna() & ~hru_gdf.geometry.is_empty]
-    logger.info("  Loaded %d HRU polygons in %s", len(hru_gdf), _elapsed(t1))
-
-    logger.info("--- Step 2/2: Rasterize HRU fabric to land mask ---")
-    t2 = time.time()
-    # all_touched=True: be inclusive at the outer coastline so thin edge HRUs
-    # are not clipped. create_zonal_params is the precise arbiter downstream.
-    binary = rasterize_binary(hru_gdf, info, all_touched=True)
-    write_uint8_binary(binary, info, output_path)
+    binary, n_polys = build_landmask(template_path, hru_gpkg, hru_layer, output_path, logger)
     n_land = int((binary == 1).sum())
     logger.info(
-        "  Rasterize + write done in %s | %d land cells (%.2f%% of grid)",
-        _elapsed(t2), n_land, 100 * n_land / binary.size,
+        "  Rasterised %d HRU polygons in %s | %d land cells (%.2f%% of grid)",
+        n_polys, _elapsed(t1), n_land, 100 * n_land / binary.size,
     )
 
     logger.info("=== build_depstor_landmask complete in %s ===", _elapsed(t_start))
