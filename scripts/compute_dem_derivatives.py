@@ -1,4 +1,4 @@
-"""Open-source TWI/FDR/FAC/slope/aspect from per-VPU merged Hydrodem.
+"""Open-source TWI/slope/aspect from per-VPU merged Hydrodem.
 
 **Status: parallel-artifact pipeline, not the canonical TWI source.** The
 canonical CONUS TWI for downstream PRMS parameter extraction
@@ -9,34 +9,43 @@ shape — swapping the source would invalidate those thresholds. This script
 exists as a self-contained open-source recipe that can be re-run on any DEM
 (future cross-border work, #53; future PRMS-threshold recalibration, etc.).
 
-Reproduces the ArcPy recipe (Fill -> FlowDirection -> FlowAccumulation -> Slope
--> TWI) using richdem (FillDepressions+epsilon, slope_degrees,
-slope_percentage, aspect) and WhiteboxTools (D8Pointer with Esri encoding,
-D8FlowAccumulation). Characterization vs ArcPy ground truth lives in
-notebooks/diff_twi_hydrodem_vs_merged.py.
+Pipeline (all richdem; no WhiteboxTools subprocess on this path):
+  Hydrodem nodata fix → richdem FillDepressions+epsilon (Barnes 2014
+  priority-flood) → richdem FlowAccumulation method=D8 (O'Callaghan-Mark
+  1984) → richdem slope_degrees/slope_percentage/aspect on the FIXED
+  (pre-fill) DEM → TWI = log(fac * 10 / (tan(slope_rad) + 0.01)) → mask
+  against the HRU-fabric land_mask.tif. Characterization vs ArcPy ground
+  truth lives in notebooks/diff_twi_hydrodem_vs_merged.py.
 
-Why richdem for fill (not whitebox): whitebox FillDepressions --fix_flats
-iterates a flat-resolution pass that scales poorly with the size of contiguous
-flat regions — VPU 18 (California's Central Valley + Mojave) didn't finish in
-4 hours, while richdem's Barnes 2014 priority-flood-with-epsilon finishes the
-same VPU in ~6 minutes. Float64 precision is required during fill so the
+Why richdem D8 (and not WhiteboxTools D8Pointer + D8FlowAccumulation): the
+WBT subprocess pair adds GeoTIFF round-trips and walltime that scaled poorly
+on CONUS VPUs (per #70). richdem's D8 FlowAccumulation runs in-process on
+the same rdarray we already have from the fill step, drops two intermediate
+writes (Fdr_hydrodem, Fac_hydrodem), and uses the same widely-cited
+O'Callaghan & Mark (1984) D8 routing — defensible for an open-source TWI
+recipe. FAC convention differs: richdem counts the cell itself (headwater =
+1), so the TWI formula uses `fac` directly where the ArcPy/WBT version used
+`fac + 1`.
+
+Why richdem for fill: whitebox FillDepressions --fix_flats iterates a flat-
+resolution pass that scales poorly with the size of contiguous flat regions
+— VPU 18 (California's Central Valley + Mojave) didn't finish in 4 hours,
+while richdem's Barnes 2014 priority-flood-with-epsilon finishes the same
+VPU in ~6 minutes. Float64 precision is required during fill so the
 cumulative epsilon increment doesn't push deep depressions above their rim
 (richdem's "negligible gradients ... rose above" warning).
 
 Outputs (per VPU, written to {data_root}/work/nhd_merged/<vpu>/):
 - Hydrodem_merged_fixed_<vpu>.tif  (intermediate, nodata=-9999)
-- Hydrodem_filled_<vpu>.tif        (richdem FillDepressions+epsilon output)
-- Fdr_hydrodem_<vpu>.tif           (D8 pointer, Esri encoding)
-- Fac_hydrodem_<vpu>.tif           (D8 flow accumulation, cells)
-- Slope_hydrodem_<vpu>.tif         (richdem slope_degrees, on filled DEM)
-- Slope_pct_hydrodem_<vpu>.tif     (richdem slope_percentage, on filled DEM)
-- Aspect_hydrodem_<vpu>.tif        (richdem aspect, on filled DEM)
-- Twi_hydrodem_<vpu>.tif           (log((fac+1)*10 / (tan(slope_rad) + 0.01)))
+- Hydrodem_filled_<vpu>.tif        (richdem FillDepressions+epsilon, float64)
+- Slope_hydrodem_<vpu>.tif         (richdem slope_degrees, on FIXED DEM)
+- Slope_pct_hydrodem_<vpu>.tif     (richdem slope_percentage, on FIXED DEM)
+- Aspect_hydrodem_<vpu>.tif        (richdem aspect, on FIXED DEM)
+- Twi_hydrodem_<vpu>.tif           (log(fac*10 / (tan(slope_rad)+0.01)),
+                                    HRU-fabric land mask applied)
 """
 
 import argparse
-import os
-import subprocess
 from pathlib import Path
 
 import numpy as np
@@ -44,70 +53,26 @@ import rasterio
 import richdem as rd
 import rioxarray  # noqa: F401  (registers .rio accessor)
 
-from gfv2_params.config import load_config
+from gfv2_params.config import load_config, require_config_key
+from gfv2_params.depstor import read_land_mask_for_grid
 from gfv2_params.log import configure_logging
 
 # Hydrodem_merged_<vpu>.tif declares nodata=-99.99 (centimeters/100, same as
-# NEDSnapshot). Re-encode to nodata=-9999 so WhiteboxTools and richdem both
-# pick up an unambiguous value (a float -99.99 comparison is risky) and the
-# downstream open-source pipeline shares one nodata convention.
+# NEDSnapshot). Re-encode to nodata=-9999 so richdem picks up an unambiguous
+# value (a float -99.99 comparison is risky) and the downstream open-source
+# pipeline shares one nodata convention.
 DEM_SRC_NODATA = -99.99
 DEM_NODATA = -9999.0
 
 
-def _find_whitebox_tools_binary() -> str:
-    """Locate the WhiteboxTools executable inside the bundled `whitebox` package.
-
-    Mirrors the helper in scripts/build_depstor_routing.py. Instantiates
-    WhiteboxTools() first to trigger the auto-download of the rust binary on a
-    fresh env (idempotent on subsequent calls).
-    """
-    import whitebox  # local import — keep optional unless this step runs
-    from whitebox import WhiteboxTools
-
-    WhiteboxTools()  # auto-downloads the binary on first use
-
-    pkg_dir = os.path.dirname(whitebox.__file__)
-    candidates = [
-        os.path.join(pkg_dir, "whitebox_tools.exe"),
-        os.path.join(pkg_dir, "whitebox_tools"),
-        os.path.join(pkg_dir, "bin", "whitebox_tools.exe"),
-        os.path.join(pkg_dir, "bin", "whitebox_tools"),
-    ]
-    runner = next((c for c in candidates if os.path.isfile(c)), None)
-    if runner is None:
-        raise FileNotFoundError(
-            "WhiteboxTools binary not found inside `whitebox` package. "
-            "Reinstall the `whitebox` pip package."
-        )
-    return runner
-
-
-def _run_wbt(runner: str, tool: str, args: list[str], logger) -> None:
-    cmd = [runner, f"--wd={os.getcwd()}", "--max_procs=-1", f"-r={tool}", *args, "-v"]
-    logger.info("  Running: %s", " ".join(cmd))
-    proc = subprocess.run(cmd, text=True, capture_output=True)
-    if proc.stdout:
-        logger.debug("WBT stdout:\n%s", proc.stdout)
-    if proc.returncode != 0:
-        logger.error("WBT stderr:\n%s", proc.stderr)
-        raise RuntimeError(
-            f"WhiteboxTools {tool} failed (exit code {proc.returncode}). See stderr above."
-        )
-
-
 def _fix_dem_nodata(dem_src: Path, dem_fixed: Path, logger) -> None:
-    """Re-encode Hydrodem for downstream WhiteboxTools / richdem consumption.
+    """Re-encode Hydrodem nodata from the source's -99.99 to -9999.
 
-    Two things happen here:
-    1. Nodata is remapped from the source's -99.99 (cm/100 sentinel) to -9999,
-       so WhiteboxTools and richdem pick up an unambiguous value (a float
-       -99.99 comparison is risky).
-    2. The output is written with LZW compression *without* predictor=2.
-       WhiteboxTools' built-in TIFF reader silently produces garbage when the
-       input uses horizontal-differencing predictor (the file reads fine in
-       GDAL/rasterio but every WBT downstream step propagates corrupt
-       elevations through the pipeline).
+    A float -99.99 comparison is risky for downstream consumers (richdem reads
+    nodata with floating-point equality), so we remap to an unambiguous
+    sentinel. LZW + predictor=2 is intentionally NOT used here: the original
+    motivation (WhiteboxTools subprocess input) is gone, but predictor=2 buys
+    little on a -9999-padded ocean and we keep the simpler encoding.
     """
     logger.info(
         "Re-encoding Hydrodem nodata: %s -> %s (nodata %s -> %s)",
@@ -126,7 +91,7 @@ def _fix_dem_nodata(dem_src: Path, dem_fixed: Path, logger) -> None:
     )
 
 
-def _fill_depressions_richdem(dem_fixed: Path, dem_filled: Path, logger) -> None:
+def _fill_depressions_richdem(dem_fixed: Path, dem_filled: Path, logger) -> rd.rdarray:
     """Fill depressions with richdem priority-flood + epsilon (Barnes 2014).
 
     Float64 throughout (in-memory AND on-disk) is required: richdem's epsilon
@@ -134,11 +99,12 @@ def _fill_depressions_richdem(dem_fixed: Path, dem_filled: Path, logger) -> None
     while ULP_float64 ~ 1e-13 m — the float64 increment is small enough to be
     invisibly thin, but float32 ULPs accumulate fast enough to push deep
     closed basins above their bounding rim on continent-scale flats. So we
-    fill in float64. We then must also *save* in float64: casting down to
-    float32 collapses the per-cell ULP gradient (most adjacent cells round
-    to identical float32 values), and the downstream whitebox D8Pointer
-    sees a flat raster and assigns FDR=0 to those cells — breaking flow
-    accumulation through every filled depression.
+    fill in float64 and save in float64 so the D8 FlowAccumulation step sees
+    the same per-cell ULP gradient that broke under float32 in earlier
+    revisions.
+
+    Returns the filled rdarray so the caller can pass it straight to
+    FlowAccumulation without round-tripping through disk.
     """
     logger.info("Loading fixed DEM into richdem (no_data=%s)...", DEM_NODATA)
     dem_in = rd.LoadGDAL(str(dem_fixed), no_data=DEM_NODATA)
@@ -166,30 +132,76 @@ def _fill_depressions_richdem(dem_fixed: Path, dem_filled: Path, logger) -> None
     profile.pop("predictor", None)
     with rasterio.open(dem_filled, "w", **profile) as dst:
         dst.write(np.asarray(dem64, dtype=np.float64), 1)
+    return dem64
 
 
-def _compute_twi(fac_path: Path, slope_deg: rd.rdarray, twi_out: Path, logger) -> None:
-    """Write TWI = log((fac+1) * 10 / (tan(slope_rad) + 0.01)).
+def _flow_accumulation_d8(dem_filled: rd.rdarray, logger) -> rd.rdarray:
+    """D8 flow accumulation via richdem (O'Callaghan & Mark 1984).
 
-    Matches the ArcPy reference: fac is FlowAccumulation+1, the 100/10 factor
-    simplifies to *10, and the +0.01 constant prevents div-by-zero on flats.
+    Returns cell-count flow accumulation including the cell itself (headwater
+    = 1). The previous WBT D8FlowAccumulation produced exclusive counts
+    (headwater = 0); the TWI formula is adjusted accordingly downstream.
     """
-    with rasterio.open(fac_path) as fac_ds:
-        fac = fac_ds.read(1).astype(np.float64)
-        fac_nd = fac_ds.nodata
-        # predictor=2 is safe here because the TWI output is consumed by
-        # GDAL-based tools only (build_vrt.py, marimo notebooks, QGIS) — never
-        # passed to a WhiteboxTools subprocess. The fixed/filled DEM avoids
-        # predictor=2 specifically because WBT can't read it.
+    logger.info("Running richdem FlowAccumulation(method='D8')...")
+    return rd.FlowAccumulation(dem_filled, method="D8")
+
+
+def _compute_twi(
+    fac: rd.rdarray,
+    slope_deg: rd.rdarray,
+    template_path: Path,
+    land_valid: np.ndarray,
+    twi_out: Path,
+    logger,
+) -> None:
+    """Write TWI = log(fac * 10 / (tan(slope_rad) + 0.01)), masked to land.
+
+    Matches the scale of the ArcPy reference (the constant 10 = the 100/10
+    factor in the original Twi = ln(((FAC+1)*100) / (tan(slope_rad)+0.01)/10)
+    expression). richdem's FAC counts the cell itself, so the historical
+    `fac+1` adjustment is rolled into the FAC values themselves — no
+    arithmetic change at the cell level.
+
+    `land_valid` is the boolean HRU-fabric land mask aligned to the TWI grid
+    (True = inside the fabric). Off-land cells write nodata, mirroring the
+    PR #69 convention so coastal-bulge artefacts never leak into downstream
+    zonal aggregation.
+    """
+    fac_arr = np.asarray(fac, dtype=np.float64)
+    fac_nd_raw = getattr(fac, "no_data", None)
+    fac_nd = float(fac_nd_raw) if fac_nd_raw is not None else None
+
+    slope_arr = np.asarray(slope_deg, dtype=np.float64)
+    slope_nd_raw = getattr(slope_deg, "no_data", None)
+    slope_nd = float(DEM_NODATA if slope_nd_raw is None else slope_nd_raw)
+
+    valid = np.isfinite(fac_arr) & np.isfinite(slope_arr)
+    if fac_nd is not None and np.isfinite(fac_nd):
+        valid &= fac_arr != fac_nd
+    valid &= slope_arr != slope_nd
+    # Filter near-vertical slopes — physically impossible (>89°) and arise from
+    # closed-basin fill artifacts (a handful of cells per VPU; ~0.0001%).
+    valid &= slope_arr < 89.0
+    valid &= land_valid
+
+    twi = np.full(fac_arr.shape, DEM_NODATA, dtype=np.float32)
+    slope_rad = np.deg2rad(slope_arr[valid])
+    twi_valid = np.log((fac_arr[valid] * 10.0) / (np.tan(slope_rad) + 0.01))
+    twi[valid] = twi_valid.astype(np.float32)
+
+    # predictor=2 is safe here because the TWI output is consumed by
+    # GDAL-based tools only (build_vrt.py, marimo notebooks, QGIS) — never
+    # passed to a WhiteboxTools subprocess.
+    with rasterio.open(template_path) as tmpl:
         twi_profile = {
             "driver": "GTiff",
             "dtype": "float32",
             "nodata": DEM_NODATA,
-            "width": fac_ds.width,
-            "height": fac_ds.height,
+            "width": tmpl.width,
+            "height": tmpl.height,
             "count": 1,
-            "crs": fac_ds.crs,
-            "transform": fac_ds.transform,
+            "crs": tmpl.crs,
+            "transform": tmpl.transform,
             "compress": "lzw",
             "predictor": 2,
             "tiled": True,
@@ -198,32 +210,18 @@ def _compute_twi(fac_path: Path, slope_deg: rd.rdarray, twi_out: Path, logger) -
             "BIGTIFF": "YES",
         }
 
-    slope_arr = np.asarray(slope_deg, dtype=np.float64)
-    slope_nd_raw = getattr(slope_deg, "no_data", None)
-    slope_nd = float(DEM_NODATA if slope_nd_raw is None else slope_nd_raw)
-
-    valid = np.isfinite(fac) & np.isfinite(slope_arr)
-    if fac_nd is not None and np.isfinite(fac_nd):
-        valid &= fac != fac_nd
-    valid &= slope_arr != slope_nd
-    # Filter near-vertical slopes — physically impossible (>89°) and arise from
-    # closed-basin fill artifacts (a handful of cells per VPU; ~0.0001%).
-    valid &= slope_arr < 89.0
-
-    twi = np.full(fac.shape, DEM_NODATA, dtype=np.float32)
-    slope_rad = np.deg2rad(slope_arr[valid])
-    twi_valid = np.log(((fac[valid] + 1.0) * 10.0) / (np.tan(slope_rad) + 0.01))
-    twi[valid] = twi_valid.astype(np.float32)
-
     twi_out.parent.mkdir(parents=True, exist_ok=True)
     with rasterio.open(twi_out, "w", **twi_profile) as dst:
         dst.write(twi, 1)
-    logger.info("Wrote: %s (%d valid pixels of %d)", twi_out, int(valid.sum()), valid.size)
+    logger.info(
+        "Wrote: %s (%d valid pixels of %d; %d cells dropped by land mask)",
+        twi_out, int(valid.sum()), valid.size, int((~land_valid).sum()),
+    )
 
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Compute open-source DEM derivatives (filled DEM, FDR, FAC, slope, aspect, TWI) from Hydrodem.",
+        description="Compute open-source DEM derivatives (filled DEM, slope, aspect, TWI) from Hydrodem.",
     )
     parser.add_argument("--config", required=True, help="Path to config YAML file")
     parser.add_argument("--vpu", required=True, help="VPU code, e.g., 06")
@@ -236,6 +234,7 @@ def main():
 
     input_dir = Path(config["input_dir"])
     output_dir = Path(config["output_dir"])
+    landmask_path = Path(require_config_key(config, "landmask_raster", "compute_dem_derivatives"))
 
     vpu_dir = output_dir / args.vpu
     vpu_dir.mkdir(parents=True, exist_ok=True)
@@ -243,8 +242,6 @@ def main():
     dem_src = input_dir / args.vpu / f"Hydrodem_merged_{args.vpu}.tif"
     dem_fixed = vpu_dir / f"Hydrodem_merged_fixed_{args.vpu}.tif"
     dem_filled = vpu_dir / f"Hydrodem_filled_{args.vpu}.tif"
-    fdr_out = vpu_dir / f"Fdr_hydrodem_{args.vpu}.tif"
-    fac_out = vpu_dir / f"Fac_hydrodem_{args.vpu}.tif"
     slope_out = vpu_dir / f"Slope_hydrodem_{args.vpu}.tif"
     slope_pct_out = vpu_dir / f"Slope_pct_hydrodem_{args.vpu}.tif"
     aspect_out = vpu_dir / f"Aspect_hydrodem_{args.vpu}.tif"
@@ -252,13 +249,14 @@ def main():
 
     if not dem_src.exists():
         raise FileNotFoundError(f"Hydrodem source not found: {dem_src}")
+    if not landmask_path.exists():
+        raise FileNotFoundError(
+            f"Land mask not found (run build_depstor_landmask first): {landmask_path}"
+        )
 
     if not args.force and twi_out.exists():
         logger.info("Final TWI output exists (use --force to rebuild): %s", twi_out)
         return
-
-    runner = _find_whitebox_tools_binary()
-    logger.info("WhiteboxTools binary: %s", runner)
 
     if args.force or not dem_fixed.exists():
         _fix_dem_nodata(dem_src, dem_fixed, logger)
@@ -267,30 +265,18 @@ def main():
 
     if args.force or not dem_filled.exists():
         logger.info("--- richdem FillDepressions+epsilon (float64) ---")
-        _fill_depressions_richdem(dem_fixed, dem_filled, logger)
+        dem64 = _fill_depressions_richdem(dem_fixed, dem_filled, logger)
     else:
         logger.info("Reusing filled DEM (exists): %s", dem_filled)
+        dem_in = rd.LoadGDAL(str(dem_filled), no_data=DEM_NODATA)
+        dem64 = rd.rdarray(dem_in.astype(np.float64), no_data=DEM_NODATA)
+        dem64.geotransform = dem_in.geotransform
+        dem64.projection = dem_in.projection
+        del dem_in
 
-    if args.force or not fdr_out.exists():
-        logger.info("--- D8Pointer (Esri encoding) ---")
-        _run_wbt(
-            runner, "D8Pointer",
-            [f"--dem={dem_filled}", f"--output={fdr_out}", "--esri_pntr"],
-            logger,
-        )
-    else:
-        logger.info("Reusing FDR (exists): %s", fdr_out)
-
-    if args.force or not fac_out.exists():
-        logger.info("--- D8FlowAccumulation (cells, esri_pntr) ---")
-        _run_wbt(
-            runner, "D8FlowAccumulation",
-            [f"--input={fdr_out}", f"--output={fac_out}",
-             "--pntr", "--esri_pntr", "--out_type=cells"],
-            logger,
-        )
-    else:
-        logger.info("Reusing FAC (exists): %s", fac_out)
+    logger.info("--- richdem FlowAccumulation method=D8 (in-memory) ---")
+    fac = _flow_accumulation_d8(dem64, logger)
+    del dem64
 
     # Compute slope/aspect from the FIXED (pre-fill) DEM, not the filled DEM.
     # richdem's epsilon=True fill imprints a per-cell ULP increment (~6e-5 m at
@@ -298,7 +284,7 @@ def main():
     # synthetic slope and dims TWI on those cells. ArcPy's `Fill` doesn't
     # imprint such a gradient, so its `Slope(DEM_filled)` matches `Slope(unfilled)`
     # on stream cells (which aren't depressions and aren't modified by fill).
-    # The fill is still required for proper FDR/FAC routing — this just decouples
+    # The fill is still required for proper FAC routing — this just decouples
     # slope from the epsilon artifact.
     logger.info("Loading fixed DEM into richdem for slope/aspect (no_data=%s)...", DEM_NODATA)
     dem_rd = rd.LoadGDAL(str(dem_fixed), no_data=DEM_NODATA)
@@ -320,8 +306,14 @@ def main():
     logger.info("Wrote: %s", aspect_out)
     del aspect, dem_rd
 
-    logger.info("--- TWI = log((fac+1)*10 / (tan(slope_rad) + 0.01)) ---")
-    _compute_twi(fac_out, slope_deg, twi_out, logger)
+    logger.info("Reading HRU-fabric land mask windowed to TWI grid: %s", landmask_path)
+    with rasterio.open(dem_fixed) as tmpl:
+        land_valid = read_land_mask_for_grid(
+            landmask_path, tmpl.transform, tmpl.height, tmpl.width,
+        )
+
+    logger.info("--- TWI = log(fac*10 / (tan(slope_rad) + 0.01)), land-masked ---")
+    _compute_twi(fac, slope_deg, dem_fixed, land_valid, twi_out, logger)
 
     logger.info("compute_dem_derivatives complete for VPU %s", args.vpu)
 

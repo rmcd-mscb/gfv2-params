@@ -5,10 +5,10 @@
 #SBATCH --output=logs/job_%A_%a.out
 #SBATCH --error=logs/job_%A_%a.err
 #SBATCH --array=0-17            # Array index range (0 to len(vpus)-1)
-#SBATCH --time=04:00:00         # breach + D8 + accumulation + 3 richdem passes + TWI
+#SBATCH --time=04:00:00         # fill + D8 FAC + 3 richdem passes + TWI + landmask read
 #SBATCH --ntasks=1              # Single task per job
-#SBATCH --cpus-per-task=4       # WhiteboxTools respects --max_procs=-1
-#SBATCH --mem=192G              # Filled DEM + intermediates; VPU 10 margin
+#SBATCH --cpus-per-task=4       # richdem is single-threaded per pass; extras buffer GDAL IO
+#SBATCH --mem=192G              # Filled DEM (float64) + FAC + intermediates; VPU 10 margin
 
 # Load required modules
 cd "$SLURM_SUBMIT_DIR"

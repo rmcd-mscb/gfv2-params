@@ -17,10 +17,11 @@ def _(mo):
     # TWI: open-source (Hydrodem-derived) vs ArcPy (`Twi_merged`) — characterization
 
     Pixel-wise comparison between the open-source `Twi_hydrodem_<vpu>.tif`
-    (produced by `scripts/compute_dem_derivatives.py`: richdem
-    `FillDepressions+epsilon` → WhiteboxTools `D8Pointer --esri_pntr` →
-    `D8FlowAccumulation` and richdem slope/aspect) and the ArcPy reference
-    `Twi_merged_<vpu>.tif` (per-RPU TWI tiles merged per-VPU by PR #50).
+    (produced by `scripts/compute_dem_derivatives.py`: all-richdem pipeline —
+    `FillDepressions+epsilon` → `FlowAccumulation(method='D8')` → slope/aspect
+    on the fixed DEM, then masked to the HRU-fabric `land_mask.tif`) and the
+    ArcPy reference `Twi_merged_<vpu>.tif` (per-RPU TWI tiles merged per-VPU
+    by PR #50, also masked to `land_mask.tif`).
 
     **The ArcPy `Twi_merged` remains the canonical TWI** for downstream PRMS
     parameter extraction. The downstream consumer (`carea_max`, `smidx_coef`
