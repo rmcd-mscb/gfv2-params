@@ -14,13 +14,23 @@ Pipeline (hybrid richdem + WhiteboxTools):
   priority-flood) → WhiteboxTools D8Pointer (Esri encoding) → WhiteboxTools
   D8FlowAccumulation (cells, exclusive of the cell itself) → richdem
   slope_degrees/slope_percentage/aspect on the FIXED (pre-fill) DEM → TWI
-  = log((fac + 1) * 10 / (tan(slope_rad) + 0.01)) → mask against the
+  = log((fac + 1) * 10 / (tan(min(slope, 60°)) + 0.01)) → mask against the
   per-VPU HRU land mask (`land_mask_<vpu>.tif`, built by
   `build_vpu_landmask.py`). The mask is per-VPU rather than the CONUS
   depstor land_mask because the per-VPU Hydrodem footprint bulges past
   this VPU's HRU boundary into adjacent VPUs; only the per-VPU mask clips
   the TWI to just this VPU's HRUs. Characterization vs ArcPy ground truth
   lives in notebooks/diff_twi_hydrodem_vs_merged.py.
+
+Why cap slope at 60°: the NHDPlus Hydrodem carries occasional spurious
+high-elevation cells (5530 m points in the Adirondacks, etc. — uncleaned
+stream-burn sentinels or bridge artefacts). Adjacent to those, computed
+slope spikes to ~89°+. The previous behaviour was a hard `slope < 89°`
+filter that dropped those cells to nodata, producing a 1-pixel "snake"
+of holes along HRU/stream boundaries where the bad cells cluster. The
+cap keeps every valid cell and guarantees TWI ≥ log(10/(tan(60°)+0.01))
+≈ 1.75 for fac=0 cells, eliminating negative TWI as a numerical
+artefact of the formula at near-vertical slopes.
 
 Why hybrid (richdem fill + WBT D8): a previous all-richdem revision used
 `rd.FlowAccumulation(method='D8')` for routing. That worked on small/mid
@@ -53,7 +63,7 @@ Outputs (per VPU, written to {data_root}/work/nhd_merged/<vpu>/):
 - Slope_hydrodem_<vpu>.tif         (richdem slope_degrees, on FIXED DEM)
 - Slope_pct_hydrodem_<vpu>.tif     (richdem slope_percentage, on FIXED DEM)
 - Aspect_hydrodem_<vpu>.tif        (richdem aspect, on FIXED DEM)
-- Twi_hydrodem_<vpu>.tif           (log((fac+1)*10 / (tan(slope_rad)+0.01)),
+- Twi_hydrodem_<vpu>.tif           (log((fac+1)*10/(tan(min(slope,60°))+0.01)),
                                     per-VPU HRU land mask applied)
 """
 
@@ -77,6 +87,19 @@ from gfv2_params.log import configure_logging
 # pipeline shares one nodata convention.
 DEM_SRC_NODATA = -99.99
 DEM_NODATA = -9999.0
+
+# Cap slope at 60° before computing TWI. The Hydrodem carries occasional
+# spurious-elevation cells (e.g., uncleaned stream-burn sentinels, bridge
+# artefacts) — 5530 m points in the Adirondacks where Mt. Marcy tops out at
+# 1629 m — that drive computed slopes to ~89°+ in adjacent cells. Without
+# a cap, those cells produce negative or near-zero TWI clustered along HRU/
+# stream boundaries (where the bad cells live), visible as a 1-pixel "snake"
+# pattern in QGIS. Capping at 60° keeps every cell valid and guarantees TWI
+# ≥ log(10/(tan(60°)+0.01)) ≈ 1.75 for fac=0 cells. Real terrain rarely
+# exceeds 60° at 30 m resolution (Half Dome ~80°+ but on a tiny pixel
+# fraction). Less defensible than fixing the Hydrodem outliers upstream,
+# but tractable.
+SLOPE_CAP_DEG = 60.0
 
 
 def _find_whitebox_tools_binary() -> str:
@@ -195,12 +218,16 @@ def _compute_twi(
     twi_out: Path,
     logger,
 ) -> None:
-    """Write TWI = log((fac + 1) * 10 / (tan(slope_rad) + 0.01)), masked to land.
+    """Write TWI = log((fac + 1) * 10 / (tan(min(slope, 60°)) + 0.01)), masked to land.
 
-    Matches the ArcPy reference exactly: fac is FlowAccumulation+1 (WBT's
+    Matches the ArcPy reference scale: fac is FlowAccumulation+1 (WBT's
     `--out_type=cells` counts upslope cells exclusive of self, so headwater
     = 0; the +1 includes the cell itself), the 100/10 factor simplifies to
     *10, and the +0.01 constant prevents div-by-zero on flats.
+
+    Slope is clipped to SLOPE_CAP_DEG before taking tan() — see module-level
+    constant for rationale (Hydrodem outliers driving near-vertical computed
+    slopes; cap eliminates negative TWI as a numerical artefact).
 
     `land_valid` is the boolean per-VPU HRU mask aligned to the FAC grid
     (True = inside the fabric). Off-land cells write nodata.
@@ -236,13 +263,15 @@ def _compute_twi(
     if fac_nd is not None and np.isfinite(fac_nd):
         valid &= fac != fac_nd
     valid &= slope_arr != slope_nd
-    # Filter near-vertical slopes — physically impossible (>89°) and arise from
-    # closed-basin fill artifacts (a handful of cells per VPU; ~0.0001%).
-    valid &= slope_arr < 89.0
     valid &= land_valid
 
+    # Cap slope at SLOPE_CAP_DEG before the tan() — see module-level constant
+    # for rationale. Counts the cap-clipping for the log.
+    n_capped = int((valid & (slope_arr > SLOPE_CAP_DEG)).sum())
+    slope_capped = np.minimum(slope_arr, SLOPE_CAP_DEG)
+
     twi = np.full(fac.shape, DEM_NODATA, dtype=np.float32)
-    slope_rad = np.deg2rad(slope_arr[valid])
+    slope_rad = np.deg2rad(slope_capped[valid])
     twi_valid = np.log(((fac[valid] + 1.0) * 10.0) / (np.tan(slope_rad) + 0.01))
     twi[valid] = twi_valid.astype(np.float32)
 
@@ -250,8 +279,10 @@ def _compute_twi(
     with rasterio.open(twi_out, "w", **twi_profile) as dst:
         dst.write(twi, 1)
     logger.info(
-        "Wrote: %s (%d valid pixels of %d; %d cells dropped by land mask)",
+        "Wrote: %s (%d valid pixels of %d; %d cells dropped by land mask; "
+        "%d cells slope-capped at %.0f°)",
         twi_out, int(valid.sum()), valid.size, int((~land_valid).sum()),
+        n_capped, SLOPE_CAP_DEG,
     )
 
 
