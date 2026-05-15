@@ -20,6 +20,13 @@ This mask constrains each per-VPU TWI product to just the HRUs that
 belong to that VPU. The CONUS depstor ``land_mask.tif`` is left alone —
 depstor's per-HRU zonal stats don't care about cross-VPU mask bleed.
 
+Fabric-independent by design: the open-source TWI rasters this mask
+constrains are global products (one per VPU under ``work/nhd_merged/``),
+so the masks are also global. The HRU source is the canonical CONUS
+fabric (``gfv2_nhru_merged.gpkg``); per-fabric HRU subsets are subsets
+of that gpkg and filtering by the ``vpu`` column is sufficient. The
+script takes no ``--fabric`` argument for this reason.
+
 Output: ``{data_root}/work/nhd_merged/<vpu>/land_mask_<vpu>.tif``
 """
 
@@ -96,18 +103,22 @@ def main():
     parser.add_argument("--config", required=True, help="Path to vpu_landmask_raster.yml")
     parser.add_argument("--vpu", required=True, help="VPU code, e.g., 01")
     parser.add_argument("--base_config", default=None, help="Path to base_config.yml")
-    parser.add_argument("--fabric", default=None, help="Fabric name (overrides FABRIC env / default_fabric)")
     parser.add_argument("--force", action="store_true", help="Overwrite existing output")
     args = parser.parse_args()
 
     logger = configure_logging("build_vpu_landmask")
     t_start = time.time()
 
+    # No --fabric: the per-VPU land mask is a fabric-independent product. The
+    # config pins the HRU source to the canonical CONUS `gfv2_nhru_merged.gpkg`
+    # and the output to work/nhd_merged/<vpu>/ — both fabric-free locations.
+    # `load_config` still goes through fabric resolution to set `{data_root}`,
+    # but the step-config's `hru_gpkg` / `hru_layer` win over any fabric-profile
+    # defaults via the standard step-overrides-base merge.
     config = load_config(
         Path(args.config),
         vpu=args.vpu,
         base_config_path=Path(args.base_config) if args.base_config else None,
-        fabric=args.fabric,
     )
 
     template_path = Path(require_config_key(config, "template_raster", "build_vpu_landmask"))
