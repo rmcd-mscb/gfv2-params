@@ -18,6 +18,10 @@ so nearest-neighbour resampling is exact (no fractional shift). Template cells
 outside the source TWI extent receive the TWI nodata sentinel, so they fail
 the `twi_valid` check in compute_carea_map_binary and end up as 255 in the
 output regardless of their perv/onstream status.
+
+land_mask.tif (the rasterised HRU fabric) is also read: off-land cells are
+excluded explicitly so the on-stream branch can't rescue them and so a stale
+perv_binary can't leak ocean into carea_map.
 """
 
 import argparse
@@ -35,9 +39,9 @@ from gfv2_params.config import load_config, require_config_key
 from gfv2_params.depstor import RasterInfo, compute_carea_map_binary
 from gfv2_params.log import configure_logging
 
-# TWI is float32 — roughly 4x the per-strip memory of the uint8 inputs. At
-# CONUS width (~150k cols) one 1024-row strip is ~600 MB for TWI; well under
-# the default 32 G sbatch allocation but worth noting.
+# TWI is float32 — ~4x the per-strip memory of the uint8 inputs. At CONUS width
+# (~150k cols) one 1024-row strip is ~600 MB; well under the default 32 G
+# sbatch allocation but worth noting.
 STRIP_ROWS = 1024
 
 
@@ -96,6 +100,7 @@ def main():
 
     template_path = Path(require_config_key(config, "template_raster", "build_depstor_carea_map"))
     twi_path = Path(require_config_key(config, "twi_raster", "build_depstor_carea_map"))
+    landmask_path = Path(config["landmask_raster"])
     perv_path = Path(config["perv_raster"])
     onstream_path = Path(config["onstream_raster"])
 
@@ -112,12 +117,13 @@ def main():
         ),
     ]
 
-    for p in (template_path, twi_path, perv_path, onstream_path):
+    for p in (template_path, twi_path, landmask_path, perv_path, onstream_path):
         if not p.exists():
             raise FileNotFoundError(f"Required input not found: {p}")
 
     logger.info("=== build_depstor_carea_map ===")
     logger.info("Template : %s", template_path)
+    logger.info("Land mask: %s", landmask_path)
     logger.info("Perv     : %s", perv_path)
     logger.info("Onstream : %s", onstream_path)
     logger.info("TWI      : %s", twi_path)
@@ -138,9 +144,11 @@ def main():
     profile = _uint8_binary_profile(info)
 
     with ExitStack() as stack:
+        landmask_src = stack.enter_context(rasterio.open(landmask_path))
         perv_src = stack.enter_context(rasterio.open(perv_path))
         onstream_src = stack.enter_context(rasterio.open(onstream_path))
         twi_src = stack.enter_context(rasterio.open(twi_path))
+        _assert_aligned(landmask_src, info, "land_mask")
         _assert_aligned(perv_src, info, "perv")
         _assert_aligned(onstream_src, info, "onstream")
         if twi_src.crs != info.crs:
@@ -183,11 +191,14 @@ def main():
         for row_off in range(0, info.height, STRIP_ROWS):
             h = min(STRIP_ROWS, info.height - row_off)
             window = Window(0, row_off, info.width, h)
+            land_valid = landmask_src.read(1, window=window) == 1
             perv = perv_src.read(1, window=window)
             onstream = onstream_src.read(1, window=window)
             twi = twi_vrt.read(1, window=window)
             for i, (thresh, _, _) in enumerate(runs):
-                out = compute_carea_map_binary(perv, onstream, twi, thresh, twi_nodata)
+                out = compute_carea_map_binary(
+                    perv, onstream, twi, thresh, twi_nodata, land_valid
+                )
                 dsts[i].write(out, 1, window=window)
                 counts[i] += int((out == 1).sum())
 

@@ -18,6 +18,7 @@
 
 perv_raster: "{data_root}/{fabric}/depstor_rasters/perv_binary.tif"
 onstream_raster: "{data_root}/{fabric}/depstor_rasters/onstream_binary.tif"
+landmask_raster: "{data_root}/{fabric}/depstor_rasters/land_mask.tif"
 
 threshold_carea_max: 8.0
 output_raster_carea_max: "{data_root}/{fabric}/depstor_rasters/carea_map_t8_binary.tif"

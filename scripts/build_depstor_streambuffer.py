@@ -5,6 +5,11 @@ buffer_distance metres (default 60 m — 2 cell widths at 30 m), and burns the
 buffered polygons onto the elevation-VRT template grid as a uint8 binary mask
 (1 = inside any stream buffer, 255 = nodata).
 
+Off-land cells are masked out against land_mask.tif (the rasterised HRU
+fabric) so a coastal segment buffer cannot extend over open water — consistent
+with the rest of the depstor builders, even though stream segments are inland
+by nature.
+
 Output: {fabric}/depstor_rasters/stream_buffer.tif
 Logic source: depstor/scripts/DepStor.py:521-577 — minus the HRU-tagging step.
 """
@@ -16,7 +21,7 @@ from pathlib import Path
 import geopandas as gpd
 
 from gfv2_params.config import load_config, require_config_key
-from gfv2_params.depstor import RasterInfo, rasterize_binary, write_uint8_binary
+from gfv2_params.depstor import RasterInfo, rasterize_binary, read_land_mask, write_uint8_binary
 from gfv2_params.log import configure_logging
 
 
@@ -57,6 +62,7 @@ def main():
     template_path = Path(require_config_key(config, "template_raster", "build_depstor_streambuffer"))
     segments_gpkg = Path(require_config_key(config, "segments_gpkg", "build_depstor_streambuffer"))
     segments_layer = config.get("segments_layer", "nsegment")
+    landmask_path = Path(config["landmask_raster"])
     output_path = Path(config["output_raster"])
     buffer_distance = float(config.get("buffer_distance", 60))
 
@@ -64,6 +70,8 @@ def main():
         raise FileNotFoundError(f"Template raster not found: {template_path}")
     if not segments_gpkg.exists():
         raise FileNotFoundError(f"Segments gpkg not found: {segments_gpkg}")
+    if not landmask_path.exists():
+        raise FileNotFoundError(f"Land mask not found (run build_depstor_landmask first): {landmask_path}")
 
     logger.info("=== build_depstor_streambuffer ===")
     logger.info("Template     : %s", template_path)
@@ -95,6 +103,7 @@ def main():
     logger.info("--- Step 3/3: Rasterize buffer onto template grid ---")
     t3 = time.time()
     binary = rasterize_binary(seg_gdf, info, all_touched=True)
+    binary[~read_land_mask(landmask_path)] = 255  # drop off-land (ocean) cells
     write_uint8_binary(binary, info, output_path)
     n_in = int((binary == 1).sum())
     logger.info(

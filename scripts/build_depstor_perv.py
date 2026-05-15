@@ -1,17 +1,22 @@
 """Build the pervious-area binary raster from imperv and dprst inputs.
 
-A cell is pervious where it is neither impervious nor depression-storage.
-Implements the PRMS-standard cell-wise interpretation of depstor workflow
-Level Three step `GetPervAreaTotal` (docs/depstor_workflow.md) — NOT depstor's
-`remove_all_overlap=True` all-or-nothing exclusion, which diverges from the
-documented design intent.
+A cell is pervious where it is inside the modeling domain and neither
+impervious nor depression-storage. Implements the PRMS-standard cell-wise
+interpretation of depstor workflow Level Three step `GetPervAreaTotal`
+(docs/depstor_workflow.md) — NOT depstor's `remove_all_overlap=True`
+all-or-nothing exclusion, which diverges from the documented design intent.
 
-Inputs (both on the same template grid):
+The land mask is essential: this builder defaults every cell to pervious and
+only excludes imperv/dprst cells, so without masking against land_mask.tif
+(the rasterised HRU fabric) the entire ocean inside the grid is marked pervious.
+
+Inputs (all on the same template grid):
+- land_mask.tif     (uint8 1/255) [from build_depstor_landmask.py]
 - imperv_binary.tif (uint8 1/255) [from build_depstor_imperv.py]
 - dprst_binary.tif  (uint8 1/255) [from build_depstor_dprst.py]
 
 Output:
-- perv_binary.tif : 1 where (imperv != 1) AND (dprst != 1), else 255.
+- perv_binary.tif : 1 where land AND (imperv != 1) AND (dprst != 1), else 255.
 """
 
 import argparse
@@ -37,12 +42,22 @@ def _elapsed(t0: float) -> str:
     return f"{m}m {s:02d}s" if m else f"{s}s"
 
 
-def compute_perv_binary(imperv: np.ndarray, dprst: np.ndarray) -> np.ndarray:
-    """Cell is pervious where it is NOT impervious AND NOT depression-storage."""
-    mask = imperv == 1
-    mask |= dprst == 1
+def compute_perv_binary(
+    imperv: np.ndarray, dprst: np.ndarray, land_valid: np.ndarray
+) -> np.ndarray:
+    """Cell is pervious where it is valid land AND NOT impervious AND NOT
+    depression-storage.
+
+    `land_valid` is the HRU-fabric land mask (boolean, True = inside the
+    modeling domain — `land_mask.tif == 1`). It is required, not optional: this
+    function defaults every cell to pervious, so omitting the mask would
+    classify the whole ocean as pervious.
+    """
+    exclude = imperv == 1
+    exclude |= dprst == 1
+    exclude |= ~land_valid
     out = np.full_like(imperv, 1)
-    out[mask] = 255
+    out[exclude] = 255
     return out
 
 
@@ -94,16 +109,18 @@ def main():
     )
 
     template_path = Path(require_config_key(config, "template_raster", "build_depstor_perv"))
+    landmask_path = Path(config["landmask_raster"])
     imperv_path = Path(config["imperv_raster"])
     dprst_path = Path(config["dprst_raster"])
     perv_path = Path(config["perv_raster"])
 
-    for p in (template_path, imperv_path, dprst_path):
+    for p in (template_path, landmask_path, imperv_path, dprst_path):
         if not p.exists():
             raise FileNotFoundError(f"Required input not found: {p}")
 
     logger.info("=== build_depstor_perv ===")
     logger.info("Template      : %s", template_path)
+    logger.info("Land mask     : %s", landmask_path)
     logger.info("Imperv binary : %s", imperv_path)
     logger.info("Dprst binary  : %s", dprst_path)
     logger.info("Perv out      : %s", perv_path)
@@ -120,18 +137,21 @@ def main():
     n_perv = 0
     profile = _uint8_binary_profile(info)
 
-    with rasterio.open(imperv_path) as imperv_src, \
+    with rasterio.open(landmask_path) as landmask_src, \
+         rasterio.open(imperv_path) as imperv_src, \
          rasterio.open(dprst_path) as dprst_src, \
          rasterio.open(perv_path, "w", **profile) as dst:
+        _assert_aligned(landmask_src, info, "land_mask")
         _assert_aligned(imperv_src, info, "imperv")
         _assert_aligned(dprst_src, info, "dprst")
 
         for row_off in range(0, info.height, STRIP_ROWS):
             h = min(STRIP_ROWS, info.height - row_off)
             window = Window(0, row_off, info.width, h)
+            land_valid = landmask_src.read(1, window=window) == 1
             imperv = imperv_src.read(1, window=window)
             dprst = dprst_src.read(1, window=window)
-            perv = compute_perv_binary(imperv, dprst)
+            perv = compute_perv_binary(imperv, dprst, land_valid)
             dst.write(perv, 1, window=window)
             n_perv += int((perv == 1).sum())
 

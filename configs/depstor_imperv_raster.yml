@@ -14,5 +14,6 @@
 # template_raster comes from the active fabric profile in base_config.yml.
 
 imperv_raster: "{data_root}/input/lulc/nlcd_annual_imperv/Annual_NLCD_FctImp_2015_CU_C1V1.tif"
+landmask_raster: "{data_root}/{fabric}/depstor_rasters/land_mask.tif"
 output_raster: "{data_root}/{fabric}/depstor_rasters/imperv_binary.tif"
 imperv_threshold: 50

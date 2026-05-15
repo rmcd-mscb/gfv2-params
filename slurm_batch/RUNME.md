@@ -275,15 +275,16 @@ zonal-stats jobs (`dprst_frac`, `imperv_frac`, `onstream_storage_frac`,
 Inputs (manually staged per fabric):
 - `input/depstor/<fabric>_segments_wbodies.gpkg` (layers `nsegment`, `v2_wb`)
 - `input/depstor/<fabric>_fdr.tif` (D8 flow direction, Esri pointer)
-- Per-fabric `twi_raster` (from `base_config.yml`) — issue #61 carea_map step.
-- Reuses existing `input/lulc_veg/Imperv.tif` and `work/nhd_merged/elevation.vrt`.
+- Per-fabric `hru_gpkg` / `twi_raster` (from `base_config.yml`).
+- Reuses the NLCD impervious raster and `work/nhd_merged/elevation.vrt`.
 
 Run in order — each step writes intermediates the next consumes:
 
 ```bash
-sbatch slurm_batch/build_depstor_imperv.batch
-sbatch slurm_batch/build_depstor_streambuffer.batch
-sbatch slurm_batch/build_depstor_waterbody.batch
+sbatch slurm_batch/build_depstor_landmask.batch       # land_mask.tif — must run first
+sbatch slurm_batch/build_depstor_imperv.batch         # depends on landmask
+sbatch slurm_batch/build_depstor_streambuffer.batch   # depends on landmask
+sbatch slurm_batch/build_depstor_waterbody.batch      # depends on landmask
 sbatch slurm_batch/build_depstor_dprst.batch          # depends on the three above
 sbatch slurm_batch/build_depstor_perv.batch           # depends on imperv + dprst
 sbatch slurm_batch/build_depstor_routing.batch        # depends on dprst + staged FDR
@@ -294,11 +295,12 @@ sbatch slurm_batch/build_depstor_drains_imperv.batch  # drains_to_dprst x imperv
 sbatch slurm_batch/build_depstor_carea_map.batch      # carea_map at TWI = 8.0 and 15.6
 ```
 
-Steps 1-3 are independent of each other and can run concurrently. Step 4
-combines them and must wait. Steps 5 and 6 both wait for Step 4 (`dprst`) to
-finish, then can run in parallel with one another. Step 6
-(`build_depstor_routing`) runs WhiteboxTools `Watershed` against the staged FDR
-+ the dprst output and is the most memory- and time-intensive.
+`build_depstor_landmask` rasterizes the HRU fabric to `land_mask.tif` — the
+authoritative land/domain mask **every** other depstor builder masks its output
+against, so it must run first. imperv/streambuffer/waterbody depend only on it
+and can then run concurrently. `dprst` combines those three. `perv` and
+`routing` both wait on `dprst`; `build_depstor_routing` runs WhiteboxTools
+`Watershed` against the staged FDR and is the most memory- and time-intensive.
 
 The three issue-#61 build steps depend on the outputs above (`drains_to_dprst`,
 `perv_binary`, `onstream_binary`) and on the per-fabric `twi_raster`. They are
@@ -506,6 +508,7 @@ sacct -j <JOBID> -o JobID,State,Elapsed,MaxRSS
 | download_rpu_rasters.batch | base_config.yml | gfv2_params.download.rpu_rasters |
 | download_nalcms.batch | base_config.yml | gfv2_params.download.nalcms_lulc |
 | download_nhm_v11.batch | base_config.yml | gfv2_params.download.nhm_v11_lulc |
+| build_depstor_landmask.batch | depstor_landmask_raster.yml | build_depstor_landmask.py |
 | build_depstor_imperv.batch | depstor_imperv_raster.yml | build_depstor_imperv.py |
 | build_depstor_streambuffer.batch | depstor_streambuffer_raster.yml | build_depstor_streambuffer.py |
 | build_depstor_waterbody.batch | depstor_waterbody_raster.yml | build_depstor_waterbody.py |

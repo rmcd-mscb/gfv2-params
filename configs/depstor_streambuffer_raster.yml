@@ -8,5 +8,6 @@
 # base_config.yml.
 
 segments_layer: nsegment
+landmask_raster: "{data_root}/{fabric}/depstor_rasters/land_mask.tif"
 output_raster: "{data_root}/{fabric}/depstor_rasters/stream_buffer.tif"
 buffer_distance: 60

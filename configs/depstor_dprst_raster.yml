@@ -5,6 +5,7 @@
 #
 # template_raster comes from the active fabric profile in base_config.yml.
 
+landmask_raster: "{data_root}/{fabric}/depstor_rasters/land_mask.tif"
 wbody_binary_raster: "{data_root}/{fabric}/depstor_rasters/wbody_binary.tif"
 wbody_regions_raster: "{data_root}/{fabric}/depstor_rasters/wbody_regions.tif"
 stream_buffer_raster: "{data_root}/{fabric}/depstor_rasters/stream_buffer.tif"

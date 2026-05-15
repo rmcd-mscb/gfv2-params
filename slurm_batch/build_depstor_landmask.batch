@@ -1,0 +1,31 @@
+#!/bin/bash
+#SBATCH -p cpu
+#SBATCH -A impd
+#SBATCH --job-name=build_depstor_landmask
+#SBATCH --output=logs/job_%j.out
+#SBATCH --error=logs/job_%j.err
+#SBATCH --time=08:00:00
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=4
+#SBATCH --mem=128G
+#
+# Rasterizes the HRU polygon fabric to land_mask.tif. Same cost profile as
+# build_depstor_waterbody (load a large polygon layer, rasterize to the
+# template grid). Must run BEFORE every other depstor builder — they all mask
+# their outputs against land_mask.tif.
+#
+# Defaults are CONUS-sized. For smaller fabrics, override resources at submission.
+# Extra args after the batch path are forwarded to the python script via "$@":
+#   FABRIC=gfv2_vpu01 sbatch --time=01:00:00 --mem=16G slurm_batch/build_depstor_landmask.batch --force
+
+cd "$SLURM_SUBMIT_DIR"
+[ -f .pixi-activate.sh ] || { echo "ERROR: missing .pixi-activate.sh — run scripts/refresh_pixi_activation.sh" >&2; exit 1; }
+source .pixi-activate.sh
+BASE_CONFIG=${BASE_CONFIG:-configs/base_config.yml}
+FABRIC=${FABRIC:-gfv2}
+
+python scripts/build_depstor_landmask.py \
+    --config configs/depstor_landmask_raster.yml \
+    --base_config "$BASE_CONFIG" \
+    --fabric "$FABRIC" \
+    "$@"

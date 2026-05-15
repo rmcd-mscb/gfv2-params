@@ -4,6 +4,11 @@ Reads the staged water-body polygon layer, filters by minimum area, rasterizes
 to the elevation-VRT template grid, then runs a connected-component label step
 (8-connectivity) to give each contiguous water body a unique region ID.
 
+Off-land cells are masked out of the binary against land_mask.tif (the
+rasterised HRU fabric) *before* the connected-component step, so coastal
+water-body polygons that extend over open water cannot seed ocean regions or
+leak downstream into dprst/onstream.
+
 Outputs:
 - {fabric}/depstor_rasters/wbody_binary.tif  (uint8 0/1, 255 nodata)
 - {fabric}/depstor_rasters/wbody_regions.tif (int32 region IDs, 0 nodata)
@@ -23,6 +28,7 @@ from gfv2_params.depstor import (
     RasterInfo,
     clump_regions,
     rasterize_binary,
+    read_land_mask,
     write_int32_regions,
     write_uint8_binary,
 )
@@ -65,6 +71,7 @@ def main():
     template_path = Path(require_config_key(config, "template_raster", "build_depstor_waterbody"))
     waterbody_gpkg = Path(require_config_key(config, "waterbody_gpkg", "build_depstor_waterbody"))
     waterbody_layer = require_config_key(config, "waterbody_layer", "build_depstor_waterbody")
+    landmask_path = Path(config["landmask_raster"])
     binary_path = Path(config["wbody_binary_raster"])
     regions_path = Path(config["wbody_regions_raster"])
     min_area = float(config.get("min_area_threshold", 900.0))
@@ -73,6 +80,8 @@ def main():
         raise FileNotFoundError(f"Template raster not found: {template_path}")
     if not waterbody_gpkg.exists():
         raise FileNotFoundError(f"Waterbody gpkg not found: {waterbody_gpkg}")
+    if not landmask_path.exists():
+        raise FileNotFoundError(f"Land mask not found (run build_depstor_landmask first): {landmask_path}")
 
     logger.info("=== build_depstor_waterbody ===")
     logger.info("Template     : %s", template_path)
@@ -105,8 +114,9 @@ def main():
     logger.info("--- Step 2/4: Rasterize wbody polygons (binary) ---")
     t2 = time.time()
     binary = rasterize_binary(wb_gdf, info, all_touched=False)
+    binary[~read_land_mask(landmask_path)] = 255  # drop off-land (ocean) cells
     n_in = int((binary == 1).sum())
-    logger.info("  Rasterized in %s | %d wbody cells", _elapsed(t2), n_in)
+    logger.info("  Rasterized in %s | %d wbody cells (after land mask)", _elapsed(t2), n_in)
 
     logger.info("--- Step 3/4: Write binary raster ---")
     t3 = time.time()
