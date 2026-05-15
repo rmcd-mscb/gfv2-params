@@ -10,5 +10,6 @@
 # base_config.yml.
 
 dprst_raster: "{data_root}/{fabric}/depstor_rasters/dprst_binary.tif"
+landmask_raster: "{data_root}/{fabric}/depstor_rasters/land_mask.tif"
 output_raster: "{data_root}/{fabric}/depstor_rasters/drains_to_dprst.tif"
 keep_intermediates: false

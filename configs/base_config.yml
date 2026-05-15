@@ -17,6 +17,10 @@ fabrics:
     segments_gpkg: "{data_root}/input/depstor/{fabric}_segments_wbodies.gpkg"
     waterbody_gpkg: "{data_root}/input/depstor/{fabric}_segments_wbodies.gpkg"
     waterbody_layer: v2_wb
+    # HRU polygon fabric — authoritative land/domain mask for the depstor
+    # builders (build_depstor_landmask.py rasterizes this to land_mask.tif).
+    hru_gpkg: "{data_root}/{fabric}/fabric/gfv2_nhru_merged.gpkg"
+    hru_layer: nhru
 
   gfv2_vpu01:
     # VPU01 validation overlay (issue #38). Uses the per-VPU staged inputs
@@ -30,6 +34,8 @@ fabrics:
     segments_gpkg: "{data_root}/input/fabric/NHM_01_draft.gpkg"
     waterbody_gpkg: "{data_root}/input/fabric/NHM_01_draft.gpkg"
     waterbody_layer: wbs
+    hru_gpkg: "{data_root}/{fabric}/fabric/gfv2_vpu01_nhru.gpkg"
+    hru_layer: nhru
 
   oregon:
     # Depstor inputs not yet staged for oregon. Depstor scripts will raise

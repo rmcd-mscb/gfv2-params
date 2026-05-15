@@ -6,6 +6,11 @@ dprst_binary.tif as pour points to delineate, for every cell, which depression
 to a uint8 binary raster where 1 = drains to ANY depression, 255 = does not /
 nodata.
 
+The collapsed binary is land-masked against land_mask.tif (the rasterised HRU
+fabric). dprst_binary.tif is itself land-masked upstream, but masking here too
+keeps the output correct even against a stale dprst input and removes any
+off-land pour points WhiteboxTools labels as their own single-cell watershed.
+
 Outputs:
 - {fabric}/depstor_rasters/drains_to_dprst.tif (uint8 binary)
 
@@ -25,7 +30,7 @@ import rioxarray  # noqa: F401  (registers .rio accessor)
 import xarray as xr
 
 from gfv2_params.config import load_config, require_config_key
-from gfv2_params.depstor import RasterInfo, write_uint8_binary
+from gfv2_params.depstor import RasterInfo, read_land_mask, write_uint8_binary
 from gfv2_params.log import configure_logging
 
 
@@ -123,11 +128,14 @@ def _run_whitebox_watershed(fdr_path: Path, pour_pts_path: Path, output_path: Pa
         )
 
 
-def _watershed_to_binary(watershed_path: Path, info: RasterInfo, out_path: Path, logger) -> None:
+def _watershed_to_binary(
+    watershed_path: Path, landmask_path: Path, info: RasterInfo, out_path: Path, logger
+) -> None:
     """Collapse the per-depression watershed labels into a uint8 binary mask.
 
     Rule: any cell with a value not equal to the source nodata is "drains to a
-    depression" (1); all others become 255 (nodata).
+    depression" (1); all others become 255 (nodata). Off-land cells (outside
+    land_mask.tif) are then forced to 255 regardless of their label.
     """
     with rasterio.open(watershed_path) as src:
         data = src.read(1)
@@ -141,6 +149,7 @@ def _watershed_to_binary(watershed_path: Path, info: RasterInfo, out_path: Path,
     else:
         valid = data != src_nodata
     binary = np.where(valid, np.uint8(1), np.uint8(255))
+    binary[~read_land_mask(landmask_path)] = 255  # drop off-land (ocean) cells
     n_in = int((binary == 1).sum())
     pct_drains = 100 * n_in / binary.size
     # Sanity check: most real drainage networks route <1% of cells into
@@ -182,10 +191,11 @@ def main():
     template_path = Path(require_config_key(config, "template_raster", "build_depstor_routing"))
     fdr_path = Path(require_config_key(config, "fdr_raster", "build_depstor_routing"))
     dprst_path = Path(config["dprst_raster"])
+    landmask_path = Path(config["landmask_raster"])
     output_path = Path(config["output_raster"])
     keep_intermediates = bool(config.get("keep_intermediates", False))
 
-    for p in (template_path, fdr_path, dprst_path):
+    for p in (template_path, fdr_path, dprst_path, landmask_path):
         if not p.exists():
             raise FileNotFoundError(f"Required input not found: {p}")
 
@@ -193,6 +203,7 @@ def main():
     logger.info("Template : %s", template_path)
     logger.info("FDR      : %s", fdr_path)
     logger.info("Dprst    : %s", dprst_path)
+    logger.info("Land mask: %s", landmask_path)
     logger.info("Output   : %s", output_path)
 
     if output_path.exists() and not args.force:
@@ -221,7 +232,7 @@ def main():
 
         logger.info("--- Step 4/4: Collapse labels to uint8 binary ---")
         t3 = time.time()
-        _watershed_to_binary(watershed_raw, info, output_path, logger)
+        _watershed_to_binary(watershed_raw, landmask_path, info, output_path, logger)
         logger.info("  Binary mask written in %s", _elapsed(t3))
     finally:
         if not keep_intermediates:

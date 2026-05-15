@@ -1,8 +1,18 @@
 """Build the imperviousness binary raster used by the depression-storage pipeline.
 
-Threshold the staged Imperv.tif at imperv_threshold (default 50%), warp/snap to the
-elevation-VRT template grid, and write a uint8 binary raster (1 = impervious,
-255 = nodata) to {fabric}/depstor_rasters/imperv_binary.tif.
+Threshold the source fractional-impervious raster (imperv_raster in
+configs/depstor_imperv_raster.yml — currently the 2015 NLCD Annual Fractional
+Impervious Surface) at imperv_threshold (default 50%), warp/snap to the
+template grid, and write a uint8 binary raster (1 = impervious, 255 = nodata)
+to {fabric}/depstor_rasters/imperv_binary.tif.
+
+The source CRS and nodata value are handled dynamically: gdal.Warp reprojects
+to the template CRS, and the source nodata is read back from the warped raster
+and passed to threshold_above. The source must be a continuous 0-100 percentage.
+
+Off-land cells are masked out of the result against land_mask.tif (the
+rasterised HRU fabric), so coastal impervious-surface cells outside the
+modeling domain do not leak into the binary.
 
 Logic ported from depstor/scripts/DepStor.py:452-518 — minus the HRU-tagging step.
 """
@@ -15,7 +25,7 @@ import rasterio
 from osgeo import gdal, gdalconst
 
 from gfv2_params.config import load_config, require_config_key
-from gfv2_params.depstor import RasterInfo, threshold_above, write_uint8_binary
+from gfv2_params.depstor import RasterInfo, read_land_mask, threshold_above, write_uint8_binary
 from gfv2_params.log import configure_logging
 
 
@@ -28,7 +38,9 @@ def _elapsed(t0: float) -> str:
 def _warp_to_template(src_path: Path, info: RasterInfo, out_path: Path) -> None:
     """Warp src_path to the template grid (EPSG:5070, 30m, exact bounds).
 
-    Uses bilinear resampling (Imperv is a continuous percentage 0-100).
+    Uses bilinear resampling — the source is a continuous 0-100 percentage.
+    gdal.Warp auto-detects the source nodata and excludes it from the kernel,
+    so coastal cells are interpolated from valid land pixels only.
     """
     output_bounds = (info.bounds.left, info.bounds.bottom, info.bounds.right, info.bounds.top)
     warp_ds = gdal.Warp(
@@ -73,6 +85,7 @@ def main():
 
     template_path = Path(require_config_key(config, "template_raster", "build_depstor_imperv"))
     imperv_path = Path(config["imperv_raster"])
+    landmask_path = Path(config["landmask_raster"])
     output_path = Path(config["output_raster"])
     threshold = float(config.get("imperv_threshold", 50))
 
@@ -80,6 +93,8 @@ def main():
         raise FileNotFoundError(f"Template raster not found: {template_path}")
     if not imperv_path.exists():
         raise FileNotFoundError(f"Imperv raster not found: {imperv_path}")
+    if not landmask_path.exists():
+        raise FileNotFoundError(f"Land mask not found (run build_depstor_landmask first): {landmask_path}")
 
     logger.info("=== build_depstor_imperv ===")
     logger.info("Template : %s", template_path)
@@ -108,6 +123,7 @@ def main():
             data = src.read(1)
             src_nodata = src.nodata
         binary = threshold_above(data, threshold, src_nodata)
+        binary[~read_land_mask(landmask_path)] = 255  # drop off-land (ocean) cells
         write_uint8_binary(binary, info, output_path)
         n_impervious = int((binary == 1).sum())
         n_total = binary.size

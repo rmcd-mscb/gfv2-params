@@ -1,6 +1,9 @@
 # Build the pervious-area binary raster.
 #
-# A cell is pervious where it is NOT impervious AND NOT depression-storage.
+# A cell is pervious where it is valid land (inside the template DEM's nodata
+# footprint) AND NOT impervious AND NOT depression-storage. The land mask is
+# required: this builder defaults every cell to pervious, so without it the
+# whole ocean inside the grid bounding box would be marked pervious.
 # Source: depstor workflow Level Three, `GetPervAreaTotal`
 # (docs/depstor_workflow.md) — "Get raster with HRU IDs in areas that are not
 # impervious or depressions. Basically a con operation to label stuff."
@@ -15,4 +18,5 @@
 
 imperv_raster: "{data_root}/{fabric}/depstor_rasters/imperv_binary.tif"
 dprst_raster: "{data_root}/{fabric}/depstor_rasters/dprst_binary.tif"
+landmask_raster: "{data_root}/{fabric}/depstor_rasters/land_mask.tif"
 perv_raster: "{data_root}/{fabric}/depstor_rasters/perv_binary.tif"
