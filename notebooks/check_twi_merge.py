@@ -19,10 +19,11 @@ def _(mo):
     Sanity checks for the per-VPU `Twi_merged_<vpu>.tif` outputs produced by
     `slurm_batch/compute_dem_derivatives.batch` (issue #52: open-source
     reproduction of the ArcPy TWI recipe via all-richdem fill + D8
-    FlowAccumulation + numpy log formula, then clipped to the HRU-fabric
-    `land_mask.tif`). Confirms presence, metadata, value ranges, and renders
-    decimated thumbnails so flow-routing artifacts (e.g., endorheic-basin
-    spillways, cross-RPU drainage corridors) are visible.
+    FlowAccumulation + numpy log formula, then clipped to the per-VPU HRU
+    mask `work/nhd_merged/<vpu>/land_mask_<vpu>.tif`). Confirms presence,
+    metadata, value ranges, and renders decimated thumbnails so flow-routing
+    artifacts (e.g., endorheic-basin spillways, cross-RPU drainage corridors)
+    are visible.
 
     Expected after a complete run: 18 outputs under
     `{data_root}/work/nhd_merged/<vpu>/Twi_merged_<vpu>.tif`, each Float32 with

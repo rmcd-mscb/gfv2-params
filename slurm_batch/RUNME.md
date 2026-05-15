@@ -216,7 +216,25 @@ priority where it has valid data and Copernicus fills the border gaps.
 NHDPlus `_fixed_` elevation tiles produced by `compute_slope_aspect.py` to
 build a seamless composite elevation surface for slope/aspect computation.
 
-### Stage 1c: Merge TWI by VPU
+### Stage 1c1: Build per-VPU HRU land masks
+
+Build the per-VPU HRU-fabric land mask consumed by both TWI pipelines:
+
+```bash
+sbatch slurm_batch/build_vpu_landmask.batch
+```
+
+Produces `work/nhd_merged/<vpu>/land_mask_<vpu>.tif` — a uint8 1/255 raster
+where 1 = inside an HRU whose `vpu` attribute matches this VPU, 255 = outside.
+The mask is rasterised onto the per-VPU `Hydrodem_merged_<vpu>.tif` grid, so
+TWI products downstream get a strict match to their VPU's HRU coverage rather
+than the CONUS-wide depstor `land_mask.tif` (which leaves cells unmasked
+wherever adjacent-VPU HRUs drape into a VPU's Hydrodem footprint).
+
+Only depends on Stage 1 (per-VPU Hydrodem exists). Independent of Stage 2d
+(depstor landmask).
+
+### Stage 1c2: Merge TWI by VPU
 
 Merge the per-RPU TWI rasters staged in Stage 0 into per-VPU GeoTIFFs:
 
@@ -225,14 +243,11 @@ sbatch slurm_batch/merge_rpu_by_vpu_twi.batch
 ```
 
 Produces `work/nhd_merged/<vpu>/Twi_merged_<vpu>.tif` for each of the 18 VPUs.
-The merge clips its output to the HRU-fabric `land_mask.tif` (PR #69
-convention) so coastal RPU bulges never reach downstream zonal aggregation.
+The merge clips its output to the per-VPU HRU mask from Stage 1c1 so the
+per-RPU TWI bulges (coast on the east, adjacent-VPU/border drape on the
+west/north) never reach downstream zonal aggregation.
 
-**Depends on Stage 2d-landmask**: `land_mask.tif` must exist for the active
-fabric before this stage runs. For `gfv2`, that means Stage 1, Stage 1b, and
-Stage 2a must complete first (so `elevation.vrt` exists, which the landmask
-build uses as its template grid); for `gfv2_vpu01` the template is the per-VPU
-Hydrodem, so only Stage 1 needs to complete.
+**Depends on Stage 1c1.**
 
 ### Stage 2a: Build VRTs (one-time)
 
@@ -302,9 +317,7 @@ sbatch slurm_batch/build_depstor_carea_map.batch      # carea_map at TWI = 8.0 a
 ```
 
 `build_depstor_landmask` rasterizes the HRU fabric to `land_mask.tif` — the
-authoritative land/domain mask **every** other depstor builder and the TWI
-merge (Stage 1c) / open-source TWI recipe (`compute_dem_derivatives.py`) mask
-their outputs
+authoritative land/domain mask **every** other depstor builder masks its output
 against, so it must run first. imperv/streambuffer/waterbody depend only on it
 and can then run concurrently. `dprst` combines those three. `perv` and
 `routing` both wait on `dprst`; `build_depstor_routing` runs WhiteboxTools
@@ -494,6 +507,7 @@ sacct -j <JOBID> -o JobID,State,Elapsed,MaxRSS
 |---|---|---|
 | merge_rpu_by_vpu.batch | merge_rpu_by_vpu.yml | merge_rpu_by_vpu.py |
 | merge_rpu_by_vpu_twi.batch | merge_rpu_by_vpu_twi.yml | merge_rpu_by_vpu.py |
+| build_vpu_landmask.batch | vpu_landmask_raster.yml | build_vpu_landmask.py |
 | stage_twi.batch | (uses base_config.yml indirectly) | scripts/stage_twi.sh |
 | compute_slope_aspect.batch | slope_aspect.yml | compute_slope_aspect.py |
 | build_border_dem.batch | base_config.yml | build_border_dem.py |
