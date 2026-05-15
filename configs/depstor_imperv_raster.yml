@@ -1,11 +1,18 @@
 # Build the depression-storage imperviousness binary raster.
 #
-# Threshold the staged Imperv.tif at imperv_threshold (default 50%), warp/snap
-# to the active fabric's template_raster grid, and write a uint8 binary raster
-# (1 = impervious, 255 = nodata) to {fabric}/depstor_rasters/imperv_binary.tif.
+# Threshold the source fractional-impervious raster at imperv_threshold
+# (default 50%), warp/snap to the active fabric's template_raster grid, and
+# write a uint8 binary raster (1 = impervious, 255 = nodata) to
+# {fabric}/depstor_rasters/imperv_binary.tif.
+#
+# imperv_raster: NLCD Annual Fractional Impervious Surface, 2015 (CONUS, 30 m,
+# 0-100 percent developed impervious, nodata 250, Albers/WGS84). build_depstor_
+# imperv.py reprojects it to the template CRS and reads its nodata dynamically,
+# so swapping the source raster needs no code change — but the source must be a
+# continuous 0-100 percentage on a 30 m grid.
 #
 # template_raster comes from the active fabric profile in base_config.yml.
 
-imperv_raster: "{data_root}/input/lulc_veg/Imperv.tif"
+imperv_raster: "{data_root}/input/lulc/nlcd_annual_imperv/Annual_NLCD_FctImp_2015_CU_C1V1.tif"
 output_raster: "{data_root}/{fabric}/depstor_rasters/imperv_binary.tif"
 imperv_threshold: 50
