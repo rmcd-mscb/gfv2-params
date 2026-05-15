@@ -14,12 +14,8 @@ Pipeline (all richdem; no WhiteboxTools subprocess on this path):
   priority-flood) → richdem FlowAccumulation method=D8 (O'Callaghan-Mark
   1984) → richdem slope_degrees/slope_percentage/aspect on the FIXED
   (pre-fill) DEM → TWI = log(fac * 10 / (tan(slope_rad) + 0.01)) → mask
-  against the per-VPU HRU land mask (`land_mask_<vpu>.tif`, built by
-  `build_vpu_landmask.py`). The mask is per-VPU rather than the CONUS
-  depstor land_mask because the per-VPU Hydrodem footprint bulges past
-  this VPU's HRU boundary into adjacent VPUs; only the per-VPU mask
-  clips the TWI to just this VPU's HRUs. Characterization vs ArcPy
-  ground truth lives in notebooks/diff_twi_hydrodem_vs_merged.py.
+  against the HRU-fabric land_mask.tif. Characterization vs ArcPy ground
+  truth lives in notebooks/diff_twi_hydrodem_vs_merged.py.
 
 Why richdem D8 (and not WhiteboxTools D8Pointer + D8FlowAccumulation): the
 WBT subprocess pair adds GeoTIFF round-trips and walltime that scaled poorly
@@ -46,7 +42,7 @@ Outputs (per VPU, written to {data_root}/work/nhd_merged/<vpu>/):
 - Slope_pct_hydrodem_<vpu>.tif     (richdem slope_percentage, on FIXED DEM)
 - Aspect_hydrodem_<vpu>.tif        (richdem aspect, on FIXED DEM)
 - Twi_hydrodem_<vpu>.tif           (log(fac*10 / (tan(slope_rad)+0.01)),
-                                    per-VPU HRU land mask applied)
+                                    HRU-fabric land mask applied)
 """
 
 import argparse
@@ -57,8 +53,8 @@ import rasterio
 import richdem as rd
 import rioxarray  # noqa: F401  (registers .rio accessor)
 
-from gfv2_params.config import load_config
-from gfv2_params.depstor import read_land_mask
+from gfv2_params.config import load_config, require_config_key
+from gfv2_params.depstor import read_land_mask_for_grid
 from gfv2_params.log import configure_logging
 
 # Hydrodem_merged_<vpu>.tif declares nodata=-99.99 (centimeters/100, same as
@@ -238,6 +234,7 @@ def main():
 
     input_dir = Path(config["input_dir"])
     output_dir = Path(config["output_dir"])
+    landmask_path = Path(require_config_key(config, "landmask_raster", "compute_dem_derivatives"))
 
     vpu_dir = output_dir / args.vpu
     vpu_dir.mkdir(parents=True, exist_ok=True)
@@ -249,17 +246,12 @@ def main():
     slope_pct_out = vpu_dir / f"Slope_pct_hydrodem_{args.vpu}.tif"
     aspect_out = vpu_dir / f"Aspect_hydrodem_{args.vpu}.tif"
     twi_out = vpu_dir / f"Twi_hydrodem_{args.vpu}.tif"
-    # Per-VPU HRU land mask aligned to the per-VPU Hydrodem grid (built by
-    # scripts/build_vpu_landmask.py). The CONUS depstor land_mask.tif is the
-    # union of every VPU's HRUs — it leaves cells unmasked where adjacent-VPU
-    # HRUs drape into this VPU's Hydrodem bulge. The per-VPU mask is strict.
-    vpu_landmask_path = vpu_dir / f"land_mask_{args.vpu}.tif"
 
     if not dem_src.exists():
         raise FileNotFoundError(f"Hydrodem source not found: {dem_src}")
-    if not vpu_landmask_path.exists():
+    if not landmask_path.exists():
         raise FileNotFoundError(
-            f"Per-VPU land mask not found (run build_vpu_landmask first): {vpu_landmask_path}"
+            f"Land mask not found (run build_depstor_landmask first): {landmask_path}"
         )
 
     if not args.force and twi_out.exists():
@@ -314,11 +306,11 @@ def main():
     logger.info("Wrote: %s", aspect_out)
     del aspect, dem_rd
 
-    # Per-VPU mask and Hydrodem share the same grid by construction (the
-    # mask was rasterised onto Hydrodem_merged_<vpu>.tif), so a direct
-    # full-array read is correct and avoids a windowed lookup.
-    logger.info("Reading per-VPU HRU land mask: %s", vpu_landmask_path)
-    land_valid = read_land_mask(vpu_landmask_path)
+    logger.info("Reading HRU-fabric land mask windowed to TWI grid: %s", landmask_path)
+    with rasterio.open(dem_fixed) as tmpl:
+        land_valid = read_land_mask_for_grid(
+            landmask_path, tmpl.transform, tmpl.height, tmpl.width,
+        )
 
     logger.info("--- TWI = log(fac*10 / (tan(slope_rad) + 0.01)), land-masked ---")
     _compute_twi(fac, slope_deg, dem_fixed, land_valid, twi_out, logger)

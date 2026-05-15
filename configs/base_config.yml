@@ -19,12 +19,13 @@ fabrics:
     waterbody_layer: v2_wb
     # HRU polygon fabric — authoritative land/domain mask for the depstor
     # builders (build_depstor_landmask.py rasterizes this to land_mask.tif).
-    # The per-VPU TWI scripts consume the per-VPU mask built by
-    # build_vpu_landmask.py (work/nhd_merged/<vpu>/land_mask_<vpu>.tif),
-    # not the CONUS depstor land_mask, because the per-VPU Hydrodem
-    # footprints bulge past each VPU's HRU boundary.
     hru_gpkg: "{data_root}/{fabric}/fabric/gfv2_nhru_merged.gpkg"
     hru_layer: nhru
+    # Rasterised HRU-fabric land mask (uint8 1/255). Built by
+    # build_depstor_landmask.py. Consumed by the depstor builders and by
+    # the TWI scripts (merge_rpu_by_vpu TWI case, compute_dem_derivatives)
+    # to clip off-domain (ocean) cells before zonal aggregation.
+    landmask_raster: "{data_root}/{fabric}/depstor_rasters/land_mask.tif"
 
   gfv2_vpu01:
     # VPU01 validation overlay (issue #38). Uses the per-VPU staged inputs
@@ -40,6 +41,7 @@ fabrics:
     waterbody_layer: wbs
     hru_gpkg: "{data_root}/{fabric}/fabric/gfv2_vpu01_nhru.gpkg"
     hru_layer: nhru
+    landmask_raster: "{data_root}/{fabric}/depstor_rasters/land_mask.tif"
 
   oregon:
     # Depstor inputs not yet staged for oregon. Depstor scripts will raise
