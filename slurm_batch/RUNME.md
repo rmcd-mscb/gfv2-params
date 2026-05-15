@@ -225,8 +225,14 @@ sbatch slurm_batch/merge_rpu_by_vpu_twi.batch
 ```
 
 Produces `work/nhd_merged/<vpu>/Twi_merged_<vpu>.tif` for each of the 18 VPUs.
-Independent of Stage 1 / 1b — can run as soon as the TWI staging in Stage 0 is
-complete.
+The merge clips its output to the HRU-fabric `land_mask.tif` (PR #69
+convention) so coastal RPU bulges never reach downstream zonal aggregation.
+
+**Depends on Stage 2d-landmask**: `land_mask.tif` must exist for the active
+fabric before this stage runs. For `gfv2`, that means Stage 1, Stage 1b, and
+Stage 2a must complete first (so `elevation.vrt` exists, which the landmask
+build uses as its template grid); for `gfv2_vpu01` the template is the per-VPU
+Hydrodem, so only Stage 1 needs to complete.
 
 ### Stage 2a: Build VRTs (one-time)
 
@@ -296,7 +302,9 @@ sbatch slurm_batch/build_depstor_carea_map.batch      # carea_map at TWI = 8.0 a
 ```
 
 `build_depstor_landmask` rasterizes the HRU fabric to `land_mask.tif` — the
-authoritative land/domain mask **every** other depstor builder masks its output
+authoritative land/domain mask **every** other depstor builder and the TWI
+merge (Stage 1c) / open-source TWI recipe (`compute_dem_derivatives.py`) mask
+their outputs
 against, so it must run first. imperv/streambuffer/waterbody depend only on it
 and can then run concurrently. `dprst` combines those three. `perv` and
 `routing` both wait on `dprst`; `build_depstor_routing` runs WhiteboxTools
