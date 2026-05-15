@@ -36,7 +36,7 @@ from pathlib import Path
 
 import geopandas as gpd
 
-from gfv2_params.config import load_config, require_config_key
+from gfv2_params.config import VPU_RASTER_MAP, load_config, require_config_key
 from gfv2_params.depstor import RasterInfo, rasterize_binary, write_uint8_binary
 from gfv2_params.log import configure_logging
 
@@ -80,14 +80,23 @@ def build_vpu_landmask(
             f"column; cannot filter by VPU. Available columns: {sorted(hru_gdf.columns)}"
         )
 
+    # Per-VPU rasters use simple two-character codes (`03`, `10`), but the HRU
+    # fabric stores sub-region codes (`03N`/`03S`/`03W`, `10L`/`10U`) — there
+    # is no plain `03` or `10` row in gfv2_nhru_merged.gpkg. VPU_RASTER_MAP
+    # encodes the sub-region -> raster-VPU mapping, so we invert it here to
+    # build the set of acceptable HRU vpu values for this raster VPU.
     vpu_key = str(vpu).zfill(2)
-    matches = hru_gdf[vpu_column].astype(str).str.zfill(2) == vpu_key
+    sub_vpus = {sub for sub, parent in VPU_RASTER_MAP.items() if parent == vpu_key}
+    acceptable_vpus = {vpu_key} | sub_vpus
+    logger.info("  Filtering HRUs by %s in %s", vpu_column, sorted(acceptable_vpus))
+
+    matches = hru_gdf[vpu_column].astype(str).isin(acceptable_vpus)
     hru_gdf = hru_gdf[matches]
     hru_gdf = hru_gdf[hru_gdf.geometry.notna() & ~hru_gdf.geometry.is_empty]
     if hru_gdf.empty:
         raise ValueError(
-            f"No HRUs matched {vpu_column}=={vpu} in {hru_gpkg}:{hru_layer}. "
-            f"Verify the VPU code and the fabric gpkg."
+            f"No HRUs matched {vpu_column} in {sorted(acceptable_vpus)} in "
+            f"{hru_gpkg}:{hru_layer}. Verify the VPU code and the fabric gpkg."
         )
 
     # all_touched=True for the same reason as build_depstor_landmask: stay
