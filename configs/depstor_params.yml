@@ -1,0 +1,85 @@
+# Drive every depstor zonal-stats + ratio derivation from a single config.
+# Replaces the 9 *_frac_param.yml files + depstor_ratio_params.yml. Driver:
+# scripts/derive_depstor_params.py (three modes: zonal, merge, ratios).
+#
+# Slurm orchestration: slurm_batch/submit_depstor_params.sh loops over every
+# fraction below and submits an array zonal job + chained merge (afterok), then
+# a single ratios job that depends on every merge.
+#
+# Each fraction's gdptools exactextract output uses categorical=false on a uint8
+# 1/255 binary, so per-HRU mean == fraction of HRU covered by 1-valued cells.
+
+defaults:
+  batch_dir:    "{data_root}/{fabric}/batches"
+  target_layer: nhru
+  id_feature:   nat_hru_id
+  output_dir:   "{data_root}/{fabric}/params"
+  merged_subdir: merged
+  categorical:  false
+  count_column: count
+
+fractions:
+  - name: perv_frac
+    source_raster: "{data_root}/{fabric}/depstor_rasters/perv_binary.tif"
+    merged_file:   nhm_perv_frac_params.csv
+
+  - name: imperv_frac
+    source_raster: "{data_root}/{fabric}/depstor_rasters/imperv_binary.tif"
+    merged_file:   nhm_imperv_frac_params.csv
+
+  - name: dprst_frac
+    source_raster: "{data_root}/{fabric}/depstor_rasters/dprst_binary.tif"
+    merged_file:   nhm_dprst_frac_params.csv
+
+  - name: drains_perv_frac
+    source_raster: "{data_root}/{fabric}/depstor_rasters/drains_perv_binary.tif"
+    merged_file:   nhm_drains_perv_frac_params.csv
+
+  - name: drains_imperv_frac
+    source_raster: "{data_root}/{fabric}/depstor_rasters/drains_imperv_binary.tif"
+    merged_file:   nhm_drains_imperv_frac_params.csv
+
+  - name: onstream_storage_frac
+    source_raster: "{data_root}/{fabric}/depstor_rasters/onstream_binary.tif"
+    merged_file:   nhm_onstream_storage_frac_params.csv
+
+  - name: drains_to_dprst_frac
+    source_raster: "{data_root}/{fabric}/depstor_rasters/drains_to_dprst.tif"
+    merged_file:   nhm_drains_to_dprst_frac_params.csv
+
+  - name: carea_t8_frac
+    source_raster: "{data_root}/{fabric}/depstor_rasters/carea_map_t8_binary.tif"
+    merged_file:   nhm_carea_t8_frac_params.csv
+
+  - name: carea_t156_frac
+    source_raster: "{data_root}/{fabric}/depstor_rasters/carea_map_t156_binary.tif"
+    merged_file:   nhm_carea_t156_frac_params.csv
+
+# Level-5 ratio derivations. numerator/denominator reference fraction `name`s
+# above; derive_depstor_params resolves them to the matching merged_file paths.
+# Clamp-to-one per ArcPy source (docs/0b_TB_depr_stor.py:220-312): getCarea
+# outputs are clamped at 1.0; sro_to_dprst_* are not.
+ratios:
+  - name: sro_to_dprst_perv
+    numerator:    drains_perv_frac
+    denominator:  perv_frac
+    clamp_to_one: false
+    output_file:  nhm_sro_to_dprst_perv_params.csv
+
+  - name: sro_to_dprst_imperv
+    numerator:    drains_imperv_frac
+    denominator:  imperv_frac
+    clamp_to_one: false
+    output_file:  nhm_sro_to_dprst_imperv_params.csv
+
+  - name: carea_max
+    numerator:    carea_t8_frac
+    denominator:  perv_frac
+    clamp_to_one: true
+    output_file:  nhm_carea_max_params.csv
+
+  - name: smidx_coef
+    numerator:    carea_t156_frac
+    denominator:  perv_frac
+    clamp_to_one: true
+    output_file:  nhm_smidx_coef_params.csv

@@ -42,6 +42,8 @@ gfv2-params/
 │   ├── batching.py           # Spatial batching helpers
 │   ├── lulc.py               # LULC reclassification helpers
 │   ├── depstor.py            # Depression-storage raster helpers (binarize, intersect, write)
+│   ├── depstor_builders/     # Per-step depstor raster builders (used by build_depstor_rasters.py)
+│   ├── depstor_ratios.py     # PRMS Level-5 ratio arithmetic (compute_ratio)
 │   ├── log.py                # Logging setup
 │   └── download/             # Data download utilities
 ├── scripts/                  # CLI processing scripts
@@ -60,15 +62,8 @@ gfv2-params/
 │   ├── create_soils_params.py      # Soils and soil moisture max
 │   ├── create_lulc_params.py       # LULC fractional parameters
 │   ├── create_ssflux_params.py     # Subsurface flux parameters
-│   ├── build_depstor_imperv.py        # Depression-storage Level-2/3 binary builders
-│   ├── build_depstor_streambuffer.py
-│   ├── build_depstor_waterbody.py
-│   ├── build_depstor_dprst.py
-│   ├── build_depstor_perv.py
-│   ├── build_depstor_routing.py       # WhiteboxTools watershed → drains_to_dprst
-│   ├── build_depstor_intersect.py     # drains × {perv,imperv} Level-4 builders
-│   ├── build_depstor_carea_map.py     # Contributing-area mask at TWI thresholds
-│   ├── derive_depstor_ratios.py       # Level-5 ratio params from merged fractions
+│   ├── build_depstor_rasters.py       # Build the full depstor raster stack (10 steps)
+│   ├── derive_depstor_params.py       # Depstor zonal stats + Level-5 ratios (zonal/merge/ratios)
 │   ├── merge_params.py             # Merge per-batch CSVs
 │   ├── merge_default_params.py     # Merge NHM default params
 │   ├── merge_and_fill_params.py    # KNN gap-filling
@@ -204,12 +199,23 @@ See `slurm_batch/RUNME.md` for the full step-by-step workflow.
 
 ## Depression-storage pipeline
 
-The depstor pipeline (Levels 2-5) builds intermediate binary/fraction rasters
-on the elevation-VRT template grid, then runs zonal stats to produce per-HRU
-fraction params (`dprst_frac`, `imperv_frac`, `onstream_storage_frac`,
-`drains_to_dprst_frac`, `perv_frac`, `drains_perv_frac`, `drains_imperv_frac`,
-`carea_t8_frac`, `carea_t156_frac`). Level-5 ratios are derived from the merged
-fractions by `derive_depstor_ratios.py`.
+The depstor pipeline (Levels 2-5) is driven by two orchestrators and two
+unified configs:
+
+- [scripts/build_depstor_rasters.py](scripts/build_depstor_rasters.py) reads
+  [configs/depstor_rasters.yml](configs/depstor_rasters.yml) and walks the
+  10-step DAG (landmask → imperv/streambuffer/waterbody → dprst → perv/routing
+  → drains_perv/drains_imperv → carea_map) via the builder modules under
+  [src/gfv2_params/depstor_builders/](src/gfv2_params/depstor_builders/).
+- [scripts/derive_depstor_params.py](scripts/derive_depstor_params.py) reads
+  [configs/depstor_params.yml](configs/depstor_params.yml) and dispatches the
+  9 fractions (`perv_frac`, `imperv_frac`, `dprst_frac`,
+  `drains_perv_frac`, `drains_imperv_frac`, `onstream_storage_frac`,
+  `drains_to_dprst_frac`, `carea_t8_frac`, `carea_t156_frac`) plus the 4 PRMS
+  Level-5 ratios (`sro_to_dprst_perv`, `sro_to_dprst_imperv`, `carea_max`,
+  `smidx_coef`). The slurm wrapper
+  [slurm_batch/submit_depstor_params.sh](slurm_batch/submit_depstor_params.sh)
+  chains 9 zonal arrays → 9 merges → 1 ratios job via afterok.
 
 See [docs/depstor_workflow.md](docs/depstor_workflow.md) for the design notes
 and [docs/depstor_port_summary.md](docs/depstor_port_summary.md) for the

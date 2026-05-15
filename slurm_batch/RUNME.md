@@ -81,10 +81,10 @@ fabric, set `FABRIC` and (optionally) override resource asks at submission:
 
 ```bash
 # CONUS gfv2 — default
-sbatch slurm_batch/build_depstor_imperv.batch
+sbatch slurm_batch/build_depstor_rasters.batch
 
 # VPU01 validation overlay — smaller; override resources
-FABRIC=gfv2_vpu01 sbatch --time=01:00:00 --mem=16G slurm_batch/build_depstor_imperv.batch
+FABRIC=gfv2_vpu01 sbatch --time=02:00:00 --mem=48G slurm_batch/build_depstor_rasters.batch
 ```
 
 `submit_jobs.sh` accepts fabric as its 5th positional argument and forwards it
@@ -266,46 +266,38 @@ LULC_CONFIG=configs/lulc_nalcms_param.yml sbatch slurm_batch/build_lulc_rasters.
 
 ### Stage 2d: Build depstor rasters (per fabric)
 
-Build the depression-storage intermediate rasters on the elevation-VRT template
-grid. Outputs go to `{fabric}/depstor_rasters/` and feed the new Stage 4
-zonal-stats jobs (`dprst_frac`, `imperv_frac`, `onstream_storage_frac`,
-`drains_to_dprst_frac`, `perv_frac`, `drains_perv_frac`, `drains_imperv_frac`,
-`carea_t8_frac`, `carea_t156_frac`).
+Build the full depression-storage raster stack on the elevation-VRT template
+grid. Outputs go to `{fabric}/depstor_rasters/` and feed the Stage 4 depstor
+zonal-stats orchestrator below.
 
 Inputs (manually staged per fabric):
 - `input/depstor/<fabric>_segments_wbodies.gpkg` (layers `nsegment`, `v2_wb`)
 - `input/depstor/<fabric>_fdr.tif` (D8 flow direction, Esri pointer)
 - Per-fabric `hru_gpkg` / `twi_raster` (from `base_config.yml`).
-- Reuses the NLCD impervious raster and `work/nhd_merged/elevation.vrt`.
+- The NLCD 2015 fractional-impervious raster (path set in
+  `configs/depstor_rasters.yml` under `imperv_source`) and
+  `work/nhd_merged/elevation.vrt`.
 
-Run in order — each step writes intermediates the next consumes:
+One sbatch builds the entire stack in dependency order
+(landmask → imperv/streambuffer/waterbody → dprst → perv/routing →
+drains_perv/drains_imperv → carea_map). The 10-step DAG is encoded in
+`src/gfv2_params/depstor_builders/__init__.py`; selective re-runs are supported
+via `--step <name>` or `--from <name>` passed through to the python script.
 
 ```bash
-sbatch slurm_batch/build_depstor_landmask.batch       # land_mask.tif — must run first
-sbatch slurm_batch/build_depstor_imperv.batch         # depends on landmask
-sbatch slurm_batch/build_depstor_streambuffer.batch   # depends on landmask
-sbatch slurm_batch/build_depstor_waterbody.batch      # depends on landmask
-sbatch slurm_batch/build_depstor_dprst.batch          # depends on the three above
-sbatch slurm_batch/build_depstor_perv.batch           # depends on imperv + dprst
-sbatch slurm_batch/build_depstor_routing.batch        # depends on dprst + staged FDR
+sbatch slurm_batch/build_depstor_rasters.batch
 
-# Issue #61 Level-4/5 intermediates (depend on routing + perv + onstream + TWI):
-sbatch slurm_batch/build_depstor_drains_perv.batch    # drains_to_dprst x perv
-sbatch slurm_batch/build_depstor_drains_imperv.batch  # drains_to_dprst x imperv
-sbatch slurm_batch/build_depstor_carea_map.batch      # carea_map at TWI = 8.0 and 15.6
+# VPU01 validation overlay — smaller; override resources:
+FABRIC=gfv2_vpu01 sbatch --time=02:00:00 --mem=48G \
+    slurm_batch/build_depstor_rasters.batch
+
+# Resume from a specific step (e.g. after a routing crash):
+sbatch slurm_batch/build_depstor_rasters.batch --from routing --force
 ```
 
-`build_depstor_landmask` rasterizes the HRU fabric to `land_mask.tif` — the
-authoritative land/domain mask **every** other depstor builder masks its output
-against, so it must run first. imperv/streambuffer/waterbody depend only on it
-and can then run concurrently. `dprst` combines those three. `perv` and
-`routing` both wait on `dprst`; `build_depstor_routing` runs WhiteboxTools
-`Watershed` against the staged FDR and is the most memory- and time-intensive.
-
-The three issue-#61 build steps depend on the outputs above (`drains_to_dprst`,
-`perv_binary`, `onstream_binary`) and on the per-fabric `twi_raster`. They are
-all streaming uint8/float32 ops; the carea_map step uses `WarpedVRT` to align
-TWI to the template grid on the fly.
+Default resources size the job for the long pole (`routing` — WhiteboxTools
+Watershed on CONUS). For VPU01 / smaller fabrics, override `--time` and
+`--mem` at submission as shown above.
 
 Note: Stage 2d depends on Stage 2a (the elevation VRT exists) but is otherwise
 fabric-independent of the rest of Part 1. It can run in parallel with Part 2's
@@ -361,26 +353,23 @@ The `create_lulc_params.batch` job produces per-HRU fractional land cover percen
 NALCMS 2020 class (19 classes). Output: `{fabric}/params/nalcms_2020/` per batch, merged to
 `{fabric}/params/merged/nhm_nalcms_2020_lulc_params.csv`.
 
-Depression-storage zonal stats (require Stage 2d outputs):
+Depression-storage zonal stats + Level-5 ratios (require Stage 2d outputs):
 
 ```bash
-slurm_batch/submit_jobs.sh $BATCHES slurm_batch/create_dprst_frac_params.batch
-slurm_batch/submit_jobs.sh $BATCHES slurm_batch/create_imperv_frac_params.batch
-slurm_batch/submit_jobs.sh $BATCHES slurm_batch/create_onstream_storage_frac_params.batch
-slurm_batch/submit_jobs.sh $BATCHES slurm_batch/create_drains_to_dprst_frac_params.batch
-slurm_batch/submit_jobs.sh $BATCHES slurm_batch/create_perv_frac_params.batch
-
-# Issue #61 Level-5 fractions — paired with the matching denominators above
-# (perv_frac, imperv_frac) by derive_depstor_ratios in Stage 5:
-slurm_batch/submit_jobs.sh $BATCHES slurm_batch/create_drains_perv_frac_params.batch
-slurm_batch/submit_jobs.sh $BATCHES slurm_batch/create_drains_imperv_frac_params.batch
-slurm_batch/submit_jobs.sh $BATCHES slurm_batch/create_carea_t8_frac_params.batch
-slurm_batch/submit_jobs.sh $BATCHES slurm_batch/create_carea_t156_frac_params.batch
+slurm_batch/submit_depstor_params.sh $BATCHES
+# or for a non-default fabric:
+slurm_batch/submit_depstor_params.sh $BATCHES gfv2_vpu01
 ```
 
-Each produces a per-HRU fraction in [0, 1]. With `categorical: false` on a uint8
-binary raster, the gdptools exactextract mean equals the fraction of HRU area
-covered by 1-valued cells.
+A single call submits 9 zonal-stats array jobs (one per fraction), chains 9
+merge jobs via `afterok`, and finally chains one ratios job that depends on
+every merge — producing all 9 merged fraction CSVs plus the 4 PRMS Level-5
+ratio CSVs (`sro_to_dprst_perv`, `sro_to_dprst_imperv`, `carea_max`,
+`smidx_coef`) under `{fabric}/params/merged/`.
+
+Each fraction is the per-HRU mean of a uint8 1/255 binary raster with
+`categorical: false`, so the value equals the fraction of HRU area covered by
+1-valued cells.
 
 ### Stage 5: Merge and validate
 
@@ -508,23 +497,8 @@ sacct -j <JOBID> -o JobID,State,Elapsed,MaxRSS
 | download_rpu_rasters.batch | base_config.yml | gfv2_params.download.rpu_rasters |
 | download_nalcms.batch | base_config.yml | gfv2_params.download.nalcms_lulc |
 | download_nhm_v11.batch | base_config.yml | gfv2_params.download.nhm_v11_lulc |
-| build_depstor_landmask.batch | depstor_landmask_raster.yml | build_depstor_landmask.py |
-| build_depstor_imperv.batch | depstor_imperv_raster.yml | build_depstor_imperv.py |
-| build_depstor_streambuffer.batch | depstor_streambuffer_raster.yml | build_depstor_streambuffer.py |
-| build_depstor_waterbody.batch | depstor_waterbody_raster.yml | build_depstor_waterbody.py |
-| build_depstor_dprst.batch | depstor_dprst_raster.yml | build_depstor_dprst.py |
-| build_depstor_perv.batch | depstor_perv_raster.yml | build_depstor_perv.py |
-| build_depstor_routing.batch | depstor_routing_raster.yml | build_depstor_routing.py |
-| build_depstor_drains_perv.batch | depstor_drains_perv_raster.yml | build_depstor_intersect.py |
-| build_depstor_drains_imperv.batch | depstor_drains_imperv_raster.yml | build_depstor_intersect.py |
-| build_depstor_carea_map.batch | depstor_carea_map_raster.yml | build_depstor_carea_map.py |
-| create_dprst_frac_params.batch | dprst_frac_param.yml | create_zonal_params.py |
-| create_imperv_frac_params.batch | imperv_frac_param.yml | create_zonal_params.py |
-| create_onstream_storage_frac_params.batch | onstream_storage_frac_param.yml | create_zonal_params.py |
-| create_drains_to_dprst_frac_params.batch | drains_to_dprst_frac_param.yml | create_zonal_params.py |
-| create_perv_frac_params.batch | perv_frac_param.yml | create_zonal_params.py |
-| create_drains_perv_frac_params.batch | drains_perv_frac_param.yml | create_zonal_params.py |
-| create_drains_imperv_frac_params.batch | drains_imperv_frac_param.yml | create_zonal_params.py |
-| create_carea_t8_frac_params.batch | carea_t8_frac_param.yml | create_zonal_params.py |
-| create_carea_t156_frac_params.batch | carea_t156_frac_param.yml | create_zonal_params.py |
-| merge_output_params.batch (final step) | depstor_ratio_params.yml | derive_depstor_ratios.py |
+| build_depstor_rasters.batch | depstor_rasters.yml | build_depstor_rasters.py |
+| create_depstor_zonal.batch | depstor_params.yml | derive_depstor_params.py (--mode zonal) |
+| merge_depstor_fraction.batch | depstor_params.yml | derive_depstor_params.py (--mode merge) |
+| derive_depstor_ratios.batch | depstor_params.yml | derive_depstor_params.py (--mode ratios) |
+| submit_depstor_params.sh | depstor_params.yml | dispatches the 9 fractions × (zonal → merge) then ratios via afterok |

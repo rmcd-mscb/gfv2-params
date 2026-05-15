@@ -58,7 +58,7 @@ DEM_NODATA = -9999.0
 def _find_whitebox_tools_binary() -> str:
     """Locate the WhiteboxTools executable inside the bundled `whitebox` package.
 
-    Mirrors the helper in scripts/build_depstor_routing.py. Instantiates
+    Mirrors the helper in gfv2_params.depstor_builders.routing. Instantiates
     WhiteboxTools() first to trigger the auto-download of the rust binary on a
     fresh env (idempotent on subsequent calls).
     """

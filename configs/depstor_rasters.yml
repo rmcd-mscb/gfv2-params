@@ -1,0 +1,68 @@
+# Build the full depression-storage raster stack in dependency order.
+# Single source of truth for the depstor generation pipeline — replaces the 10
+# old configs/depstor_*_raster.yml files. Driver: scripts/build_depstor_rasters.py
+# (uses src/gfv2_params/depstor_builders/).
+#
+# Path templating: {data_root} and {fabric} are resolved by load_config() against
+# the active fabric profile in base_config.yml. All step outputs are written
+# into output_dir.
+#
+# Step ordering is locked in src/gfv2_params/depstor_builders/__init__.py
+# (STEP_ORDER); landmask MUST run first and every step masks against it. The
+# orchestrator validates upstream outputs before running each step and supports
+# --step <name> / --from <name> for selective re-runs.
+
+output_dir: "{data_root}/{fabric}/depstor_rasters"
+
+# Source rasters that are NOT per-fabric. The NLCD source is the same across
+# every fabric (CONUS coverage), so it lives at the step level rather than in
+# every fabric profile. Override via the imperv step's `source` key if needed.
+imperv_source: "{data_root}/input/lulc/nlcd_annual_imperv/Annual_NLCD_FctImp_2015_CU_C1V1.tif"
+
+steps:
+  - name: landmask
+    output: land_mask.tif
+
+  - name: imperv
+    threshold: 50
+    output: imperv_binary.tif
+
+  - name: streambuffer
+    buffer_distance: 60
+    output: stream_buffer.tif
+
+  - name: waterbody
+    min_area_threshold: 900.0
+    outputs:
+      binary: wbody_binary.tif
+      regions: wbody_regions.tif
+
+  - name: dprst
+    outputs:
+      dprst: dprst_binary.tif
+      onstream: onstream_binary.tif
+
+  - name: perv
+    output: perv_binary.tif
+
+  - name: routing
+    keep_intermediates: false
+    output: drains_to_dprst.tif
+
+  - name: drains_perv
+    inputs: [drains_to_dprst, perv]
+    output_key: drains_perv
+    output: drains_perv_binary.tif
+
+  - name: drains_imperv
+    inputs: [drains_to_dprst, imperv]
+    output_key: drains_imperv
+    output: drains_imperv_binary.tif
+
+  - name: carea_map
+    thresholds:
+      carea_max: 8.0   # feeds PRMS carea_max
+      smidx:     15.6  # feeds PRMS smidx_coef
+    outputs:
+      carea_max: carea_map_t8_binary.tif
+      smidx:     carea_map_t156_binary.tif

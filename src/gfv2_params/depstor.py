@@ -97,10 +97,11 @@ def threshold_above(values: np.ndarray, threshold: float, src_nodata) -> np.ndar
 def read_land_mask(landmask_path: Path) -> np.ndarray:
     """Read land_mask.tif and return a boolean land mask (True = land/in-fabric).
 
-    `land_mask.tif` (built by `build_depstor_landmask.py`) is the uint8 1/255
-    rasterised HRU fabric — the authoritative depstor land/domain mask. Every
-    depstor builder masks its output against it so ocean / off-domain cells are
-    never marked present.
+    `land_mask.tif` (built by the `landmask` step of `build_depstor_rasters.py`,
+    via `gfv2_params.depstor_builders.landmask`) is the uint8 1/255 rasterised
+    HRU fabric — the authoritative depstor land/domain mask. Every depstor
+    builder masks its output against it so ocean / off-domain cells are never
+    marked present.
 
     Whole-array builders call this helper once; streaming builders open
     land_mask.tif themselves and test ``strip == 1`` per window. The mask is

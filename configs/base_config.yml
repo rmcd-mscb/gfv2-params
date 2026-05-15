@@ -18,7 +18,8 @@ fabrics:
     waterbody_gpkg: "{data_root}/input/depstor/{fabric}_segments_wbodies.gpkg"
     waterbody_layer: v2_wb
     # HRU polygon fabric — authoritative land/domain mask for the depstor
-    # builders (build_depstor_landmask.py rasterizes this to land_mask.tif).
+    # builders. gfv2_params.depstor_builders.landmask rasterises this to
+    # land_mask.tif (driven by scripts/build_depstor_rasters.py).
     hru_gpkg: "{data_root}/{fabric}/fabric/gfv2_nhru_merged.gpkg"
     hru_layer: nhru
 
