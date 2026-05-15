@@ -3,11 +3,13 @@
 import argparse
 from pathlib import Path
 
+import numpy as np
 import rioxarray as rxr
 import yaml
 from rioxarray.merge import merge_arrays
 
-from gfv2_params.config import load_base_config
+from gfv2_params.config import load_base_config, require_config_key
+from gfv2_params.depstor import read_land_mask_for_grid
 from gfv2_params.log import configure_logging
 
 
@@ -108,6 +110,32 @@ def main():
                 nodata_val = -9999
                 merged = merged.astype("float32")
                 merged = merged.where(merged > -1e30, nodata_val)
+
+                # Mask to the HRU-fabric land_mask.tif (PR #69 convention). The
+                # per-RPU TWI tiles cover the source-DEM footprint, which bulges
+                # into the ocean on coastal RPUs; without this step the merged
+                # TWI carries those bulges into downstream zonal aggregation.
+                landmask_path = Path(require_config_key(
+                    base, "landmask_raster", "merge_rpu_by_vpu (TWI)",
+                ))
+                if not landmask_path.exists():
+                    raise FileNotFoundError(
+                        f"Land mask not found (run build_depstor_landmask first): {landmask_path}"
+                    )
+                logger.info("Masking merged TWI to HRU-fabric land mask: %s", landmask_path)
+                merged_transform = merged.rio.transform()
+                merged_h, merged_w = merged.shape[-2], merged.shape[-1]
+                land_valid = read_land_mask_for_grid(
+                    landmask_path, merged_transform, merged_h, merged_w,
+                )
+                merged_arr = np.asarray(merged.values)
+                n_off_land = int((~land_valid & (merged_arr != nodata_val)).sum())
+                merged_arr = np.where(land_valid, merged_arr, np.float32(nodata_val))
+                merged = merged.copy(data=merged_arr)
+                logger.info(
+                    "  Land mask dropped %d off-fabric cells (set to nodata=%s)",
+                    n_off_land, nodata_val,
+                )
 
             case _:
                 raise ValueError(f"Unknown dataset_name: {dataset_name}")
