@@ -112,6 +112,45 @@ def read_land_mask(landmask_path: Path) -> np.ndarray:
         return src.read(1) == 1
 
 
+def read_land_mask_for_grid(
+    landmask_path: Path,
+    transform: Affine,
+    height: int,
+    width: int,
+) -> np.ndarray:
+    """Read land_mask.tif onto an arbitrary target grid via a windowed read.
+
+    Returns a (height, width) boolean array — True where the land mask reads 1
+    (inside the HRU fabric). Cells outside the land_mask coverage fall back to
+    False (ocean), so a target extent that escapes the mask is handled
+    defensively rather than raising.
+
+    Assumes the target grid is co-aligned with the land mask (same CRS, same
+    pixel size, anchored to the same lattice). `build_depstor_landmask`
+    rasterises onto the fabric's `template_raster`, so any raster on that
+    template grid — or a sub-extent of it — is co-aligned by construction.
+    Use this for masking products that share the lattice but not the extent
+    (e.g. per-VPU `Twi_merged_<vpu>.tif`, which sits inside the CONUS
+    template grid).
+    """
+    from rasterio.windows import from_bounds as _from_bounds
+
+    left = transform.c
+    top = transform.f
+    right = left + width * transform.a
+    bottom = top + height * transform.e
+    with rasterio.open(landmask_path) as src:
+        win = _from_bounds(left, bottom, right, top, transform=src.transform)
+        data = src.read(1, window=win, boundless=True, fill_value=255)
+    if data.shape != (height, width):
+        raise ValueError(
+            f"Land-mask window read returned shape {data.shape}, expected "
+            f"({height}, {width}). Target grid is likely not co-aligned with "
+            f"{landmask_path}."
+        )
+    return data == 1
+
+
 def intersect_binaries(a: np.ndarray, b: np.ndarray) -> np.ndarray:
     """Return uint8 binary mask: 1 where both inputs are 1, else 255 (nodata).
 
