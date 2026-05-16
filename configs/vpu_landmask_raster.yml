@@ -1,0 +1,19 @@
+# Build the per-VPU HRU-fabric land mask used by the TWI pipeline.
+#
+# Rasterises HRUs filtered to `vpu == <vpu>` onto the per-VPU Hydrodem grid
+# (Hydrodem_merged_<vpu>.tif) -> work/nhd_merged/<vpu>/land_mask_<vpu>.tif.
+# Every TWI consumer (merge_rpu_by_vpu TWI case, compute_dem_derivatives)
+# clips against this mask so the per-VPU Hydrodem bulges past this VPU's
+# HRUs never leak into the TWI footprint.
+#
+# Fabric-independent by design: the open-source TWI rasters are global
+# products under work/nhd_merged/<vpu>/, so the masks that constrain them
+# also live there and are built from a single canonical HRU source rather
+# than the active fabric's HRU layer. `gfv2_nhru_merged.gpkg` is THE CONUS
+# HRU fabric — every fabric's HRUs are a subset, so filtering by the `vpu`
+# column is sufficient.
+
+template_raster: "{data_root}/work/nhd_merged/{vpu}/Hydrodem_merged_{vpu}.tif"
+hru_gpkg: "{data_root}/gfv2/fabric/gfv2_nhru_merged.gpkg"
+hru_layer: nhru
+output_raster: "{data_root}/work/nhd_merged/{vpu}/land_mask_{vpu}.tif"

@@ -20,6 +20,10 @@ fabrics:
     # HRU polygon fabric — authoritative land/domain mask for the depstor
     # builders. gfv2_params.depstor_builders.landmask rasterises this to
     # land_mask.tif (driven by scripts/build_depstor_rasters.py).
+    # The per-VPU TWI scripts consume the per-VPU mask built by
+    # build_vpu_landmask.py (work/nhd_merged/<vpu>/land_mask_<vpu>.tif),
+    # not the CONUS depstor land_mask, because the per-VPU Hydrodem
+    # footprints bulge past each VPU's HRU boundary.
     hru_gpkg: "{data_root}/{fabric}/fabric/gfv2_nhru_merged.gpkg"
     hru_layer: nhru
 

@@ -56,7 +56,7 @@ gfv2-params/
 │   ├── build_lulc_rasters.py       # Pre-compute LULC-derived rasters
 │   ├── build_weights.py            # Pre-compute polygon-to-polygon weights
 │   ├── compute_slope_aspect.py     # Derive slope/aspect from DEM
-│   ├── compute_dem_derivatives.py  # Open-source TWI/FDR/FAC/slope/aspect from Hydrodem
+│   ├── compute_dem_derivatives.py  # Open-source TWI/FDR/FAC/slope/aspect from Hydrodem (richdem fill + WBT D8)
 │   ├── merge_rpu_by_vpu.py         # Merge RPU rasters by VPU
 │   ├── create_zonal_params.py      # Elevation, slope, aspect, depstor-fraction parameters
 │   ├── create_soils_params.py      # Soils and soil moisture max
