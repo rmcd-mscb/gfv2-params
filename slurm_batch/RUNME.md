@@ -133,7 +133,7 @@ The following externally-provided files must be placed in the scaffolded directo
 | `input/soils_litho/` | `TEXT_PRMS.tif`, `AWC.tif`, `Lithology_exp_Konly_Project.shp` (+ sidecar files: `.dbf`, `.prj`, `.shx`) |
 | `input/lulc_veg/` | `RootDepth.tif`, `CNPY.tif`, `Imperv.tif` |
 | `input/nhm_default/` | NHM default parameter files (input to final merge step) |
-| `input/depstor/` | Per-fabric: `<fabric>_segments_wbodies.gpkg` (layers `nsegment`, `v2_wb`); `<fabric>_fdr.tif` (D8 flow direction, Esri pointer encoding) |
+| `input/depstor/` | Per-fabric: `<fabric>_segments_wbodies.gpkg` (layers `nsegment`, `v2_wb`). The D8 flow-direction raster is sourced from the shared `work/nhd_merged/fdr.vrt` produced by Part 1 — no fabric-specific FDR is required here. |
 | `input/twi/<rpu>/` | Per-RPU TWI raster `twi.tif` (+ `.tfw`, `.aux.xml`, `.ovr`, `.xml` sidecars). Stage with `bash scripts/stage_twi.sh` (see below). |
 
 The NALCMS 2020 land cover raster can be downloaded automatically (see below).
@@ -293,8 +293,8 @@ zonal-stats orchestrator below.
 
 Inputs (manually staged per fabric):
 - `input/depstor/<fabric>_segments_wbodies.gpkg` (layers `nsegment`, `v2_wb`)
-- `input/depstor/<fabric>_fdr.tif` (D8 flow direction, Esri pointer)
 - Per-fabric `hru_gpkg` / `twi_raster` (from `base_config.yml`).
+- Shared `fdr_raster` from `work/nhd_merged/fdr.vrt` (Part 1 output; no per-fabric FDR needed).
 - The NLCD 2015 fractional-impervious raster (path set in
   `configs/depstor_rasters.yml` under `imperv_source`) and
   `work/nhd_merged/elevation.vrt`.

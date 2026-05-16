@@ -97,8 +97,8 @@ gfv2_param/
 │   │   ├── nlcd_annual_imperv/     # NLCD fractional imperviousness (downloadable)
 │   │   └── nalcms_2020/            # NALCMS 2020 land cover (downloadable)
 │   ├── depstor/                    # Per-fabric depression-storage inputs
-│   │   ├── <fabric>_segments_wbodies.gpkg   # nsegment + v2_wb layers
-│   │   └── <fabric>_fdr.tif        # D8 flow direction (Esri pointer)
+│   │   └── <fabric>_segments_wbodies.gpkg   # nsegment + v2_wb layers
+│   │                               # (FDR comes from shared work/nhd_merged/fdr.vrt)
 │   ├── twi/<rpu>/                  # Per-RPU TWI (twi.tif + sidecars; staged via stage_twi.sh)
 │   ├── nhm_default/                # NHM default parameter files
 │   └── nhd_downloads/              # Raw NHDPlus zip archives (downloadable)
@@ -136,7 +136,7 @@ The following externally-provided files must be placed in the scaffolded directo
 | `input/soils_litho/` | `TEXT_PRMS.tif`, `AWC.tif`, `Lithology_exp_Konly_Project.shp` (+ sidecar files: `.dbf`, `.prj`, `.shx`) |
 | `input/lulc_veg/` | `RootDepth.tif`, `CNPY.tif`, `Imperv.tif` |
 | `input/nhm_default/` | NHM default parameter files (input to final merge step) |
-| `input/depstor/` | Per-fabric: `<fabric>_segments_wbodies.gpkg` (layers `nsegment`, `v2_wb`) and `<fabric>_fdr.tif` (D8 flow direction, Esri pointer encoding) |
+| `input/depstor/` | Per-fabric: `<fabric>_segments_wbodies.gpkg` (layers `nsegment`, `v2_wb`). The D8 flow-direction raster is no longer expected here — the gfv2 profile now consumes `work/nhd_merged/fdr.vrt` produced by the shared raster pipeline. |
 | `input/twi/<rpu>/` | Per-RPU `twi.tif` (+ `.tfw`, `.aux.xml`, `.ovr`, `.xml` sidecars). Stage with `bash scripts/stage_twi.sh` (or `sbatch slurm_batch/stage_twi.batch` for an unattended run). |
 
 ### 3. Run fabric-independent tasks
