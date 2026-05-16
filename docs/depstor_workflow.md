@@ -93,13 +93,30 @@ The workflow is broken up into 5 levels:
 5. **Level Five:** Profit (i.e., generate the parameter files)
 
 **gfv2-params land mask (PR #69, issue #68):** Before any Level One/Two builder
-runs, `build_depstor_landmask.py` rasterises the `nhru` polygon fabric to the
-template grid → `land_mask.tif` (uint8 1/255). Every depstor raster builder
-masks its output against it. This replaced an earlier DEM-nodata mask that
-bulged into the ocean (the hydro-conditioned DEM carries valid elevations over
-coastal water; the FDR has the same blobs). The HRU fabric is the
-authoritative modeling domain and is exactly what `create_zonal_params`
-aggregates to downstream.
+runs, the `landmask` step in [`scripts/build_depstor_rasters.py`](../scripts/build_depstor_rasters.py)
+(implementation in [`src/gfv2_params/depstor_builders/landmask.py`](../src/gfv2_params/depstor_builders/landmask.py))
+rasterises the `nhru` polygon fabric to the template grid → `land_mask.tif`
+(uint8 1/255). Every other depstor raster builder masks its output against
+it. This replaced an earlier DEM-nodata mask that bulged into the ocean (the
+hydro-conditioned DEM carries valid elevations over coastal water; the FDR
+has the same blobs). The HRU fabric is the authoritative modeling domain
+and is exactly what `create_zonal_params` aggregates to downstream.
+
+**gfv2-params per-VPU land mask (PR #70, issue #66):** Independent of the
+CONUS depstor `land_mask.tif` above, a *per-VPU* HRU mask is built by
+[`scripts/build_vpu_landmask.py`](../scripts/build_vpu_landmask.py)
+(config: [`configs/vpu_landmask_raster.yml`](../configs/vpu_landmask_raster.yml);
+sbatch: `slurm_batch/build_vpu_landmask.batch`). It filters
+`gfv2/fabric/gfv2_nhru_merged.gpkg` by `vpu == <vpu>` (with sub-region
+handling for `03N/S/W` and `10L/U` via `VPU_RASTER_MAP`) and rasterises onto
+the per-VPU Hydrodem grid, writing
+`work/nhd_merged/<vpu>/land_mask_<vpu>.tif`. The per-VPU TWI pipeline
+(`merge_rpu_by_vpu.py` TWI case + `compute_dem_derivatives.py`) consumes
+this per-VPU mask via [`read_land_mask_for_grid`](../src/gfv2_params/depstor.py)
+to clip `Twi_merged_<vpu>.tif` and `Twi_hydrodem_<vpu>.tif` to the per-VPU
+HRU boundary. Without it, per-RPU TWI bulges (coastal ocean,
+adjacent-VPU drape on per-RPU Hydrodem tiles) leak into downstream zonal
+aggregation. Runs as **RUNME Stage 1c1**, before the TWI merge.
 
 ---
 
@@ -239,11 +256,14 @@ aggregates to downstream.
     - **Output**
       - `Carea_map`
     - **gfv2-params**: produced as a uint8 binary mask (1 = cell qualifies,
-      255 = nodata) by [`scripts/build_depstor_carea_map.py`](../scripts/build_depstor_carea_map.py)
+      255 = nodata) by the `carea_map` step of
+      [`scripts/build_depstor_rasters.py`](../scripts/build_depstor_rasters.py)
+      (implementation in
+      [`src/gfv2_params/depstor_builders/carea_map.py`](../src/gfv2_params/depstor_builders/carea_map.py))
       via [`compute_carea_map_binary`](../src/gfv2_params/depstor.py). The
       ArcPy HRU-ID burn is dropped — HRU identity is recovered downstream by
-      `create_zonal_params.py` via gdptools polygon overlay. Built at both
-      PRMS thresholds (8.0 and 15.6) in one pass.
+      `derive_depstor_params.py --mode zonal` via gdptools polygon overlay.
+      Built at both PRMS thresholds (8.0 and 15.6) in one pass.
 
 12. **getSro_to_dprst_perv** — *implemented (issue #61)*
     - Surface runoff to depression storage for pervious surfaces. Returns
@@ -256,10 +276,16 @@ aggregates to downstream.
       need to document this section better.
     - **Outputs**
       - `Sro_to_dprst_perv` (dataframe)
-    - **gfv2-params**: per-cell intersection built by [`scripts/build_depstor_intersect.py`](../scripts/build_depstor_intersect.py)
-      (config: `depstor_drains_perv_raster.yml`). Per-HRU ratio computed by
-      [`scripts/derive_depstor_ratios.py`](../scripts/derive_depstor_ratios.py)
-      from the `drains_perv_frac` and `perv_frac` merged fraction CSVs:
+    - **gfv2-params**: per-cell intersection built by the `drains_perv` step
+      of [`scripts/build_depstor_rasters.py`](../scripts/build_depstor_rasters.py)
+      (implementation in
+      [`src/gfv2_params/depstor_builders/intersect.py`](../src/gfv2_params/depstor_builders/intersect.py),
+      configured under `steps.drains_perv` in
+      [`configs/depstor_rasters.yml`](../configs/depstor_rasters.yml)).
+      Per-HRU ratio computed by `derive_depstor_params.py --mode ratios` via
+      [`compute_ratio`](../src/gfv2_params/depstor_ratios.py) from the
+      `drains_perv_frac` and `perv_frac` count CSVs in
+      `{fabric}/params/merged/_intermediates/`:
       `sro_to_dprst_perv = count(drains_perv_binary per HRU) / count(perv_binary per HRU)`.
 
 13. **getSro_to_dprst_imperv** — *implemented (issue #61)*
@@ -303,8 +329,10 @@ aggregates to downstream.
     - **Outputs**
       - `Carea` (dataframe)
     - **gfv2-params**: pair-wise per-HRU ratio computed by
-      [`scripts/derive_depstor_ratios.py`](../scripts/derive_depstor_ratios.py)
-      from merged fraction CSVs:
+      `derive_depstor_params.py --mode ratios` via
+      [`compute_ratio`](../src/gfv2_params/depstor_ratios.py) from the
+      `carea_t<X>_frac` and `perv_frac` count CSVs in
+      `{fabric}/params/merged/_intermediates/`:
       `ratio = count(carea_map_t<X>_binary per HRU) / count(perv_binary per HRU)`,
       clamped at 1.0.
 
@@ -313,22 +341,90 @@ aggregates to downstream.
       TWI threshold of **15.6**
     - Returns dataframe
     - **gfv2-params**: `nhm_smidx_coef_params.csv` written by
-      [`scripts/derive_depstor_ratios.py`](../scripts/derive_depstor_ratios.py).
-      `smidx_exp` is *not* produced by this pipeline (the ArcPy source only
-      derives `smidx_coef`); it needs a separate sourcing decision (typically
-      a fixed NHM default).
+      `derive_depstor_params.py --mode ratios` into
+      `{fabric}/params/merged/`. `smidx_exp` is *not* produced by this
+      pipeline (the ArcPy source only derives `smidx_coef`); it needs a
+      separate sourcing decision (typically a fixed NHM default).
 
 17. **getCarea** *(reused; presumably `getCarea_max`)* — *implemented (issue #61)*
     - Computes Soil Moisture Index Coefficient with `getCarea` function and a
       TWI threshold of **8**
     - Returns dataframe
     - **gfv2-params**: `nhm_carea_max_params.csv` written by
-      [`scripts/derive_depstor_ratios.py`](../scripts/derive_depstor_ratios.py).
+      `derive_depstor_params.py --mode ratios` into
+      `{fabric}/params/merged/`.
 
-18. **getHRU_percent_imperv**
+18. **getHRU_percent_imperv** — *implemented (PR #72)*
     - Compute the impervious fraction of the HRUs
     - **Inputs**
       - `hruImperv`
     - Weird stuff, maybe we can do it better
     - **Output**
       - dataframe
+    - **gfv2-params**: `nhm_hru_percent_imperv_params.csv` written by
+      `derive_depstor_params.py --mode ratios` into
+      `{fabric}/params/merged/`. Computed as
+      `count(imperv_binary per HRU) / count(land_mask per HRU)`
+      from the `imperv_frac` and `hru_total` count CSVs in
+      `{fabric}/params/merged/_intermediates/`. Bounded in [0, 1] by
+      construction; no clamp.
+
+19. **getDprst_frac (PRMS dprst_frac)** — *implemented (PR #72)*
+    - Per-HRU fraction of land area classified as depression storage.
+    - **gfv2-params**: `nhm_dprst_frac_params.csv` written by
+      `derive_depstor_params.py --mode ratios` into
+      `{fabric}/params/merged/`. Computed as
+      `count(dprst_binary per HRU) / count(land_mask per HRU)`
+      from the `dprst_frac` (count) and `hru_total` count CSVs in
+      `{fabric}/params/merged/_intermediates/`. Bounded in [0, 1] by
+      construction; no clamp.
+    - **Note on the filename collision:** the intermediate count CSV in
+      `_intermediates/` is also named `nhm_dprst_frac_params.csv` (same
+      filename, different subdir; `count` column = cell count, not a
+      fraction). Different consumers should pull from the right subdir:
+      PRMS-ready ratio from `merged/`, intermediate count from
+      `merged/_intermediates/`.
+
+---
+
+### Output layout (post-PR #72)
+
+The two orchestrators
+[`scripts/build_depstor_rasters.py`](../scripts/build_depstor_rasters.py)
+and [`scripts/derive_depstor_params.py`](../scripts/derive_depstor_params.py)
+produce, per fabric:
+
+```
+{fabric}/depstor_rasters/           # 13 generation outputs
+├── land_mask.tif                   # (built first; every other raster masks against it)
+├── imperv_binary.tif
+├── stream_buffer.tif
+├── wbody_binary.tif    wbody_regions.tif
+├── dprst_binary.tif    onstream_binary.tif
+├── perv_binary.tif
+├── drains_to_dprst.tif
+├── drains_perv_binary.tif    drains_imperv_binary.tif
+└── carea_map_t8_binary.tif    carea_map_t156_binary.tif
+
+{fabric}/params/merged/             # 6 final PRMS-ready ratio CSVs (all [0, 1])
+├── nhm_sro_to_dprst_perv_params.csv
+├── nhm_sro_to_dprst_imperv_params.csv
+├── nhm_carea_max_params.csv
+├── nhm_smidx_coef_params.csv
+├── nhm_hru_percent_imperv_params.csv    # NEW in PR #72
+├── nhm_dprst_frac_params.csv            # NEW in PR #72
+└── _intermediates/                       # 10 per-fraction count CSVs (NOT [0, 1])
+    ├── nhm_perv_frac_params.csv      nhm_imperv_frac_params.csv
+    ├── nhm_dprst_frac_params.csv     nhm_onstream_storage_frac_params.csv
+    ├── nhm_drains_perv_frac_params.csv   nhm_drains_imperv_frac_params.csv
+    ├── nhm_drains_to_dprst_frac_params.csv
+    ├── nhm_carea_t8_frac_params.csv  nhm_carea_t156_frac_params.csv
+    └── nhm_hru_total_count_params.csv    # NEW in PR #72; denominator for the area-fraction ratios
+```
+
+The 13 PRMS depstor parameters not produced here (`dprst_frac_open`,
+`dprst_frac_clos`, `dprst_depth_avg`, `dprst_seep_rate_clos`,
+`dprst_et_coef`, `op_flow_thres`, `va_open_exp`, `va_clos_exp`,
+`dprst_frac_init`, `imperv_stor_max`, `smidx_exp`) come from NHM defaults
+or a separate sourcing decision — see the "Out-of-scope PRMS dprst params"
+cell in `notebooks/qaqc_depstor_vpu01.ipynb`.
