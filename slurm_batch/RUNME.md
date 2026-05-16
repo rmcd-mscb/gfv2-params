@@ -216,7 +216,25 @@ priority where it has valid data and Copernicus fills the border gaps.
 NHDPlus `_fixed_` elevation tiles produced by `compute_slope_aspect.py` to
 build a seamless composite elevation surface for slope/aspect computation.
 
-### Stage 1c: Merge TWI by VPU
+### Stage 1c1: Build per-VPU HRU land masks
+
+Build the per-VPU HRU-fabric land mask consumed by both TWI pipelines:
+
+```bash
+sbatch slurm_batch/build_vpu_landmask.batch
+```
+
+Produces `work/nhd_merged/<vpu>/land_mask_<vpu>.tif` — a uint8 1/255 raster
+where 1 = inside an HRU whose `vpu` attribute matches this VPU, 255 = outside.
+The mask is rasterised onto the per-VPU `Hydrodem_merged_<vpu>.tif` grid, so
+TWI products downstream get a strict match to their VPU's HRU coverage rather
+than the CONUS-wide depstor `land_mask.tif` (which leaves cells unmasked
+wherever adjacent-VPU HRUs drape into a VPU's Hydrodem footprint).
+
+Only depends on Stage 1 (per-VPU Hydrodem exists). Independent of Stage 2d
+(depstor landmask).
+
+### Stage 1c2: Merge TWI by VPU
 
 Merge the per-RPU TWI rasters staged in Stage 0 into per-VPU GeoTIFFs:
 
@@ -225,8 +243,11 @@ sbatch slurm_batch/merge_rpu_by_vpu_twi.batch
 ```
 
 Produces `work/nhd_merged/<vpu>/Twi_merged_<vpu>.tif` for each of the 18 VPUs.
-Independent of Stage 1 / 1b — can run as soon as the TWI staging in Stage 0 is
-complete.
+The merge clips its output to the per-VPU HRU mask from Stage 1c1 so the
+per-RPU TWI bulges (coast on the east, adjacent-VPU/border drape on the
+west/north) never reach downstream zonal aggregation.
+
+**Depends on Stage 1c1.**
 
 ### Stage 2a: Build VRTs (one-time)
 
@@ -486,6 +507,7 @@ sacct -j <JOBID> -o JobID,State,Elapsed,MaxRSS
 |---|---|---|
 | merge_rpu_by_vpu.batch | merge_rpu_by_vpu.yml | merge_rpu_by_vpu.py |
 | merge_rpu_by_vpu_twi.batch | merge_rpu_by_vpu_twi.yml | merge_rpu_by_vpu.py |
+| build_vpu_landmask.batch | vpu_landmask_raster.yml | build_vpu_landmask.py |
 | stage_twi.batch | (uses base_config.yml indirectly) | scripts/stage_twi.sh |
 | compute_slope_aspect.batch | slope_aspect.yml | compute_slope_aspect.py |
 | build_border_dem.batch | base_config.yml | build_border_dem.py |

@@ -5,10 +5,10 @@
 #SBATCH --output=logs/job_%A_%a.out
 #SBATCH --error=logs/job_%A_%a.err
 #SBATCH --array=0-17            # Array index range (0 to len(vpus)-1)
-#SBATCH --time=04:00:00         # breach + D8 + accumulation + 3 richdem passes + TWI
+#SBATCH --time=08:00:00         # richdem fill + WBT D8Pointer + WBT D8FAC + 3 richdem passes + TWI; WBT FAC ~hours on VPU 10
 #SBATCH --ntasks=1              # Single task per job
-#SBATCH --cpus-per-task=4       # WhiteboxTools respects --max_procs=-1
-#SBATCH --mem=192G              # Filled DEM + intermediates; VPU 10 margin
+#SBATCH --cpus-per-task=4       # WBT respects --max_procs=-1; richdem passes are single-threaded
+#SBATCH --mem=192G              # Filled DEM (float64) + intermediates; VPU 10 margin
 
 # Load required modules
 cd "$SLURM_SUBMIT_DIR"

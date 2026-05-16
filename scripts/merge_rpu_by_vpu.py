@@ -3,11 +3,13 @@
 import argparse
 from pathlib import Path
 
+import numpy as np
 import rioxarray as rxr
 import yaml
 from rioxarray.merge import merge_arrays
 
 from gfv2_params.config import load_base_config
+from gfv2_params.depstor import read_land_mask_for_grid
 from gfv2_params.log import configure_logging
 
 
@@ -108,6 +110,33 @@ def main():
                 nodata_val = -9999
                 merged = merged.astype("float32")
                 merged = merged.where(merged > -1e30, nodata_val)
+
+                # Mask to the per-VPU HRU land mask (issue #70). The per-RPU TWI
+                # tiles cover the source-DEM footprint, which bulges past this
+                # VPU's HRU boundary on both the coastal flank (ocean) and the
+                # inland flank (adjacent VPUs / Canadian border). The per-VPU
+                # mask is strict: only HRUs whose `vpu` attribute matches this
+                # VPU are rasterised, so adjacent-VPU drape doesn't survive
+                # into the merged TWI footprint.
+                vpu_landmask_path = base_path / "work" / "nhd_merged" / args.vpu / f"land_mask_{args.vpu}.tif"
+                if not vpu_landmask_path.exists():
+                    raise FileNotFoundError(
+                        f"Per-VPU land mask not found (run build_vpu_landmask first): {vpu_landmask_path}"
+                    )
+                logger.info("Masking merged TWI to per-VPU HRU land mask: %s", vpu_landmask_path)
+                merged_transform = merged.rio.transform()
+                merged_h, merged_w = merged.shape[-2], merged.shape[-1]
+                land_valid = read_land_mask_for_grid(
+                    vpu_landmask_path, merged_transform, merged_h, merged_w,
+                )
+                merged_arr = np.asarray(merged.values)
+                n_off_land = int((~land_valid & (merged_arr != nodata_val)).sum())
+                merged_arr = np.where(land_valid, merged_arr, np.float32(nodata_val))
+                merged = merged.copy(data=merged_arr)
+                logger.info(
+                    "  Per-VPU land mask dropped %d off-fabric cells (set to nodata=%s)",
+                    n_off_land, nodata_val,
+                )
 
             case _:
                 raise ValueError(f"Unknown dataset_name: {dataset_name}")
