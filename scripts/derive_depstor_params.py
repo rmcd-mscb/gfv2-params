@@ -81,9 +81,22 @@ def _find_fraction(config: dict, name: str) -> dict:
     raise ValueError(f"Fraction '{name}' not in config; available: {available}")
 
 
-def _merge_paths(config: dict) -> Path:
+def _merge_paths(config: dict) -> tuple[Path, Path]:
+    """Return (intermediates_dir, ratios_dir).
+
+    Intermediate per-fraction count CSVs (one per fraction) land in
+    `merged/_intermediates/`. Final PRMS-ready ratio CSVs land in `merged/`.
+    Splitting them out keeps PRMS-readers (which only want the ratios) from
+    accidentally consuming the count CSVs as if they were [0, 1] fractions —
+    a bug the per-fraction filename convention (`nhm_<x>_frac_params.csv`)
+    invited because gdptools writes a `count` column, not a normalised
+    fraction.
+    """
     defaults = config["defaults"]
-    return Path(defaults["output_dir"]) / defaults["merged_subdir"]
+    output_dir = Path(defaults["output_dir"])
+    intermediates_dir = output_dir / defaults["merged_intermediates_subdir"]
+    ratios_dir = output_dir / defaults["merged_subdir"]
+    return intermediates_dir, ratios_dir
 
 
 def run_zonal(args, logger) -> None:
@@ -162,8 +175,8 @@ def run_merge(args, logger) -> None:
     expected_max = config.get("expected_max_hru_id")
 
     input_dir = Path(defaults["output_dir"]) / source_type
-    merged_dir = _merge_paths(config)
-    merged_dir.mkdir(parents=True, exist_ok=True)
+    intermediates_dir, _ = _merge_paths(config)
+    intermediates_dir.mkdir(parents=True, exist_ok=True)
 
     if not input_dir.exists():
         raise FileNotFoundError(f"Per-batch dir not found: {input_dir}")
@@ -202,7 +215,7 @@ def run_merge(args, logger) -> None:
                 len(gaps), id_feature, expected_max, len(existing), gaps[:10],
             )
 
-    out_path = merged_dir / merged_file
+    out_path = intermediates_dir / merged_file
     merged.to_csv(out_path, index=False)
     logger.info("Merged %d rows -> %s", len(merged), out_path)
 
@@ -214,14 +227,16 @@ def run_ratios(args, logger) -> None:
     id_feature = defaults["id_feature"]
     count_column = defaults["count_column"]
 
-    merged_dir = _merge_paths(config)
-    if not merged_dir.exists():
-        raise FileNotFoundError(f"Merged dir not found: {merged_dir}")
+    intermediates_dir, ratios_dir = _merge_paths(config)
+    if not intermediates_dir.exists():
+        raise FileNotFoundError(f"Intermediates dir not found: {intermediates_dir}")
+    ratios_dir.mkdir(parents=True, exist_ok=True)
 
-    fraction_files = {spec["name"]: merged_dir / spec["merged_file"] for spec in config["fractions"]}
+    fraction_files = {spec["name"]: intermediates_dir / spec["merged_file"] for spec in config["fractions"]}
 
     logger.info("=== ratios (%d) ===", len(ratios))
-    logger.info("Merged dir: %s", merged_dir)
+    logger.info("Intermediates dir: %s", intermediates_dir)
+    logger.info("Ratios dir       : %s", ratios_dir)
 
     for spec in ratios:
         name = spec["name"]
@@ -234,7 +249,7 @@ def run_ratios(args, logger) -> None:
 
         num_path = fraction_files[num_name]
         den_path = fraction_files[den_name]
-        out_path = merged_dir / spec["output_file"]
+        out_path = ratios_dir / spec["output_file"]
         clamp = bool(spec.get("clamp_to_one", False))
 
         for p in (num_path, den_path):

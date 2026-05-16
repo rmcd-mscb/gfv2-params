@@ -1,15 +1,17 @@
 #!/bin/bash
 # Usage: ./submit_depstor_params.sh <batches_dir> [fabric] [base_config] [max_concurrent]
 #
-# For each of the 9 depstor fractions, submits:
+# For each of the 10 depstor fractions, submits:
 #   1. an array zonal job over every HRU batch (max_concurrent throttled), and
-#   2. a chained merge job (afterok on the array).
+#   2. a chained merge job (afterok on the array), writing to
+#      {fabric}/params/merged/_intermediates/.
 #
-# After all 9 merges, a single ratios job runs (afterok on every merge) to
-# derive the 4 PRMS Level-5 params (sro_to_dprst_perv, sro_to_dprst_imperv,
-# carea_max, smidx_coef).
+# After all 10 merges, a single ratios job runs (afterok on every merge) to
+# derive the 6 PRMS Level-5 params (sro_to_dprst_perv, sro_to_dprst_imperv,
+# carea_max, smidx_coef, hru_percent_imperv, dprst_frac) into
+# {fabric}/params/merged/.
 #
-# The 9 fractions are the canonical list from configs/depstor_params.yml; if
+# The 10 fractions are the canonical list from configs/depstor_params.yml; if
 # you add or remove fractions there, update FRACTIONS below.
 
 set -euo pipefail
@@ -63,6 +65,7 @@ FRACTIONS=(
     drains_to_dprst_frac
     carea_t8_frac
     carea_t156_frac
+    hru_total                # land_mask aggregation; denominator for hru_percent_imperv + dprst_frac ratios
 )
 
 echo "Submitting ${#FRACTIONS[@]} depstor fractions x $N_BATCHES batches each ($THROTTLE_NOTE), FABRIC=$FABRIC"

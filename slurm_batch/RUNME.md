@@ -382,15 +382,22 @@ slurm_batch/submit_depstor_params.sh $BATCHES
 slurm_batch/submit_depstor_params.sh $BATCHES gfv2_vpu01
 ```
 
-A single call submits 9 zonal-stats array jobs (one per fraction), chains 9
+A single call submits 10 zonal-stats array jobs (one per fraction), chains 10
 merge jobs via `afterok`, and finally chains one ratios job that depends on
-every merge — producing all 9 merged fraction CSVs plus the 4 PRMS Level-5
-ratio CSVs (`sro_to_dprst_perv`, `sro_to_dprst_imperv`, `carea_max`,
-`smidx_coef`) under `{fabric}/params/merged/`.
+every merge. Outputs land in two subdirectories under `{fabric}/params/merged/`:
 
-Each fraction is the per-HRU mean of a uint8 1/255 binary raster with
-`categorical: false`, so the value equals the fraction of HRU area covered by
-1-valued cells.
+- `{fabric}/params/merged/` — **6 final PRMS-ready ratio CSVs**, all
+  dimensionless and bounded in [0, 1]:
+  `sro_to_dprst_perv`, `sro_to_dprst_imperv`, `carea_max`, `smidx_coef`,
+  `hru_percent_imperv`, `dprst_frac`.
+- `{fabric}/params/merged/_intermediates/` — **10 per-fraction count CSVs**
+  (`nhm_<name>_frac_params.csv` and `nhm_hru_total_count_params.csv`).
+  Each row's `count` column is the partial-pixel-weighted sum of `1`-valued
+  cells per HRU — **NOT** a [0, 1] fraction. Inputs to the ratio derivation;
+  not direct PRMS parameters. To get a true area fraction divide by the HRU
+  pixel count (e.g. `areasqkm * 1e6 / 900` for the 30 m template grid; the
+  `hru_total` fraction aggregates `land_mask.tif` to give exactly that
+  denominator).
 
 ### Stage 5: Merge and validate
 
