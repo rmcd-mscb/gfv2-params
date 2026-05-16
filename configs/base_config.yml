@@ -18,7 +18,8 @@ fabrics:
     waterbody_gpkg: "{data_root}/input/depstor/{fabric}_segments_wbodies.gpkg"
     waterbody_layer: v2_wb
     # HRU polygon fabric — authoritative land/domain mask for the depstor
-    # builders (build_depstor_landmask.py rasterizes this to land_mask.tif).
+    # builders. gfv2_params.depstor_builders.landmask rasterises this to
+    # land_mask.tif (driven by scripts/build_depstor_rasters.py).
     # The per-VPU TWI scripts consume the per-VPU mask built by
     # build_vpu_landmask.py (work/nhd_merged/<vpu>/land_mask_<vpu>.tif),
     # not the CONUS depstor land_mask, because the per-VPU Hydrodem

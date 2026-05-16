@@ -1,0 +1,165 @@
+"""WhiteboxTools Watershed from dprst pour-points on the staged FDR."""
+
+from __future__ import annotations
+
+import os
+import subprocess
+
+import numpy as np
+import rasterio
+import rioxarray  # noqa: F401  (registers .rio accessor)
+import xarray as xr
+
+from ..depstor import RasterInfo, read_land_mask, write_uint8_binary
+from .context import BuildContext
+
+
+def _find_whitebox_tools_binary() -> str:
+    """Locate the WhiteboxTools executable inside the bundled `whitebox` package."""
+    import whitebox
+
+    pkg_dir = os.path.dirname(whitebox.__file__)
+    candidates = [
+        os.path.join(pkg_dir, "whitebox_tools.exe"),
+        os.path.join(pkg_dir, "whitebox_tools"),
+        os.path.join(pkg_dir, "bin", "whitebox_tools.exe"),
+        os.path.join(pkg_dir, "bin", "whitebox_tools"),
+    ]
+    runner = next((c for c in candidates if os.path.isfile(c)), None)
+    if runner is None:
+        raise FileNotFoundError(
+            "WhiteboxTools binary not found inside `whitebox` package. "
+            "Reinstall the `whitebox` pip package."
+        )
+    return runner
+
+
+def _reproject_fdr_with_rioxarray(fdr_path, dprst_path, out_path, logger) -> None:
+    logger.info("  Reprojecting FDR to match dprst grid (rioxarray.reproject_match)...")
+    fdr_da = xr.open_dataarray(fdr_path, engine="rasterio").squeeze("band", drop=True)
+    dprst_da = xr.open_dataarray(dprst_path, engine="rasterio").squeeze("band", drop=True)
+    fdr_aligned = fdr_da.rio.reproject_match(dprst_da)
+    fdr_aligned = fdr_aligned.rio.write_nodata(np.uint8(255))
+    # xarray >= 2023 refuses to encode if _FillValue is in both attrs and
+    # encoding. reproject_match preserves it in attrs from the source raster.
+    fdr_aligned.attrs.pop("_FillValue", None)
+    fdr_aligned.rio.to_raster(
+        out_path,
+        driver="GTiff",
+        compress="LZW",
+        tiled=True,
+        blockxsize=256,
+        blockysize=256,
+        dtype="uint8",
+        nodata=np.uint8(255),
+        BIGTIFF="YES",
+    )
+
+
+def _prepare_pour_points(dprst_path, out_path, logger) -> None:
+    """Convert dprst_binary.tif (1=pour, 255=nodata) into 0/1 (nodata=0).
+
+    WBT's Watershed reads the raw values and treats every non-zero value as a
+    pour-point — it ignores the GeoTIFF nodata tag. The 255 cells therefore
+    leak in unless we re-encode.
+    """
+    logger.info("  Converting dprst_binary.tif (1/255) -> 0/1 pour-points (nodata=0)...")
+    with rasterio.open(dprst_path) as src:
+        data = src.read(1)
+        profile = src.profile.copy()
+    pour = np.where(data == 1, np.uint8(1), np.uint8(0))
+    profile.update(nodata=0, compress="LZW")
+    with rasterio.open(out_path, "w", **profile) as dst:
+        dst.write(pour, 1)
+
+
+def _run_whitebox_watershed(fdr_path, pour_pts_path, output_path, logger) -> None:
+    runner = _find_whitebox_tools_binary()
+    logger.info("  WhiteboxTools binary: %s", runner)
+    cmd = [
+        runner,
+        f"--wd={os.getcwd()}",
+        "--max_procs=-1",
+        "-r=Watershed",
+        f"--d8_pntr={fdr_path}",
+        f"--pour_pts={pour_pts_path}",
+        f"--output={output_path}",
+        "--esri_pntr",
+        "-v",
+    ]
+    logger.info("  Running: %s", " ".join(cmd))
+    proc = subprocess.run(cmd, text=True, capture_output=True)
+    if proc.stdout:
+        logger.debug("WBT stdout:\n%s", proc.stdout)
+    if proc.returncode != 0:
+        logger.error("WBT stderr:\n%s", proc.stderr)
+        raise RuntimeError(
+            f"WhiteboxTools Watershed failed (exit code {proc.returncode}). See stderr above."
+        )
+
+
+def _watershed_to_binary(watershed_path, landmask_path, info, out_path, logger) -> None:
+    with rasterio.open(watershed_path) as src:
+        data = src.read(1)
+        src_nodata = src.nodata
+    if src_nodata is None:
+        valid = data > 0
+    elif isinstance(src_nodata, float) and np.isnan(src_nodata):
+        valid = ~np.isnan(data)
+    else:
+        valid = data != src_nodata
+    binary = np.where(valid, np.uint8(1), np.uint8(255))
+    binary[~read_land_mask(landmask_path)] = 255  # drop off-land (ocean) cells
+    n_in = int((binary == 1).sum())
+    pct = 100 * n_in / binary.size
+    # >50% coverage almost certainly means the pour-points nodata bug — PR #56.
+    if pct > 50:
+        logger.warning(
+            "Drains-to-dprst coverage is %.2f%% of the grid — unusually high. "
+            "Check pour-points nodata=0 (not 255) and FDR alignment.",
+            pct,
+        )
+    write_uint8_binary(binary, info, out_path)
+    logger.info(
+        "  Drains-to-dprst mask written: %s (%d cells, %.4f%% of grid)",
+        out_path, n_in, pct,
+    )
+
+
+def build(step_cfg: dict, ctx: BuildContext, logger) -> dict:
+    if ctx.fdr_raster is None:
+        raise KeyError("routing step needs `fdr_raster` in fabric profile.")
+    output_path = ctx.resolve_output(step_cfg["output"])
+    landmask_path = ctx.require("landmask")
+    dprst_path = ctx.require("dprst")
+    keep_intermediates = bool(step_cfg.get("keep_intermediates", False))
+
+    if not ctx.fdr_raster.exists():
+        raise FileNotFoundError(f"FDR raster not found: {ctx.fdr_raster}")
+
+    logger.info("--- routing ---")
+    logger.info("  FDR    : %s", ctx.fdr_raster)
+    logger.info("  Output : %s", output_path)
+
+    if output_path.exists() and not ctx.force:
+        logger.info("  Output exists — skipping (pass --force to rebuild)")
+        return {"drains_to_dprst": output_path}
+
+    info = RasterInfo.from_path(ctx.template_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    fdr_aligned = output_path.parent / "fdr_aligned.tif"
+    pour_pts = output_path.parent / "dprst_pourpts.tif"
+    watershed_raw = output_path.parent / "hru_to_dprst_labels.tif"
+
+    try:
+        _reproject_fdr_with_rioxarray(ctx.fdr_raster, dprst_path, fdr_aligned, logger)
+        _prepare_pour_points(dprst_path, pour_pts, logger)
+        _run_whitebox_watershed(fdr_aligned, pour_pts, watershed_raw, logger)
+        _watershed_to_binary(watershed_raw, landmask_path, info, output_path, logger)
+    finally:
+        if not keep_intermediates:
+            for p in (fdr_aligned, pour_pts, watershed_raw):
+                if p.exists():
+                    p.unlink()
+
+    return {"drains_to_dprst": output_path}

@@ -1,0 +1,130 @@
+# Drive every depstor zonal-stats + ratio derivation from a single config.
+# Replaces the 9 *_frac_param.yml files + depstor_ratio_params.yml. Driver:
+# scripts/derive_depstor_params.py (three modes: zonal, merge, ratios).
+#
+# Slurm orchestration: slurm_batch/submit_depstor_params.sh loops over every
+# fraction below and submits an array zonal job + chained merge (afterok), then
+# a single ratios job that depends on every merge.
+#
+# Output layout under {output_dir}:
+#   merged/                  -- final PRMS-ready ratio CSVs (proper [0, 1] values)
+#   merged/_intermediates/   -- per-fraction count CSVs (partial-pixel-weighted
+#                               cell counts per HRU; NOT [0, 1] fractions). Used
+#                               as inputs to the ratio block below; safe to
+#                               ignore for downstream PRMS consumers.
+#
+# Note on the `count` column: gdptools exactextract with categorical=false on a
+# uint8 1/255 binary returns count == sum of partial-pixel coverage fractions
+# for the 1-valued cells per HRU. It is NOT a fraction in [0, 1]; to get a
+# fraction you must divide by the HRU's total pixel count (see the new
+# `hru_total` fraction below — it aggregates land_mask.tif to give exactly
+# that denominator, and the `hru_percent_imperv` / `dprst_frac` ratios below
+# do the division).
+
+defaults:
+  batch_dir:                  "{data_root}/{fabric}/batches"
+  target_layer:               nhru
+  id_feature:                 nat_hru_id
+  output_dir:                 "{data_root}/{fabric}/params"
+  merged_subdir:              merged
+  merged_intermediates_subdir: merged/_intermediates
+  categorical:                false
+  count_column:               count
+
+fractions:
+  - name: perv_frac
+    source_raster: "{data_root}/{fabric}/depstor_rasters/perv_binary.tif"
+    merged_file:   nhm_perv_frac_params.csv
+
+  - name: imperv_frac
+    source_raster: "{data_root}/{fabric}/depstor_rasters/imperv_binary.tif"
+    merged_file:   nhm_imperv_frac_params.csv
+
+  - name: dprst_frac
+    source_raster: "{data_root}/{fabric}/depstor_rasters/dprst_binary.tif"
+    merged_file:   nhm_dprst_frac_params.csv
+
+  - name: drains_perv_frac
+    source_raster: "{data_root}/{fabric}/depstor_rasters/drains_perv_binary.tif"
+    merged_file:   nhm_drains_perv_frac_params.csv
+
+  - name: drains_imperv_frac
+    source_raster: "{data_root}/{fabric}/depstor_rasters/drains_imperv_binary.tif"
+    merged_file:   nhm_drains_imperv_frac_params.csv
+
+  - name: onstream_storage_frac
+    source_raster: "{data_root}/{fabric}/depstor_rasters/onstream_binary.tif"
+    merged_file:   nhm_onstream_storage_frac_params.csv
+
+  - name: drains_to_dprst_frac
+    source_raster: "{data_root}/{fabric}/depstor_rasters/drains_to_dprst.tif"
+    merged_file:   nhm_drains_to_dprst_frac_params.csv
+
+  - name: carea_t8_frac
+    source_raster: "{data_root}/{fabric}/depstor_rasters/carea_map_t8_binary.tif"
+    merged_file:   nhm_carea_t8_frac_params.csv
+
+  - name: carea_t156_frac
+    source_raster: "{data_root}/{fabric}/depstor_rasters/carea_map_t156_binary.tif"
+    merged_file:   nhm_carea_t156_frac_params.csv
+
+  # Aggregating land_mask.tif (uint8 1=land, 255=nodata) gives the per-HRU
+  # total pixel count needed as the denominator for hru_percent_imperv and
+  # the PRMS dprst_frac. Same partial-pixel weighting convention as every
+  # other fraction above, so the count ratios are dimensionless.
+  - name: hru_total
+    source_raster: "{data_root}/{fabric}/depstor_rasters/land_mask.tif"
+    merged_file:   nhm_hru_total_count_params.csv
+
+# Ratio derivations -- final PRMS parameters in {output_dir}/{merged_subdir}/.
+# numerator/denominator reference fraction `name`s above; derive_depstor_params
+# resolves them to the matching count CSVs in {merged_intermediates_subdir}/.
+# Both sides share partial-pixel weighting, so the ratio is a true [0, 1].
+# Clamp-to-one per ArcPy source (docs/0b_TB_depr_stor.py:220-312): getCarea
+# outputs are clamped at 1.0; sro_to_dprst_* and the area-fraction ratios
+# (hru_percent_imperv, dprst_frac) are mathematically bounded in [0, 1] so
+# no clamp is needed.
+ratios:
+  - name: sro_to_dprst_perv
+    numerator:    drains_perv_frac
+    denominator:  perv_frac
+    clamp_to_one: false
+    output_file:  nhm_sro_to_dprst_perv_params.csv
+
+  - name: sro_to_dprst_imperv
+    numerator:    drains_imperv_frac
+    denominator:  imperv_frac
+    clamp_to_one: false
+    output_file:  nhm_sro_to_dprst_imperv_params.csv
+
+  - name: carea_max
+    numerator:    carea_t8_frac
+    denominator:  perv_frac
+    clamp_to_one: true
+    output_file:  nhm_carea_max_params.csv
+
+  - name: smidx_coef
+    numerator:    carea_t156_frac
+    denominator:  perv_frac
+    clamp_to_one: true
+    output_file:  nhm_smidx_coef_params.csv
+
+  # imperv_count / hru_pixel_count -- per-HRU fraction of land area classified
+  # as impervious. Bounded in [0, 1] by construction.
+  - name: hru_percent_imperv
+    numerator:    imperv_frac
+    denominator:  hru_total
+    clamp_to_one: false
+    output_file:  nhm_hru_percent_imperv_params.csv
+
+  # dprst_count / hru_pixel_count -- per-HRU fraction of land area classified
+  # as depression storage. Bounded in [0, 1] by construction.
+  # NB: filename collides with the intermediate count CSV (also named
+  # nhm_dprst_frac_params.csv); the two live in different subdirs:
+  #   {merged_subdir}/nhm_dprst_frac_params.csv             <-- PRMS [0, 1] param
+  #   {merged_intermediates_subdir}/nhm_dprst_frac_params.csv <-- count
+  - name: dprst_frac
+    numerator:    dprst_frac
+    denominator:  hru_total
+    clamp_to_one: false
+    output_file:  nhm_dprst_frac_params.csv

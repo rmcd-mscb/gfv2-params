@@ -1,0 +1,36 @@
+#!/bin/bash
+#SBATCH -p cpu
+#SBATCH -A impd
+#SBATCH --job-name=build_depstor_rasters
+#SBATCH --output=logs/job_%j.out
+#SBATCH --error=logs/job_%j.err
+#SBATCH --time=18:00:00
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=8
+#SBATCH --mem=192G
+#
+# Build the entire depression-storage raster stack in dependency order
+# (landmask -> imperv/streambuffer/waterbody -> dprst -> perv/routing
+#  -> drains_perv/drains_imperv -> carea_map). Resources are sized for the
+# long pole (WhiteboxTools routing on CONUS). For VPU01 / smaller fabrics,
+# override at submission:
+#
+#   FABRIC=gfv2_vpu01 sbatch --time=02:00:00 --mem=48G \
+#       slurm_batch/build_depstor_rasters.batch
+#
+# Extra args after the batch path are forwarded to python via "$@",
+# so e.g. --force or --from <step> can be passed through:
+#
+#   sbatch slurm_batch/build_depstor_rasters.batch --from routing --force
+
+cd "$SLURM_SUBMIT_DIR"
+[ -f .pixi-activate.sh ] || { echo "ERROR: missing .pixi-activate.sh — run scripts/refresh_pixi_activation.sh" >&2; exit 1; }
+source .pixi-activate.sh
+BASE_CONFIG=${BASE_CONFIG:-configs/base_config.yml}
+FABRIC=${FABRIC:-gfv2}
+
+python scripts/build_depstor_rasters.py \
+    --config configs/depstor_rasters.yml \
+    --base_config "$BASE_CONFIG" \
+    --fabric "$FABRIC" \
+    "$@"

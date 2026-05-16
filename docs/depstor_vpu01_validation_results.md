@@ -1,5 +1,27 @@
 # Depression-storage VPU 01 validation results (issue #38)
 
+> **2026-05-16 update (PR #72).** This document is a historical record of the
+> validation runs on `feat/depstor-validation-issue-38`. The script and
+> config names referenced below (e.g. `scripts/build_depstor_imperv.py`,
+> `configs/dprst_frac_param.yml`) predate the consolidation in
+> [PR #72](https://github.com/rmcd-mscb/gfv2-params/pull/72) and no longer
+> exist on `main`. They have been replaced by 2 orchestrators
+> (`scripts/build_depstor_rasters.py`, `scripts/derive_depstor_params.py`)
+> + 2 unified configs — see [`docs/depstor_port_summary.md`](depstor_port_summary.md)
+> §v2 architecture for the mapping. The validation findings themselves
+> remain valid. Specifically:
+>
+> - **CSV semantic note (line 77, follow-up item 1 at line 113):** ✓ Resolved
+>   in PR #72. The "fraction" CSVs are now in `merged/_intermediates/` with
+>   `count` clearly identified as a partial-pixel-weighted cell count, and
+>   two new ratios — `hru_percent_imperv` and `dprst_frac` — emit proper
+>   [0, 1] PRMS values in `merged/`. The qaqc notebook normalises before
+>   plotting.
+> - **`build_depstor_routing.py` sanity assertion (follow-up item 2 at
+>   line 115):** still pending. The 50%-coverage warning is now in
+>   `src/gfv2_params/depstor_builders/routing.py:_watershed_to_binary`
+>   (carried forward from the pre-consolidation script) but does not abort.
+
 Branch: `feat/depstor-validation-issue-38`
 Run 1: 2026-05-11 15:39–15:45 UTC (initial submission, 8/9 jobs COMPLETED — routing failed)
 Run 2: 2026-05-11 16:25 UTC (resubmit after `_FillValue` fix — routing surfaced WBT/ZSTD bug)
