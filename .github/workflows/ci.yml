@@ -1,0 +1,37 @@
+name: ci
+
+# Test gate for push to main and every PR targeting main. The project's HPC
+# environment doesn't run pytest on the head node (shared-FS GDAL/PROJ import
+# storms; see slurm_batch/RUNME.md notes), so CI is where the test suite gets
+# exercised.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# Cancel an in-flight PR run if a new commit is pushed. Keep main runs intact.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install pixi + materialise dev env
+        uses: prefix-dev/setup-pixi@v0.8.1
+        with:
+          environments: dev
+          # Cache the resolved env keyed off pixi.lock + the workflow file
+          # so we don't re-download GDAL/PROJ on every run.
+          cache: true
+
+      - name: Run pytest
+        # `-e dev` selects the env that adds pytest on top of the runtime deps.
+        # `tests/` excludes notebooks/_legacy. `-ra` summarises non-pass results.
+        run: pixi run -e dev pytest tests/ -v -ra
