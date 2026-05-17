@@ -1,0 +1,42 @@
+#!/bin/bash
+#SBATCH -p cpu
+#SBATCH -A impd
+#SBATCH --job-name=build_shared_rasters
+#SBATCH --output=logs/job_%j.out
+#SBATCH --error=logs/job_%j.err
+#SBATCH --time=12:00:00
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=16
+#SBATCH --mem=96G
+
+# Walk the full CONUS shared-rasters DAG via the unified orchestrator (PR #74).
+# This is the recommended production entrypoint for generating every
+# fabric-independent raster under {data_root}/shared/ — replaces the chain of
+# per-step sbatch launches (merge_rpu_by_vpu.batch, compute_slope_aspect.batch,
+# build_border_dem.batch, build_vpu_landmask.batch, build_vrt.batch,
+# build_derived_rasters.batch, build_lulc_rasters.batch).
+#
+# Cached steps skip in seconds; cold-cache cost is dominated by the four LULC
+# resamples (~25-30 min each on CONUS-scale grids, multithreaded since PR #77).
+# 12 h wall is generous headroom for a first-time CONUS build.
+#
+# Env knobs:
+#   FORCE=1            rebuild outputs that already exist
+#   VPUS=01,10         restrict per-VPU steps to a comma-separated subset
+#
+# Per-step debugging: the individual slurm_batch/*.batch files remain as thin
+# shells around the same library builders — use them when you want per-step
+# granularity or per-VPU parallelism via SLURM arrays.
+
+set -euo pipefail
+
+cd "$SLURM_SUBMIT_DIR"
+[ -f .pixi-activate.sh ] || { echo "ERROR: missing .pixi-activate.sh — run scripts/refresh_pixi_activation.sh" >&2; exit 1; }
+source .pixi-activate.sh
+
+FORCE=${FORCE:+--force}
+VPUS_OVERRIDE=${VPUS:+--vpus $VPUS}
+
+python scripts/build_shared_rasters.py \
+    --config configs/shared_rasters.yml \
+    $VPUS_OVERRIDE $FORCE

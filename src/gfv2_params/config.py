@@ -187,7 +187,7 @@ def load_config(
                 replacements[key] = str_val
 
     # Resolve placeholders in fabric-profile values flattened onto base
-    # (e.g., template_raster: "{data_root}/work/01/Hydrodem_merged_01.tif").
+    # (e.g., template_raster: "{data_root}/shared/per_vpu/01/Hydrodem_merged_01.tif").
     # Step config values can override these and are resolved next.
     resolved_base = _resolve_placeholders(base, replacements)
     resolved_step = _resolve_placeholders(step, replacements)

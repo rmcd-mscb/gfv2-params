@@ -2,7 +2,7 @@
 
 Each submodule exposes a single ``build(step_cfg, ctx, logger) -> dict[str, Path]``
 function that produces named outputs in the shared raster store under
-``{data_root}/work/``. The orchestrator at ``scripts/build_shared_rasters.py``
+``{data_root}/shared/``. The orchestrator at ``scripts/build_shared_rasters.py``
 walks STEP_ORDER, calling each builder in dependency order; outputs are
 recorded in ``ctx.paths`` so downstream steps can reference them by short name.
 
@@ -11,9 +11,6 @@ per-VPU NHDPlus prep, border DEM fill, per-VPU landmask, CONUS VRT assembly,
 and CONUS-scale derived rasters. Unlike the depstor pipeline, there is no
 fabric concept — these rasters are reused across every fabric. Per-VPU steps
 iterate ``ctx.vpus`` internally rather than being launched once per VPU.
-
-Steps are migrated to library mode incrementally; STEP_ORDER and BUILDERS
-fill in as each cluster lands on this branch.
 """
 
 from __future__ import annotations
