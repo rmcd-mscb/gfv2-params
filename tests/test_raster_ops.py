@@ -113,6 +113,53 @@ def test_resample_file_not_found():
             )
 
 
+def test_resample_atomic_rename_clears_stale_tmp_and_leaves_no_tmp_on_success():
+    """Atomic-rename guard: stale .tmp files at the target paths are unlinked
+    before a fresh run, and no .tmp companions remain after success.
+
+    Regression test for the corruption mode in job 20515994: a previous job
+    killed mid-write left a 4.75 GB partial cnpy_resampled_nalcms.tif that
+    rasterio could still open, so the orchestrator's _is_valid_raster()
+    skipped the resample and the next run consumed a 96%-incomplete file.
+    With the .tmp + os.replace pattern, partial state lives at <path>.tmp
+    where the existence check at the final <path> never sees it.
+    """
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmpdir = Path(tmpdir)
+        src_path = tmpdir / "src.tif"
+        tmpl_path = tmpdir / "tmpl.tif"
+        intermediate_path = tmpdir / "intermediate.tif"
+        output_path = tmpdir / "output.tif"
+
+        data = np.array([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0], [7.0, 8.0, 9.0]], dtype=np.float32)
+        _write_tiff(src_path, data)
+        _write_tiff(tmpl_path, np.ones((3, 3), dtype=np.float32))
+
+        # Simulate the post-kill state: stale .tmp files from a previous
+        # interrupted run sitting at both expected paths. They should be
+        # unlinked at the top of resample() before any work begins.
+        stale_intermediate_tmp = Path(f"{intermediate_path}.tmp")
+        stale_output_tmp = Path(f"{output_path}.tmp")
+        stale_intermediate_tmp.write_bytes(b"garbage from prior killed run")
+        stale_output_tmp.write_bytes(b"garbage from prior killed run")
+        assert stale_intermediate_tmp.exists()
+        assert stale_output_tmp.exists()
+
+        resample(str(src_path), str(tmpl_path), str(intermediate_path), str(output_path))
+
+        # Final outputs are at the canonical paths, NOT at .tmp paths.
+        assert output_path.exists()
+        # The intermediate is deleted at the end of a successful run.
+        assert not intermediate_path.exists()
+        # No .tmp companions should survive a successful run.
+        assert not stale_intermediate_tmp.exists()
+        assert not stale_output_tmp.exists()
+        # And the output is a valid raster (sanity check — confirms the
+        # rename produced a real file, not just the absence of .tmp).
+        with rasterio.open(str(output_path)) as src:
+            assert src.read(1).shape == (3, 3)
+
+
 def test_mult_rasters_basic():
     """Element-wise multiplication of two 3x3 rasters."""
     with tempfile.TemporaryDirectory() as tmpdir:
