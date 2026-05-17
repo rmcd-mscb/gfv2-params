@@ -1,0 +1,45 @@
+# Unified config for the CONUS shared-raster pipeline.
+# Driven by scripts/build_shared_rasters.py.
+#
+# These rasters live under {data_root}/work/ and are reused across every
+# fabric profile; they are produced once and consumed by every downstream
+# fabric-specific zonal-stats and depstor pipeline.
+#
+# Migration is incremental: this file's `steps:` list grows as each
+# cluster of scripts is refactored to library mode. See PLANNED_STEPS in
+# src/gfv2_params/shared_rasters/__init__.py for the roadmap.
+
+# Per-VPU loop scope. Per-VPU steps iterate this list internally rather
+# than being launched once per VPU. Override at the CLI with --vpus to
+# scope a partial run (e.g., --vpus 01 for VPU01 validation only).
+vpus:
+  - "01"
+  - "02"
+  - "03N"
+  - "03S"
+  - "03W"
+  - "04"
+  - "05"
+  - "06"
+  - "07"
+  - "08"
+  - "09"
+  - "10L"
+  - "10U"
+  - "11"
+  - "12"
+  - "13"
+  - "14"
+  - "15"
+  - "16"
+  - "17"
+  - "18"
+
+# Base output directory for the shared raster store. Steps namespace within.
+output_dir: "{data_root}/work"
+
+# Step DAG. Each entry has a `name` matched against STEP_ORDER in
+# gfv2_params.shared_rasters and step-specific config. Empty until the
+# first cluster lands (commit 2b: merge_rpu_by_vpu, compute_slope_aspect,
+# compute_dem_derivatives).
+steps: []
