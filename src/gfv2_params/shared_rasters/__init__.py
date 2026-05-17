@@ -20,6 +20,8 @@ from __future__ import annotations
 
 from . import (
     build_border_dem,
+    build_derived_rasters,
+    build_lulc_rasters,
     build_vpu_landmask,
     build_vrt,
     compute_dem_derivatives,
@@ -43,6 +45,8 @@ BUILDERS: dict = {
     "compute_dem_derivatives": compute_dem_derivatives.build,
     "merge_rpu_by_vpu_twi":    merge_rpu_by_vpu.build,  # post-landmask invocation
     "build_vrt":               build_vrt.build,
+    "build_derived_rasters":   build_derived_rasters.build,
+    "build_lulc_rasters":      build_lulc_rasters.build,
 }
 
 STEP_ORDER: list[str] = [
@@ -53,24 +57,13 @@ STEP_ORDER: list[str] = [
     "compute_dem_derivatives",  # optional / parallel
     "merge_rpu_by_vpu_twi",
     "build_vrt",
-]
-
-# Roadmap. Names move from PLANNED_STEPS into STEP_ORDER + BUILDERS as each
-# cluster lands. Standard production flow:
-#   2b (DONE): merge_rpu_by_vpu, compute_slope_aspect, merge_rpu_by_vpu_twi
-#   2c (DONE): compute_dem_derivatives (optional / parallel pipeline)
-#   2d (DONE): build_border_dem, build_vpu_landmask, build_vrt
-#   2e:        build_derived_rasters, build_lulc_rasters
-PLANNED_STEPS = [
-    "merge_rpu_by_vpu",
-    "compute_slope_aspect",
-    "build_border_dem",
-    "build_vpu_landmask",
-    "compute_dem_derivatives",  # optional / parallel
-    "merge_rpu_by_vpu_twi",
-    "build_vrt",
     "build_derived_rasters",
     "build_lulc_rasters",
 ]
+
+# Migration complete: every step from PLANNED_STEPS is now registered in
+# STEP_ORDER + BUILDERS. The list is preserved as a documentation
+# reference so the production pipeline shape stays visible in one place.
+PLANNED_STEPS = list(STEP_ORDER)
 
 __all__ = ["BUILDERS", "STEP_ORDER", "PLANNED_STEPS", "SharedRastersContext"]

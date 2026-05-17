@@ -73,3 +73,17 @@ steps:
   # nhd_merged/ and lists copernicus_fill/ tiles ahead of NHDPlus tiles so
   # NHDPlus wins the overlap (GDAL last-source-wins).
   - name: build_vrt
+
+  # Stage 2b: derived rasters (soil_moist_max = RootDepth * AWC).
+  # CONUS-once; defaults to standard input/output paths under data_root.
+  - name: build_derived_rasters
+
+  # Stage 2c: LULC derived rasters (resampled CNPY/keep + radtrn). One step
+  # block processes every configured LULC source in order. Comment out a
+  # source path to skip it.
+  - name: build_lulc_rasters
+    sources:
+      - configs/lulc_nhm_v11_param.yml
+      - configs/lulc_nalcms_param.yml
+      - configs/lulc_nlcd_param.yml
+      - configs/lulc_foresce_param.yml
