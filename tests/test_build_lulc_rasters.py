@@ -6,13 +6,29 @@ mid-walk after nalcms had already completed a 17-minute resample).
 """
 
 import logging
-import tempfile
 from pathlib import Path
 
+import numpy as np
+import rasterio
 import yaml
+from rasterio.crs import CRS
+from rasterio.transform import from_bounds
 
 from gfv2_params.shared_rasters.build_lulc_rasters import _build_one_source
 from gfv2_params.shared_rasters.context import SharedRastersContext
+
+
+def _write_tiny_tiff(path: Path) -> None:
+    """Write a 2x2 GeoTIFF so rasterio.open() succeeds. _build_one_source
+    calls _raster_info(...) for logging on every input that exists, so the
+    "existing" inputs in these tests have to be readable rasters, not
+    zero-byte placeholders."""
+    with rasterio.open(
+        str(path), "w", driver="GTiff", height=2, width=2, count=1,
+        dtype="float32", crs=CRS.from_string("EPSG:4326"),
+        transform=from_bounds(0, 0, 2, 2, 2, 2),
+    ) as dst:
+        dst.write(np.ones((2, 2), dtype=np.float32), 1)
 
 
 def _write_config(path: Path, cfg: dict) -> None:
@@ -51,11 +67,16 @@ def test_missing_lulc_source_raster_warns_and_skips(tmp_path, caplog):
 
 
 def test_missing_canopy_raster_warns_and_skips(tmp_path, caplog):
-    """Same warn-and-skip behavior when source_raster exists but canopy is missing."""
+    """Same warn-and-skip behavior when source_raster exists but canopy is missing.
+
+    source_raster must be a real GeoTIFF (not a zero-byte placeholder) because
+    _build_one_source calls _raster_info(lulc_raster) for logging before it
+    gets to check whether canopy_raster exists.
+    """
     data_root = tmp_path / "data_root"
     data_root.mkdir()
     fake_lulc = data_root / "lulc.tif"
-    fake_lulc.write_bytes(b"")  # existence check only; we never read it
+    _write_tiny_tiff(fake_lulc)
     cfg_path = tmp_path / "lulc_missing_cnpy.yml"
     _write_config(cfg_path, {
         "lulc_source": "fake_source",
@@ -71,38 +92,23 @@ def test_missing_canopy_raster_warns_and_skips(tmp_path, caplog):
     assert any("Canopy raster not found" in r.message for r in caplog.records)
 
 
-def test_missing_keep_raster_warns_and_retains_cnpy_output(tmp_path, caplog, monkeypatch):
+def test_missing_keep_raster_warns_and_retains_cnpy_output(tmp_path, caplog):
     """A configured but missing keep_raster yields a warning, skips Steps 2-3,
-    but retains the cnpy_resampled output from Step 1 in the produced dict.
-
-    Stubs resample() so we don't actually do CONUS-scale GDAL work in a test.
-    """
+    but retains the cnpy_resampled output from Step 1 in the produced dict."""
     data_root = tmp_path / "data_root"
     data_root.mkdir()
     derived_dir = data_root / "work" / "derived_rasters"
     derived_dir.mkdir(parents=True)
 
+    # source_raster, canopy_raster, AND cnpy_resampled all need to be real
+    # readable rasters: _build_one_source logs raster info for the first two
+    # (via _raster_info -> rasterio.open), and _is_valid_raster opens the
+    # third to decide whether to skip the Step 1 resample.
     fake_lulc = data_root / "lulc.tif"
-    fake_lulc.write_bytes(b"")
     fake_cnpy = data_root / "cnpy.tif"
-    fake_cnpy.write_bytes(b"")
-
-    # Pre-create a fake cnpy_resampled output so _is_valid_raster's path
-    # check passes and Step 1 takes the "already exists — skipping" branch.
-    # Use a real (tiny) GeoTIFF so rasterio.open() inside _is_valid_raster
-    # actually succeeds.
-    import numpy as np
-    import rasterio
-    from rasterio.crs import CRS
-    from rasterio.transform import from_bounds
-
     cnpy_resampled = derived_dir / "cnpy_resampled_fake_source.tif"
-    with rasterio.open(
-        str(cnpy_resampled), "w", driver="GTiff", height=2, width=2, count=1,
-        dtype="float32", crs=CRS.from_string("EPSG:4326"),
-        transform=from_bounds(0, 0, 2, 2, 2, 2),
-    ) as dst:
-        dst.write(np.ones((2, 2), dtype=np.float32), 1)
+    for p in (fake_lulc, fake_cnpy, cnpy_resampled):
+        _write_tiny_tiff(p)
 
     cfg_path = tmp_path / "lulc_missing_keep.yml"
     _write_config(cfg_path, {
