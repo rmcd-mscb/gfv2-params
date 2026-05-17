@@ -137,7 +137,7 @@ def _build_one_source(source_yaml: Path, ctx: SharedRastersContext, logger) -> d
     keep_raster_str = config.get("keep_raster")
     keep_raster = Path(keep_raster_str) if keep_raster_str else None
 
-    derived_dir = radtrn_raster.parent if radtrn_raster else ctx.data_root / "work" / "derived_rasters"
+    derived_dir = radtrn_raster.parent if radtrn_raster else ctx.derived_dir
     derived_dir.mkdir(parents=True, exist_ok=True)
 
     logger.info("LULC raster  : %s", lulc_raster)

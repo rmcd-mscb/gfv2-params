@@ -6,13 +6,14 @@ unchanged.
 
 Creates GDAL virtual rasters that reference per-VPU source files, allowing
 them to be read as a single CONUS raster without duplicating data on disk.
-If a ``copernicus_fill`` subdirectory exists under ``nhd_merged/``, its
-tiles are listed as lower-priority fill sources before the primary NHDPlus
-VPU tiles. GDAL VRT compositing is last-source-wins, so NHDPlus takes
-priority and fill sources only contribute where NHDPlus has nodata.
+Reads per-VPU sources from ``ctx.per_vpu_dir`` (one subdir per VPU). If a
+``borders_dir`` (Copernicus fill) exists alongside, its tiles are listed as
+lower-priority fill sources before the primary NHDPlus VPU tiles. GDAL VRT
+compositing is last-source-wins, so NHDPlus takes priority and fill sources
+only contribute where NHDPlus has nodata. VRTs are written to ``ctx.vrt_dir``.
 
 CONUS-once: this builder does not iterate ctx.vpus. The per-VPU sources are
-discovered by globbing the nhd_merged directory.
+discovered by globbing the per_vpu directory.
 """
 
 from __future__ import annotations
@@ -44,48 +45,41 @@ RASTER_TYPES = {
     "twi":       ("Twi_merged_*.tif", "-9999"),
 }
 
-# Fill subdirectories whose tiles should be listed BEFORE the primary NHDPlus
-# VPU tiles. GDAL VRT uses last-source-wins for overlapping pixels, so listing
-# NHDPlus last ensures it takes priority and fill sources only contribute
-# where NHDPlus has nodata.
-FILL_DIRS = {"copernicus_fill"}
-
-
 def build(step_cfg: dict, ctx: SharedRastersContext, logger) -> dict:
     """Build CONUS-wide VRTs for elevation, slope, aspect, fdr, twi.
 
-    step_cfg keys (optional):
-      nhd_merged_dir — directory of per-VPU rasters. Defaults to
-                       ``{data_root}/work/nhd_merged``.
+    step_cfg keys (all optional; defaults reference context properties):
+      per_vpu_dir  — per-VPU NHDPlus raster directory. Default ``ctx.per_vpu_dir``.
+      borders_dir  — Copernicus border-DEM fill directory. Default ``ctx.borders_dir``.
+      vrt_dir      — output directory for CONUS VRTs. Default ``ctx.vrt_dir``.
 
     Returns a dict mapping VRT short name (``elevation``, ``slope``, ...) to
     the built VRT path. Recorded in ctx.paths for any downstream consumers.
     """
-    nhd_merged_dir = Path(step_cfg.get(
-        "nhd_merged_dir", ctx.data_root / "work" / "nhd_merged",
-    ))
-    if not nhd_merged_dir.exists():
-        raise FileNotFoundError(f"NHD merged directory not found: {nhd_merged_dir}")
+    per_vpu_dir = Path(step_cfg.get("per_vpu_dir", ctx.per_vpu_dir))
+    borders_dir = Path(step_cfg.get("borders_dir", ctx.borders_dir))
+    vrt_dir = Path(step_cfg.get("vrt_dir", ctx.vrt_dir))
+
+    if not per_vpu_dir.exists():
+        raise FileNotFoundError(f"per_vpu directory not found: {per_vpu_dir}")
+    vrt_dir.mkdir(parents=True, exist_ok=True)
 
     produced: dict = {}
     built_count = 0
     for vrt_name, (pattern, src_nodata) in RASTER_TYPES.items():
         # Primary NHDPlus VPU tiles (listed last = highest priority)
-        primary_files = sorted(
-            f for f in nhd_merged_dir.glob(f"*/{pattern}")
-            if f.parent.name not in FILL_DIRS
-        )
-        # Fill tiles (listed first = lowest priority)
-        fill_files = []
-        for fill_dir_name in sorted(FILL_DIRS):
-            fill_files.extend(sorted(nhd_merged_dir.glob(f"{fill_dir_name}/{pattern}")))
+        primary_files = sorted(per_vpu_dir.glob(f"*/{pattern}"))
+        # Fill tiles (listed first = lowest priority). borders_dir is a flat
+        # directory of tiles; the legacy `copernicus_fill/` subdirectory under
+        # nhd_merged is now a peer of per_vpu_dir, not nested under it.
+        fill_files = sorted(borders_dir.glob(pattern)) if borders_dir.exists() else []
 
         source_files = fill_files + primary_files
         if not source_files:
             logger.warning("No source files found for %s (pattern: */%s)", vrt_name, pattern)
             continue
 
-        vrt_path = nhd_merged_dir / f"{vrt_name}.vrt"
+        vrt_path = vrt_dir / f"{vrt_name}.vrt"
         n_fill = len(fill_files)
         fill_msg = f" + {n_fill} fill" if n_fill else ""
         logger.info("Building %s from %d source files (%d primary%s)",
@@ -105,7 +99,7 @@ def build(step_cfg: dict, ctx: SharedRastersContext, logger) -> dict:
 
     if built_count == 0:
         raise RuntimeError(
-            f"No VRTs were built. Check that {nhd_merged_dir} contains "
+            f"No VRTs were built. Check that {per_vpu_dir} contains "
             "per-VPU subdirectories with merged GeoTIFFs."
         )
     logger.info("VRT build complete: %d of %d types built", built_count, len(RASTER_TYPES))

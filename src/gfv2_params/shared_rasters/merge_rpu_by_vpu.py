@@ -127,7 +127,7 @@ def _process_dataset(
             # mask is strict: only HRUs whose `vpu` attribute matches this
             # VPU are rasterised, so adjacent-VPU drape doesn't survive into
             # the merged TWI footprint.
-            vpu_landmask_path = base_path / "work" / "nhd_merged" / vpu / f"land_mask_{vpu}.tif"
+            vpu_landmask_path = base_path / "shared" / "per_vpu" / vpu / f"land_mask_{vpu}.tif"
             if not vpu_landmask_path.exists():
                 raise FileNotFoundError(
                     f"Per-VPU land mask not found (run build_vpu_landmask first): "

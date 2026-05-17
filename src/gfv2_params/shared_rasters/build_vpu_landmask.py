@@ -6,7 +6,7 @@ working unchanged.
 
 Rasterises HRUs filtered to ``vpu == <vpu>`` onto the per-VPU Hydrodem grid
 (``Hydrodem_merged_<vpu>.tif``), producing
-``work/nhd_merged/<vpu>/land_mask_<vpu>.tif`` — a uint8 1/255 binary raster
+``shared/per_vpu/<vpu>/land_mask_<vpu>.tif`` — a uint8 1/255 binary raster
 where 1 = inside one of this VPU's HRUs, 255 = outside.
 
 Why a per-VPU mask instead of the CONUS ``land_mask.tif`` from PR #69: the
@@ -21,7 +21,7 @@ boundary — striped patterns inside the Hydrodem footprint but outside this
 VPU's HRU fabric.
 
 Fabric-independent by design: the open-source TWI rasters this mask
-constrains are global products (one per VPU under ``work/nhd_merged/``),
+constrains are global products (one per VPU under ``shared/per_vpu/``),
 so the masks are also global. The HRU source is the canonical CONUS fabric
 (``gfv2_nhru_merged.gpkg``); per-fabric HRU subsets are subsets of that
 gpkg and filtering by the ``vpu`` column is sufficient.

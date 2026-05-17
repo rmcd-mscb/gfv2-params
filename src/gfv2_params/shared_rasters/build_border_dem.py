@@ -11,9 +11,9 @@ in the overlap zone via GDAL VRT last-source-wins ordering). Slope and aspect
 are computed via RichDEM on this composite, then masked to retain only pixels
 in the fill zone (where Copernicus has data but NHDPlus does not).
 
-Output tiles are placed in ``work/nhd_merged/copernicus_fill/`` where the
-build_vrt step lists them before NHDPlus tiles in the VRT (GDAL
-last-source-wins means NHDPlus takes priority).
+Output tiles are placed in ``ctx.borders_dir`` (``shared/conus/borders/`` by
+default) where the build_vrt step lists them before NHDPlus tiles in the VRT
+(GDAL last-source-wins means NHDPlus takes priority).
 
 Dependency: must run AFTER compute_slope_aspect (per-VPU), because it needs
 the NHDPlus ``_fixed_`` elevation tiles for the composite.
@@ -46,7 +46,6 @@ OUTPUT_NODATA = -9999
 
 # Glob pattern for NHDPlus _fixed_ elevation tiles (written by compute_slope_aspect).
 NHDPLUS_FIXED_PATTERN = "NEDSnapshot_merged_fixed_*.tif"
-FILL_DIRS = {"copernicus_fill"}
 
 
 def _elapsed(t0: float) -> str:
@@ -55,15 +54,16 @@ def _elapsed(t0: float) -> str:
     return f"{m}m {s:02d}s" if m else f"{s}s"
 
 
-def _build_nhdplus_vrt(nhd_merged_dir: Path, output_vrt: Path) -> Path:
-    """Build a VRT from NHDPlus _fixed_ tiles only (no fill layers)."""
-    primary_files = sorted(
-        f for f in nhd_merged_dir.glob(f"*/{NHDPLUS_FIXED_PATTERN}")
-        if f.parent.name not in FILL_DIRS
-    )
+def _build_nhdplus_vrt(per_vpu_dir: Path, output_vrt: Path) -> Path:
+    """Build a VRT from NHDPlus _fixed_ tiles only (no fill layers).
+
+    In the new layout the per-VPU directory contains only per-VPU subdirs;
+    Copernicus fill lives in a peer ``borders/`` directory under conus/.
+    """
+    primary_files = sorted(per_vpu_dir.glob(f"*/{NHDPLUS_FIXED_PATTERN}"))
     if not primary_files:
         raise FileNotFoundError(
-            f"No NHDPlus _fixed_ tiles found in {nhd_merged_dir}. "
+            f"No NHDPlus _fixed_ tiles found in {per_vpu_dir}. "
             "Run compute_slope_aspect first."
         )
     vrt_options = gdal.BuildVRTOptions(
@@ -201,13 +201,15 @@ def build(step_cfg: dict, ctx: SharedRastersContext, logger) -> dict:
     """Build Copernicus DEM fill for Canada/Mexico border HRUs.
 
     CONUS-once: does not iterate ctx.vpus. NHDPlus source tiles are discovered
-    by globbing ``nhd_merged_dir`` for per-VPU _fixed_ tiles.
+    by globbing ``per_vpu_dir`` for per-VPU _fixed_ tiles.
 
-    step_cfg keys (optional):
-      raw_dir         — Copernicus tile cache. Defaults to
-                        ``{data_root}/input/copernicus_dem/raw``.
-      nhd_merged_dir  — NHDPlus merged-tile directory. Defaults to
-                        ``{data_root}/work/nhd_merged``.
+    step_cfg keys (all optional; defaults reference context properties):
+      raw_dir       — Copernicus tile cache. Default
+                      ``{data_root}/input/copernicus_dem/raw``.
+      per_vpu_dir   — NHDPlus per-VPU merged-tile directory. Default
+                      ``ctx.per_vpu_dir``.
+      borders_dir   — output directory for border fill tiles. Default
+                      ``ctx.borders_dir``.
 
     Returns a dict with the three CONUS fill outputs registered for any
     downstream consumer that wants them.
@@ -217,10 +219,8 @@ def build(step_cfg: dict, ctx: SharedRastersContext, logger) -> dict:
     raw_dir = Path(step_cfg.get(
         "raw_dir", ctx.data_root / "input" / "copernicus_dem" / "raw",
     ))
-    nhd_merged_dir = Path(step_cfg.get(
-        "nhd_merged_dir", ctx.data_root / "work" / "nhd_merged",
-    ))
-    fill_dir = nhd_merged_dir / "copernicus_fill"
+    per_vpu_dir = Path(step_cfg.get("per_vpu_dir", ctx.per_vpu_dir))
+    fill_dir = Path(step_cfg.get("borders_dir", ctx.borders_dir))
     fill_dir.mkdir(parents=True, exist_ok=True)
 
     elev_out = fill_dir / "NEDSnapshot_merged_fixed_copernicus.tif"
@@ -334,7 +334,7 @@ def build(step_cfg: dict, ctx: SharedRastersContext, logger) -> dict:
     if not slope_out.exists() or not aspect_out.exists() or ctx.force:
         try:
             logger.info("=== Step 3/5: Build composite elevation VRT ===")
-            _build_nhdplus_vrt(nhd_merged_dir, nhdplus_vrt)
+            _build_nhdplus_vrt(per_vpu_dir, nhdplus_vrt)
             logger.info("  NHDPlus-only VRT: %s", nhdplus_vrt)
             _build_composite_vrt(elev_out, nhdplus_vrt, composite_vrt)
             logger.info("  Composite VRT: %s", composite_vrt)

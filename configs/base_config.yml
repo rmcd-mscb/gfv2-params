@@ -11,13 +11,13 @@ fabrics:
   gfv2:
     expected_max_hru_id: 361471
     batch_size: 10000
-    template_raster: "{data_root}/work/nhd_merged/elevation.vrt"
+    template_raster: "{data_root}/shared/conus/vrt/elevation.vrt"
     # FDR is CONUS hydrology, not fabric-specific. Use the shared open-source
     # VRT assembled by build_vrt.py from per-VPU Fdr_merged_*.tif. (Contrast
     # with twi_raster, where the ArcPy `Twi_merged_*` source is preferred over
     # the open-source `Twi_hydrodem_*` for PRMS calibration thresholds.)
-    fdr_raster: "{data_root}/work/nhd_merged/fdr.vrt"
-    twi_raster: "{data_root}/work/nhd_merged/twi.vrt"
+    fdr_raster: "{data_root}/shared/conus/vrt/fdr.vrt"
+    twi_raster: "{data_root}/shared/conus/vrt/twi.vrt"
     segments_gpkg: "{data_root}/input/depstor/{fabric}_segments_wbodies.gpkg"
     waterbody_gpkg: "{data_root}/input/depstor/{fabric}_segments_wbodies.gpkg"
     waterbody_layer: v2_wb
@@ -25,7 +25,7 @@ fabrics:
     # builders. gfv2_params.depstor_builders.landmask rasterises this to
     # land_mask.tif (driven by scripts/build_depstor_rasters.py).
     # The per-VPU TWI scripts consume the per-VPU mask built by
-    # build_vpu_landmask.py (work/nhd_merged/<vpu>/land_mask_<vpu>.tif),
+    # build_vpu_landmask.py (shared/per_vpu/<vpu>/land_mask_<vpu>.tif),
     # not the CONUS depstor land_mask, because the per-VPU Hydrodem
     # footprints bulge past each VPU's HRU boundary.
     hru_gpkg: "{data_root}/{fabric}/fabric/gfv2_nhru_merged.gpkg"
@@ -33,13 +33,13 @@ fabrics:
 
   gfv2_vpu01:
     # VPU01 validation overlay (issue #38). Uses the per-VPU staged inputs
-    # under work/nhd_merged/01/ and the NHM_01_draft fabric gpkg directly,
+    # under shared/per_vpu/01/ and the NHM_01_draft fabric gpkg directly,
     # sidestepping the chunked CONUS reproject (issue #41).
     expected_max_hru_id: 11278
     batch_size: 2000
-    template_raster: "{data_root}/work/nhd_merged/01/Hydrodem_merged_01.tif"
-    fdr_raster: "{data_root}/work/nhd_merged/01/Fdr_merged_01.tif"
-    twi_raster: "{data_root}/work/nhd_merged/01/Twi_merged_01.tif"
+    template_raster: "{data_root}/shared/per_vpu/01/Hydrodem_merged_01.tif"
+    fdr_raster: "{data_root}/shared/per_vpu/01/Fdr_merged_01.tif"
+    twi_raster: "{data_root}/shared/per_vpu/01/Twi_merged_01.tif"
     segments_gpkg: "{data_root}/input/fabric/NHM_01_draft.gpkg"
     waterbody_gpkg: "{data_root}/input/fabric/NHM_01_draft.gpkg"
     waterbody_layer: wbs

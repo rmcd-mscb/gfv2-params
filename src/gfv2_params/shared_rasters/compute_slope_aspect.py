@@ -70,15 +70,15 @@ def _process_vpu(vpu: str, input_dir: Path, output_dir: Path, force: bool, logge
 def build(step_cfg: dict, ctx: SharedRastersContext, logger) -> dict:
     """Compute slope + aspect for every VPU in ``ctx.vpus``.
 
-    step_cfg keys:
-      input_dir  — per-VPU DEM source directory (templated against {data_root})
-      output_dir — per-VPU slope/aspect output directory (templated)
+    step_cfg keys (all optional; defaults reference ``ctx.per_vpu_dir``):
+      input_dir  — per-VPU DEM source directory
+      output_dir — per-VPU slope/aspect output directory
 
     Returns an empty dict — per-VPU outputs are not registered in ctx.paths
     (downstream consumers re-template per-VPU paths off conventional patterns).
     """
-    input_dir = Path(step_cfg["input_dir"])
-    output_dir = Path(step_cfg["output_dir"])
+    input_dir = Path(step_cfg.get("input_dir", ctx.per_vpu_dir))
+    output_dir = Path(step_cfg.get("output_dir", ctx.per_vpu_dir))
     output_dir.mkdir(parents=True, exist_ok=True)
 
     if not ctx.vpus:
