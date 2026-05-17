@@ -1,0 +1,40 @@
+#!/bin/bash
+#SBATCH -p cpu
+#SBATCH -A impd
+#SBATCH --job-name=zonal_param
+#SBATCH --output=logs/job_%A_%a.out
+#SBATCH --error=logs/job_%A_%a.err
+#SBATCH --time=04:00:00
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=2
+#SBATCH --mem=32G
+#
+# Array task: zonal-stats one Part 2 param over one HRU batch.
+# Submitted by slurm_batch/submit_zonal_params.sh; the wrapper exports
+# PARAM (e.g. elevation, slope, soils, lulc_nhm_v11, ssflux, ...) and FABRIC.
+#
+# The orchestrator dispatches on the param's `script:` tag in
+# configs/zonal_params.yml (zonal / soils / lulc / ssflux) -> the matching
+# gfv2_params.zonal_runners.run_*_batch function.
+#
+# Time bumped to 4h to cover ssflux + LULC param types (which do more work
+# per batch than elev/slope/aspect). Lighter params finish well under this.
+
+cd "$SLURM_SUBMIT_DIR"
+[ -f .pixi-activate.sh ] || { echo "ERROR: missing .pixi-activate.sh — run scripts/refresh_pixi_activation.sh" >&2; exit 1; }
+source .pixi-activate.sh
+BASE_CONFIG=${BASE_CONFIG:-configs/base_config.yml}
+FABRIC=${FABRIC:-gfv2}
+
+if [ -z "${PARAM:-}" ]; then
+    echo "ERROR: PARAM env var not set. Submit via submit_zonal_params.sh." >&2
+    exit 1
+fi
+
+python scripts/derive_zonal_params.py \
+    --config configs/zonal_params.yml \
+    --base_config "$BASE_CONFIG" \
+    --fabric "$FABRIC" \
+    --mode zonal \
+    --param "$PARAM" \
+    --batch_id "$SLURM_ARRAY_TASK_ID"

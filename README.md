@@ -278,6 +278,39 @@ and [docs/depstor_port_summary.md](docs/depstor_port_summary.md) for the
 ArcPy-to-open-source port summary. Stage 2d in `slurm_batch/RUNME.md` lists the
 build order and dependencies.
 
+## Zonal-pass parameter pipeline
+
+The Part 2 per-fabric zonal-pass parameter pipeline is driven by one
+orchestrator over one unified config:
+
+- [scripts/derive_zonal_params.py](scripts/derive_zonal_params.py) reads
+  [configs/zonal_params.yml](configs/zonal_params.yml) and dispatches every
+  Part 2 param type (`elevation`, `slope`, `aspect`, `soils`,
+  `soil_moist_max`, `lulc_nhm_v11`, `lulc_nalcms`, `lulc_nlcd`,
+  `lulc_foresce`, `ssflux`) into the matching per-script work function
+  under [src/gfv2_params/zonal_runners.py](src/gfv2_params/zonal_runners.py).
+  Three modes: `--mode zonal --param <name> --batch_id <N>`,
+  `--mode merge --param <name>`, `--mode build_weights` (CONUS-once ssflux
+  prereq).
+- The slurm wrapper
+  [slurm_batch/submit_zonal_params.sh](slurm_batch/submit_zonal_params.sh)
+  loops every entry in `params:` and submits per-param array + merge jobs
+  in one go (chained via `afterok`). When an entry carries
+  `depends_on: build_weights` (typically `ssflux`), the wrapper submits
+  `build_zonal_weights.batch` first and chains the ssflux array + merge on
+  its `afterok`. ssflux also chains on the merged slope CSV.
+
+```bash
+FABRIC=gfv2_vpu01 bash slurm_batch/submit_zonal_params.sh \
+    {data_root}/gfv2_vpu01/batches gfv2_vpu01 configs/base_config.yml
+```
+
+The per-script entry points and per-step sbatch files
+(`scripts/create_zonal_params.py`, `slurm_batch/create_zonal_elev_params.batch`,
+etc.) are preserved as thin shells around the same
+`gfv2_params.zonal_runners` functions for per-step debugging or per-VPU
+SLURM-array runs against a single param.
+
 ## Configuration
 
 `configs/base_config.yml` is the single source of truth for the data root and
