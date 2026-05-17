@@ -38,11 +38,8 @@ def resample(
     if not Path(template_path).exists():
         raise FileNotFoundError(f"Template raster not found: {template_path}")
 
-    src = gdal.Open(src_path, gdalconst.GA_ReadOnly)
-    if src is None:
-        raise FileNotFoundError(f"Source raster not found: {src_path}")
-    src_proj = src.GetProjection()
-
+    # Read template geometry once, then close — gdal.Warp takes the spatial
+    # reference + bounds as parameters and opens the source itself.
     tmpl = gdal.Open(template_path, gdalconst.GA_ReadOnly)
     if tmpl is None:
         raise FileNotFoundError(f"Template raster not found: {template_path}")
@@ -50,60 +47,89 @@ def resample(
     tmpl_geotrans = tmpl.GetGeoTransform()
     width = tmpl.RasterXSize
     height = tmpl.RasterYSize
+    del tmpl
 
-    driver = gdal.GetDriverByName("GTiff")
-    if driver is None:
-        raise RuntimeError("GDAL GTiff driver not available")
-    dst = driver.Create(
-        intermediate_path,
-        width,
-        height,
-        1,
-        gdalconst.GDT_Float32,
-        options=["COMPRESS=LZW", "TILED=YES", "BLOCKXSIZE=512", "BLOCKYSIZE=512", "BIGTIFF=YES"],
-    )
-    if dst is None:
-        raise RuntimeError(f"Failed to create output raster: {intermediate_path}")
-    dst.SetGeoTransform(tmpl_geotrans)
-    dst.SetProjection(tmpl_proj)
+    output_bounds = [
+        tmpl_geotrans[0],                          # minx
+        tmpl_geotrans[3] + height * tmpl_geotrans[5],  # miny (geotrans[5] negative)
+        tmpl_geotrans[0] + width * tmpl_geotrans[1],   # maxx
+        tmpl_geotrans[3],                          # maxy
+    ]
 
+    # Atomic-rename: do every write to a `.tmp` companion path, rename to the
+    # final name only after the operation succeeds. Without this, a job killed
+    # mid-write leaves a partial file whose TIFF header is intact — rasterio
+    # opens it cleanly, the existence/validity check passes, and the next run
+    # silently consumes a corrupted output. See job 20515994 for the precise
+    # symptom (4.75 GB partial cnpy_resampled_nalcms.tif passed _is_valid_raster).
+    intermediate_tmp = Path(f"{intermediate_path}.tmp")
+    output_tmp = Path(f"{output_path}.tmp")
+    intermediate_tmp.unlink(missing_ok=True)
+    output_tmp.unlink(missing_ok=True)
+
+    # Stage 1: reproject source onto template grid via multithreaded GDAL Warp.
+    # `gdal.ReprojectImage` is single-threaded; switching to gdal.Warp with
+    # NUM_THREADS=ALL_CPUS yields a 4-8x speedup on CONUS-scale targets and
+    # unblocks first-time builds of the large-grid LULC sources (NALCMS, NLCD).
     logger.info(
-        "  GDAL ReprojectImage: %s -> %s  (%d x %d pixels)",
+        "  GDAL Warp (multithreaded): %s -> %s  (%d x %d pixels)",
         Path(src_path).name,
-        Path(intermediate_path).name,
+        intermediate_tmp.name,
         width,
         height,
     )
     t_gdal = time.time()
-    err = gdal.ReprojectImage(src, dst, src_proj, tmpl_proj, gdalconst.GRA_NearestNeighbour)
-    if err != 0:
-        raise RuntimeError(f"GDAL ReprojectImage failed with error code {err}")
-    del dst
-    del src
-    del tmpl
-    logger.info("  GDAL reproject done in %.0f s", time.time() - t_gdal)
+    warp_ds = gdal.Warp(
+        str(intermediate_tmp),
+        str(src_path),
+        format="GTiff",
+        dstSRS=tmpl_proj,
+        outputBounds=output_bounds,
+        xRes=abs(tmpl_geotrans[1]),
+        yRes=abs(tmpl_geotrans[5]),
+        resampleAlg=gdal.GRA_NearestNeighbour,
+        outputType=gdalconst.GDT_Float32,
+        multithread=True,
+        warpOptions=["NUM_THREADS=ALL_CPUS"],
+        creationOptions=[
+            "COMPRESS=LZW", "TILED=YES",
+            "BLOCKXSIZE=1024", "BLOCKYSIZE=1024",
+            "BIGTIFF=YES", "NUM_THREADS=ALL_CPUS",
+        ],
+    )
+    if warp_ds is None:
+        raise RuntimeError(f"gdal.Warp failed: {src_path} -> {intermediate_tmp}")
+    warp_ds.FlushCache()
+    del warp_ds
+    intermediate_tmp.replace(intermediate_path)
+    logger.info("  GDAL Warp done in %.0f s", time.time() - t_gdal)
 
+    # Stage 2: block-wise NoData mask + write final. Output is float32 (was
+    # float64) — the source data is uint8 with ~3-digit precision, so float64
+    # was wasting an entire bit-plane of disk + I/O for zero accuracy gain.
     logger.info("  Applying NoData mask (block-wise) and writing LZW output: %s", Path(output_path).name)
     t_mask = time.time()
     with rasterio.open(intermediate_path) as src_rio:
         profile = src_rio.profile
         profile.update(
-            dtype=rasterio.float64,
+            dtype=rasterio.float32,
             count=1,
             compress="lzw",
+            predictor=3,  # floating-point predictor — better ratio + faster decode for float data
             tiled=True,
-            blockxsize=512,
-            blockysize=512,
+            blockxsize=1024,
+            blockysize=1024,
             BIGTIFF="YES",
-            nodata=np.nan,  # declare NaN as nodata so GDAL excludes it from average resampling
+            num_threads="ALL_CPUS",
+            nodata=np.nan,
         )
         n_windows = sum(1 for _ in src_rio.block_windows(1))
         log_every = max(1, n_windows // 10)
         logger.info("  Masking %d windows", n_windows)
 
-        with rasterio.open(output_path, "w", **profile) as dst_rio:
+        with rasterio.open(output_tmp, "w", **profile) as dst_rio:
             for i, (_, window) in enumerate(src_rio.block_windows(1), start=1):
-                data = src_rio.read(1, window=window).astype(np.float64)
+                data = src_rio.read(1, window=window).astype(np.float32)
                 for val in mask_values:
                     data[data == val] = np.nan
                 if mask_negative:
@@ -118,6 +144,7 @@ def resample(
                         i, n_windows, 100 * i / n_windows, elapsed, eta,
                     )
     logger.info("  NoData mask + write done in %.0f s", time.time() - t_mask)
+    output_tmp.replace(output_path)
     # remove large intermediate
     Path(intermediate_path).unlink(missing_ok=True)
     logger.info("  Removed intermediate: %s", intermediate_path)
