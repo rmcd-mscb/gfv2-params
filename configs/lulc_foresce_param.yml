@@ -6,7 +6,7 @@ year: 2070
 source_raster: "{data_root}/input/lulc_veg/{lulc_source}/LULC_{scenario}_{year}.tif"
 canopy_raster: "{data_root}/input/lulc_veg/{lulc_source}/CNPY.tif"
 keep_raster: "{data_root}/input/lulc_veg/{lulc_source}/keep.tif"
-radtrn_raster: "{data_root}/work/derived_rasters/radtrn_{lulc_source}_{scenario}_{year}.tif"
+radtrn_raster: "{data_root}/shared/conus/derived/radtrn_{lulc_source}_{scenario}_{year}.tif"
 crosswalk_file: "crosswalks/foresce_nhm.csv"
 
 batch_dir: "{data_root}/{fabric}/batches"

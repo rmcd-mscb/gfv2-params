@@ -9,7 +9,7 @@ source_type: nhm_v11
 source_raster: "{data_root}/input/lulc_veg/nhm_v11/LULC.tif"
 canopy_raster: "{data_root}/input/lulc_veg/nhm_v11/CNPY.tif"
 keep_raster: "{data_root}/input/lulc_veg/nhm_v11/keep.tif"
-radtrn_raster: "{data_root}/work/derived_rasters/radtrn_nhm_v11.tif"
+radtrn_raster: "{data_root}/shared/conus/derived/radtrn_nhm_v11.tif"
 crosswalk_file: "crosswalks/nhm_v11_nhm.csv"
 
 batch_dir: "{data_root}/{fabric}/batches"
