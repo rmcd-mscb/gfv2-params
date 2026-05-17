@@ -18,39 +18,42 @@ fill in as each cluster lands on this branch.
 
 from __future__ import annotations
 
-from . import compute_slope_aspect, merge_rpu_by_vpu
+from . import compute_dem_derivatives, compute_slope_aspect, merge_rpu_by_vpu
 from .context import SharedRastersContext
 
 # The DAG. The two `merge_rpu_by_vpu*` invocations share a single builder —
 # `merge_rpu_by_vpu_twi` runs after `build_vpu_landmask` because the TWI
 # dataset is masked against the per-VPU HRU land mask (issue #70).
+# `compute_dem_derivatives` is registered but NOT in the default steps: list
+# of configs/shared_rasters.yml — it produces a parallel/optional artifact
+# (Twi_hydrodem_*.tif) not consumed by the canonical PRMS pipeline. See its
+# module docstring for the calibration-threshold caveat.
 BUILDERS: dict = {
-    "merge_rpu_by_vpu":     merge_rpu_by_vpu.build,
-    "compute_slope_aspect": compute_slope_aspect.build,
-    "merge_rpu_by_vpu_twi": merge_rpu_by_vpu.build,  # post-landmask invocation
+    "merge_rpu_by_vpu":        merge_rpu_by_vpu.build,
+    "compute_slope_aspect":    compute_slope_aspect.build,
+    "compute_dem_derivatives": compute_dem_derivatives.build,
+    "merge_rpu_by_vpu_twi":    merge_rpu_by_vpu.build,  # post-landmask invocation
 }
 
 STEP_ORDER: list[str] = [
     "merge_rpu_by_vpu",
     "compute_slope_aspect",
+    "compute_dem_derivatives",  # optional / parallel
     "merge_rpu_by_vpu_twi",
 ]
 
 # Roadmap. Names move from PLANNED_STEPS into STEP_ORDER + BUILDERS as each
 # cluster lands. Standard production flow:
 #   2b (DONE): merge_rpu_by_vpu, compute_slope_aspect, merge_rpu_by_vpu_twi
-#   2d:       build_border_dem, build_vpu_landmask, build_vrt
-#   2e:       build_derived_rasters, build_lulc_rasters
-#
-# Optional / parallel pipeline (NOT in the canonical production flow):
-#   2c: compute_dem_derivatives — open-source alternative to ArcPy-derived
-#       TWI. See module docstring for the calibration-threshold caveat that
-#       keeps it out of the canonical PRMS parameter pipeline.
+#   2c (DONE): compute_dem_derivatives (optional / parallel pipeline)
+#   2d:        build_border_dem, build_vpu_landmask, build_vrt
+#   2e:        build_derived_rasters, build_lulc_rasters
 PLANNED_STEPS = [
     "merge_rpu_by_vpu",
     "compute_slope_aspect",
     "build_border_dem",
     "build_vpu_landmask",
+    "compute_dem_derivatives",  # optional / parallel
     "merge_rpu_by_vpu_twi",
     "build_vrt",
     "build_derived_rasters",
