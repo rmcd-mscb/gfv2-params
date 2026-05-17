@@ -46,24 +46,34 @@ All data lives under `data_root` (set in `configs/base_config.yml`):
 
 ```
 gfv2_param/
-├── input/          # External data (manually staged or downloaded)
-│   ├── fabrics/    # Per-VPU and custom watershed fabric gpkgs
+├── input/                  # External data (manually staged or downloaded)
+│   ├── fabrics/            # Per-VPU and custom watershed fabric gpkgs
 │   ├── nhd_downloads/
 │   ├── mrlc_impervious/
 │   ├── soils_litho/
 │   ├── lulc_veg/
-│   │   └── nhm_v11/    # NHM v1.1 pre-derived LULC rasters (downloadable)
+│   │   └── nhm_v11/        # NHM v1.1 pre-derived LULC rasters (downloadable)
 │   └── nhm_defaults/
-├── work/           # Reproducible intermediates (safe to delete)
-│   ├── nhd_extracted/
-│   ├── nhd_merged/     # Per-VPU GeoTIFFs + CONUS VRTs
-│   ├── derived_rasters/
-│   └── weights/
-└── {fabric}/       # Per-fabric outputs (e.g., gfv2/, oregon/)
-    ├── fabric/     # Merged fabric gpkg
-    ├── batches/    # Per-batch gpkgs + manifest
-    └── params/     # Parameter outputs + merged + filled
+├── shared/                 # Fabric-independent intermediates (reused by every fabric)
+│   ├── source/             # Unzipped per-RPU NHDPlus rasters
+│   ├── per_vpu/<vpu>/      # Per-VPU merged GeoTIFFs (NED/Hydrodem/Fdr/Fac/Twi/slope/aspect/landmask)
+│   └── conus/
+│       ├── vrt/            # CONUS-wide GDAL virtual rasters (elevation/slope/aspect/fdr/twi)
+│       ├── derived/        # soil_moist_max.tif, radtrn, resampled CNPY/keep
+│       ├── borders/        # Copernicus border-DEM fill (Canada/Mexico)
+│       └── weights/        # P2P polygon weights for ssflux
+└── {fabric}/               # Per-fabric outputs (e.g., gfv2/, oregon/)
+    ├── fabric/             # Merged fabric gpkg
+    ├── batches/            # Per-batch gpkgs + manifest
+    └── params/             # Parameter outputs + merged + filled
 ```
+
+> **Upgrading an existing `data_root` from the legacy `work/` layout?** Run
+> `pixi run python scripts/migrate_to_shared_layout.py --data-root <path> --dry-run`
+> to preview the 27 directory renames, then `--execute` to apply them.
+> Atomic `os.rename` on the same filesystem (metadata-only, near-instant);
+> regenerates CONUS VRTs at the end since they encode absolute source paths.
+> Idempotent — re-running after success is a no-op.
 
 ## Selecting a fabric
 
@@ -114,10 +124,10 @@ These stages do not require a watershed fabric and can be run while fabric prepa
 ### Recommended: run Part 1 via the unified shared-rasters orchestrator
 
 After Stage 0 completes and the downloads in Stages 1/1b have finished, every
-remaining raster prep step can be driven from one entry point:
+remaining raster prep step can be driven from one sbatch:
 
 ```bash
-pixi run python scripts/build_shared_rasters.py --config configs/shared_rasters.yml
+sbatch slurm_batch/build_shared_rasters.batch
 ```
 
 This walks the full DAG (merge_rpu_by_vpu → compute_slope_aspect →
@@ -125,18 +135,23 @@ build_border_dem → build_vpu_landmask → merge_rpu_by_vpu_twi → build_vrt �
 build_derived_rasters → build_lulc_rasters) in dependency order, replacing
 the per-stage sbatch invocations below. Per-VPU steps iterate the `vpus`
 list inside `configs/shared_rasters.yml` rather than launching one sbatch
-per VPU. Flags:
+per VPU. Env knobs the batch honours:
 
-- `--step <name>` — run just that step (upstream outputs must exist)
-- `--from <name>` — resume from this step (it + everything after)
-- `--vpus 01,02` — restrict per-VPU steps to a subset
-- `--force` — rebuild outputs that already exist
+- `FORCE=1` — pass `--force` to rebuild outputs that already exist
+- `VPUS=01,02` — pass `--vpus 01,02` to restrict per-VPU steps to a subset
+
+For interactive use (or finer-grained flags like `--step <name>` or
+`--from <name>`), invoke the orchestrator directly:
+
+```bash
+pixi run python scripts/build_shared_rasters.py --config configs/shared_rasters.yml
+```
 
 The individual `slurm_batch/*.batch` files and per-script CLIs documented in
 Stages 1 through 2c below are preserved as thin shells around the same
 library builders. Use them when you want per-step granularity or per-VPU
-parallelism via SLURM arrays; use the orchestrator when you want one job
-that walks the whole DAG.
+parallelism via SLURM arrays; use the orchestrator batch when you want one
+job that walks the whole DAG.
 
 ### Stage 0: Initialize data root and stage inputs
 
@@ -529,9 +544,9 @@ sacct -j <JOBID> -o JobID,State,Elapsed,MaxRSS
 The unified shared-rasters orchestrator wraps every Part 1 raster-prep
 script below behind one entry point:
 
-| Orchestrator | Config | Script |
+| Batch file | Config | Script |
 |---|---|---|
-| _(none — single entry point)_ | shared_rasters.yml | build_shared_rasters.py |
+| build_shared_rasters.batch | shared_rasters.yml | build_shared_rasters.py |
 
 The per-script CLIs in the table below are preserved as thin shells and
 keep working unchanged; use them for per-step granularity or per-VPU SLURM

@@ -98,7 +98,7 @@ gfv2_param/
 │   │   └── nalcms_2020/            # NALCMS 2020 land cover (downloadable)
 │   ├── depstor/                    # Per-fabric depression-storage inputs
 │   │   └── <fabric>_segments_wbodies.gpkg   # nsegment + v2_wb layers
-│   │                               # (FDR comes from shared shared/conus/vrt/fdr.vrt)
+│   │                               # (FDR comes from shared/conus/vrt/fdr.vrt)
 │   ├── twi/<rpu>/                  # Per-RPU TWI (twi.tif + sidecars; staged via stage_twi.sh)
 │   ├── nhm_default/                # NHM default parameter files
 │   └── nhd_downloads/              # Raw NHDPlus zip archives (downloadable)
@@ -140,6 +140,13 @@ The following externally-provided files must be placed in the scaffolded directo
 | `input/nhm_default/` | NHM default parameter files (input to final merge step) |
 | `input/depstor/` | Per-fabric: `<fabric>_segments_wbodies.gpkg` (layers `nsegment`, `v2_wb`). The D8 flow-direction raster is no longer expected here — the gfv2 profile now consumes `shared/conus/vrt/fdr.vrt` produced by the shared raster pipeline. |
 | `input/twi/<rpu>/` | Per-RPU `twi.tif` (+ `.tfw`, `.aux.xml`, `.ovr`, `.xml` sidecars). Stage with `bash scripts/stage_twi.sh` (or `sbatch slurm_batch/stage_twi.batch` for an unattended run). |
+
+> **Upgrading an existing `data_root` from the legacy `work/` layout?** Run
+> `pixi run python scripts/migrate_to_shared_layout.py --data-root <path> --dry-run`
+> to preview the 27 directory renames, then `--execute` to apply them.
+> Atomic `os.rename` on the same filesystem (metadata-only, near-instant);
+> regenerates CONUS VRTs at the end since they encode absolute source paths.
+> Idempotent — re-running after success is a no-op.
 
 ### 3. Run fabric-independent tasks
 
@@ -240,7 +247,7 @@ one orchestrator and one unified config:
   calibration thresholds reference the canonical ArcPy-derived TWI — see
   the [module docstring](src/gfv2_params/shared_rasters/compute_dem_derivatives.py)).
 
-These outputs live under `{data_root}/work/` and are **fabric-independent**:
+These outputs live under `{data_root}/shared/` and are **fabric-independent**:
 every fabric reuses the same CONUS rasters. Per-VPU iteration happens
 inside the builders, not in per-VPU sbatch launches, so the orchestrator
 runs as a single job. The per-script entrypoints and sbatch wrappers are

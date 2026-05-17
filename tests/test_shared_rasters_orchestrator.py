@@ -80,7 +80,7 @@ def test_orchestrator_smoke_with_empty_steps(tmp_path):
     shared_config = tmp_path / "shared_rasters.yml"
     shared_config.write_text(yaml.safe_dump({
         "vpus": ["01"],
-        "output_dir": "{data_root}/work",
+        "output_dir": "{data_root}/shared",
         "steps": [],
     }))
     result = subprocess.run(
@@ -95,7 +95,7 @@ def test_orchestrator_smoke_with_empty_steps(tmp_path):
     )
     assert result.returncode == 0, result.stderr
     assert "No steps to run" in (result.stdout + result.stderr)
-    assert (data_root / "work").exists()
+    assert (data_root / "shared").exists()
 
 
 def test_orchestrator_rejects_unknown_step(tmp_path):
@@ -112,7 +112,7 @@ def test_orchestrator_rejects_unknown_step(tmp_path):
     shared_config = tmp_path / "shared_rasters.yml"
     shared_config.write_text(yaml.safe_dump({
         "vpus": ["01"],
-        "output_dir": "{data_root}/work",
+        "output_dir": "{data_root}/shared",
         "steps": [{"name": "this_step_does_not_exist"}],
     }))
     result = subprocess.run(

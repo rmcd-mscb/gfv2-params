@@ -4,7 +4,7 @@ Replaces the scattered per-script invocations under scripts/merge_rpu_by_vpu.py,
 scripts/compute_*.py, and scripts/build_*.py with one orchestrator that walks
 the dependency DAG declared in configs/shared_rasters.yml.
 
-These rasters are fabric-independent — they live under {data_root}/work/ and
+These rasters are fabric-independent — they live under {data_root}/shared/ and
 are reused across every fabric profile.
 
 Flags:
@@ -12,9 +12,6 @@ Flags:
   --from <name>     resume from this step (run it + everything after)
   --vpus <csv>      restrict per-VPU steps to this comma-separated list
   --force           rebuild outputs even if they already exist
-
-Steps are being migrated to library mode incrementally; STEP_ORDER and
-BUILDERS in gfv2_params.shared_rasters grow as each cluster lands.
 """
 
 import argparse
