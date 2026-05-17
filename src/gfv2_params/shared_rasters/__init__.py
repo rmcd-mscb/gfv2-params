@@ -9,31 +9,49 @@ recorded in ``ctx.paths`` so downstream steps can reference them by short name.
 Mirrors the ``depstor_builders`` pattern for fabric-independent CONUS rasters:
 per-VPU NHDPlus prep, border DEM fill, per-VPU landmask, CONUS VRT assembly,
 and CONUS-scale derived rasters. Unlike the depstor pipeline, there is no
-fabric concept — these rasters are reused across every fabric.
+fabric concept — these rasters are reused across every fabric. Per-VPU steps
+iterate ``ctx.vpus`` internally rather than being launched once per VPU.
 
 Steps are migrated to library mode incrementally; STEP_ORDER and BUILDERS
-will fill in as each cluster lands on this branch.
+fill in as each cluster lands on this branch.
 """
 
 from __future__ import annotations
 
+from . import compute_slope_aspect, merge_rpu_by_vpu
 from .context import SharedRastersContext
 
-BUILDERS: dict = {}
+# The DAG. The two `merge_rpu_by_vpu*` invocations share a single builder —
+# `merge_rpu_by_vpu_twi` runs after `build_vpu_landmask` because the TWI
+# dataset is masked against the per-VPU HRU land mask (issue #70).
+BUILDERS: dict = {
+    "merge_rpu_by_vpu":     merge_rpu_by_vpu.build,
+    "compute_slope_aspect": compute_slope_aspect.build,
+    "merge_rpu_by_vpu_twi": merge_rpu_by_vpu.build,  # post-landmask invocation
+}
 
-STEP_ORDER: list[str] = []
+STEP_ORDER: list[str] = [
+    "merge_rpu_by_vpu",
+    "compute_slope_aspect",
+    "merge_rpu_by_vpu_twi",
+]
 
-# Roadmap. Each name will move from PLANNED_STEPS into STEP_ORDER + BUILDERS
-# as its cluster lands:
-#   cluster 2b: merge_rpu_by_vpu, compute_slope_aspect, compute_dem_derivatives
-#   cluster 2c: build_border_dem, build_vpu_landmask, build_vrt
-#   cluster 2d: build_derived_rasters, build_lulc_rasters
+# Roadmap. Names move from PLANNED_STEPS into STEP_ORDER + BUILDERS as each
+# cluster lands. Standard production flow:
+#   2b (DONE): merge_rpu_by_vpu, compute_slope_aspect, merge_rpu_by_vpu_twi
+#   2d:       build_border_dem, build_vpu_landmask, build_vrt
+#   2e:       build_derived_rasters, build_lulc_rasters
+#
+# Optional / parallel pipeline (NOT in the canonical production flow):
+#   2c: compute_dem_derivatives — open-source alternative to ArcPy-derived
+#       TWI. See module docstring for the calibration-threshold caveat that
+#       keeps it out of the canonical PRMS parameter pipeline.
 PLANNED_STEPS = [
     "merge_rpu_by_vpu",
     "compute_slope_aspect",
-    "compute_dem_derivatives",
     "build_border_dem",
     "build_vpu_landmask",
+    "merge_rpu_by_vpu_twi",
     "build_vrt",
     "build_derived_rasters",
     "build_lulc_rasters",

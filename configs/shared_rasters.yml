@@ -39,7 +39,22 @@ vpus:
 output_dir: "{data_root}/work"
 
 # Step DAG. Each entry has a `name` matched against STEP_ORDER in
-# gfv2_params.shared_rasters and step-specific config. Empty until the
-# first cluster lands (commit 2b: merge_rpu_by_vpu, compute_slope_aspect,
-# compute_dem_derivatives).
-steps: []
+# gfv2_params.shared_rasters and step-specific config. The orchestrator walks
+# these in STEP_ORDER (configuration order in this list is ignored).
+steps:
+  # Stage 1: per-VPU NHDPlus prep (non-TWI datasets).
+  - name: merge_rpu_by_vpu
+    manifest: configs/merge_rpu_by_vpu.yml
+
+  # Stage 1: per-VPU slope + aspect from merged NEDSnapshot.
+  - name: compute_slope_aspect
+    input_dir: "{data_root}/work/nhd_merged"
+    output_dir: "{data_root}/work/nhd_merged"
+
+  # Stage 1c2: merged TWI, masked against the per-VPU HRU land mask. Runs
+  # AFTER build_vpu_landmask (which lands in cluster 2d). Listed here in
+  # roadmap order so the DAG is visible in one place; the orchestrator
+  # validation will surface a clear error if you enable this entry before
+  # build_vpu_landmask is registered.
+  - name: merge_rpu_by_vpu_twi
+    manifest: configs/merge_rpu_by_vpu_twi.yml
