@@ -10,7 +10,7 @@ def _(mo):
         r"""
         # Derived Rasters — Visual QA
 
-        Inspect pre-computed rasters in `work/derived_rasters/`.
+        Inspect pre-computed rasters in `shared/conus/derived/`.
         All rasters are CONUS-scale (~124k × 167k px at 30 m).
 
         **Best practice:** uses rasterio's `out_shape` decimated read — only a

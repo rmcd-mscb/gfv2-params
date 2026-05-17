@@ -178,7 +178,7 @@ def test_load_config_resolves_fabric_placeholder():
         step_config = Path(tmpdir) / "step.yml"
         step_config.write_text(yaml.dump({
             "source_type": "elevation",
-            "source_raster": "{data_root}/work/nhd_merged/elevation.vrt",
+            "source_raster": "{data_root}/shared/conus/vrt/elevation.vrt",
             "batch_dir": "{data_root}/{fabric}/batches",
             "output_dir": "{data_root}/{fabric}/params",
             "target_layer": "nhru",

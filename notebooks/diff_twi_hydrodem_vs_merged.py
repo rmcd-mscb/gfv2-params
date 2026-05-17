@@ -20,7 +20,7 @@ def _(mo):
     (produced by `scripts/compute_dem_derivatives.py`: hybrid pipeline —
     richdem `FillDepressions+epsilon` → WhiteboxTools `D8Pointer --esri_pntr`
     → `D8FlowAccumulation` → richdem slope/aspect on the fixed DEM, then
-    masked to the per-VPU HRU mask `work/nhd_merged/<vpu>/land_mask_<vpu>.tif`)
+    masked to the per-VPU HRU mask `shared/per_vpu/<vpu>/land_mask_<vpu>.tif`)
     and the ArcPy reference `Twi_merged_<vpu>.tif` (per-RPU TWI tiles merged
     per-VPU by PR #50, masked to the same per-VPU HRU mask).
 

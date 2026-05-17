@@ -18,7 +18,8 @@ import rasterio
 import numpy as np
 from pathlib import Path
 
-NHD = Path("/caldera/hovenweep/projects/usgs/water/impd/nhgf/gfv2_param_v2/work/nhd_merged")
+PER_VPU = Path("/caldera/hovenweep/projects/usgs/water/impd/nhgf/gfv2_param_v2/shared/per_vpu")
+VRT_DIR = Path("/caldera/hovenweep/projects/usgs/water/impd/nhgf/gfv2_param_v2/shared/conus/vrt")
 VPUS = ["01","02","03","04","05","06","07","08","09","10","11","12","13","14","15","16","17","18"]
 
 print("=" * 80)
@@ -27,7 +28,7 @@ print("=" * 80)
 
 for vpu in VPUS:
     for suffix in ["fixed", "slope", "aspect"]:
-        f = NHD / vpu / f"NEDSnapshot_merged_{suffix}_{vpu}.tif"
+        f = PER_VPU / vpu / f"NEDSnapshot_merged_{suffix}_{vpu}.tif"
         if not f.exists():
             print(f"VPU {vpu} {suffix:7s}: MISSING")
             continue
@@ -53,7 +54,7 @@ print()
 print("=" * 80)
 print("VRT srcNodata check (what the VRT will mask):")
 for vrt_name in ["elevation", "slope", "aspect"]:
-    p = NHD / f"{vrt_name}.vrt"
+    p = VRT_DIR / f"{vrt_name}.vrt"
     if p.exists():
         content = p.read_text()
         # Extract SourceFilename and srcNoData from VRT XML

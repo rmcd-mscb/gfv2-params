@@ -29,7 +29,7 @@ def main():
 
     # No --fabric: the per-VPU land mask is a fabric-independent product. The
     # config pins the HRU source to the canonical CONUS gfv2_nhru_merged.gpkg
-    # and the output to work/nhd_merged/<vpu>/.
+    # and the output to shared/per_vpu/<vpu>/.
     config = load_config(
         Path(args.config),
         vpu=args.vpu,
