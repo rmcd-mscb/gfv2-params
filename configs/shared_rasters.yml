@@ -1,13 +1,19 @@
 # Unified config for the CONUS shared-raster pipeline.
 # Driven by scripts/build_shared_rasters.py.
 #
-# These rasters live under {data_root}/work/ and are reused across every
+# These rasters live under {data_root}/shared/ and are reused across every
 # fabric profile; they are produced once and consumed by every downstream
 # fabric-specific zonal-stats and depstor pipeline.
 #
-# Migration is incremental: this file's `steps:` list grows as each
-# cluster of scripts is refactored to library mode. See PLANNED_STEPS in
-# src/gfv2_params/shared_rasters/__init__.py for the roadmap.
+# On-disk layout:
+#   shared/
+#   ├── per_vpu/{vpu}/        merged NHDPlus rasters + derived per-VPU products
+#   ├── conus/
+#   │   ├── vrt/              CONUS VRT files assembled from per_vpu/*
+#   │   ├── derived/          CONUS-scale derived (soil_moist_max, radtrn, ...)
+#   │   ├── borders/          Copernicus border-DEM fill
+#   │   └── weights/          P2P weight matrices
+#   └── source/               raw NHDPlus extract cache
 
 # Per-VPU loop scope. Per-VPU steps iterate this list internally rather
 # than being launched once per VPU. Override at the CLI with --vpus to
@@ -36,11 +42,15 @@ vpus:
   - "18"
 
 # Base output directory for the shared raster store. Steps namespace within.
-output_dir: "{data_root}/work"
+output_dir: "{data_root}/shared"
 
 # Step DAG. Each entry has a `name` matched against STEP_ORDER in
 # gfv2_params.shared_rasters and step-specific config. The orchestrator walks
 # these in STEP_ORDER (configuration order in this list is ignored).
+#
+# Builders fall back to conventional paths (ctx.per_vpu_dir, ctx.vrt_dir,
+# ctx.borders_dir, ctx.derived_dir, ...) when step blocks omit the relevant
+# keys, so most steps below carry no explicit configuration.
 steps:
   # Stage 1: per-VPU NHDPlus prep (non-TWI datasets).
   - name: merge_rpu_by_vpu
@@ -48,8 +58,6 @@ steps:
 
   # Stage 1: per-VPU slope + aspect from merged NEDSnapshot.
   - name: compute_slope_aspect
-    input_dir: "{data_root}/work/nhd_merged"
-    output_dir: "{data_root}/work/nhd_merged"
 
   # Stage 1b: Copernicus GLO-30 fill for Canada/Mexico border HRUs. CONUS-once
   # (does not iterate vpus). Depends on the per-VPU _fixed_ NED tiles produced
@@ -60,22 +68,21 @@ steps:
   # and rasterises the canonical CONUS gfv2_nhru_merged.gpkg (filtered by the
   # `vpu` column) onto each per-VPU Hydrodem grid.
   - name: build_vpu_landmask
-    template_raster: "{data_root}/work/nhd_merged/{vpu}/Hydrodem_merged_{vpu}.tif"
+    template_raster: "{data_root}/shared/per_vpu/{vpu}/Hydrodem_merged_{vpu}.tif"
     hru_gpkg: "{data_root}/gfv2/fabric/gfv2_nhru_merged.gpkg"
     hru_layer: nhru
-    output_raster: "{data_root}/work/nhd_merged/{vpu}/land_mask_{vpu}.tif"
+    output_raster: "{data_root}/shared/per_vpu/{vpu}/land_mask_{vpu}.tif"
 
   # Stage 1c2: merged TWI, masked against the per-VPU HRU land mask.
   - name: merge_rpu_by_vpu_twi
     manifest: configs/merge_rpu_by_vpu_twi.yml
 
-  # Stage 2a: CONUS VRT assembly. Discovers per-VPU sources by globbing
-  # nhd_merged/ and lists copernicus_fill/ tiles ahead of NHDPlus tiles so
-  # NHDPlus wins the overlap (GDAL last-source-wins).
+  # Stage 2a: CONUS VRT assembly. Reads per-VPU sources from ctx.per_vpu_dir,
+  # lists borders/ tiles ahead of NHDPlus tiles so NHDPlus wins the overlap
+  # (GDAL last-source-wins), writes VRTs to ctx.vrt_dir.
   - name: build_vrt
 
   # Stage 2b: derived rasters (soil_moist_max = RootDepth * AWC).
-  # CONUS-once; defaults to standard input/output paths under data_root.
   - name: build_derived_rasters
 
   # Stage 2c: LULC derived rasters (resampled CNPY/keep + radtrn). One step

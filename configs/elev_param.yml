@@ -1,5 +1,5 @@
 source_type: elevation
-source_raster: "{data_root}/work/nhd_merged/elevation.vrt"
+source_raster: "{data_root}/shared/conus/vrt/elevation.vrt"
 batch_dir: "{data_root}/{fabric}/batches"
 target_layer: nhru
 id_feature: nat_hru_id

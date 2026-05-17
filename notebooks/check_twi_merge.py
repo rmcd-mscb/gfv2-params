@@ -20,13 +20,13 @@ def _(mo):
     `slurm_batch/compute_dem_derivatives.batch` (issue #52: open-source
     reproduction of the ArcPy TWI recipe via richdem fill + WBT D8 routing
     + numpy log formula, then clipped to the per-VPU HRU mask
-    `work/nhd_merged/<vpu>/land_mask_<vpu>.tif`). Confirms presence,
+    `shared/per_vpu/<vpu>/land_mask_<vpu>.tif`). Confirms presence,
     metadata, value ranges, and renders decimated thumbnails so flow-routing
     artifacts (e.g., endorheic-basin spillways, cross-RPU drainage corridors)
     are visible.
 
     Expected after a complete run: 18 outputs under
-    `{data_root}/work/nhd_merged/<vpu>/Twi_merged_<vpu>.tif`, each Float32 with
+    `{data_root}/shared/per_vpu/<vpu>/Twi_merged_<vpu>.tif`, each Float32 with
     nodata=-9999 and valid values roughly in [-2, 26]. Some negative TWI is
     expected for very steep low-fac cells; cells with slope ≥ 89° are masked
     in compute_dem_derivatives.py to suppress fill artifacts in deep closed

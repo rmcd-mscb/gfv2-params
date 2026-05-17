@@ -223,7 +223,7 @@ def main():
     base = load_base_config()
     data_root = Path(base["data_root"])
     download_dir = data_root / "input/nhd_downloads"
-    extract_dir = data_root / "work/nhd_extracted"
+    extract_dir = data_root / "shared/source"
     download_dir.mkdir(exist_ok=True)
     extract_dir.mkdir(exist_ok=True)
 

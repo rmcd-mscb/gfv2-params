@@ -4,7 +4,7 @@ batch_dir: "{data_root}/{fabric}/batches"
 target_layer: nhru
 id_feature: nat_hru_id
 output_dir: "{data_root}/{fabric}/params"
-weight_dir: "{data_root}/work/weights"
+weight_dir: "{data_root}/shared/conus/weights"
 merged_slope_file: "{data_root}/{fabric}/params/merged/nhm_slope_params.csv"
 merged_file: nhm_ssflux_params.csv
 categorical: false

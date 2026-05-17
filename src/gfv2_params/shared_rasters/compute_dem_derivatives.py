@@ -60,7 +60,7 @@ bounding rim on continent-scale flats. So we fill in float64 and save in
 float64 so WBT D8Pointer / D8FlowAccumulation see the same per-cell ULP
 gradient that broke under float32 in earlier revisions.
 
-Outputs (per VPU, written to {data_root}/work/nhd_merged/<vpu>/):
+Outputs (per VPU, written to {data_root}/shared/per_vpu/<vpu>/):
 - Hydrodem_merged_fixed_<vpu>.tif  (intermediate, nodata=-9999)
 - Hydrodem_filled_<vpu>.tif        (richdem FillDepressions+epsilon, float64)
 - Fdr_hydrodem_<vpu>.tif           (WBT D8 pointer, Esri encoding)
@@ -411,17 +411,17 @@ def build(step_cfg: dict, ctx: SharedRastersContext, logger) -> dict:
     configs/shared_rasters.yml. Users add it explicitly when they want the
     open-source TWI alongside the canonical ArcPy-derived one.
 
-    step_cfg keys:
-      input_dir  — per-VPU Hydrodem source directory (templated)
-      output_dir — per-VPU derived raster output directory (templated)
+    step_cfg keys (both optional; default to ``ctx.per_vpu_dir``):
+      input_dir  — per-VPU Hydrodem source directory
+      output_dir — per-VPU derived raster output directory
 
     Depends on the per-VPU HRU land mask at
     ``{output_dir}/<vpu>/land_mask_<vpu>.tif`` (build_vpu_landmask step).
 
     Returns an empty dict — per-VPU outputs are not registered in ctx.paths.
     """
-    input_dir = Path(step_cfg["input_dir"])
-    output_dir = Path(step_cfg["output_dir"])
+    input_dir = Path(step_cfg.get("input_dir", ctx.per_vpu_dir))
+    output_dir = Path(step_cfg.get("output_dir", ctx.per_vpu_dir))
 
     if not ctx.vpus:
         logger.warning("compute_dem_derivatives: ctx.vpus is empty, nothing to do")

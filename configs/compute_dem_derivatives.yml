@@ -1,2 +1,2 @@
-input_dir: "{data_root}/work/nhd_merged"
-output_dir: "{data_root}/work/nhd_merged"
+input_dir: "{data_root}/shared/per_vpu"
+output_dir: "{data_root}/shared/per_vpu"

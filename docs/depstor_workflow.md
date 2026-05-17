@@ -110,7 +110,7 @@ sbatch: `slurm_batch/build_vpu_landmask.batch`). It filters
 `gfv2/fabric/gfv2_nhru_merged.gpkg` by `vpu == <vpu>` (with sub-region
 handling for `03N/S/W` and `10L/U` via `VPU_RASTER_MAP`) and rasterises onto
 the per-VPU Hydrodem grid, writing
-`work/nhd_merged/<vpu>/land_mask_<vpu>.tif`. The per-VPU TWI pipeline
+`shared/per_vpu/<vpu>/land_mask_<vpu>.tif`. The per-VPU TWI pipeline
 (`merge_rpu_by_vpu.py` TWI case + `compute_dem_derivatives.py`) consumes
 this per-VPU mask via [`read_land_mask_for_grid`](../src/gfv2_params/depstor.py)
 to clip `Twi_merged_<vpu>.tif` and `Twi_hydrodem_<vpu>.tif` to the per-VPU

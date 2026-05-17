@@ -20,10 +20,10 @@ from .context import SharedRastersContext
 def build(step_cfg: dict, ctx: SharedRastersContext, logger) -> dict:
     """Build soil_moist_max from RootDepth and AWC source rasters.
 
-    step_cfg keys (all optional, with conventional defaults under ``ctx.data_root``):
-      root_depth_raster  — ``input/lulc_veg/RootDepth.tif``
-      awc_raster         — ``input/soils_litho/AWC.tif``
-      output_dir         — ``work/derived_rasters``
+    step_cfg keys (all optional, with conventional defaults):
+      root_depth_raster  — ``{data_root}/input/lulc_veg/RootDepth.tif``
+      awc_raster         — ``{data_root}/input/soils_litho/AWC.tif``
+      output_dir         — ``ctx.derived_dir`` (``shared/conus/derived``)
 
     Returns ``{"soil_moist_max": path}`` for downstream consumers.
     """
@@ -31,7 +31,7 @@ def build(step_cfg: dict, ctx: SharedRastersContext, logger) -> dict:
     rd_rast = Path(step_cfg.get("root_depth_raster", data_root / "input" / "lulc_veg" / "RootDepth.tif"))
     awc_rast = Path(step_cfg.get("awc_raster", data_root / "input" / "soils_litho" / "AWC.tif"))
 
-    derived_dir = Path(step_cfg.get("output_dir", data_root / "work" / "derived_rasters"))
+    derived_dir = Path(step_cfg.get("output_dir", ctx.derived_dir))
     derived_dir.mkdir(parents=True, exist_ok=True)
     intermediate_rast = derived_dir / "rd_250_intermediate.tif"
     rd_resampled = derived_dir / "rd_250_raw.tif"

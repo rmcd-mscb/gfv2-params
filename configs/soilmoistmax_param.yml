@@ -1,5 +1,5 @@
 source_type: soil_moist_max
-source_raster: "{data_root}/work/derived_rasters/soil_moist_max.tif"
+source_raster: "{data_root}/shared/conus/derived/soil_moist_max.tif"
 batch_dir: "{data_root}/{fabric}/batches"
 target_layer: nhru
 id_feature: nat_hru_id

@@ -160,7 +160,7 @@ The following externally-provided files must be placed in the scaffolded directo
 | `input/soils_litho/` | `TEXT_PRMS.tif`, `AWC.tif`, `Lithology_exp_Konly_Project.shp` (+ sidecar files: `.dbf`, `.prj`, `.shx`) |
 | `input/lulc_veg/` | `RootDepth.tif`, `CNPY.tif`, `Imperv.tif` |
 | `input/nhm_default/` | NHM default parameter files (input to final merge step) |
-| `input/depstor/` | Per-fabric: `<fabric>_segments_wbodies.gpkg` (layers `nsegment`, `v2_wb`). The D8 flow-direction raster is sourced from the shared `work/nhd_merged/fdr.vrt` produced by Part 1 — no fabric-specific FDR is required here. |
+| `input/depstor/` | Per-fabric: `<fabric>_segments_wbodies.gpkg` (layers `nsegment`, `v2_wb`). The D8 flow-direction raster is sourced from the shared `shared/conus/vrt/fdr.vrt` produced by Part 1 — no fabric-specific FDR is required here. |
 | `input/twi/<rpu>/` | Per-RPU TWI raster `twi.tif` (+ `.tfw`, `.aux.xml`, `.ovr`, `.xml` sidecars). Stage with `bash scripts/stage_twi.sh` (see below). |
 
 The NALCMS 2020 land cover raster can be downloaded automatically (see below).
@@ -235,7 +235,7 @@ for HRUs that extend into Canada or Mexico beyond NHDPlus coverage:
 sbatch slurm_batch/build_border_dem.batch
 ```
 
-This creates fill rasters in `work/nhd_merged/copernicus_fill/`. The subsequent
+This creates fill rasters in `shared/conus/borders/`. The subsequent
 `build_vrt.py` step composites these behind the NHDPlus tiles, so NHDPlus takes
 priority where it has valid data and Copernicus fills the border gaps.
 
@@ -251,7 +251,7 @@ Build the per-VPU HRU-fabric land mask consumed by both TWI pipelines:
 sbatch slurm_batch/build_vpu_landmask.batch
 ```
 
-Produces `work/nhd_merged/<vpu>/land_mask_<vpu>.tif` — a uint8 1/255 raster
+Produces `shared/per_vpu/<vpu>/land_mask_<vpu>.tif` — a uint8 1/255 raster
 where 1 = inside an HRU whose `vpu` attribute matches this VPU, 255 = outside.
 The mask is rasterised onto the per-VPU `Hydrodem_merged_<vpu>.tif` grid, so
 TWI products downstream get a strict match to their VPU's HRU coverage rather
@@ -269,7 +269,7 @@ Merge the per-RPU TWI rasters staged in Stage 0 into per-VPU GeoTIFFs:
 sbatch slurm_batch/merge_rpu_by_vpu_twi.batch
 ```
 
-Produces `work/nhd_merged/<vpu>/Twi_merged_<vpu>.tif` for each of the 18 VPUs.
+Produces `shared/per_vpu/<vpu>/Twi_merged_<vpu>.tif` for each of the 18 VPUs.
 The merge clips its output to the per-VPU HRU mask from Stage 1c1 so the
 per-RPU TWI bulges (coast on the east, adjacent-VPU/border drape on the
 west/north) never reach downstream zonal aggregation.
@@ -321,10 +321,10 @@ zonal-stats orchestrator below.
 Inputs (manually staged per fabric):
 - `input/depstor/<fabric>_segments_wbodies.gpkg` (layers `nsegment`, `v2_wb`)
 - Per-fabric `hru_gpkg` / `twi_raster` (from `base_config.yml`).
-- Shared `fdr_raster` from `work/nhd_merged/fdr.vrt` (Part 1 output; no per-fabric FDR needed).
+- Shared `fdr_raster` from `shared/conus/vrt/fdr.vrt` (Part 1 output; no per-fabric FDR needed).
 - The NLCD 2015 fractional-impervious raster (path set in
   `configs/depstor_rasters.yml` under `imperv_source`) and
-  `work/nhd_merged/elevation.vrt`.
+  `shared/conus/vrt/elevation.vrt`.
 
 One sbatch builds the entire stack in dependency order
 (landmask → imperv/streambuffer/waterbody → dprst → perv/routing →

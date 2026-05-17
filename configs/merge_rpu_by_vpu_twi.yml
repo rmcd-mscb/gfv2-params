@@ -2,7 +2,7 @@
 #
 # Inputs are per-RPU GeoTIFFs staged at input/twi/<rpu>/twi.tif by
 # scripts/stage_twi.sh. Outputs land alongside the NHD merged tiles
-# in work/nhd_merged/<vpu>/Twi_merged_<vpu>.tif so build_vrt.py can
+# in shared/per_vpu/<vpu>/Twi_merged_<vpu>.tif so build_vrt.py can
 # eventually compose them (follow-up).
 #
 # VPU 08 includes RPU 03g — same cross-VPU case as the NHD merge.
@@ -12,14 +12,14 @@
   TWI:
     rpus:
       - "input/twi/01a/twi.tif"
-    output: "work/nhd_merged/01/Twi_merged_01.tif"
+    output: "shared/per_vpu/01/Twi_merged_01.tif"
 
 "02":
   TWI:
     rpus:
       - "input/twi/02a/twi.tif"
       - "input/twi/02b/twi.tif"
-    output: "work/nhd_merged/02/Twi_merged_02.tif"
+    output: "shared/per_vpu/02/Twi_merged_02.tif"
 
 "03":
   TWI:
@@ -30,7 +30,7 @@
       - "input/twi/03d/twi.tif"
       - "input/twi/03e/twi.tif"
       - "input/twi/03f/twi.tif"
-    output: "work/nhd_merged/03/Twi_merged_03.tif"
+    output: "shared/per_vpu/03/Twi_merged_03.tif"
 
 "04":
   TWI:
@@ -39,7 +39,7 @@
       - "input/twi/04b/twi.tif"
       - "input/twi/04c/twi.tif"
       - "input/twi/04d/twi.tif"
-    output: "work/nhd_merged/04/Twi_merged_04.tif"
+    output: "shared/per_vpu/04/Twi_merged_04.tif"
 
 "05":
   TWI:
@@ -48,13 +48,13 @@
       - "input/twi/05b/twi.tif"
       - "input/twi/05c/twi.tif"
       - "input/twi/05d/twi.tif"
-    output: "work/nhd_merged/05/Twi_merged_05.tif"
+    output: "shared/per_vpu/05/Twi_merged_05.tif"
 
 "06":
   TWI:
     rpus:
       - "input/twi/06a/twi.tif"
-    output: "work/nhd_merged/06/Twi_merged_06.tif"
+    output: "shared/per_vpu/06/Twi_merged_06.tif"
 
 "07":
   TWI:
@@ -62,7 +62,7 @@
       - "input/twi/07a/twi.tif"
       - "input/twi/07b/twi.tif"
       - "input/twi/07c/twi.tif"
-    output: "work/nhd_merged/07/Twi_merged_07.tif"
+    output: "shared/per_vpu/07/Twi_merged_07.tif"
 
 "08":
   TWI:
@@ -70,13 +70,13 @@
       - "input/twi/03g/twi.tif"
       - "input/twi/08a/twi.tif"
       - "input/twi/08b/twi.tif"
-    output: "work/nhd_merged/08/Twi_merged_08.tif"
+    output: "shared/per_vpu/08/Twi_merged_08.tif"
 
 "09":
   TWI:
     rpus:
       - "input/twi/09a/twi.tif"
-    output: "work/nhd_merged/09/Twi_merged_09.tif"
+    output: "shared/per_vpu/09/Twi_merged_09.tif"
 
 "10":
   TWI:
@@ -90,7 +90,7 @@
       - "input/twi/10g/twi.tif"
       - "input/twi/10h/twi.tif"
       - "input/twi/10i/twi.tif"
-    output: "work/nhd_merged/10/Twi_merged_10.tif"
+    output: "shared/per_vpu/10/Twi_merged_10.tif"
 
 "11":
   TWI:
@@ -99,7 +99,7 @@
       - "input/twi/11b/twi.tif"
       - "input/twi/11c/twi.tif"
       - "input/twi/11d/twi.tif"
-    output: "work/nhd_merged/11/Twi_merged_11.tif"
+    output: "shared/per_vpu/11/Twi_merged_11.tif"
 
 "12":
   TWI:
@@ -108,7 +108,7 @@
       - "input/twi/12b/twi.tif"
       - "input/twi/12c/twi.tif"
       - "input/twi/12d/twi.tif"
-    output: "work/nhd_merged/12/Twi_merged_12.tif"
+    output: "shared/per_vpu/12/Twi_merged_12.tif"
 
 "13":
   TWI:
@@ -117,28 +117,28 @@
       - "input/twi/13b/twi.tif"
       - "input/twi/13c/twi.tif"
       - "input/twi/13d/twi.tif"
-    output: "work/nhd_merged/13/Twi_merged_13.tif"
+    output: "shared/per_vpu/13/Twi_merged_13.tif"
 
 "14":
   TWI:
     rpus:
       - "input/twi/14a/twi.tif"
       - "input/twi/14b/twi.tif"
-    output: "work/nhd_merged/14/Twi_merged_14.tif"
+    output: "shared/per_vpu/14/Twi_merged_14.tif"
 
 "15":
   TWI:
     rpus:
       - "input/twi/15a/twi.tif"
       - "input/twi/15b/twi.tif"
-    output: "work/nhd_merged/15/Twi_merged_15.tif"
+    output: "shared/per_vpu/15/Twi_merged_15.tif"
 
 "16":
   TWI:
     rpus:
       - "input/twi/16a/twi.tif"
       - "input/twi/16b/twi.tif"
-    output: "work/nhd_merged/16/Twi_merged_16.tif"
+    output: "shared/per_vpu/16/Twi_merged_16.tif"
 
 "17":
   TWI:
@@ -147,7 +147,7 @@
       - "input/twi/17b/twi.tif"
       - "input/twi/17c/twi.tif"
       - "input/twi/17d/twi.tif"
-    output: "work/nhd_merged/17/Twi_merged_17.tif"
+    output: "shared/per_vpu/17/Twi_merged_17.tif"
 
 "18":
   TWI:
@@ -155,4 +155,4 @@
       - "input/twi/18a/twi.tif"
       - "input/twi/18b/twi.tif"
       - "input/twi/18c/twi.tif"
-    output: "work/nhd_merged/18/Twi_merged_18.tif"
+    output: "shared/per_vpu/18/Twi_merged_18.tif"
