@@ -54,7 +54,8 @@ _TREE = [
                             (downloadable via download/rpu_rasters.py)
           depstor/          Per-fabric depression-storage inputs:
                             <fabric>_segments_wbodies.gpkg (layers nsegment, v2_wb)
-                            <fabric>_fdr.tif (D8 flow direction, Esri pointer)
+                            (FDR is sourced from the shared work/nhd_merged/fdr.vrt,
+                            not staged here per-fabric.)
           twi/<rpu>/        Per-RPU topographic wetness index rasters
                             (twi.tif + .tfw/.aux.xml/.ovr/.xml sidecars).
                             Provenance: USGS ScienceBase 5f5154ba82ce4c3d12386a02
@@ -190,7 +191,6 @@ def validate_inputs(data_root: Path, fabric: str, logger) -> None:
         data_root / "input" / "soils_litho" / "Lithology_exp_Konly_Project.shp",
         data_root / "input" / "lulc_veg" / "RootDepth.tif",
         data_root / "input" / "depstor" / f"{fabric}_segments_wbodies.gpkg",
-        data_root / "input" / "depstor" / f"{fabric}_fdr.tif",
         # Sentinel for the per-RPU TWI staging step. Run scripts/stage_twi.sh
         # if missing.
         data_root / "input" / "twi" / "01a" / "twi.tif",

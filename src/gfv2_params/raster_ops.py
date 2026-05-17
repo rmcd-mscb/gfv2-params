@@ -28,6 +28,16 @@ def resample(
       - WRONG for CNPY (0 = no tree canopy, a valid measurement)
     Pass mask_values=(128,) when resampling CNPY to preserve non-forest pixels.
     """
+    # Explicit existence checks up front: newer osgeo enables GDAL exceptions
+    # by default, so gdal.Open() raises RuntimeError on a missing file rather
+    # than returning None — the historical `if src is None` guard never fires
+    # and a less useful RuntimeError leaks out instead. Checking here makes
+    # the behavior version-independent.
+    if not Path(src_path).exists():
+        raise FileNotFoundError(f"Source raster not found: {src_path}")
+    if not Path(template_path).exists():
+        raise FileNotFoundError(f"Template raster not found: {template_path}")
+
     src = gdal.Open(src_path, gdalconst.GA_ReadOnly)
     if src is None:
         raise FileNotFoundError(f"Source raster not found: {src_path}")

@@ -12,7 +12,11 @@ fabrics:
     expected_max_hru_id: 361471
     batch_size: 10000
     template_raster: "{data_root}/work/nhd_merged/elevation.vrt"
-    fdr_raster: "{data_root}/input/depstor/{fabric}_fdr.tif"
+    # FDR is CONUS hydrology, not fabric-specific. Use the shared open-source
+    # VRT assembled by build_vrt.py from per-VPU Fdr_merged_*.tif. (Contrast
+    # with twi_raster, where the ArcPy `Twi_merged_*` source is preferred over
+    # the open-source `Twi_hydrodem_*` for PRMS calibration thresholds.)
+    fdr_raster: "{data_root}/work/nhd_merged/fdr.vrt"
     twi_raster: "{data_root}/work/nhd_merged/twi.vrt"
     segments_gpkg: "{data_root}/input/depstor/{fabric}_segments_wbodies.gpkg"
     waterbody_gpkg: "{data_root}/input/depstor/{fabric}_segments_wbodies.gpkg"

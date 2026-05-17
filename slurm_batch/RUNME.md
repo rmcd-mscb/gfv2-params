@@ -111,6 +111,33 @@ cd /caldera/hovenweep/projects/usgs/water/impd/nhgf/gfv2-params
 
 These stages do not require a watershed fabric and can be run while fabric preparation proceeds in parallel. Complete all Part 1 stages before moving to Part 2.
 
+### Recommended: run Part 1 via the unified shared-rasters orchestrator
+
+After Stage 0 completes and the downloads in Stages 1/1b have finished, every
+remaining raster prep step can be driven from one entry point:
+
+```bash
+pixi run python scripts/build_shared_rasters.py --config configs/shared_rasters.yml
+```
+
+This walks the full DAG (merge_rpu_by_vpu → compute_slope_aspect →
+build_border_dem → build_vpu_landmask → merge_rpu_by_vpu_twi → build_vrt →
+build_derived_rasters → build_lulc_rasters) in dependency order, replacing
+the per-stage sbatch invocations below. Per-VPU steps iterate the `vpus`
+list inside `configs/shared_rasters.yml` rather than launching one sbatch
+per VPU. Flags:
+
+- `--step <name>` — run just that step (upstream outputs must exist)
+- `--from <name>` — resume from this step (it + everything after)
+- `--vpus 01,02` — restrict per-VPU steps to a subset
+- `--force` — rebuild outputs that already exist
+
+The individual `slurm_batch/*.batch` files and per-script CLIs documented in
+Stages 1 through 2c below are preserved as thin shells around the same
+library builders. Use them when you want per-step granularity or per-VPU
+parallelism via SLURM arrays; use the orchestrator when you want one job
+that walks the whole DAG.
+
 ### Stage 0: Initialize data root and stage inputs
 
 Scaffold the full directory tree under your `data_root`:
@@ -133,7 +160,7 @@ The following externally-provided files must be placed in the scaffolded directo
 | `input/soils_litho/` | `TEXT_PRMS.tif`, `AWC.tif`, `Lithology_exp_Konly_Project.shp` (+ sidecar files: `.dbf`, `.prj`, `.shx`) |
 | `input/lulc_veg/` | `RootDepth.tif`, `CNPY.tif`, `Imperv.tif` |
 | `input/nhm_default/` | NHM default parameter files (input to final merge step) |
-| `input/depstor/` | Per-fabric: `<fabric>_segments_wbodies.gpkg` (layers `nsegment`, `v2_wb`); `<fabric>_fdr.tif` (D8 flow direction, Esri pointer encoding) |
+| `input/depstor/` | Per-fabric: `<fabric>_segments_wbodies.gpkg` (layers `nsegment`, `v2_wb`). The D8 flow-direction raster is sourced from the shared `work/nhd_merged/fdr.vrt` produced by Part 1 — no fabric-specific FDR is required here. |
 | `input/twi/<rpu>/` | Per-RPU TWI raster `twi.tif` (+ `.tfw`, `.aux.xml`, `.ovr`, `.xml` sidecars). Stage with `bash scripts/stage_twi.sh` (see below). |
 
 The NALCMS 2020 land cover raster can be downloaded automatically (see below).
@@ -293,8 +320,8 @@ zonal-stats orchestrator below.
 
 Inputs (manually staged per fabric):
 - `input/depstor/<fabric>_segments_wbodies.gpkg` (layers `nsegment`, `v2_wb`)
-- `input/depstor/<fabric>_fdr.tif` (D8 flow direction, Esri pointer)
 - Per-fabric `hru_gpkg` / `twi_raster` (from `base_config.yml`).
+- Shared `fdr_raster` from `work/nhd_merged/fdr.vrt` (Part 1 output; no per-fabric FDR needed).
 - The NLCD 2015 fractional-impervious raster (path set in
   `configs/depstor_rasters.yml` under `imperv_source`) and
   `work/nhd_merged/elevation.vrt`.
@@ -498,6 +525,17 @@ sacct -j <JOBID> -o JobID,State,Elapsed,MaxRSS
 ```
 
 ## Script -> Config -> Entry Point Mapping
+
+The unified shared-rasters orchestrator wraps every Part 1 raster-prep
+script below behind one entry point:
+
+| Orchestrator | Config | Script |
+|---|---|---|
+| _(none — single entry point)_ | shared_rasters.yml | build_shared_rasters.py |
+
+The per-script CLIs in the table below are preserved as thin shells and
+keep working unchanged; use them for per-step granularity or per-VPU SLURM
+arrays.
 
 | Batch file | Config | Script |
 |---|---|---|

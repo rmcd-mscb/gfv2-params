@@ -97,8 +97,8 @@ gfv2_param/
 │   │   ├── nlcd_annual_imperv/     # NLCD fractional imperviousness (downloadable)
 │   │   └── nalcms_2020/            # NALCMS 2020 land cover (downloadable)
 │   ├── depstor/                    # Per-fabric depression-storage inputs
-│   │   ├── <fabric>_segments_wbodies.gpkg   # nsegment + v2_wb layers
-│   │   └── <fabric>_fdr.tif        # D8 flow direction (Esri pointer)
+│   │   └── <fabric>_segments_wbodies.gpkg   # nsegment + v2_wb layers
+│   │                               # (FDR comes from shared work/nhd_merged/fdr.vrt)
 │   ├── twi/<rpu>/                  # Per-RPU TWI (twi.tif + sidecars; staged via stage_twi.sh)
 │   ├── nhm_default/                # NHM default parameter files
 │   └── nhd_downloads/              # Raw NHDPlus zip archives (downloadable)
@@ -136,7 +136,7 @@ The following externally-provided files must be placed in the scaffolded directo
 | `input/soils_litho/` | `TEXT_PRMS.tif`, `AWC.tif`, `Lithology_exp_Konly_Project.shp` (+ sidecar files: `.dbf`, `.prj`, `.shx`) |
 | `input/lulc_veg/` | `RootDepth.tif`, `CNPY.tif`, `Imperv.tif` |
 | `input/nhm_default/` | NHM default parameter files (input to final merge step) |
-| `input/depstor/` | Per-fabric: `<fabric>_segments_wbodies.gpkg` (layers `nsegment`, `v2_wb`) and `<fabric>_fdr.tif` (D8 flow direction, Esri pointer encoding) |
+| `input/depstor/` | Per-fabric: `<fabric>_segments_wbodies.gpkg` (layers `nsegment`, `v2_wb`). The D8 flow-direction raster is no longer expected here — the gfv2 profile now consumes `work/nhd_merged/fdr.vrt` produced by the shared raster pipeline. |
 | `input/twi/<rpu>/` | Per-RPU `twi.tif` (+ `.tfw`, `.aux.xml`, `.ovr`, `.xml` sidecars). Stage with `bash scripts/stage_twi.sh` (or `sbatch slurm_batch/stage_twi.batch` for an unattended run). |
 
 ### 3. Run fabric-independent tasks
@@ -157,6 +157,28 @@ sbatch slurm_batch/download_nalcms.batch
 ```
 
 Both scripts are idempotent — already-downloaded files are skipped on resubmission.
+
+**Build the CONUS shared raster store (recommended):** once the downloads
+above are complete, the entire raster preparation DAG runs from one
+orchestrator over [configs/shared_rasters.yml](configs/shared_rasters.yml):
+
+```bash
+pixi run python scripts/build_shared_rasters.py --config configs/shared_rasters.yml
+```
+
+This walks 7 production steps in dependency order (merge_rpu_by_vpu →
+compute_slope_aspect → build_border_dem → build_vpu_landmask →
+merge_rpu_by_vpu_twi → build_vrt → build_derived_rasters → build_lulc_rasters)
+and writes everything into the shared `work/` store consumed by every
+fabric. Add `--step <name>` to run one step or `--from <name>` to resume.
+`--vpus 01,02` scopes per-VPU steps to a subset; `--force` rebuilds
+existing outputs. See [Shared rasters pipeline](#shared-rasters-pipeline)
+below for the design notes.
+
+The per-script entry points (`merge_rpu_by_vpu.py`, `compute_slope_aspect.py`,
+etc.) and their sbatch wrappers (`slurm_batch/merge_rpu_by_vpu.batch`, etc.)
+are preserved as thin shells around the same library builders, so existing
+job submissions keep working unchanged.
 
 ### 4. Run fabric-dependent tasks
 
@@ -196,6 +218,31 @@ via (highest precedence first):
    `prepare_fabric.py` and all stages with `--fabric <name>` (or `FABRIC=<name>`).
 
 See `slurm_batch/RUNME.md` for the full step-by-step workflow.
+
+## Shared rasters pipeline
+
+The CONUS shared-raster preparation (Part 1 of the workflow) is driven by
+one orchestrator and one unified config:
+
+- [scripts/build_shared_rasters.py](scripts/build_shared_rasters.py) reads
+  [configs/shared_rasters.yml](configs/shared_rasters.yml) and walks the
+  step DAG via the builder modules under
+  [src/gfv2_params/shared_rasters/](src/gfv2_params/shared_rasters/).
+- The DAG covers per-VPU NHDPlus prep (`merge_rpu_by_vpu`,
+  `compute_slope_aspect`), border-DEM fill (`build_border_dem`), per-VPU
+  HRU landmask (`build_vpu_landmask`), the masked TWI merge
+  (`merge_rpu_by_vpu_twi`), CONUS VRT assembly (`build_vrt`), and CONUS
+  derived rasters (`build_derived_rasters`, `build_lulc_rasters`).
+- `compute_dem_derivatives` is registered as an opt-in step (parallel
+  open-source TWI pipeline; not in the default `steps:` list because PRMS
+  calibration thresholds reference the canonical ArcPy-derived TWI — see
+  the [module docstring](src/gfv2_params/shared_rasters/compute_dem_derivatives.py)).
+
+These outputs live under `{data_root}/work/` and are **fabric-independent**:
+every fabric reuses the same CONUS rasters. Per-VPU iteration happens
+inside the builders, not in per-VPU sbatch launches, so the orchestrator
+runs as a single job. The per-script entrypoints and sbatch wrappers are
+preserved as thin shells around the same builders.
 
 ## Depression-storage pipeline
 
