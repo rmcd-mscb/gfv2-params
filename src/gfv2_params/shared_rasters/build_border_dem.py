@@ -227,6 +227,31 @@ def build(step_cfg: dict, ctx: SharedRastersContext, logger) -> dict:
     slope_out = fill_dir / "NEDSnapshot_merged_slope_copernicus.tif"
     aspect_out = fill_dir / "NEDSnapshot_merged_aspect_copernicus.tif"
 
+    # Early-exit if every output is already on disk. Without this the
+    # orchestrator re-runs the Copernicus download on every walk, even
+    # when the three output tiles are cached — slow (network-bound) and
+    # fragile (the >20% shortfall guard at line ~259 trips intermittently
+    # on transient 404s from the deliberately-generous border bbox).
+    # Mirrors the skip-if-exists pattern every per-VPU builder uses.
+    if (
+        not ctx.force
+        and elev_out.exists()
+        and slope_out.exists()
+        and aspect_out.exists()
+    ):
+        logger.info(
+            "=== build_border_dem: all outputs exist, skipping "
+            "(use --force to rebuild) ==="
+        )
+        logger.info("  elevation: %s", elev_out)
+        logger.info("  slope    : %s", slope_out)
+        logger.info("  aspect   : %s", aspect_out)
+        return {
+            "border_elevation": elev_out,
+            "border_slope": slope_out,
+            "border_aspect": aspect_out,
+        }
+
     # --- Step 1: Compute tile list and download ---
     logger.info("=== Step 1/5: Download Copernicus GLO-30 tiles ===")
     all_labels = []
