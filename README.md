@@ -98,16 +98,18 @@ gfv2_param/
 │   │   └── nalcms_2020/            # NALCMS 2020 land cover (downloadable)
 │   ├── depstor/                    # Per-fabric depression-storage inputs
 │   │   └── <fabric>_segments_wbodies.gpkg   # nsegment + v2_wb layers
-│   │                               # (FDR comes from shared work/nhd_merged/fdr.vrt)
+│   │                               # (FDR comes from shared shared/conus/vrt/fdr.vrt)
 │   ├── twi/<rpu>/                  # Per-RPU TWI (twi.tif + sidecars; staged via stage_twi.sh)
 │   ├── nhm_default/                # NHM default parameter files
 │   └── nhd_downloads/              # Raw NHDPlus zip archives (downloadable)
-├── work/                           # Reproducible intermediates (safe to delete)
-│   ├── nhd_extracted/              # Unzipped per-RPU rasters
-│   ├── nhd_merged/                 # Per-VPU GeoTIFFs + CONUS VRTs (incl. twi.vrt)
-│   │   └── copernicus_fill/        # Border-DEM fill (Canada/Mexico) for elevation VRT
-│   ├── derived_rasters/            # soil_moist_max.tif, radtrn, resampled CNPY/keep
-│   └── weights/                    # P2P polygon weights for ssflux
+├── shared/                         # Fabric-independent intermediates (reused by every fabric)
+│   ├── source/                     # Unzipped per-RPU NHDPlus rasters
+│   ├── per_vpu/<vpu>/              # Per-VPU merged GeoTIFFs (NED/Hydrodem/Fdr/Fac/Twi/slope/aspect/landmask)
+│   └── conus/
+│       ├── vrt/                    # CONUS-wide GDAL virtual rasters (elevation/slope/aspect/fdr/twi)
+│       ├── derived/                # soil_moist_max.tif, radtrn, resampled CNPY/keep
+│       ├── borders/                # Copernicus border-DEM fill (Canada/Mexico)
+│       └── weights/                # P2P polygon weights for ssflux
 └── {fabric}/                       # Per-fabric outputs (e.g., gfv2/, gfv2_vpu01/, oregon/)
     ├── fabric/                     # Merged fabric gpkg
     ├── batches/                    # Per-batch gpkgs + manifest
@@ -136,7 +138,7 @@ The following externally-provided files must be placed in the scaffolded directo
 | `input/soils_litho/` | `TEXT_PRMS.tif`, `AWC.tif`, `Lithology_exp_Konly_Project.shp` (+ sidecar files: `.dbf`, `.prj`, `.shx`) |
 | `input/lulc_veg/` | `RootDepth.tif`, `CNPY.tif`, `Imperv.tif` |
 | `input/nhm_default/` | NHM default parameter files (input to final merge step) |
-| `input/depstor/` | Per-fabric: `<fabric>_segments_wbodies.gpkg` (layers `nsegment`, `v2_wb`). The D8 flow-direction raster is no longer expected here — the gfv2 profile now consumes `work/nhd_merged/fdr.vrt` produced by the shared raster pipeline. |
+| `input/depstor/` | Per-fabric: `<fabric>_segments_wbodies.gpkg` (layers `nsegment`, `v2_wb`). The D8 flow-direction raster is no longer expected here — the gfv2 profile now consumes `shared/conus/vrt/fdr.vrt` produced by the shared raster pipeline. |
 | `input/twi/<rpu>/` | Per-RPU `twi.tif` (+ `.tfw`, `.aux.xml`, `.ovr`, `.xml` sidecars). Stage with `bash scripts/stage_twi.sh` (or `sbatch slurm_batch/stage_twi.batch` for an unattended run). |
 
 ### 3. Run fabric-independent tasks

@@ -33,8 +33,8 @@ Run 4: 2026-05-11 17:00 UTC (resubmit after pour-points fix — **all 9 jobs COM
 ## Configuration
 
 - Fabric: `gfv2_vpu01`
-- Template grid: `work/nhd_merged/01/Hydrodem_merged_01.tif` (25,845 × 31,405, unnamed Albers ≈ EPSG:5070)
-- FDR: `work/nhd_merged/01/Fdr_merged_01.tif` (per-VPU; sidesteps the CONUS `fdr.vrt` memory issue tracked in issue #41)
+- Template grid: `shared/per_vpu/01/Hydrodem_merged_01.tif` (25,845 × 31,405, unnamed Albers ≈ EPSG:5070)
+- FDR: `shared/per_vpu/01/Fdr_merged_01.tif` (per-VPU; sidesteps the CONUS `fdr.vrt` memory issue tracked in issue #41)
 - Fabric polygons: `input/fabric/NHM_01_draft.gpkg` layers `nhru` (11,278 features, `nat_hru_id` 1..11,278), `nsegment`, `wbs` (note: NOT `v2_wb`)
 - Batch size: 2000 → KD-tree bisection produced **8** batches in `gfv2_vpu01/batches/`
 
@@ -69,7 +69,7 @@ Run 4: 2026-05-11 17:00 UTC (resubmit after pour-points fix — **all 9 jobs COM
 
 ## Raster output summary
 
-All rasters share shape `31,405 × 25,845` (snapped to `work/nhd_merged/01/Hydrodem_merged_01.tif`) and `nodata = 255` (uint8) or `nodata = 0` (int32 regions). Coverage column = `(cells == 1) / (total cells)`.
+All rasters share shape `31,405 × 25,845` (snapped to `shared/per_vpu/01/Hydrodem_merged_01.tif`) and `nodata = 255` (uint8) or `nodata = 0` (int32 regions). Coverage column = `(cells == 1) / (total cells)`.
 
 | Raster | Dtype | Valid % (≠ nodata) | Cells == 1 | Coverage % | Notes |
 |---|---|---|---|---|---|
