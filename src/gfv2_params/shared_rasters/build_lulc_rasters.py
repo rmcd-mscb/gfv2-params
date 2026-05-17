@@ -114,10 +114,23 @@ def _build_one_source(source_yaml: Path, ctx: SharedRastersContext, logger) -> d
 
     lulc_raster = Path(config["source_raster"])
     cnpy_raster = Path(config["canopy_raster"])
+    # Missing inputs are warn-and-skip, not fatal. The orchestrator processes
+    # every LULC source in the `sources:` list; one source's data not being
+    # staged shouldn't take down the whole step (and the other sources). The
+    # warning is loud enough to surface in CI/log output, and the source is
+    # cleanly omitted from `produced` so downstream consumers see the gap.
     if not lulc_raster.exists():
-        raise FileNotFoundError(f"LULC raster not found: {lulc_raster}")
+        logger.warning(
+            "LULC raster not found for source=%s — skipping this source. "
+            "Missing: %s", lulc_source, lulc_raster,
+        )
+        return {}
     if not cnpy_raster.exists():
-        raise FileNotFoundError(f"Canopy raster not found: {cnpy_raster}")
+        logger.warning(
+            "Canopy raster not found for source=%s — skipping this source. "
+            "Missing: %s", lulc_source, cnpy_raster,
+        )
+        return {}
 
     radtrn_raster_str = config.get("radtrn_raster")
     radtrn_raster = Path(radtrn_raster_str) if radtrn_raster_str else None
@@ -161,7 +174,15 @@ def _build_one_source(source_yaml: Path, ctx: SharedRastersContext, logger) -> d
         return produced
 
     if not keep_raster.exists():
-        raise FileNotFoundError(f"Keep raster not found: {keep_raster}")
+        # Same warn-and-skip philosophy as source/canopy missing, but the
+        # cnpy resample already succeeded — return what we have so downstream
+        # consumers can still use the cnpy_resampled output.
+        logger.warning(
+            "Keep raster not found for source=%s — skipping Steps 2-3 "
+            "(keep resample + radtrn). Cnpy resample retained. Missing: %s",
+            lulc_source, keep_raster,
+        )
+        return produced
 
     # Step 2: Resample keep to LULC grid.
     keep_resampled = derived_dir / f"keep_resampled_{lulc_source}.tif"
