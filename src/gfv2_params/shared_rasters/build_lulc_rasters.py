@@ -159,9 +159,10 @@ def _build_one_source(source_yaml: Path, ctx: SharedRastersContext, logger) -> d
         logger.info("--- Step 1/3: Resample canopy raster to LULC grid ---")
         logger.info("  (CONUS-scale GeoTIFF; may take 30-60 min)")
         t1 = time.time()
-        # mask_values=(128,) — do NOT mask 0; value 0 = no canopy, a valid measurement
+        # mask_values=() — value 0 is a valid canopy measurement (no canopy);
+        # the int16 nodata sentinel (-32768) is caught by mask_negative=True.
         resample(str(cnpy_raster), str(lulc_raster), str(intermediate), str(cnpy_resampled),
-                 mask_values=(128,))
+                 mask_values=())
         logger.info("  Done in %s — written: %s", _elapsed(t1), cnpy_resampled)
         logger.info("  Result: %s", _raster_info(cnpy_resampled))
     else:
@@ -191,9 +192,11 @@ def _build_one_source(source_yaml: Path, ctx: SharedRastersContext, logger) -> d
         logger.info("--- Step 2/3: Resample keep raster to LULC grid ---")
         logger.info("  (CONUS-scale GeoTIFF; may take 30-60 min)")
         t2 = time.time()
-        # mask_values=(128,) — do NOT mask 0; value 0 = fully deciduous, a valid measurement
+        # mask_values=() — value 0 is a valid retention measurement (fully
+        # deciduous); the int8 nodata sentinel (-128) is caught by
+        # mask_negative=True.
         resample(str(keep_raster), str(lulc_raster), str(intermediate), str(keep_resampled),
-                 mask_values=(128,))
+                 mask_values=())
         logger.info("  Done in %s — written: %s", _elapsed(t2), keep_resampled)
         logger.info("  Result: %s", _raster_info(keep_resampled))
     else:

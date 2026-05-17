@@ -15,7 +15,7 @@ def resample(
     template_path: str,
     intermediate_path: str,
     output_path: str,
-    mask_values=(128, 0),
+    mask_values=(),
     mask_negative=True,
 ) -> None:
     """Reproject and resample src_path raster to match template_path's spatial reference.
@@ -23,10 +23,14 @@ def resample(
     Writes the result to intermediate_path, applies NoData masking,
     and saves the final raster to output_path.
 
-    WARNING — default mask_values=(128, 0) masks pixel value 0:
-      - Correct for RootDepth (0 = cropland = no natural root depth)
-      - WRONG for CNPY (0 = no tree canopy, a valid measurement)
-    Pass mask_values=(128,) when resampling CNPY to preserve non-forest pixels.
+    ``mask_values`` is the tuple of pixel values that get rewritten to NaN in
+    the output (in addition to whatever ``mask_negative=True`` catches —
+    typically the signed-integer nodata sentinel like int8's -128). Empty by
+    default; pass an explicit tuple per-call to document the intent at the
+    call site, e.g.:
+      - RootDepth: ``mask_values=(0,)``  — 0 = cropland = no natural root depth
+      - CNPY/keep: ``mask_values=()``    — 0 is a valid measurement (no canopy /
+                                            fully deciduous), so do NOT mask it
     """
     # Explicit existence checks up front: newer osgeo enables GDAL exceptions
     # by default, so gdal.Open() raises RuntimeError on a missing file rather
