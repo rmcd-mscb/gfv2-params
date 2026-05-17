@@ -18,7 +18,14 @@ fill in as each cluster lands on this branch.
 
 from __future__ import annotations
 
-from . import compute_dem_derivatives, compute_slope_aspect, merge_rpu_by_vpu
+from . import (
+    build_border_dem,
+    build_vpu_landmask,
+    build_vrt,
+    compute_dem_derivatives,
+    compute_slope_aspect,
+    merge_rpu_by_vpu,
+)
 from .context import SharedRastersContext
 
 # The DAG. The two `merge_rpu_by_vpu*` invocations share a single builder —
@@ -31,22 +38,28 @@ from .context import SharedRastersContext
 BUILDERS: dict = {
     "merge_rpu_by_vpu":        merge_rpu_by_vpu.build,
     "compute_slope_aspect":    compute_slope_aspect.build,
+    "build_border_dem":        build_border_dem.build,
+    "build_vpu_landmask":      build_vpu_landmask.build,
     "compute_dem_derivatives": compute_dem_derivatives.build,
     "merge_rpu_by_vpu_twi":    merge_rpu_by_vpu.build,  # post-landmask invocation
+    "build_vrt":               build_vrt.build,
 }
 
 STEP_ORDER: list[str] = [
     "merge_rpu_by_vpu",
     "compute_slope_aspect",
+    "build_border_dem",
+    "build_vpu_landmask",
     "compute_dem_derivatives",  # optional / parallel
     "merge_rpu_by_vpu_twi",
+    "build_vrt",
 ]
 
 # Roadmap. Names move from PLANNED_STEPS into STEP_ORDER + BUILDERS as each
 # cluster lands. Standard production flow:
 #   2b (DONE): merge_rpu_by_vpu, compute_slope_aspect, merge_rpu_by_vpu_twi
 #   2c (DONE): compute_dem_derivatives (optional / parallel pipeline)
-#   2d:        build_border_dem, build_vpu_landmask, build_vrt
+#   2d (DONE): build_border_dem, build_vpu_landmask, build_vrt
 #   2e:        build_derived_rasters, build_lulc_rasters
 PLANNED_STEPS = [
     "merge_rpu_by_vpu",

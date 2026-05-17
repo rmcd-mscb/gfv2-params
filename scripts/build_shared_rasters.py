@@ -36,16 +36,24 @@ from gfv2_params.shared_rasters import (
 _DEFAULT_BASE_CONFIG = Path(__file__).resolve().parent.parent / "configs" / "base_config.yml"
 
 
+# Placeholders resolved later by per-VPU builders inside their iteration
+# loop (not at config-load time). Mirrors how `{fabric}` is treated by the
+# depstor orchestrator — builder-owned, not orchestrator-owned.
+_DEFERRED_PLACEHOLDERS = {"vpu"}
+
+
 def _resolve_nested(value, replacements: dict):
     """Recursively resolve {placeholder} substrings in nested str/list/dict."""
     if isinstance(value, str):
         for ph, rep in replacements.items():
             value = value.replace(f"{{{ph}}}", str(rep))
-        remaining = re.findall(r"\{(\w+)\}", value)
+        remaining = [r for r in re.findall(r"\{(\w+)\}", value)
+                     if r not in _DEFERRED_PLACEHOLDERS]
         if remaining:
             raise ValueError(
                 f"Unresolved placeholder(s) {remaining} in value '{value}'. "
-                f"Available: {sorted(replacements)}"
+                f"Available now: {sorted(replacements)}. "
+                f"Deferred to builders: {sorted(_DEFERRED_PLACEHOLDERS)}."
             )
         return value
     if isinstance(value, list):

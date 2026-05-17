@@ -51,10 +51,25 @@ steps:
     input_dir: "{data_root}/work/nhd_merged"
     output_dir: "{data_root}/work/nhd_merged"
 
-  # Stage 1c2: merged TWI, masked against the per-VPU HRU land mask. Runs
-  # AFTER build_vpu_landmask (which lands in cluster 2d). Listed here in
-  # roadmap order so the DAG is visible in one place; the orchestrator
-  # validation will surface a clear error if you enable this entry before
-  # build_vpu_landmask is registered.
+  # Stage 1b: Copernicus GLO-30 fill for Canada/Mexico border HRUs. CONUS-once
+  # (does not iterate vpus). Depends on the per-VPU _fixed_ NED tiles produced
+  # by compute_slope_aspect.
+  - name: build_border_dem
+
+  # Stage 1c1: per-VPU HRU land mask used by the TWI pipeline. Iterates vpus
+  # and rasterises the canonical CONUS gfv2_nhru_merged.gpkg (filtered by the
+  # `vpu` column) onto each per-VPU Hydrodem grid.
+  - name: build_vpu_landmask
+    template_raster: "{data_root}/work/nhd_merged/{vpu}/Hydrodem_merged_{vpu}.tif"
+    hru_gpkg: "{data_root}/gfv2/fabric/gfv2_nhru_merged.gpkg"
+    hru_layer: nhru
+    output_raster: "{data_root}/work/nhd_merged/{vpu}/land_mask_{vpu}.tif"
+
+  # Stage 1c2: merged TWI, masked against the per-VPU HRU land mask.
   - name: merge_rpu_by_vpu_twi
     manifest: configs/merge_rpu_by_vpu_twi.yml
+
+  # Stage 2a: CONUS VRT assembly. Discovers per-VPU sources by globbing
+  # nhd_merged/ and lists copernicus_fill/ tiles ahead of NHDPlus tiles so
+  # NHDPlus wins the overlap (GDAL last-source-wins).
+  - name: build_vrt
