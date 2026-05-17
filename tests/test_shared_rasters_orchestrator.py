@@ -95,7 +95,7 @@ def test_orchestrator_smoke_with_empty_steps(tmp_path):
     )
     assert result.returncode == 0, result.stderr
     assert "No steps to run" in (result.stdout + result.stderr)
-    assert (data_root / "work").exists()
+    assert (data_root / "shared").exists()
 
 
 def test_orchestrator_rejects_unknown_step(tmp_path):

@@ -291,7 +291,7 @@ def test_load_config_selects_fabric_profile():
         assert config["expected_max_hru_id"] == 11278
         assert config["batch_size"] == 2000
         assert config["waterbody_layer"] == "wbs"
-        assert config["template_raster"] == "/fake/root/work/01/Hydrodem_merged_01.tif"
+        assert config["template_raster"] == "/fake/root/shared/per_vpu/01/Hydrodem_merged_01.tif"
         assert config["output_dir"] == "/fake/root/gfv2_vpu01/params"
 
 
@@ -394,4 +394,4 @@ def test_load_base_config_with_fabric_profile():
         assert config["expected_max_hru_id"] == 11278
         assert config["batch_size"] == 2000
         # {data_root} and {fabric} placeholders are resolved here too.
-        assert config["template_raster"] == "/fake/root/work/01/Hydrodem_merged_01.tif"
+        assert config["template_raster"] == "/fake/root/shared/per_vpu/01/Hydrodem_merged_01.tif"
