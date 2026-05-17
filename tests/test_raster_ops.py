@@ -57,7 +57,7 @@ def _write_tiff(path, data, crs="EPSG:4326", transform=None, nodata=None):
 
 
 def test_resample_masks_nodata_values():
-    """Values 128 and 0 should become NaN after resample."""
+    """Explicit mask_values=(128, 0) should rewrite both pixel values to NaN."""
     with tempfile.TemporaryDirectory() as tmpdir:
         tmpdir = Path(tmpdir)
         src_path = tmpdir / "src.tif"
@@ -69,12 +69,40 @@ def test_resample_masks_nodata_values():
         _write_tiff(src_path, data)
         _write_tiff(tmpl_path, np.ones((3, 3), dtype=np.float32))
 
-        resample(str(src_path), str(tmpl_path), str(intermediate_path), str(output_path))
+        resample(str(src_path), str(tmpl_path), str(intermediate_path), str(output_path),
+                 mask_values=(128, 0))
 
         with rasterio.open(str(output_path)) as src:
             result = src.read(1)
             assert np.isnan(result[0, 1])  # was 128
             assert np.isnan(result[1, 0])  # was 0
+
+
+def test_resample_default_mask_values_is_no_op():
+    """Default mask_values=() preserves all non-negative pixel values."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmpdir = Path(tmpdir)
+        src_path = tmpdir / "src.tif"
+        tmpl_path = tmpdir / "tmpl.tif"
+        intermediate_path = tmpdir / "intermediate.tif"
+        output_path = tmpdir / "output.tif"
+
+        # 0, 128, and other positives should all survive when mask_values is unset.
+        data = np.array([[1.0, 128.0, 5.0], [0.0, 3.0, 7.0], [2.0, 4.0, 6.0]], dtype=np.float32)
+        _write_tiff(src_path, data)
+        _write_tiff(tmpl_path, np.ones((3, 3), dtype=np.float32))
+
+        resample(str(src_path), str(tmpl_path), str(intermediate_path), str(output_path))
+
+        with rasterio.open(str(output_path)) as src:
+            result = src.read(1)
+            # No value-mask applied — every input value reaches the output.
+            assert result[0, 1] == 128.0
+            assert result[1, 0] == 0.0
+            assert result[2, 2] == 6.0
+            # mask_negative=True is still on by default; no negatives in this
+            # input, so the output should be NaN-free.
+            assert not np.any(np.isnan(result))
 
 
 def test_resample_masks_negative_values():

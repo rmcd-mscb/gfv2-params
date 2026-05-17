@@ -42,10 +42,14 @@ def build(step_cfg: dict, ctx: SharedRastersContext, logger) -> dict:
     if not awc_rast.exists():
         raise FileNotFoundError(f"AWC raster not found: {awc_rast}")
 
-    # Step 1: Resample RootDepth to match AWC grid
+    # Step 1: Resample RootDepth to match AWC grid.
+    # mask_values=(0,) — 0 = cropland = no natural root depth; mask it to
+    # NaN so downstream soil_moist_max doesn't multiply zeros through. The
+    # int8 -128 nodata sentinel is caught separately by mask_negative=True.
     if not rd_resampled.exists() or ctx.force:
         logger.info("Resampling RootDepth to AWC grid...")
-        resample(str(rd_rast), str(awc_rast), str(intermediate_rast), str(rd_resampled))
+        resample(str(rd_rast), str(awc_rast), str(intermediate_rast), str(rd_resampled),
+                 mask_values=(0,))
         logger.info("Written: %s", rd_resampled)
     else:
         logger.info("Resampled RootDepth already exists: %s", rd_resampled)
