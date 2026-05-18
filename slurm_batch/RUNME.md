@@ -390,10 +390,39 @@ python scripts/prepare_fabric.py \
 
 ### Stage 4: Generate parameters (SLURM array jobs)
 
-Submit batch jobs using the wrapper script:
+#### Recommended: run Part 2 via the unified zonal-params dispatcher
 
-Pass the corresponding param config as the 4th argument to auto-submit a merge job
-that runs immediately after each array job completes (`afterok` dependency):
+After Stage 3 completes (fabric merged + batched), every Part 2 param can
+be driven from one shell invocation:
+
+```bash
+BATCHES=/path/to/gfv2/batches
+slurm_batch/submit_zonal_params.sh $BATCHES gfv2 configs/base_config.yml
+```
+
+This loops every entry in `configs/zonal_params.yml` (10 params today:
+elevation, slope, aspect, soils, soil_moist_max, 4× LULC, ssflux) and
+submits per-param array + merge jobs chained via `afterok`. ssflux's
+`depends_on: build_weights` prereq is detected automatically: the wrapper
+submits `build_zonal_weights.batch` first and chains the ssflux array on
+its `afterok` (the weight matrix is CONUS-once per fabric — idempotent).
+ssflux also chains on the merged slope CSV.
+
+Env knobs:
+
+- `FABRIC=gfv2_vpu01` — switch to a non-default fabric
+- `SUBMIT_JOBS_MAX_CONCURRENT=4` — concurrency cap per array job (default 4)
+- `FORCE=1` — passed to build_zonal_weights to overwrite the existing matrix
+
+The individual per-param batches (`create_zonal_*.batch`, `create_soils*.batch`,
+`create_lulc_*.batch`, `create_ssflux_params.batch`, `build_weights.batch`)
+documented below remain as fallbacks for per-step debugging.
+
+#### Fallback: per-param submissions via `submit_jobs.sh`
+
+Submit batch jobs using the per-param wrapper. Pass the corresponding param
+config as the 4th argument to auto-submit a merge job that runs immediately
+after each array job completes (`afterok` dependency):
 
 ```bash
 BATCHES=/path/to/gfv2/batches
@@ -457,6 +486,15 @@ python scripts/merge_params.py --config configs/elev_param.yml --base_config con
 
 ### Stage 6: SSFlux (depends on merged slope)
 
+> **Already running via `submit_zonal_params.sh`?** Then ssflux is handled
+> automatically as part of the unified Stage 4 dispatch — the wrapper sees
+> `depends_on: build_weights` on the ssflux entry in
+> `configs/zonal_params.yml`, submits `build_zonal_weights.batch` first, and
+> chains the ssflux array + merge on its `afterok`. ssflux also chains on the
+> merged slope CSV. **No separate Stage 6 invocation needed.** This stage
+> describes the legacy standalone path for users who run ssflux outside the
+> unified dispatcher.
+
 A single batch job handles the full ssflux workflow: pre-compute weights, submit the
 ssflux array job, and automatically chain a merge job via `afterok` dependency:
 
@@ -505,10 +543,16 @@ already merged or comes as per-VPU gpkgs.
        --fabric_gpkg {data_root}/oregon/fabric/NHM_OR_draft.gpkg \
        --fabric oregon
    ```
-5. Submit parameter jobs, passing the fabric as the 5th positional arg to
-   submit_jobs.sh (or via `FABRIC` env on direct sbatch calls):
+5. Submit parameter jobs. Easiest is the unified Part 2 dispatcher (one
+   invocation walks every param + chained merges + ssflux's weights prereq):
    ```bash
    BATCHES={data_root}/oregon/batches
+   slurm_batch/submit_zonal_params.sh $BATCHES oregon configs/base_config.yml
+   ```
+   For per-param granularity, you can still use `submit_jobs.sh` (passing
+   the fabric as the 5th positional arg, or via `FABRIC` env on direct
+   sbatch calls):
+   ```bash
    slurm_batch/submit_jobs.sh $BATCHES slurm_batch/create_lulc_params.batch \
        configs/base_config.yml configs/lulc_nalcms_param.yml oregon
    ```
@@ -541,12 +585,17 @@ sacct -j <JOBID> -o JobID,State,Elapsed,MaxRSS
 
 ## Script -> Config -> Entry Point Mapping
 
-The unified shared-rasters orchestrator wraps every Part 1 raster-prep
-script below behind one entry point:
+The unified orchestrators wrap every per-script entry point below:
 
 | Batch file | Config | Script |
 |---|---|---|
-| build_shared_rasters.batch | shared_rasters.yml | build_shared_rasters.py |
+| build_shared_rasters.batch (Part 1) | shared_rasters.yml | build_shared_rasters.py |
+| build_depstor_rasters.batch (Part 2 depstor rasters) | depstor_rasters.yml | build_depstor_rasters.py |
+| submit_depstor_params.sh (Part 2 depstor params) | depstor_params.yml | derive_depstor_params.py |
+| submit_zonal_params.sh (Part 2 zonal params) | zonal_params.yml | derive_zonal_params.py |
+| derive_zonal_params.batch (per-param array task) | zonal_params.yml | derive_zonal_params.py |
+| merge_zonal_param.batch (per-param merge) | zonal_params.yml | derive_zonal_params.py |
+| build_zonal_weights.batch (ssflux prereq) | zonal_params.yml | derive_zonal_params.py |
 
 The per-script CLIs in the table below are preserved as thin shells and
 keep working unchanged; use them for per-step granularity or per-VPU SLURM

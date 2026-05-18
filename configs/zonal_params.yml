@@ -1,0 +1,138 @@
+# Drive every Part 2 zonal-pass parameter derivation from a single config.
+# Replaces the 6 per-script configs (elev_param.yml, slope_param.yml,
+# aspect_param.yml, soils_param.yml, soilmoistmax_param.yml, ssflux_param.yml)
+# + the 4 lulc_*_param.yml entries that map to Part 2 invocations. Driver:
+# scripts/derive_zonal_params.py (three modes: zonal, merge, build_weights).
+#
+# Slurm orchestration: slurm_batch/submit_zonal_params.sh loops over every
+# param entry below and submits an array zonal job + chained merge (afterok).
+# When an entry has `depends_on: build_weights`, the submit script first
+# submits build_zonal_weights.batch and chains both the array zonal and the
+# merge on its afterok.
+#
+# Output layout under {output_dir}:
+#   <name>/                  -- per-batch zonal CSVs for the named param
+#   merged/                  -- final merged per-param CSVs (one row per HRU)
+#
+# Note on LULC naming: the existing per-source configs/lulc_*_param.yml use
+# source_type="lulc" with lulc_source={nhm_v11,nalcms,nlcd,foresce} so all
+# four sources write per-batch CSVs to the SAME {output_dir}/lulc/ subdir,
+# colliding. Step 4 normalises: the orchestrator passes name=lulc_<source>
+# to the library function, giving each source its own per-batch subdir
+# (lulc_nhm_v11/, lulc_nalcms/, ...). Merged outputs land at the same
+# canonical names that the legacy CLI produces, so PRMS consumers see no
+# difference.
+#
+# The legacy configs/lulc_*_param.yml stay in place because they are also
+# referenced as `sources:` by configs/shared_rasters.yml for the Part 1
+# build_lulc_rasters step.
+
+defaults:
+  batch_dir:     "{data_root}/{fabric}/batches"
+  target_layer:  nhru
+  id_feature:    nat_hru_id
+  output_dir:    "{data_root}/{fabric}/params"
+  merged_subdir: merged
+  weight_dir:    "{data_root}/shared/conus/weights"
+
+params:
+  # --- Continuous zonal stats on shared CONUS VRTs ---
+
+  - name: elevation
+    script: zonal
+    source_raster: "{data_root}/shared/conus/vrt/elevation.vrt"
+    categorical:   false
+    merged_file:   nhm_elevation_params.csv
+
+  - name: slope
+    script: zonal
+    source_raster: "{data_root}/shared/conus/vrt/slope.vrt"
+    categorical:   false
+    merged_file:   nhm_slope_params.csv
+
+  - name: aspect
+    script: zonal
+    source_raster: "{data_root}/shared/conus/vrt/aspect.vrt"
+    categorical:   false
+    merged_file:   nhm_aspect_params.csv
+
+  # --- Soils (categorical + continuous via the same script dispatcher) ---
+
+  - name: soils
+    script: soils
+    source_raster: "{data_root}/input/soils_litho/TEXT_PRMS.tif"
+    categorical:   true
+    merged_file:   nhm_soils_params.csv
+
+  - name: soil_moist_max
+    script: soils
+    source_raster: "{data_root}/shared/conus/derived/soil_moist_max.tif"
+    categorical:   false
+    merged_file:   nhm_soil_moist_max_params.csv
+
+  # --- LULC sources (each derives cov_type / covden / interception / retention) ---
+  # NHM v1.1: keep raster present -> raster-based retention.
+
+  - name: lulc_nhm_v11
+    script: lulc
+    source_raster:  "{data_root}/input/lulc_veg/nhm_v11/LULC.tif"
+    canopy_raster:  "{data_root}/input/lulc_veg/nhm_v11/CNPY.tif"
+    keep_raster:    "{data_root}/input/lulc_veg/nhm_v11/keep.tif"
+    crosswalk_file: crosswalks/nhm_v11_nhm.csv
+    categorical:    true
+    merged_file:    nhm_lulc_nhm_v11_params.csv
+
+  # NALCMS 2020: no keep raster -> crosswalk evergreen_retention column.
+
+  - name: lulc_nalcms
+    script: lulc
+    source_raster:  "{data_root}/input/lulc/nalcms_2020/NA_NALCMS_landcover_2020v2_30m.tif"
+    canopy_raster:  "{data_root}/input/lulc_veg/CNPY.tif"
+    crosswalk_file: crosswalks/nalcms_nhm.csv
+    categorical:    true
+    merged_file:    nhm_lulc_nalcms_params.csv
+
+  # NLCD 2021: no keep raster -> crosswalk evergreen_retention column.
+
+  - name: lulc_nlcd
+    script: lulc
+    source_raster:  "{data_root}/input/lulc_veg/nlcd/nlcd_2021_land_cover.tif"
+    canopy_raster:  "{data_root}/input/lulc_veg/nlcd/nlcd_2021_tree_canopy.tif"
+    crosswalk_file: crosswalks/nlcd_nhm.csv
+    categorical:    true
+    merged_file:    nhm_lulc_nlcd_params.csv
+
+  # FORE-SCE bau_rcp45 2070: keep raster present -> raster-based retention.
+
+  - name: lulc_foresce
+    script: lulc
+    source_raster:  "{data_root}/input/lulc_veg/foresce/LULC_bau_rcp45_2070.tif"
+    canopy_raster:  "{data_root}/input/lulc_veg/foresce/CNPY.tif"
+    keep_raster:    "{data_root}/input/lulc_veg/foresce/keep.tif"
+    crosswalk_file: crosswalks/foresce_nhm.csv
+    categorical:    true
+    merged_file:    nhm_lulc_foresce_params.csv
+
+  # --- ssflux (litho-weighted PRMS subsurface flux params) ---
+  # Requires the CONUS-wide P2P weight matrix (build_weights mode) and a
+  # merged slope CSV. The submit script special-cases `depends_on:` to
+  # submit build_zonal_weights.batch first + chain the ssflux array + merge
+  # on its afterok.
+
+  - name: ssflux
+    script: ssflux
+    depends_on:    build_weights
+    source_shapefile:  "{data_root}/input/soils_litho/Lithology_exp_Konly_Project.shp"
+    merged_slope_file: "{data_root}/{fabric}/params/merged/nhm_slope_params.csv"
+    merged_file:       nhm_ssflux_params.csv
+    # Lithology permeability + PRMS flux normalisation (lifted verbatim
+    # from configs/ssflux_param.yml).
+    k_perm_min: -16.48
+    flux_params:
+      - {name: soil2gw_max,          min: 0.1,   max: 0.3}
+      - {name: ssr2gw_rate,          min: 0.3,   max: 0.7}
+      - {name: fastcoef_lin,         min: 0.01,  max: 0.6}
+      - {name: slowcoef_lin,         min: 0.005, max: 0.3}
+      - {name: gwflow_coef,          min: 0.005, max: 0.3}
+      - {name: dprst_seep_rate_open, min: 0.005, max: 0.2}
+      - {name: dprst_flow_coef,      min: 0.005, max: 0.5}

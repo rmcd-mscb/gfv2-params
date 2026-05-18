@@ -1,0 +1,40 @@
+#!/bin/bash
+#SBATCH -p cpu
+#SBATCH -A impd
+#SBATCH --job-name=zonal_weights
+#SBATCH --output=logs/job_%j.out
+#SBATCH --error=logs/job_%j.err
+#SBATCH --time=08:00:00
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=2
+#SBATCH --mem=96G
+#
+# CONUS-once: pre-compute the polygon-to-polygon weight matrix between the
+# merged fabric HRUs and the lithology shapefile. The matrix is the prereq
+# for the ssflux param entry in configs/zonal_params.yml.
+#
+# Submitted by slurm_batch/submit_zonal_params.sh as the first job in any
+# run that includes a `depends_on: build_weights` param (typically ssflux);
+# the ssflux array job is then chained --dependency=afterok on this job.
+#
+# Idempotent: skips if the weight CSV already exists. Pass FORCE=1 to
+# overwrite.
+#
+# Resources mirror the legacy slurm_batch/build_weights.batch
+# (8h wall, 96G mem) — WeightGenP2P over the full CONUS fabric is
+# memory-bound and takes hours.
+
+cd "$SLURM_SUBMIT_DIR"
+[ -f .pixi-activate.sh ] || { echo "ERROR: missing .pixi-activate.sh — run scripts/refresh_pixi_activation.sh" >&2; exit 1; }
+source .pixi-activate.sh
+BASE_CONFIG=${BASE_CONFIG:-configs/base_config.yml}
+FABRIC=${FABRIC:-gfv2}
+
+FORCE_FLAG=${FORCE:+--force}
+
+python scripts/derive_zonal_params.py \
+    --config configs/zonal_params.yml \
+    --base_config "$BASE_CONFIG" \
+    --fabric "$FABRIC" \
+    --mode build_weights \
+    $FORCE_FLAG

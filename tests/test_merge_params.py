@@ -1,21 +1,17 @@
-"""Tests for scripts/merge_params.py"""
+"""Tests for the per-param merge logic.
 
-import tempfile
+The merge work was lifted from scripts/merge_params.py:process_files into
+gfv2_params.zonal_runners.run_merge as part of Step 4. The library function
+is the source of truth; the CLI shell in scripts/merge_params.py now
+delegates to it. These tests target the library function directly.
+"""
+
 from pathlib import Path
 
 import pandas as pd
 import pytest
 
-import importlib.util
-
-_spec = importlib.util.spec_from_file_location(
-    "merge_params",
-    Path(__file__).resolve().parent.parent / "scripts" / "merge_params.py",
-)
-_mod = importlib.util.module_from_spec(_spec)
-_spec.loader.exec_module(_mod)
-
-process_files = _mod.process_files
+from gfv2_params.zonal_runners import run_merge as process_files
 
 
 def _make_config(tmp_path, fabric="gfv2", source_type="elevation", expected_max=None):
