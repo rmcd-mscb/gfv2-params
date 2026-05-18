@@ -7,7 +7,6 @@ libraries (so CI can run these in seconds).
 
 import subprocess
 import sys
-import tempfile
 from pathlib import Path
 
 import pytest

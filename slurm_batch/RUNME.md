@@ -486,6 +486,15 @@ python scripts/merge_params.py --config configs/elev_param.yml --base_config con
 
 ### Stage 6: SSFlux (depends on merged slope)
 
+> **Already running via `submit_zonal_params.sh`?** Then ssflux is handled
+> automatically as part of the unified Stage 4 dispatch — the wrapper sees
+> `depends_on: build_weights` on the ssflux entry in
+> `configs/zonal_params.yml`, submits `build_zonal_weights.batch` first, and
+> chains the ssflux array + merge on its `afterok`. ssflux also chains on the
+> merged slope CSV. **No separate Stage 6 invocation needed.** This stage
+> describes the legacy standalone path for users who run ssflux outside the
+> unified dispatcher.
+
 A single batch job handles the full ssflux workflow: pre-compute weights, submit the
 ssflux array job, and automatically chain a merge job via `afterok` dependency:
 
@@ -534,10 +543,16 @@ already merged or comes as per-VPU gpkgs.
        --fabric_gpkg {data_root}/oregon/fabric/NHM_OR_draft.gpkg \
        --fabric oregon
    ```
-5. Submit parameter jobs, passing the fabric as the 5th positional arg to
-   submit_jobs.sh (or via `FABRIC` env on direct sbatch calls):
+5. Submit parameter jobs. Easiest is the unified Part 2 dispatcher (one
+   invocation walks every param + chained merges + ssflux's weights prereq):
    ```bash
    BATCHES={data_root}/oregon/batches
+   slurm_batch/submit_zonal_params.sh $BATCHES oregon configs/base_config.yml
+   ```
+   For per-param granularity, you can still use `submit_jobs.sh` (passing
+   the fabric as the 5th positional arg, or via `FABRIC` env on direct
+   sbatch calls):
+   ```bash
    slurm_batch/submit_jobs.sh $BATCHES slurm_batch/create_lulc_params.batch \
        configs/base_config.yml configs/lulc_nalcms_param.yml oregon
    ```
