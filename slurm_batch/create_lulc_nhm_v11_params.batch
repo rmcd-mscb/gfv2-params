@@ -15,6 +15,6 @@ source .pixi-activate.sh
 BASE_CONFIG=${BASE_CONFIG:-configs/base_config.yml}
 
 python scripts/create_lulc_params.py \
-    --config configs/lulc_nhm_v11_param.yml \
+    --config configs/shared_rasters/lulc/nhm_v11.yml \
     --base_config "$BASE_CONFIG" \
     --batch_id $SLURM_ARRAY_TASK_ID

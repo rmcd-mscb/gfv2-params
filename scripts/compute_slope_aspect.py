@@ -5,7 +5,7 @@ library entrypoint. Preserves the original argparse interface so existing
 sbatch jobs (slurm_batch/compute_slope_aspect.batch) keep working unchanged.
 
 For unified DAG-style invocation across all shared rasters, prefer:
-    python scripts/build_shared_rasters.py --config configs/shared_rasters.yml
+    python scripts/build_shared_rasters.py --config configs/shared_rasters/shared_rasters.yml
 """
 
 import argparse

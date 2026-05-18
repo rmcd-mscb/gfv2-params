@@ -5,7 +5,7 @@ DAG-style dispatch across every Part 2 param type, prefer:
 
     sbatch slurm_batch/submit_zonal_params.sh <batches_dir> <fabric>
 
-which loops every entry in configs/zonal_params.yml and submits per-param
+which loops every entry in configs/zonal/zonal_params.yml and submits per-param
 array + merge jobs in one go.
 """
 

@@ -105,7 +105,7 @@ and is exactly what `create_zonal_params` aggregates to downstream.
 **gfv2-params per-VPU land mask (PR #70, issue #66):** Independent of the
 CONUS depstor `land_mask.tif` above, a *per-VPU* HRU mask is built by
 [`scripts/build_vpu_landmask.py`](../scripts/build_vpu_landmask.py)
-(config: [`configs/vpu_landmask_raster.yml`](../configs/vpu_landmask_raster.yml);
+(config: [`configs/shared_rasters/vpu_landmask_raster.yml`](../configs/shared_rasters/vpu_landmask_raster.yml);
 sbatch: `slurm_batch/build_vpu_landmask.batch`). It filters
 `gfv2/fabric/gfv2_nhru_merged.gpkg` by `vpu == <vpu>` (with sub-region
 handling for `03N/S/W` and `10L/U` via `VPU_RASTER_MAP`) and rasterises onto
@@ -281,7 +281,7 @@ aggregation. Runs as **RUNME Stage 1c1**, before the TWI merge.
       (implementation in
       [`src/gfv2_params/depstor_builders/intersect.py`](../src/gfv2_params/depstor_builders/intersect.py),
       configured under `steps.drains_perv` in
-      [`configs/depstor_rasters.yml`](../configs/depstor_rasters.yml)).
+      [`configs/depstor/depstor_rasters.yml`](../configs/depstor/depstor_rasters.yml)).
       Per-HRU ratio computed by `derive_depstor_params.py --mode ratios` via
       [`compute_ratio`](../src/gfv2_params/depstor_ratios.py) from the
       `drains_perv_frac` and `perv_frac` count CSVs in

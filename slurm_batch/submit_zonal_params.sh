@@ -1,19 +1,19 @@
 #!/bin/bash
 # Usage: ./submit_zonal_params.sh <batches_dir> [fabric] [base_config] [max_concurrent]
 #
-# For each Part 2 param in configs/zonal_params.yml, submits:
+# For each Part 2 param in configs/zonal/zonal_params.yml, submits:
 #   1. an array zonal job over every HRU batch (max_concurrent throttled), and
 #   2. a chained merge job (afterok on the array) writing to
 #      {fabric}/params/merged/.
 #
-# When an entry in configs/zonal_params.yml carries `depends_on: build_weights`
+# When an entry in configs/zonal/zonal_params.yml carries `depends_on: build_weights`
 # (typically `ssflux`), a build_zonal_weights.batch job is submitted FIRST and
 # both the array zonal AND the merge for that entry are chained --dependency=
 # afterok on the weights job. The CONUS-wide weight matrix is built once per
 # fabric (idempotent), so a second invocation skips re-computation unless
 # FORCE=1 is exported.
 #
-# The 10 params are listed in configs/zonal_params.yml — if you add or remove
+# The 10 params are listed in configs/zonal/zonal_params.yml — if you add or remove
 # entries there, also update PARAMS below.
 
 set -euo pipefail
@@ -57,7 +57,7 @@ case "$MAX_CONCURRENT" in
         ;;
 esac
 
-# Param list — must match the `name:` entries in configs/zonal_params.yml.
+# Param list — must match the `name:` entries in configs/zonal/zonal_params.yml.
 # Entries marked with build_weights_dep get the ssflux-style prereq chain.
 # Keep in dependency order: slope must merge before ssflux can run, because
 # ssflux reads the merged slope CSV at zonal time.

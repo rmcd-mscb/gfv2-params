@@ -12,7 +12,7 @@ Downloads and extracts three zip files:
   CNPY.zip  -> per-pixel canopy cover (0-100%)
 
 These are NHM v1.1 parameterisation products, not raw FORE-SCE scenario
-rasters.  Use configs/lulc_nhm_v11_param.yml and crosswalks/nhm_v11_nhm.csv
+rasters.  Use configs/shared_rasters/lulc/nhm_v11.yml and crosswalks/nhm_v11_nhm.csv
 to run the pipeline with these inputs.
 
 Extracts to: {data_root}/input/lulc_veg/nhm_v11/

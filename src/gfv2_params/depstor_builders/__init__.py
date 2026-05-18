@@ -3,7 +3,7 @@
 Each submodule exposes a single `build(step_cfg, ctx, logger) -> dict[str, Path]`
 function that produces one named output (or two, for waterbody / dprst /
 carea_map). The orchestrator at `scripts/build_depstor_rasters.py` walks the
-ordered step list in `configs/depstor_rasters.yml`, calls these in dependency
+ordered step list in `configs/depstor/depstor_rasters.yml`, calls these in dependency
 order, and collects the returned output paths so downstream steps can find
 their inputs without each builder having to repeat the
 `{data_root}/{fabric}/depstor_rasters/*` path templating.

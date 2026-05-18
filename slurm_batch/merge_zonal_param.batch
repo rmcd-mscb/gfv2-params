@@ -25,7 +25,7 @@ if [ -z "${PARAM:-}" ]; then
 fi
 
 python scripts/derive_zonal_params.py \
-    --config configs/zonal_params.yml \
+    --config configs/zonal/zonal_params.yml \
     --base_config "$BASE_CONFIG" \
     --fabric "$FABRIC" \
     --mode merge \

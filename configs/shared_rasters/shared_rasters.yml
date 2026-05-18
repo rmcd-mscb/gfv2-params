@@ -54,7 +54,7 @@ output_dir: "{data_root}/shared"
 steps:
   # Stage 1: per-VPU NHDPlus prep (non-TWI datasets).
   - name: merge_rpu_by_vpu
-    manifest: configs/merge_rpu_by_vpu.yml
+    manifest: configs/shared_rasters/merge_rpu_by_vpu.yml
 
   # Stage 1: per-VPU slope + aspect from merged NEDSnapshot.
   - name: compute_slope_aspect
@@ -75,7 +75,7 @@ steps:
 
   # Stage 1c2: merged TWI, masked against the per-VPU HRU land mask.
   - name: merge_rpu_by_vpu_twi
-    manifest: configs/merge_rpu_by_vpu_twi.yml
+    manifest: configs/shared_rasters/merge_rpu_by_vpu_twi.yml
 
   # Stage 2a: CONUS VRT assembly. Reads per-VPU sources from ctx.per_vpu_dir,
   # lists borders/ tiles ahead of NHDPlus tiles so NHDPlus wins the overlap
@@ -90,7 +90,7 @@ steps:
   # source path to skip it.
   - name: build_lulc_rasters
     sources:
-      - configs/lulc_nhm_v11_param.yml
-      - configs/lulc_nalcms_param.yml
-      - configs/lulc_nlcd_param.yml
-      - configs/lulc_foresce_param.yml
+      - configs/shared_rasters/lulc/nhm_v11.yml
+      - configs/shared_rasters/lulc/nalcms.yml
+      - configs/shared_rasters/lulc/nlcd.yml
+      - configs/shared_rasters/lulc/foresce.yml

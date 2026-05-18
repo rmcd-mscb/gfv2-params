@@ -14,7 +14,7 @@
 # PARAM (e.g. elevation, slope, soils, lulc_nhm_v11, ssflux, ...) and FABRIC.
 #
 # The orchestrator dispatches on the param's `script:` tag in
-# configs/zonal_params.yml (zonal / soils / lulc / ssflux) -> the matching
+# configs/zonal/zonal_params.yml (zonal / soils / lulc / ssflux) -> the matching
 # gfv2_params.zonal_runners.run_*_batch function.
 #
 # Time bumped to 4h to cover ssflux + LULC param types (which do more work
@@ -32,7 +32,7 @@ if [ -z "${PARAM:-}" ]; then
 fi
 
 python scripts/derive_zonal_params.py \
-    --config configs/zonal_params.yml \
+    --config configs/zonal/zonal_params.yml \
     --base_config "$BASE_CONFIG" \
     --fabric "$FABRIC" \
     --mode zonal \

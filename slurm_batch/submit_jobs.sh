@@ -22,7 +22,7 @@ if [ $# -lt 2 ]; then
     echo "  batches_dir:    path to {fabric}/batches/ (contains manifest.yml)"
     echo "  batch_script:   SLURM batch file to submit"
     echo "  base_config:    optional path to base_config.yml (default: configs/base_config.yml)"
-    echo "  merge_config:   optional param config for auto-merge (e.g. configs/elev_param.yml)"
+    echo "  merge_config:   optional param config for auto-merge (e.g. configs/zonal/elev_param.yml)"
     echo "  fabric:         optional fabric name (default: gfv2)"
     echo "  max_concurrent: optional concurrency cap (default: 4; 0/off disables)"
     exit 1

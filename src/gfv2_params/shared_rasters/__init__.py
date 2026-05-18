@@ -31,7 +31,7 @@ from .context import SharedRastersContext
 # `merge_rpu_by_vpu_twi` runs after `build_vpu_landmask` because the TWI
 # dataset is masked against the per-VPU HRU land mask (issue #70).
 # `compute_dem_derivatives` is registered but NOT in the default steps: list
-# of configs/shared_rasters.yml — it produces a parallel/optional artifact
+# of configs/shared_rasters/shared_rasters.yml — it produces a parallel/optional artifact
 # (Twi_hydrodem_*.tif) not consumed by the canonical PRMS pipeline. See its
 # module docstring for the calibration-threshold caveat.
 BUILDERS: dict = {

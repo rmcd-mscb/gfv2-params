@@ -134,7 +134,7 @@ This walks the full DAG (merge_rpu_by_vpu → compute_slope_aspect →
 build_border_dem → build_vpu_landmask → merge_rpu_by_vpu_twi → build_vrt →
 build_derived_rasters → build_lulc_rasters) in dependency order, replacing
 the per-stage sbatch invocations below. Per-VPU steps iterate the `vpus`
-list inside `configs/shared_rasters.yml` rather than launching one sbatch
+list inside `configs/shared_rasters/shared_rasters.yml` rather than launching one sbatch
 per VPU. Env knobs the batch honours:
 
 - `FORCE=1` — pass `--force` to rebuild outputs that already exist
@@ -144,7 +144,7 @@ For interactive use (or finer-grained flags like `--step <name>` or
 `--from <name>`), invoke the orchestrator directly:
 
 ```bash
-pixi run python scripts/build_shared_rasters.py --config configs/shared_rasters.yml
+pixi run python scripts/build_shared_rasters.py --config configs/shared_rasters/shared_rasters.yml
 ```
 
 The individual `slurm_batch/*.batch` files and per-script CLIs documented in
@@ -324,7 +324,7 @@ sbatch slurm_batch/build_lulc_rasters.batch
 To use a different LULC source, override `LULC_CONFIG`:
 
 ```bash
-LULC_CONFIG=configs/lulc_nalcms_param.yml sbatch slurm_batch/build_lulc_rasters.batch
+LULC_CONFIG=configs/shared_rasters/lulc/nalcms.yml sbatch slurm_batch/build_lulc_rasters.batch
 ```
 
 ### Stage 2d: Build depstor rasters (per fabric)
@@ -338,7 +338,7 @@ Inputs (manually staged per fabric):
 - Per-fabric `hru_gpkg` / `twi_raster` (from `base_config.yml`).
 - Shared `fdr_raster` from `shared/conus/vrt/fdr.vrt` (Part 1 output; no per-fabric FDR needed).
 - The NLCD 2015 fractional-impervious raster (path set in
-  `configs/depstor_rasters.yml` under `imperv_source`) and
+  `configs/depstor/depstor_rasters.yml` under `imperv_source`) and
   `shared/conus/vrt/elevation.vrt`.
 
 One sbatch builds the entire stack in dependency order
@@ -400,7 +400,7 @@ BATCHES=/path/to/gfv2/batches
 slurm_batch/submit_zonal_params.sh $BATCHES gfv2 configs/base_config.yml
 ```
 
-This loops every entry in `configs/zonal_params.yml` (10 params today:
+This loops every entry in `configs/zonal/zonal_params.yml` (10 params today:
 elevation, slope, aspect, soils, soil_moist_max, 4× LULC, ssflux) and
 submits per-param array + merge jobs chained via `afterok`. ssflux's
 `depends_on: build_weights` prereq is detected automatically: the wrapper
@@ -481,7 +481,7 @@ sbatch slurm_batch/merge_output_params.batch
 
 Or individually:
 ```bash
-python scripts/merge_params.py --config configs/elev_param.yml --base_config configs/base_config.yml
+python scripts/merge_params.py --config configs/zonal/elev_param.yml --base_config configs/base_config.yml
 ```
 
 ### Stage 6: SSFlux (depends on merged slope)
@@ -489,7 +489,7 @@ python scripts/merge_params.py --config configs/elev_param.yml --base_config con
 > **Already running via `submit_zonal_params.sh`?** Then ssflux is handled
 > automatically as part of the unified Stage 4 dispatch — the wrapper sees
 > `depends_on: build_weights` on the ssflux entry in
-> `configs/zonal_params.yml`, submits `build_zonal_weights.batch` first, and
+> `configs/zonal/zonal_params.yml`, submits `build_zonal_weights.batch` first, and
 > chains the ssflux array + merge on its `afterok`. ssflux also chains on the
 > merged slope CSV. **No separate Stage 6 invocation needed.** This stage
 > describes the legacy standalone path for users who run ssflux outside the
@@ -554,7 +554,7 @@ already merged or comes as per-VPU gpkgs.
    sbatch calls):
    ```bash
    slurm_batch/submit_jobs.sh $BATCHES slurm_batch/create_lulc_params.batch \
-       configs/base_config.yml configs/lulc_nalcms_param.yml oregon
+       configs/base_config.yml configs/shared_rasters/lulc/nalcms.yml oregon
    ```
 
 **Case B: VPU-based fabric** (per-VPU gpkgs that need merging — e.g., gfv2)

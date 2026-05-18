@@ -13,7 +13,7 @@ swapping the source would invalidate those thresholds. This step exists as
 a self-contained open-source recipe that can be re-run on any DEM (future
 cross-border work, #53; future PRMS-threshold recalibration, etc.). It is
 intentionally **not** in the default ``steps:`` list of
-configs/shared_rasters.yml; users add it explicitly to opt in.
+configs/shared_rasters/shared_rasters.yml; users add it explicitly to opt in.
 
 Pipeline (hybrid richdem + WhiteboxTools):
   Hydrodem nodata fix -> richdem FillDepressions+epsilon (Barnes 2014
@@ -408,7 +408,7 @@ def build(step_cfg: dict, ctx: SharedRastersContext, logger) -> dict:
     """Compute open-source DEM derivatives for every VPU in ``ctx.vpus``.
 
     Optional/parallel pipeline — not in the default ``steps:`` list of
-    configs/shared_rasters.yml. Users add it explicitly when they want the
+    configs/shared_rasters/shared_rasters.yml. Users add it explicitly when they want the
     open-source TWI alongside the canonical ArcPy-derived one.
 
     step_cfg keys (both optional; default to ``ctx.per_vpu_dir``):

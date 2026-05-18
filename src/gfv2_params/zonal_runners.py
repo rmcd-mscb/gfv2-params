@@ -11,7 +11,7 @@ source_raster, batch_dir, target_layer, id_feature, output_dir, merged_file,
 categorical, fabric, plus per-script extras like canopy_raster, crosswalk_file,
 keep_raster, source_shapefile, merged_slope_file, weight_dir, k_perm_min,
 flux_params). The orchestrator builds this dict by flattening the active
-param entry in ``configs/zonal_params.yml`` onto the top-level ``defaults:``
+param entry in ``configs/zonal/zonal_params.yml`` onto the top-level ``defaults:``
 block (plus the resolved fabric profile). The legacy CLIs build the same
 shape via ``gfv2_params.config.load_config`` against a per-param YAML.
 

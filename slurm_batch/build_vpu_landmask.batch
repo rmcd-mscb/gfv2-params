@@ -19,5 +19,5 @@ vpu=${vpus[$SLURM_ARRAY_TASK_ID]}
 
 FORCE=${FORCE:+--force}
 python scripts/build_vpu_landmask.py \
-    --config configs/vpu_landmask_raster.yml \
+    --config configs/shared_rasters/vpu_landmask_raster.yml \
     --vpu "$vpu" $FORCE

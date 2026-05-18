@@ -19,5 +19,5 @@ vpu=${vpus[$SLURM_ARRAY_TASK_ID]}
 
 FORCE=${FORCE:+--force}
 python scripts/merge_rpu_by_vpu.py \
-    --config configs/merge_rpu_by_vpu_twi.yml \
+    --config configs/shared_rasters/merge_rpu_by_vpu_twi.yml \
     --vpu "$vpu" $FORCE

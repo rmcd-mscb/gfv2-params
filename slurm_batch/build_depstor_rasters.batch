@@ -30,7 +30,7 @@ BASE_CONFIG=${BASE_CONFIG:-configs/base_config.yml}
 FABRIC=${FABRIC:-gfv2}
 
 python scripts/build_depstor_rasters.py \
-    --config configs/depstor_rasters.yml \
+    --config configs/depstor/depstor_rasters.yml \
     --base_config "$BASE_CONFIG" \
     --fabric "$FABRIC" \
     "$@"

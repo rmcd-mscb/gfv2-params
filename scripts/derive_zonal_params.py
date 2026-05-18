@@ -1,4 +1,4 @@
-"""Drive every Part 2 zonal-pass param from configs/zonal_params.yml.
+"""Drive every Part 2 zonal-pass param from configs/zonal/zonal_params.yml.
 
 Three modes:
   --mode zonal --param <name> --batch_id <N>
@@ -14,7 +14,7 @@ Three modes:
         Honours --force.
 
 The slurm wrapper slurm_batch/submit_zonal_params.sh loops every entry in
-configs/zonal_params.yml's `params:` list and chains all three modes into a
+configs/zonal/zonal_params.yml's `params:` list and chains all three modes into a
 per-param afterok DAG (with build_weights submitted first for entries that
 carry `depends_on: build_weights`).
 
@@ -166,7 +166,7 @@ def run_build_weights_mode(args, logger) -> None:
 
 def main():
     parser = argparse.ArgumentParser(description="Drive zonal-pass parameter derivation.")
-    parser.add_argument("--config", required=True, help="Path to configs/zonal_params.yml")
+    parser.add_argument("--config", required=True, help="Path to configs/zonal/zonal_params.yml")
     parser.add_argument("--base_config", default=None, help="Path to configs/base_config.yml")
     parser.add_argument("--fabric", default=None, help="Fabric name (overrides FABRIC env / default_fabric)")
     parser.add_argument("--mode", required=True, choices=["zonal", "merge", "build_weights"])

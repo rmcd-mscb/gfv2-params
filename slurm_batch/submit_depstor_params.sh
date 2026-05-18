@@ -11,7 +11,7 @@
 # carea_max, smidx_coef, hru_percent_imperv, dprst_frac) into
 # {fabric}/params/merged/.
 #
-# The 10 fractions are the canonical list from configs/depstor_params.yml; if
+# The 10 fractions are the canonical list from configs/depstor/depstor_params.yml; if
 # you add or remove fractions there, update FRACTIONS below.
 
 set -euo pipefail
