@@ -14,7 +14,7 @@ import yaml
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 ORCHESTRATOR = REPO_ROOT / "scripts" / "derive_zonal_params.py"
-ZONAL_PARAMS_CONFIG = REPO_ROOT / "configs" / "zonal_params.yml"
+ZONAL_PARAMS_CONFIG = REPO_ROOT / "configs" / "zonal" / "zonal_params.yml"
 
 
 # Dispatch tags the orchestrator recognises. Must match _BATCH_RUNNERS in

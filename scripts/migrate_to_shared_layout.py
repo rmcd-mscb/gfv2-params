@@ -141,7 +141,7 @@ def _regenerate_vrts(logger) -> None:
     """Re-run build_vrt step so the moved VRTs encode the new per-VPU paths."""
     repo_root = Path(__file__).resolve().parent.parent
     orchestrator = repo_root / "scripts" / "build_shared_rasters.py"
-    config = repo_root / "configs" / "shared_rasters.yml"
+    config = repo_root / "configs" / "shared_rasters" / "shared_rasters.yml"
     cmd = [
         sys.executable, str(orchestrator),
         "--config", str(config),
