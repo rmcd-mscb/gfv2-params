@@ -25,7 +25,7 @@ if [ -z "${FRACTION:-}" ]; then
 fi
 
 python scripts/derive_depstor_params.py \
-    --config configs/depstor_params.yml \
+    --config configs/depstor/depstor_params.yml \
     --base_config "$BASE_CONFIG" \
     --fabric "$FABRIC" \
     --mode zonal \

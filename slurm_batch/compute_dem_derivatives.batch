@@ -18,4 +18,4 @@ vpus=("01" "02" "03" "04" "05" "06" "07" "08" "09" "10" "11" "12" "13" "14" "15"
 vpu=${vpus[$SLURM_ARRAY_TASK_ID]}  # Select VPU based on array index
 
 FORCE=${FORCE:+--force}
-python scripts/compute_dem_derivatives.py --config configs/compute_dem_derivatives.yml --vpu $vpu $FORCE
+python scripts/compute_dem_derivatives.py --config configs/shared_rasters/compute_dem_derivatives.yml --vpu $vpu $FORCE

@@ -22,9 +22,9 @@ fi
 
 # Step 1: pre-compute P2P weights
 python scripts/build_weights.py \
-    --config configs/ssflux_param.yml \
+    --config configs/zonal/ssflux_param.yml \
     --base_config "$BASE_CONFIG"
 
 # Step 2: submit ssflux array job; merge job is chained automatically via afterok
 slurm_batch/submit_jobs.sh "$BATCHES" slurm_batch/create_ssflux_params.batch \
-    "$BASE_CONFIG" configs/ssflux_param.yml
+    "$BASE_CONFIG" configs/zonal/ssflux_param.yml

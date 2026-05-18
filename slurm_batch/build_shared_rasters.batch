@@ -38,5 +38,5 @@ FORCE=${FORCE:+--force}
 VPUS_OVERRIDE=${VPUS:+--vpus $VPUS}
 
 python scripts/build_shared_rasters.py \
-    --config configs/shared_rasters.yml \
+    --config configs/shared_rasters/shared_rasters.yml \
     $VPUS_OVERRIDE $FORCE

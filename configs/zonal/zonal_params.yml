@@ -14,7 +14,8 @@
 #   <name>/                  -- per-batch zonal CSVs for the named param
 #   merged/                  -- final merged per-param CSVs (one row per HRU)
 #
-# Note on LULC naming: the existing per-source configs/lulc_*_param.yml use
+# Note on LULC naming: the existing per-source configs at
+# configs/shared_rasters/lulc/{nhm_v11,nalcms,nlcd,foresce}.yml use
 # source_type="lulc" with lulc_source={nhm_v11,nalcms,nlcd,foresce} so all
 # four sources write per-batch CSVs to the SAME {output_dir}/lulc/ subdir,
 # colliding. Step 4 normalises: the orchestrator passes name=lulc_<source>
@@ -23,9 +24,9 @@
 # canonical names that the legacy CLI produces, so PRMS consumers see no
 # difference.
 #
-# The legacy configs/lulc_*_param.yml stay in place because they are also
-# referenced as `sources:` by configs/shared_rasters.yml for the Part 1
-# build_lulc_rasters step.
+# Those configs/shared_rasters/lulc/*.yml files stay in place because they
+# are also referenced as `sources:` by configs/shared_rasters/shared_rasters.yml
+# for the Part 1 build_lulc_rasters step.
 
 defaults:
   batch_dir:     "{data_root}/{fabric}/batches"
@@ -126,7 +127,7 @@ params:
     merged_slope_file: "{data_root}/{fabric}/params/merged/nhm_slope_params.csv"
     merged_file:       nhm_ssflux_params.csv
     # Lithology permeability + PRMS flux normalisation (lifted verbatim
-    # from configs/ssflux_param.yml).
+    # from configs/zonal/ssflux_param.yml).
     k_perm_min: -16.48
     flux_params:
       - {name: soil2gw_max,          min: 0.1,   max: 0.3}

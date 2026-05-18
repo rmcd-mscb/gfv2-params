@@ -1,4 +1,4 @@
-"""Tests for scripts/derive_zonal_params.py + configs/zonal_params.yml.
+"""Tests for scripts/derive_zonal_params.py + configs/zonal/zonal_params.yml.
 
 Mirrors tests/test_shared_rasters_orchestrator.py. Validates the unified
 zonal-pass config invariants without actually invoking the heavy geo
@@ -14,7 +14,7 @@ import yaml
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 ORCHESTRATOR = REPO_ROOT / "scripts" / "derive_zonal_params.py"
-ZONAL_PARAMS_CONFIG = REPO_ROOT / "configs" / "zonal_params.yml"
+ZONAL_PARAMS_CONFIG = REPO_ROOT / "configs" / "zonal" / "zonal_params.yml"
 
 
 # Dispatch tags the orchestrator recognises. Must match _BATCH_RUNNERS in
@@ -39,7 +39,7 @@ _EXPECTED_PARAMS = {
 
 
 def _load_config_raw() -> dict:
-    """Read configs/zonal_params.yml without resolving any placeholders.
+    """Read configs/zonal/zonal_params.yml without resolving any placeholders.
 
     The orchestrator's full resolution path requires a base_config.yml +
     fabric profile, which is more than these invariant checks need.
@@ -53,7 +53,7 @@ def _load_config_raw() -> dict:
 # ---------------------------------------------------------------------------
 
 def test_zonal_params_config_parses():
-    """The committed configs/zonal_params.yml must be valid YAML."""
+    """The committed configs/zonal/zonal_params.yml must be valid YAML."""
     config = _load_config_raw()
     assert "defaults" in config
     assert "params" in config

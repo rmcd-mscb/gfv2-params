@@ -1,4 +1,4 @@
-"""Drive every depstor aggregation step from configs/depstor_params.yml.
+"""Drive every depstor aggregation step from configs/depstor/depstor_params.yml.
 
 Three modes:
   --mode zonal --fraction <name> --batch_id <N>
@@ -294,7 +294,7 @@ def run_ratios(args, logger) -> None:
 
 def main():
     parser = argparse.ArgumentParser(description="Drive depstor zonal stats + ratio derivation.")
-    parser.add_argument("--config", required=True, help="Path to configs/depstor_params.yml")
+    parser.add_argument("--config", required=True, help="Path to configs/depstor/depstor_params.yml")
     parser.add_argument("--base_config", default=None, help="Path to configs/base_config.yml")
     parser.add_argument("--fabric", default=None, help="Fabric name (overrides FABRIC env / default_fabric)")
     parser.add_argument("--mode", required=True, choices=["zonal", "merge", "ratios"])

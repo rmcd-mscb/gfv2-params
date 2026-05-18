@@ -7,7 +7,7 @@ unchanged.
 
 For unified DAG-style invocation across all shared rasters — including
 processing every LULC source in one walk via the ``sources:`` list — prefer:
-    python scripts/build_shared_rasters.py --config configs/shared_rasters.yml
+    python scripts/build_shared_rasters.py --config configs/shared_rasters/shared_rasters.yml
 """
 
 import argparse

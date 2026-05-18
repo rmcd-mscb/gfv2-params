@@ -2,7 +2,7 @@
 
 Replaces the scattered per-script invocations under scripts/merge_rpu_by_vpu.py,
 scripts/compute_*.py, and scripts/build_*.py with one orchestrator that walks
-the dependency DAG declared in configs/shared_rasters.yml.
+the dependency DAG declared in configs/shared_rasters/shared_rasters.yml.
 
 These rasters are fabric-independent — they live under {data_root}/shared/ and
 are reused across every fabric profile.
@@ -96,7 +96,7 @@ def _select_steps(all_steps, only_step, from_step):
 
 def main():
     parser = argparse.ArgumentParser(description="Build all CONUS shared rasters.")
-    parser.add_argument("--config", required=True, help="Path to configs/shared_rasters.yml")
+    parser.add_argument("--config", required=True, help="Path to configs/shared_rasters/shared_rasters.yml")
     parser.add_argument("--base_config", default=None, help="Path to configs/base_config.yml")
     parser.add_argument("--step", default=None, help="Run only this one step")
     parser.add_argument("--from", dest="from_step", default=None, help="Resume from this step")

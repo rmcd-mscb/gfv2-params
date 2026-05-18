@@ -47,7 +47,7 @@ that walks them in dependency order is
 | `onStreamStor` (768-791) | folded into [`depstor_builders/dprst.py`](../src/gfv2_params/depstor_builders/dprst.py) | Wbody cells outside dprst — collapsed to a 2-line boolean |
 | `getCarea_map` | [`src/gfv2_params/depstor_builders/carea_map.py`](../src/gfv2_params/depstor_builders/carea_map.py) | Build the two PRMS TWI-threshold binary rasters in one pass |
 | `getSro_to_dprst_perv` / `getSro_to_dprst_imperv` (per-cell intersect step) | [`src/gfv2_params/depstor_builders/intersect.py`](../src/gfv2_params/depstor_builders/intersect.py) | `drains_to_dprst ∩ perv_binary` / `∩ imperv_binary` — cell-wise binary intersection |
-| `getZonecount` / `getCarea` / `getSmidx` / `getCarea_max` / `getHRU_percent_imperv` / `getDprst_frac` | [`src/gfv2_params/depstor_ratios.py`](../src/gfv2_params/depstor_ratios.py) + [`scripts/derive_depstor_params.py`](../scripts/derive_depstor_params.py) `--mode ratios` | Per-HRU ratio CSVs — see the `ratios:` block of [`configs/depstor_params.yml`](../configs/depstor_params.yml) for the full set |
+| `getZonecount` / `getCarea` / `getSmidx` / `getCarea_max` / `getHRU_percent_imperv` / `getDprst_frac` | [`src/gfv2_params/depstor_ratios.py`](../src/gfv2_params/depstor_ratios.py) + [`scripts/derive_depstor_params.py`](../scripts/derive_depstor_params.py) `--mode ratios` | Per-HRU ratio CSVs — see the `ratios:` block of [`configs/depstor/depstor_params.yml`](../configs/depstor/depstor_params.yml) for the full set |
 
 ## What we intentionally dropped
 
@@ -208,7 +208,7 @@ config.
 
 ### Generation side
 
-[`configs/depstor_rasters.yml`](../configs/depstor_rasters.yml) lists all 10
+[`configs/depstor/depstor_rasters.yml`](../configs/depstor/depstor_rasters.yml) lists all 10
 build steps in dependency order. Each `name` maps to a module under
 [`src/gfv2_params/depstor_builders/`](../src/gfv2_params/depstor_builders/)
 that exposes `build(step_cfg, ctx, logger) -> {output_key: Path}`. The
@@ -223,7 +223,7 @@ sized for the WhiteboxTools `routing` long-pole.
 
 ### Aggregation side
 
-[`configs/depstor_params.yml`](../configs/depstor_params.yml) carries shared
+[`configs/depstor/depstor_params.yml`](../configs/depstor/depstor_params.yml) carries shared
 defaults, **10 fractions** (each a zonal-stat target), and **6 ratios** that
 divide pairs of fractions. The driver
 [`scripts/derive_depstor_params.py`](../scripts/derive_depstor_params.py) has

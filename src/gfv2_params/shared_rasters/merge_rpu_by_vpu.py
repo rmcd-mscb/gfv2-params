@@ -182,8 +182,8 @@ def build(step_cfg: dict, ctx: SharedRastersContext, logger) -> dict:
 
     step_cfg keys:
       manifest — path to the VPU-keyed YAML manifest (e.g.,
-                 configs/merge_rpu_by_vpu.yml for non-TWI datasets, or
-                 configs/merge_rpu_by_vpu_twi.yml for TWI). Path is resolved
+                 configs/shared_rasters/merge_rpu_by_vpu.yml for non-TWI datasets, or
+                 configs/shared_rasters/merge_rpu_by_vpu_twi.yml for TWI). Path is resolved
                  relative to repo root if not absolute.
 
     Returns an empty dict — per-VPU outputs are not registered in ctx.paths

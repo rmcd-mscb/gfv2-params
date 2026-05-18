@@ -9,7 +9,7 @@ the library module docstring (and the [[twi_canonical_source]] memory) for
 why this output is not consumed by the downstream PRMS parameter pipeline.
 
 For unified DAG-style invocation across all shared rasters, prefer:
-    python scripts/build_shared_rasters.py --config configs/shared_rasters.yml
+    python scripts/build_shared_rasters.py --config configs/shared_rasters/shared_rasters.yml
 (opt in by adding `compute_dem_derivatives` to the steps: list).
 """
 

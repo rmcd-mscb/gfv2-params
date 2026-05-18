@@ -1,7 +1,7 @@
 """Build the full depression-storage raster stack from a single unified config.
 
 Replaces the 10 per-step scripts that used to live under scripts/build_depstor_*.py.
-Reads configs/depstor_rasters.yml + the active fabric profile in base_config.yml,
+Reads configs/depstor/depstor_rasters.yml + the active fabric profile in base_config.yml,
 then walks STEP_ORDER (defined in gfv2_params.depstor_builders) calling each
 builder in dependency order.
 
@@ -136,7 +136,7 @@ def _expected_outputs(step: dict) -> dict:
 
 def main():
     parser = argparse.ArgumentParser(description="Build all depression-storage rasters.")
-    parser.add_argument("--config", required=True, help="Path to configs/depstor_rasters.yml")
+    parser.add_argument("--config", required=True, help="Path to configs/depstor/depstor_rasters.yml")
     parser.add_argument("--base_config", default=None, help="Path to configs/base_config.yml")
     parser.add_argument("--fabric", default=None, help="Fabric name (overrides FABRIC env / default_fabric)")
     parser.add_argument("--step", default=None, help="Run only this one step")

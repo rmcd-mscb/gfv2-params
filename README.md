@@ -71,7 +71,9 @@ gfv2-params/
 │   └── find_missing_hru_ids.py     # Identify missing HRU IDs
 ├── configs/                  # YAML configuration files
 │   ├── base_config.yml       # Data root + fabric profiles (single source of truth)
-│   └── *.yml                 # Fabric-agnostic per-step configs with template placeholders
+│   ├── shared_rasters/       # Part 1 raster-prep configs (orchestrator + per-step + lulc/)
+│   ├── depstor/              # Part 2 depstor configs (rasters + params)
+│   └── zonal/                # Part 2 zonal-pass configs (orchestrator + per-script fallbacks)
 ├── slurm_batch/              # HPC SLURM batch scripts
 │   ├── submit_jobs.sh        # SLURM array job submission wrapper
 │   └── RUNME.md              # HPC workflow documentation (authoritative)
@@ -170,10 +172,10 @@ Both scripts are idempotent — already-downloaded files are skipped on resubmis
 
 **Build the CONUS shared raster store (recommended):** once the downloads
 above are complete, the entire raster preparation DAG runs from one
-orchestrator over [configs/shared_rasters.yml](configs/shared_rasters.yml):
+orchestrator over [configs/shared_rasters/shared_rasters.yml](configs/shared_rasters/shared_rasters.yml):
 
 ```bash
-pixi run python scripts/build_shared_rasters.py --config configs/shared_rasters.yml
+pixi run python scripts/build_shared_rasters.py --config configs/shared_rasters/shared_rasters.yml
 ```
 
 This walks 7 production steps in dependency order (merge_rpu_by_vpu →
@@ -208,7 +210,7 @@ sequence including the depstor pipeline and gap-fill.
 
 ### Single-batch run (per-param fallback)
 ```bash
-python scripts/create_zonal_params.py --config configs/elev_param.yml --batch_id 0042
+python scripts/create_zonal_params.py --config configs/zonal/elev_param.yml --batch_id 0042
 ```
 
 ## Custom Fabric
@@ -247,7 +249,7 @@ The CONUS shared-raster preparation (Part 1 of the workflow) is driven by
 one orchestrator and one unified config:
 
 - [scripts/build_shared_rasters.py](scripts/build_shared_rasters.py) reads
-  [configs/shared_rasters.yml](configs/shared_rasters.yml) and walks the
+  [configs/shared_rasters/shared_rasters.yml](configs/shared_rasters/shared_rasters.yml) and walks the
   step DAG via the builder modules under
   [src/gfv2_params/shared_rasters/](src/gfv2_params/shared_rasters/).
 - The DAG covers per-VPU NHDPlus prep (`merge_rpu_by_vpu`,
@@ -272,12 +274,12 @@ The depstor pipeline (Levels 2-5) is driven by two orchestrators and two
 unified configs:
 
 - [scripts/build_depstor_rasters.py](scripts/build_depstor_rasters.py) reads
-  [configs/depstor_rasters.yml](configs/depstor_rasters.yml) and walks the
+  [configs/depstor/depstor_rasters.yml](configs/depstor/depstor_rasters.yml) and walks the
   10-step DAG (landmask → imperv/streambuffer/waterbody → dprst → perv/routing
   → drains_perv/drains_imperv → carea_map) via the builder modules under
   [src/gfv2_params/depstor_builders/](src/gfv2_params/depstor_builders/).
 - [scripts/derive_depstor_params.py](scripts/derive_depstor_params.py) reads
-  [configs/depstor_params.yml](configs/depstor_params.yml) and dispatches the
+  [configs/depstor/depstor_params.yml](configs/depstor/depstor_params.yml) and dispatches the
   9 fractions (`perv_frac`, `imperv_frac`, `dprst_frac`,
   `drains_perv_frac`, `drains_imperv_frac`, `onstream_storage_frac`,
   `drains_to_dprst_frac`, `carea_t8_frac`, `carea_t156_frac`) plus the 4 PRMS
@@ -297,7 +299,7 @@ The Part 2 per-fabric zonal-pass parameter pipeline is driven by one
 orchestrator over one unified config:
 
 - [scripts/derive_zonal_params.py](scripts/derive_zonal_params.py) reads
-  [configs/zonal_params.yml](configs/zonal_params.yml) and dispatches every
+  [configs/zonal/zonal_params.yml](configs/zonal/zonal_params.yml) and dispatches every
   Part 2 param type (`elevation`, `slope`, `aspect`, `soils`,
   `soil_moist_max`, `lulc_nhm_v11`, `lulc_nalcms`, `lulc_nlcd`,
   `lulc_foresce`, `ssflux`) into the matching per-script work function
