@@ -47,28 +47,18 @@ gfv2-params/
 │   ├── log.py                # Logging setup
 │   └── download/             # Data download utilities
 ├── scripts/                  # CLI processing scripts
-│   ├── init_data_root.py           # Scaffold data-root tree; verify staged inputs
-│   ├── stage_twi.sh                # Stage per-RPU TWI rasters from shared FS
-│   ├── prepare_fabric.py           # Spatially batch fabric into per-batch gpkgs
-│   ├── build_vrt.py                # Build CONUS-wide virtual rasters
-│   ├── build_border_dem.py         # Copernicus GLO-30 border-fill elevation
-│   ├── build_derived_rasters.py    # Pre-compute derived rasters (e.g., soil_moist_max)
-│   ├── build_lulc_rasters.py       # Pre-compute LULC-derived rasters
-│   ├── build_weights.py            # Pre-compute polygon-to-polygon weights
-│   ├── compute_slope_aspect.py     # Derive slope/aspect from DEM
-│   ├── compute_dem_derivatives.py  # Open-source TWI/FDR/FAC/slope/aspect from Hydrodem (richdem fill + WBT D8)
-│   ├── merge_rpu_by_vpu.py         # Merge RPU rasters by VPU
-│   ├── create_zonal_params.py      # Elevation, slope, aspect, depstor-fraction parameters
-│   ├── create_soils_params.py      # Soils and soil moisture max
-│   ├── create_lulc_params.py       # LULC fractional parameters
-│   ├── create_ssflux_params.py     # Subsurface flux parameters
-│   ├── build_depstor_rasters.py       # Build the full depstor raster stack (10 steps)
-│   ├── derive_depstor_params.py       # Depstor zonal stats + Level-5 ratios (zonal/merge/ratios)
-│   ├── derive_zonal_params.py         # Part 2 zonal-pass orchestrator (zonal/merge/build_weights)
-│   ├── merge_params.py             # Merge per-batch CSVs
-│   ├── merge_default_params.py     # Merge NHM default params
-│   ├── merge_and_fill_params.py    # KNN gap-filling
-│   └── find_missing_hru_ids.py     # Identify missing HRU IDs
+│   ├── init_data_root.py             # Scaffold data-root tree; verify staged inputs
+│   ├── stage_twi.sh                  # Stage per-RPU TWI rasters from shared FS
+│   ├── refresh_pixi_activation.sh    # Pre-bake .pixi-activate.sh for sbatch sourcing
+│   ├── prepare_fabric.py             # Spatially batch fabric into per-batch gpkgs
+│   ├── migrate_to_shared_layout.py   # One-shot: legacy work/ → shared/ on-disk migration
+│   ├── build_shared_rasters.py       # Part 1 orchestrator (CONUS shared raster prep)
+│   ├── build_depstor_rasters.py      # Part 2a depstor raster stack (10 steps)
+│   ├── derive_depstor_params.py      # Part 2a depstor params (zonal/merge/ratios)
+│   ├── derive_zonal_params.py        # Part 2b zonal-pass orchestrator (zonal/merge/build_weights)
+│   ├── merge_default_params.py       # Stage 8: merge NHM default params
+│   ├── merge_and_fill_params.py      # KNN gap-filling
+│   └── find_missing_hru_ids.py       # Identify missing HRU IDs
 ├── configs/                  # YAML configuration files
 │   ├── base_config.yml       # Data root + fabric profiles (single source of truth)
 │   ├── shared_rasters/       # Part 1 raster-prep configs (orchestrator + per-step + lulc/)
@@ -187,10 +177,10 @@ fabric. Add `--step <name>` to run one step or `--from <name>` to resume.
 existing outputs. See [Shared rasters pipeline](#shared-rasters-pipeline)
 below for the design notes.
 
-The per-script entry points (`merge_rpu_by_vpu.py`, `compute_slope_aspect.py`,
-etc.) and their sbatch wrappers (`slurm_batch/merge_rpu_by_vpu.batch`, etc.)
-are preserved as thin shells around the same library builders, so existing
-job submissions keep working unchanged.
+The orchestrator dispatches into per-step library builders under
+[src/gfv2_params/shared_rasters/](src/gfv2_params/shared_rasters/). The
+older per-script CLI wrappers were retired in favour of `--step <name>`
+on the orchestrator.
 
 ### 4. Run fabric-dependent tasks
 
@@ -208,10 +198,15 @@ See [Zonal-pass parameter pipeline](#zonal-pass-parameter-pipeline) below
 for the design notes, and `slurm_batch/RUNME.md` **Part 2** for the full
 sequence including the depstor pipeline and gap-fill.
 
-### Single-batch run (per-param fallback)
+### Single-batch run (debugging one param + batch)
+
 ```bash
-python scripts/create_zonal_params.py --config configs/zonal/elev_param.yml --batch_id 0042
+python scripts/derive_zonal_params.py --mode zonal --param elevation --batch_id 42 \
+    --config configs/zonal/zonal_params.yml --base_config configs/base_config.yml
 ```
+
+`--mode merge --param <name>` runs just the merge step;
+`--mode build_weights` builds the CONUS-once ssflux prereq.
 
 ## Custom Fabric
 
@@ -231,9 +226,10 @@ via (highest precedence first):
    `waterbody_gpkg`, and `waterbody_layer`.
 2. Scaffold output dirs: `python scripts/init_data_root.py --fabric oregon`
 3. Place the fabric gpkg directly in `{data_root}/oregon/fabric/` (NOT in `input/fabric/`)
-4. Run `prepare_fabric.py --fabric oregon` and submit jobs via
-   `slurm_batch/submit_jobs.sh $BATCHES <script>.batch <base_config> <merge_config> oregon`
-   (fabric is the 5th positional arg to `submit_jobs.sh`).
+4. Run `prepare_fabric.py --fabric oregon`, then submit Part 2 jobs via
+   `slurm_batch/submit_zonal_params.sh $BATCHES oregon configs/base_config.yml`
+   (loops every entry in `configs/zonal/zonal_params.yml` and chains array
+   + merge per param). For Part 1 raster prep, `sbatch slurm_batch/build_shared_rasters.batch`.
 
 **VPU-based fabric** (per-VPU gpkgs that need merging — e.g., gfv2):
 
@@ -324,11 +320,10 @@ bash slurm_batch/submit_zonal_params.sh \
 non-default fabric resolution for the per-job library calls but is
 redundant when the positional is given.)
 
-The per-script entry points and per-step sbatch files
-(`scripts/create_zonal_params.py`, `slurm_batch/create_zonal_elev_params.batch`,
-etc.) are preserved as thin shells around the same
-`gfv2_params.zonal_runners` functions for per-step debugging or per-VPU
-SLURM-array runs against a single param.
+The orchestrator's per-step library functions live under
+[src/gfv2_params/zonal_runners.py](src/gfv2_params/zonal_runners.py).
+For per-step debugging, invoke the orchestrator directly with
+`--mode zonal --param <name> --batch_id <N>` (see "Single-batch run" above).
 
 ## Configuration
 
