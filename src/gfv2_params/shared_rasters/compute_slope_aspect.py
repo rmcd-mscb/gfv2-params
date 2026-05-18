@@ -1,8 +1,9 @@
 """Per-VPU slope + aspect rasters from merged NEDSnapshot DEM.
 
-Library entrypoint for the shared-raster orchestrator. The thin CLI shell at
-scripts/compute_slope_aspect.py delegates here so existing sbatch jobs keep
-working unchanged.
+Library entrypoint for the ``compute_slope_aspect`` step in the shared-raster
+orchestrator (``scripts/build_shared_rasters.py``). Registered via the
+BUILDERS dict in ``shared_rasters/__init__.py`` and called by the
+orchestrator's STEP_ORDER walk.
 
 Per-VPU iteration happens inside this builder rather than in the orchestrator
 walker — matches the SharedRastersContext.vpus convention. Set ``--vpus`` at

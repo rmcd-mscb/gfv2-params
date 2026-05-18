@@ -1,7 +1,6 @@
 """Per-HRU ratio arithmetic for the PRMS depstor Level-5 parameters.
 
-Pulled out of the old `scripts/derive_depstor_ratios.py` so it can be unit
-tested and reused by `scripts/derive_depstor_params.py --mode ratios`.
+Called by `scripts/derive_depstor_params.py --mode ratios`.
 
 The fraction CSVs feeding `compute_ratio` come from gdptools exactextract:
 each row is one HRU with a `count` column = weighted cell count

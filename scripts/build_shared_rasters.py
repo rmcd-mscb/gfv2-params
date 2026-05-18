@@ -1,8 +1,8 @@
 """Build the CONUS shared-raster stack from a single unified config.
 
-Replaces the scattered per-script invocations under scripts/merge_rpu_by_vpu.py,
-scripts/compute_*.py, and scripts/build_*.py with one orchestrator that walks
-the dependency DAG declared in configs/shared_rasters/shared_rasters.yml.
+Walks the dependency DAG declared in configs/shared_rasters/shared_rasters.yml,
+dispatching each step to its builder under src/gfv2_params/shared_rasters/
+via the BUILDERS dict in that package's __init__.py.
 
 These rasters are fabric-independent — they live under {data_root}/shared/ and
 are reused across every fabric profile.

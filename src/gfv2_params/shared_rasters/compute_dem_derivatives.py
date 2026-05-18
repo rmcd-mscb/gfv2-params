@@ -1,8 +1,9 @@
 """Open-source TWI/FDR/FAC/slope/aspect from per-VPU merged Hydrodem.
 
-Library entrypoint for the shared-raster orchestrator. The thin CLI shell at
-scripts/compute_dem_derivatives.py delegates here so existing sbatch jobs
-keep working unchanged.
+Library entrypoint for the ``compute_dem_derivatives`` step in the
+shared-raster orchestrator (``scripts/build_shared_rasters.py``).
+Registered via the BUILDERS dict in ``shared_rasters/__init__.py``;
+opt-in (not in the default ``steps:`` list of ``shared_rasters.yml``).
 
 **Status: parallel-artifact pipeline, not the canonical TWI source.** The
 canonical CONUS TWI for downstream PRMS parameter extraction (carea_max,
