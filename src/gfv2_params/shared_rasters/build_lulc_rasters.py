@@ -1,8 +1,9 @@
 """Pre-compute LULC derived rasters (resampled CNPY/keep + radiation transmission).
 
-Library entrypoint for the shared-raster orchestrator. The thin CLI shell at
-scripts/build_lulc_rasters.py delegates here so existing sbatch jobs keep
-working unchanged.
+Library entrypoint for the ``build_lulc_rasters`` step in the shared-raster
+orchestrator (``scripts/build_shared_rasters.py``). Registered via the
+BUILDERS dict in ``shared_rasters/__init__.py`` and called by the
+orchestrator's STEP_ORDER walk.
 
 Resamples canopy and keep rasters to match each LULC source's grid, then
 computes the radiation transmission coefficient raster:

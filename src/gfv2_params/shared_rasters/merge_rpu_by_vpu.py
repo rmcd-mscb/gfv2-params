@@ -1,8 +1,9 @@
 """Per-VPU merge of NHDPlus Regional Processing Unit rasters.
 
-Library entrypoint for the shared-raster orchestrator. The thin CLI shell at
-scripts/merge_rpu_by_vpu.py delegates here so existing sbatch jobs keep
-working unchanged.
+Library entrypoint for the ``merge_rpu_by_vpu`` step in the shared-raster
+orchestrator (``scripts/build_shared_rasters.py``). Registered via the
+BUILDERS dict in ``shared_rasters/__init__.py`` and called by the
+orchestrator's STEP_ORDER walk.
 
 One builder serves two step invocations because the production pipeline runs
 this twice — once for the standard datasets (NEDSnapshot, Hydrodem, FdrFac_Fdr,

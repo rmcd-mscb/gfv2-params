@@ -1,8 +1,9 @@
 """Copernicus GLO-30 elevation fill for border HRUs (Canada/Mexico).
 
-Library entrypoint for the shared-raster orchestrator. The thin CLI shell at
-scripts/build_border_dem.py delegates here so existing sbatch jobs keep
-working unchanged.
+Library entrypoint for the ``build_border_dem`` step in the shared-raster
+orchestrator (``scripts/build_shared_rasters.py``). Registered via the
+BUILDERS dict in ``shared_rasters/__init__.py`` and called by the
+orchestrator's STEP_ORDER walk.
 
 Downloads Copernicus 30m tiles covering border zones, mosaics them,
 reprojects to EPSG:5070 at 30m, then builds a composite elevation surface

@@ -1,8 +1,9 @@
 """Pre-compute derived rasters (soil_moist_max) from source inputs.
 
-Library entrypoint for the shared-raster orchestrator. The thin CLI shell at
-scripts/build_derived_rasters.py delegates here so existing sbatch jobs keep
-working unchanged.
+Library entrypoint for the ``build_derived_rasters`` step in the shared-raster
+orchestrator (``scripts/build_shared_rasters.py``). Registered via the
+BUILDERS dict in ``shared_rasters/__init__.py`` and called by the
+orchestrator's STEP_ORDER walk.
 
 CONUS-once builder. Eliminates race conditions when multiple SLURM batch
 jobs would otherwise try to create the same derived rasters simultaneously.

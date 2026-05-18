@@ -1,8 +1,9 @@
 """CONUS VRT assembly from per-VPU merged GeoTIFFs and optional fill layers.
 
-Library entrypoint for the shared-raster orchestrator. The thin CLI shell at
-scripts/build_vrt.py delegates here so existing invocations keep working
-unchanged.
+Library entrypoint for the ``build_vrt`` step in the shared-raster
+orchestrator (``scripts/build_shared_rasters.py``). Registered via the
+BUILDERS dict in ``shared_rasters/__init__.py`` and called by the
+orchestrator's STEP_ORDER walk.
 
 Creates GDAL virtual rasters that reference per-VPU source files, allowing
 them to be read as a single CONUS raster without duplicating data on disk.

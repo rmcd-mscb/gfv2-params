@@ -77,8 +77,8 @@ osr.UseExceptions()
 def run_zonal_batch(config: dict, batch_id: int, logger) -> None:
     """One HRU batch of continuous-zonal stats from a single raster.
 
-    Drives the elevation/slope/aspect param types. Lifted verbatim from
-    scripts/create_zonal_params.py:main(). Uses the gdptools NEW API
+    Drives the elevation/slope/aspect param types. Originally extracted from the now-retired scripts/create_zonal_params.py
+    (see PR #85). Uses the gdptools NEW API
     (source_var/source_ds/source_crs/target_gdf/target_id).
     """
     source_type = config["source_type"]
@@ -136,8 +136,8 @@ def run_zonal_batch(config: dict, batch_id: int, logger) -> None:
 def run_soils_batch(config: dict, batch_id: int, logger) -> None:
     """One HRU batch of soils (categorical) or soil_moist_max (continuous).
 
-    Lifted from scripts/create_soils_params.py:main(). Uses the gdptools OLD
-    API (var/ds/proj_ds/f_feature/id_feature) — preserved verbatim because
+    Originally extracted from the now-retired scripts/create_soils_params.py
+    (see PR #85). Uses the gdptools OLD API (var/ds/proj_ds/f_feature/id_feature) — preserved verbatim because
     that's what the per-batch helper functions below also use.
     """
     source_type = config["source_type"]
@@ -224,7 +224,8 @@ def _process_soil_moist_max(source_da, nhru_gdf, output_path, source_type, file_
 def run_lulc_batch(config: dict, batch_id: int, logger) -> None:
     """One HRU batch of LULC parameter derivation.
 
-    Lifted from scripts/create_lulc_params.py:main(). Five steps:
+    Originally extracted from the now-retired scripts/create_lulc_params.py
+    (see PR #85). Five steps:
       1. categorical zonal stats on LULC raster -> class percentages
       2. continuous zonal stats on canopy raster -> canopy_mean per HRU
       3. retention: either zonal mean from keep raster (FORE-SCE / NHM v1.1)
@@ -383,7 +384,8 @@ def run_lulc_batch(config: dict, batch_id: int, logger) -> None:
 def run_ssflux_batch(config: dict, batch_id: int, logger) -> None:
     """One HRU batch of subsurface flux parameter derivation.
 
-    Lifted from scripts/create_ssflux_params.py:main(). Requires pre-computed
+    Originally extracted from the now-retired scripts/create_ssflux_params.py
+    (see PR #85). Requires pre-computed
     CONUS weights (from run_build_weights) and merged slope CSV (from
     run_merge applied to the slope param). Output writes to
     {output_dir}/ssflux/ (subdir name is hardcoded to 'ssflux' to match
@@ -516,7 +518,8 @@ def run_ssflux_batch(config: dict, batch_id: int, logger) -> None:
 def run_build_weights(config: dict, data_root: Path, logger, force: bool = False) -> None:
     """Pre-compute the CONUS-wide P2P weight matrix that ssflux consumes.
 
-    Lifted from scripts/build_weights.py:main(). One CSV per fabric, written
+    Originally extracted from the now-retired scripts/build_weights.py
+    (see PR #85). One CSV per fabric, written
     to ``config['weight_dir']/lith_weights_<fabric>.csv``. Idempotent: skips
     if the file exists unless force=True.
     """
@@ -570,7 +573,8 @@ def run_build_weights(config: dict, data_root: Path, logger, force: bool = False
 def run_merge(config: dict, logger) -> None:
     """Concat per-batch CSVs for one param into the merged output CSV.
 
-    Lifted from scripts/merge_params.py:process_files(). Validates no
+    Originally extracted from the now-retired scripts/merge_params.py:process_files()
+    (see PR #85). Validates no
     duplicates, warns on gaps (if expected_max_hru_id is set in config).
     """
     source_type = config["source_type"]

@@ -119,7 +119,7 @@ def main():
     if not param_file.exists():
         raise FileNotFoundError(
             f"Parameter file not found: {param_file}\n"
-            "Run scripts/merge_params.py for this parameter type first."
+            "Run scripts/derive_zonal_params.py --mode merge --param <name> for this parameter type first."
         )
 
     if not merged_gpkg.exists():

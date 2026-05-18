@@ -8,7 +8,8 @@ Three modes:
         gfv2_params.zonal_runners.run_*_batch function.
   --mode merge --param <name>
         Combine per-batch CSVs for one param into the merged CSV.
-        Same logic as scripts/merge_params.py (which now delegates here).
+        Same gfv2_params.zonal_runners.run_merge function that drove the
+        legacy scripts/merge_params.py (retired in PR #85).
   --mode build_weights
         Compute the CONUS-wide P2P weight matrix that ssflux consumes.
         Honours --force.

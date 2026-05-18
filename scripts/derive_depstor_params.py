@@ -3,11 +3,10 @@
 Three modes:
   --mode zonal --fraction <name> --batch_id <N>
         Array task: run gdptools exactextract for one fraction over one HRU
-        batch. Mirrors what scripts/create_zonal_params.py does for the
-        non-depstor zonal params.
+        batch (same pattern as scripts/derive_zonal_params.py --mode zonal,
+        just keyed on `fraction` instead of `param`).
   --mode merge --fraction <name>
         Combine per-batch CSVs for one fraction into the merged CSV.
-        Same logic as scripts/merge_params.py.
   --mode ratios
         Read every merged fraction CSV and produce the four PRMS Level-5
         ratio CSVs (sro_to_dprst_perv, sro_to_dprst_imperv, carea_max,

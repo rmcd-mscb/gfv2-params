@@ -100,23 +100,26 @@ rasterises the `nhru` polygon fabric to the template grid → `land_mask.tif`
 it. This replaced an earlier DEM-nodata mask that bulged into the ocean (the
 hydro-conditioned DEM carries valid elevations over coastal water; the FDR
 has the same blobs). The HRU fabric is the authoritative modeling domain
-and is exactly what `create_zonal_params` aggregates to downstream.
+and is exactly what `derive_zonal_params` aggregates to downstream.
 
 **gfv2-params per-VPU land mask (PR #70, issue #66):** Independent of the
-CONUS depstor `land_mask.tif` above, a *per-VPU* HRU mask is built by
-[`scripts/build_vpu_landmask.py`](../scripts/build_vpu_landmask.py)
-(config: [`configs/shared_rasters/vpu_landmask_raster.yml`](../configs/shared_rasters/vpu_landmask_raster.yml);
-sbatch: `slurm_batch/build_vpu_landmask.batch`). It filters
-`gfv2/fabric/gfv2_nhru_merged.gpkg` by `vpu == <vpu>` (with sub-region
-handling for `03N/S/W` and `10L/U` via `VPU_RASTER_MAP`) and rasterises onto
-the per-VPU Hydrodem grid, writing
+CONUS depstor `land_mask.tif` above, a *per-VPU* HRU mask is built by the
+`build_vpu_landmask` step of the shared-rasters orchestrator
+(implementation:
+[`src/gfv2_params/shared_rasters/build_vpu_landmask.py`](../src/gfv2_params/shared_rasters/build_vpu_landmask.py);
+configured in the `steps:` block of
+[`configs/shared_rasters/shared_rasters.yml`](../configs/shared_rasters/shared_rasters.yml)).
+It filters `gfv2/fabric/gfv2_nhru_merged.gpkg` by `vpu == <vpu>` (with
+sub-region handling for `03N/S/W` and `10L/U` via `VPU_RASTER_MAP`) and
+rasterises onto the per-VPU Hydrodem grid, writing
 `shared/per_vpu/<vpu>/land_mask_<vpu>.tif`. The per-VPU TWI pipeline
-(`merge_rpu_by_vpu.py` TWI case + `compute_dem_derivatives.py`) consumes
-this per-VPU mask via [`read_land_mask_for_grid`](../src/gfv2_params/depstor.py)
-to clip `Twi_merged_<vpu>.tif` and `Twi_hydrodem_<vpu>.tif` to the per-VPU
-HRU boundary. Without it, per-RPU TWI bulges (coastal ocean,
-adjacent-VPU drape on per-RPU Hydrodem tiles) leak into downstream zonal
-aggregation. Runs as **RUNME Stage 1c1**, before the TWI merge.
+(`merge_rpu_by_vpu_twi` step + `compute_dem_derivatives` opt-in step)
+consumes this per-VPU mask via
+[`read_land_mask_for_grid`](../src/gfv2_params/depstor.py) to clip
+`Twi_merged_<vpu>.tif` and `Twi_hydrodem_<vpu>.tif` to the per-VPU HRU
+boundary. Without it, per-RPU TWI bulges (coastal ocean, adjacent-VPU
+drape on per-RPU Hydrodem tiles) leak into downstream zonal aggregation.
+Runs as **RUNME Stage 1c1**, before the TWI merge.
 
 ---
 

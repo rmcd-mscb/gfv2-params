@@ -34,7 +34,7 @@ pixi shell -e dev                # default + pytest, ruff, pre-commit
 Run a one-off command in the env without an interactive shell:
 
 ```bash
-pixi run python scripts/build_vrt.py --base_config configs/base_config.yml
+pixi run python scripts/build_shared_rasters.py --config configs/shared_rasters/shared_rasters.yml --step build_vrt
 ```
 
 > **Migrating from `geoenv`?** The legacy `environment.yml` is retained as a
@@ -232,100 +232,63 @@ present and newer than the source.
 
 Note: `--check` only validates manually-staged inputs (soils, litho, lulc_veg, twi). Verify downloads completed successfully by checking the job logs before proceeding.
 
-### Stage 1: Raster preparation (VPU-based)
+### Stages 1, 1b, 1c1, 1c2, 2a, 2b, 2c — Shared raster prep (one orchestrator)
 
-Download and merge per-RPU NHDPlus rasters, then derive slope/aspect:
+**All of these are now driven by `sbatch slurm_batch/build_shared_rasters.batch`** (or the
+`pixi run python scripts/build_shared_rasters.py --config configs/shared_rasters/shared_rasters.yml`
+interactive equivalent). The orchestrator walks the canonical 8-step DAG in
+dependency order — there is no longer a per-step batch surface; all the
+per-step CLIs/sbatches were retired now that the orchestrator covers them.
 
-```bash
-sbatch slurm_batch/merge_rpu_by_vpu.batch
-sbatch slurm_batch/compute_slope_aspect.batch
-```
+For a single-step rebuild, pass `--step <name>` to the orchestrator (e.g.
+`--step build_border_dem` or `--step build_vrt`). Use `--from <name>` to
+resume mid-DAG. Step names match the keys in
+[configs/shared_rasters/shared_rasters.yml](../configs/shared_rasters/shared_rasters.yml).
 
-### Stage 1b: Build border DEM fill (one-time)
+The narrative below describes what each step does and what it depends on;
+the bash invocation is always the same orchestrator.
 
-Download Copernicus GLO-30 tiles and build elevation/slope/aspect fill rasters
-for HRUs that extend into Canada or Mexico beyond NHDPlus coverage:
+**Stage 1 — `merge_rpu_by_vpu` + `compute_slope_aspect`:** Merge per-RPU
+NHDPlus rasters into per-VPU GeoTIFFs (NED, Hydrodem, FDR, FAC), then derive
+slope/aspect on the fixed-nodata NEDSnapshot.
 
-```bash
-sbatch slurm_batch/build_border_dem.batch
-```
+**Stage 1b — `build_border_dem`:** Download Copernicus GLO-30 tiles and
+build elevation/slope/aspect fill rasters for HRUs that extend into Canada or
+Mexico beyond NHDPlus coverage. Creates fill rasters in `shared/conus/borders/`;
+the subsequent `build_vrt` step composites these behind NHDPlus so NHDPlus
+takes priority where it has valid data and Copernicus fills the border gaps.
+Depends on Stage 1 — needs the NHDPlus `_fixed_` elevation tiles to build a
+seamless composite for slope/aspect computation.
 
-This creates fill rasters in `shared/conus/borders/`. The subsequent
-`build_vrt.py` step composites these behind the NHDPlus tiles, so NHDPlus takes
-priority where it has valid data and Copernicus fills the border gaps.
+**Stage 1c1 — `build_vpu_landmask`:** Build the per-VPU HRU-fabric land mask
+consumed by both TWI pipelines. Produces `shared/per_vpu/<vpu>/land_mask_<vpu>.tif`
+— a uint8 1/255 raster where 1 = inside an HRU whose `vpu` attribute matches
+this VPU, 255 = outside. The mask is rasterised onto the per-VPU
+`Hydrodem_merged_<vpu>.tif` grid, so TWI products downstream get a strict match
+to their VPU's HRU coverage rather than the CONUS-wide depstor `land_mask.tif`
+(which leaves cells unmasked wherever adjacent-VPU HRUs drape into a VPU's
+Hydrodem footprint). Depends only on Stage 1; independent of Stage 2d.
 
-**Dependency:** Must run AFTER Stage 1 completes, because it needs the
-NHDPlus `_fixed_` elevation tiles produced by `compute_slope_aspect.py` to
-build a seamless composite elevation surface for slope/aspect computation.
+**Stage 1c2 — `merge_rpu_by_vpu_twi`:** Merge the per-RPU TWI rasters staged
+in Stage 0 into per-VPU GeoTIFFs (`Twi_merged_<vpu>.tif`). The merge clips its
+output to the per-VPU HRU mask from Stage 1c1 so the per-RPU TWI bulges
+(coast on the east, adjacent-VPU/border drape on the west/north) never reach
+downstream zonal aggregation. Depends on Stage 1c1.
 
-### Stage 1c1: Build per-VPU HRU land masks
+**Stage 2a — `build_vrt`:** Combine per-VPU rasters and optional Copernicus
+fill into CONUS-wide GDAL virtual rasters (elevation/slope/aspect/fdr/twi).
 
-Build the per-VPU HRU-fabric land mask consumed by both TWI pipelines:
+**Stage 2b — `build_derived_rasters`:** Pre-compute `rd_250_raw.tif` and
+`soil_moist_max.tif`.
 
-```bash
-sbatch slurm_batch/build_vpu_landmask.batch
-```
+**Stage 2c — `build_lulc_rasters`:** Pre-compute canopy-resampled + keep-resampled
++ radiation-transmission rasters for every LULC source listed in
+[configs/shared_rasters/shared_rasters.yml](../configs/shared_rasters/shared_rasters.yml)'s
+`sources:` block (currently 4 sources: nhm_v11, nalcms, nlcd, foresce).
 
-Produces `shared/per_vpu/<vpu>/land_mask_<vpu>.tif` — a uint8 1/255 raster
-where 1 = inside an HRU whose `vpu` attribute matches this VPU, 255 = outside.
-The mask is rasterised onto the per-VPU `Hydrodem_merged_<vpu>.tif` grid, so
-TWI products downstream get a strict match to their VPU's HRU coverage rather
-than the CONUS-wide depstor `land_mask.tif` (which leaves cells unmasked
-wherever adjacent-VPU HRUs drape into a VPU's Hydrodem footprint).
-
-Only depends on Stage 1 (per-VPU Hydrodem exists). Independent of Stage 2d
-(depstor landmask).
-
-### Stage 1c2: Merge TWI by VPU
-
-Merge the per-RPU TWI rasters staged in Stage 0 into per-VPU GeoTIFFs:
-
-```bash
-sbatch slurm_batch/merge_rpu_by_vpu_twi.batch
-```
-
-Produces `shared/per_vpu/<vpu>/Twi_merged_<vpu>.tif` for each of the 18 VPUs.
-The merge clips its output to the per-VPU HRU mask from Stage 1c1 so the
-per-RPU TWI bulges (coast on the east, adjacent-VPU/border drape on the
-west/north) never reach downstream zonal aggregation.
-
-**Depends on Stage 1c1.**
-
-### Stage 2a: Build VRTs (one-time)
-
-Combine per-VPU rasters and optional Copernicus fill into virtual rasters:
-
-```bash
-python scripts/build_vrt.py --base_config configs/base_config.yml
-```
-
-### Stage 2b: Build derived rasters (one-time)
-
-Pre-compute `rd_250_raw.tif` and `soil_moist_max.tif`:
-
-```bash
-sbatch slurm_batch/build_derived_rasters.batch
-```
-
-To use a different fabric, override `FABRIC`:
-
-```bash
-FABRIC=oregon sbatch slurm_batch/build_derived_rasters.batch
-```
-
-### Stage 2c: Build LULC derived rasters (one-time)
-
-Pre-compute radiation transmission raster from LULC + canopy + keep:
-
-```bash
-sbatch slurm_batch/build_lulc_rasters.batch
-```
-
-To use a different LULC source, override `LULC_CONFIG`:
-
-```bash
-LULC_CONFIG=configs/shared_rasters/lulc/nalcms.yml sbatch slurm_batch/build_lulc_rasters.batch
-```
+**Per-fabric overrides:** All of the above are fabric-independent (CONUS).
+For depstor-only fabric overrides (Stage 2d), use `FABRIC=...` env in the
+sbatch command.
 
 ### Stage 2d: Build depstor rasters (per fabric)
 
@@ -414,36 +377,17 @@ Env knobs:
 - `SUBMIT_JOBS_MAX_CONCURRENT=4` — concurrency cap per array job (default 4)
 - `FORCE=1` — passed to build_zonal_weights to overwrite the existing matrix
 
-The individual per-param batches (`create_zonal_*.batch`, `create_soils*.batch`,
-`create_lulc_*.batch`, `create_ssflux_params.batch`, `build_weights.batch`)
-documented below remain as fallbacks for per-step debugging.
-
-#### Fallback: per-param submissions via `submit_jobs.sh`
-
-Submit batch jobs using the per-param wrapper. Pass the corresponding param
-config as the 4th argument to auto-submit a merge job that runs immediately
-after each array job completes (`afterok` dependency):
+The per-param Python CLIs and per-param sbatch wrappers were retired now
+that the orchestrator covers them. For single-param debugging, invoke the
+orchestrator directly:
 
 ```bash
-BATCHES=/path/to/gfv2/batches
-slurm_batch/submit_jobs.sh $BATCHES slurm_batch/create_zonal_elev_params.batch
-slurm_batch/submit_jobs.sh $BATCHES slurm_batch/create_zonal_slope_params.batch
-slurm_batch/submit_jobs.sh $BATCHES slurm_batch/create_zonal_aspect_params.batch
-slurm_batch/submit_jobs.sh $BATCHES slurm_batch/create_soils_params.batch
-slurm_batch/submit_jobs.sh $BATCHES slurm_batch/create_soilmoistmax_params.batch
-slurm_batch/submit_jobs.sh $BATCHES slurm_batch/create_lulc_nhm_v11_params.batch
+python scripts/derive_zonal_params.py --mode zonal --param elevation --batch_id 42 \
+    --config configs/zonal/zonal_params.yml --base_config configs/base_config.yml
 ```
 
-To use an alternative LULC source (NLCD or NALCMS) instead of NHM v1.1:
-```bash
-slurm_batch/submit_jobs.sh $BATCHES slurm_batch/create_lulc_nlcd_params.batch
-# or
-slurm_batch/submit_jobs.sh $BATCHES slurm_batch/create_lulc_nalcms_params.batch
-```
-
-The `create_lulc_params.batch` job produces per-HRU fractional land cover percentages for each
-NALCMS 2020 class (19 classes). Output: `{fabric}/params/nalcms_2020/` per batch, merged to
-`{fabric}/params/merged/nhm_nalcms_2020_lulc_params.csv`.
+`--mode merge --param <name>` runs just the merge for one param;
+`--mode build_weights` builds the CONUS-once ssflux prereq.
 
 Depression-storage zonal stats + Level-5 ratios (require Stage 2d outputs):
 
@@ -472,40 +416,30 @@ every merge. Outputs land in two subdirectories under `{fabric}/params/merged/`:
 
 ### Stage 5: Merge and validate
 
-If all Stage 4 jobs were submitted with the 4th merge-config argument (recommended), merges
-run automatically as chained SLURM jobs. To re-run all merges manually at once:
+`submit_zonal_params.sh` chains a merge job after every per-param array via
+`afterok`, so Stage 5 is automatic — there is no separate manual-merge
+step. To re-run a single param's merge (e.g., after manually fixing a
+batch CSV):
 
 ```bash
-sbatch slurm_batch/merge_output_params.batch
-```
-
-Or individually:
-```bash
-python scripts/merge_params.py --config configs/zonal/elev_param.yml --base_config configs/base_config.yml
+python scripts/derive_zonal_params.py --mode merge --param elevation \
+    --config configs/zonal/zonal_params.yml --base_config configs/base_config.yml
 ```
 
 ### Stage 6: SSFlux (depends on merged slope)
 
-> **Already running via `submit_zonal_params.sh`?** Then ssflux is handled
-> automatically as part of the unified Stage 4 dispatch — the wrapper sees
-> `depends_on: build_weights` on the ssflux entry in
-> `configs/zonal/zonal_params.yml`, submits `build_zonal_weights.batch` first, and
-> chains the ssflux array + merge on its `afterok`. ssflux also chains on the
-> merged slope CSV. **No separate Stage 6 invocation needed.** This stage
-> describes the legacy standalone path for users who run ssflux outside the
-> unified dispatcher.
+Handled automatically by `submit_zonal_params.sh` — the dispatcher sees
+`depends_on: build_weights` on the ssflux entry in
+`configs/zonal/zonal_params.yml`, submits `build_zonal_weights.batch`
+first, and chains the ssflux array + merge on its `afterok`. ssflux also
+chains on the merged slope CSV.
 
-A single batch job handles the full ssflux workflow: pre-compute weights, submit the
-ssflux array job, and automatically chain a merge job via `afterok` dependency:
+To build the CONUS-once weight matrix on its own (idempotent — skips if
+the matrix already exists, pass `FORCE=1` to overwrite):
 
 ```bash
-BATCHES={data_root}/gfv2/batches \
-  sbatch slurm_batch/build_weights.batch
+sbatch slurm_batch/build_zonal_weights.batch
 ```
-
-The job sequence is:
-1. `build_weights.py` — computes CONUS-wide P2P lithology weights
-2. `submit_jobs.sh` — submits the ssflux array; merge job is chained automatically
 
 ### Stage 7: KNN gap-fill
 
@@ -549,13 +483,9 @@ already merged or comes as per-VPU gpkgs.
    BATCHES={data_root}/oregon/batches
    slurm_batch/submit_zonal_params.sh $BATCHES oregon configs/base_config.yml
    ```
-   For per-param granularity, you can still use `submit_jobs.sh` (passing
-   the fabric as the 5th positional arg, or via `FABRIC` env on direct
-   sbatch calls):
-   ```bash
-   slurm_batch/submit_jobs.sh $BATCHES slurm_batch/create_lulc_params.batch \
-       configs/base_config.yml configs/shared_rasters/lulc/nalcms.yml oregon
-   ```
+   For per-param granularity, invoke the orchestrator directly with
+   `--mode zonal --param <name> --batch_id <N>` (see "Single-batch run"
+   in README.md or Stage 4 above).
 
 **Case B: VPU-based fabric** (per-VPU gpkgs that need merging — e.g., gfv2)
 
@@ -570,10 +500,18 @@ already merged or comes as per-VPU gpkgs.
 
 ## Partial Reruns
 
-To rerun a single failed batch (the batch file reads `$SLURM_ARRAY_TASK_ID` regardless of how the array was specified):
+To rerun a single failed batch within one of the orchestrator's array
+jobs, submit a one-task array against the generic per-batch worker with
+`$PARAM` set:
+
 ```bash
-sbatch --array=37 slurm_batch/create_zonal_elev_params.batch
+sbatch --array=37 --export=ALL,PARAM=elevation,FABRIC=gfv2,BASE_CONFIG=configs/base_config.yml \
+    slurm_batch/derive_zonal_params.batch
 ```
+
+(For Part 1 raster prep, re-run the single step via the orchestrator's
+`--step` flag: `python scripts/build_shared_rasters.py
+--config configs/shared_rasters/shared_rasters.yml --step <name>`.)
 
 ## Monitoring
 
@@ -585,51 +523,39 @@ sacct -j <JOBID> -o JobID,State,Elapsed,MaxRSS
 
 ## Script -> Config -> Entry Point Mapping
 
-The unified orchestrators wrap every per-script entry point below:
+Every production workflow is now driven by an orchestrator. The per-step
+Python CLIs and per-step sbatch wrappers were retired now that the
+orchestrators cover them — the library code they delegated to lives under
+`src/gfv2_params/`.
 
-| Batch file | Config | Script |
+### Orchestrators (the primary surface)
+
+| Batch / shell | Config | Script |
 |---|---|---|
-| build_shared_rasters.batch (Part 1) | shared_rasters.yml | build_shared_rasters.py |
-| build_depstor_rasters.batch (Part 2 depstor rasters) | depstor_rasters.yml | build_depstor_rasters.py |
-| submit_depstor_params.sh (Part 2 depstor params) | depstor_params.yml | derive_depstor_params.py |
-| submit_zonal_params.sh (Part 2 zonal params) | zonal_params.yml | derive_zonal_params.py |
-| derive_zonal_params.batch (per-param array task) | zonal_params.yml | derive_zonal_params.py |
-| merge_zonal_param.batch (per-param merge) | zonal_params.yml | derive_zonal_params.py |
-| build_zonal_weights.batch (ssflux prereq) | zonal_params.yml | derive_zonal_params.py |
+| `build_shared_rasters.batch` | `shared_rasters/shared_rasters.yml` | `build_shared_rasters.py` |
+| `build_depstor_rasters.batch` | `depstor/depstor_rasters.yml` | `build_depstor_rasters.py` |
+| `submit_depstor_params.sh` | `depstor/depstor_params.yml` | `derive_depstor_params.py` (dispatches 10 fractions × zonal+merge, then ratios via afterok) |
+| `submit_zonal_params.sh` | `zonal/zonal_params.yml` | `derive_zonal_params.py` (dispatches 10 params × zonal+merge, with ssflux's `build_weights` prereq chained automatically) |
 
-The per-script CLIs in the table below are preserved as thin shells and
-keep working unchanged; use them for per-step granularity or per-VPU SLURM
-arrays.
+### Workers invoked by the orchestrators (don't sbatch these directly)
 
-| Batch file | Config | Script |
+| Batch | Used by | Config | Script |
+|---|---|---|---|
+| `derive_zonal_params.batch` | `submit_zonal_params.sh` | `zonal/zonal_params.yml` | `derive_zonal_params.py --mode zonal --param $PARAM` |
+| `merge_zonal_param.batch` | `submit_zonal_params.sh` | `zonal/zonal_params.yml` | `derive_zonal_params.py --mode merge --param $PARAM` |
+| `build_zonal_weights.batch` | `submit_zonal_params.sh` (for ssflux prereq) | `zonal/zonal_params.yml` | `derive_zonal_params.py --mode build_weights` |
+| `create_depstor_zonal.batch` | `submit_depstor_params.sh` | `depstor/depstor_params.yml` | `derive_depstor_params.py --mode zonal --fraction $FRACTION` |
+| `merge_depstor_fraction.batch` | `submit_depstor_params.sh` | `depstor/depstor_params.yml` | `derive_depstor_params.py --mode merge --fraction $FRACTION` |
+| `derive_depstor_ratios.batch` | `submit_depstor_params.sh` | `depstor/depstor_params.yml` | `derive_depstor_params.py --mode ratios` |
+
+### Standalone (one-off / setup / post-processing)
+
+| Batch / shell | Config | Script |
 |---|---|---|
-| merge_rpu_by_vpu.batch | merge_rpu_by_vpu.yml | merge_rpu_by_vpu.py |
-| merge_rpu_by_vpu_twi.batch | merge_rpu_by_vpu_twi.yml | merge_rpu_by_vpu.py |
-| build_vpu_landmask.batch | vpu_landmask_raster.yml | build_vpu_landmask.py |
-| stage_twi.batch | (uses base_config.yml indirectly) | scripts/stage_twi.sh |
-| compute_slope_aspect.batch | slope_aspect.yml | compute_slope_aspect.py |
-| build_border_dem.batch | base_config.yml | build_border_dem.py |
-| build_derived_rasters.batch | base_config.yml | build_derived_rasters.py |
-| build_lulc_rasters.batch | lulc_nhm_v11_param.yml | build_lulc_rasters.py |
-| create_zonal_elev_params.batch | elev_param.yml | create_zonal_params.py |
-| create_zonal_slope_params.batch | slope_param.yml | create_zonal_params.py |
-| create_zonal_aspect_params.batch | aspect_param.yml | create_zonal_params.py |
-| create_soils_params.batch | soils_param.yml | create_soils_params.py |
-| create_soilmoistmax_params.batch | soilmoistmax_param.yml | create_soils_params.py |
-| create_lulc_nhm_v11_params.batch | lulc_nhm_v11_param.yml | create_lulc_params.py |
-| create_lulc_params.batch | lulc_foresce_param.yml | create_lulc_params.py |
-| create_lulc_nlcd_params.batch | lulc_nlcd_param.yml | create_lulc_params.py |
-| create_lulc_nalcms_params.batch | lulc_nalcms_param.yml | create_lulc_params.py |
-| build_weights.batch | ssflux_param.yml | build_weights.py → create_ssflux_params.py → merge_params.py |
-| create_ssflux_params.batch | ssflux_param.yml | create_ssflux_params.py |
-| merge_output_params.batch | all param configs | merge_params.py |
-| merge_params.batch | (via MERGE_CONFIG env) | merge_params.py |
-| merge_default_output_params.batch | base_config.yml | merge_default_params.py |
-| download_rpu_rasters.batch | base_config.yml | gfv2_params.download.rpu_rasters |
-| download_nalcms.batch | base_config.yml | gfv2_params.download.nalcms_lulc |
-| download_nhm_v11.batch | base_config.yml | gfv2_params.download.nhm_v11_lulc |
-| build_depstor_rasters.batch | depstor_rasters.yml | build_depstor_rasters.py |
-| create_depstor_zonal.batch | depstor_params.yml | derive_depstor_params.py (--mode zonal) |
-| merge_depstor_fraction.batch | depstor_params.yml | derive_depstor_params.py (--mode merge) |
-| derive_depstor_ratios.batch | depstor_params.yml | derive_depstor_params.py (--mode ratios) |
-| submit_depstor_params.sh | depstor_params.yml | dispatches the 9 fractions × (zonal → merge) then ratios via afterok |
+| `stage_twi.batch` | `base_config.yml` (indirectly) | `scripts/stage_twi.sh` |
+| `download_rpu_rasters.batch` | `base_config.yml` | `gfv2_params.download.rpu_rasters` |
+| `download_nalcms.batch` | `base_config.yml` | `gfv2_params.download.nalcms_lulc` |
+| `download_nhm_v11.batch` | `base_config.yml` | `gfv2_params.download.nhm_v11_lulc` |
+| `diagnose_slope_aspect.batch` | per-config | diagnostic tool |
+| `merge_default_output_params.batch` (Stage 8) | `base_config.yml` | `merge_default_params.py` |
+| `submit_jobs.sh` | (caller-provided) | generic per-VPU array dispatcher |
