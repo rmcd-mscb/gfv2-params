@@ -78,7 +78,7 @@ gfv2_param/
 ## Selecting a fabric
 
 Fabric identities and their per-fabric inputs (`template_raster`, `fdr_raster`,
-`waterbody_gpkg`/layer, `expected_max_hru_id`, `batch_size`) live as profiles
+`waterbody_gpkg`/layer, `expected_max_hru_id`, `batch_size`, `id_feature`) live as profiles
 in a single `configs/base_config.yml` under a `fabrics:` mapping. The active
 profile is selected via:
 
@@ -462,7 +462,9 @@ already merged or comes as per-VPU gpkgs.
 **Case A: Pre-merged fabric** (single gpkg covering the full domain — e.g., Oregon)
 
 1. Add a profile under `fabrics:` in `configs/base_config.yml`. Required keys
-   are `expected_max_hru_id` and `batch_size`. If the depstor pipeline will be
+   are `expected_max_hru_id`, `batch_size`, and `id_feature` (the HRU id column
+   present in the fabric — e.g. `nat_hru_id` for gfv2, `hru_id` for oregon —
+   which flows through to the merged parameter CSVs). If the depstor pipeline will be
    run for this fabric, also set `template_raster`, `fdr_raster`,
    `segments_gpkg`, `waterbody_gpkg`, and `waterbody_layer`. The `oregon`
    profile shows the minimum (no depstor inputs yet).

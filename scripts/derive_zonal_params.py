@@ -27,7 +27,7 @@ import re
 import sys
 from pathlib import Path
 
-from gfv2_params.config import load_config
+from gfv2_params.config import load_config, require_config_key
 from gfv2_params.log import configure_logging
 from gfv2_params.zonal_runners import (
     run_build_weights,
@@ -106,6 +106,10 @@ def _build_param_cfg(config: dict, entry: dict) -> dict:
     param_cfg["fabric"] = config["fabric"]
     if "expected_max_hru_id" in config:
         param_cfg["expected_max_hru_id"] = config["expected_max_hru_id"]
+    # id_feature is a fabric property (base_config.yml profile), not a per-step
+    # default — pull it from the resolved base config so it flows through to
+    # the merged parameter CSVs.
+    param_cfg["id_feature"] = require_config_key(config, "id_feature", "derive_zonal_params")
     return param_cfg
 
 

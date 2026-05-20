@@ -30,7 +30,7 @@ class TestFindMissingIds:
         df = pd.DataFrame({"nat_hru_id": [1, 2, 4, 5], "val": [10, 20, 40, 50]})
         df.to_csv(csv, index=False)
 
-        param_df, missing = find_missing_ids(csv, 5, logger)
+        param_df, missing = find_missing_ids(csv, 5, "nat_hru_id", logger)
         assert missing == [3]
         assert len(param_df) == 4
 
@@ -41,7 +41,7 @@ class TestFindMissingIds:
         df = pd.DataFrame({"nat_hru_id": [1, 2, 3], "val": [10, 20, 30]})
         df.to_csv(csv, index=False)
 
-        _, missing = find_missing_ids(csv, 3, logger)
+        _, missing = find_missing_ids(csv, 3, "nat_hru_id", logger)
         assert missing == []
 
     def test_all_missing(self, tmp_path):
@@ -51,8 +51,20 @@ class TestFindMissingIds:
         df = pd.DataFrame({"nat_hru_id": pd.Series(dtype=int), "val": pd.Series(dtype=float)})
         df.to_csv(csv, index=False)
 
-        _, missing = find_missing_ids(csv, 3, logger)
+        _, missing = find_missing_ids(csv, 3, "nat_hru_id", logger)
         assert missing == [1, 2, 3]
+
+    def test_keys_on_custom_id_feature(self, tmp_path):
+        """A fabric whose id column is hru_id (e.g. oregon) keys on it, not nat_hru_id."""
+        import logging
+        logger = logging.getLogger("test")
+        csv = tmp_path / "params.csv"
+        df = pd.DataFrame({"hru_id": [1, 2, 4], "val": [10, 20, 40]})
+        df.to_csv(csv, index=False)
+
+        param_df, missing = find_missing_ids(csv, 4, "hru_id", logger)
+        assert missing == [3]
+        assert len(param_df) == 3
 
 
 class TestMergedGpkgPathResolution:
@@ -94,7 +106,7 @@ class TestFillMissingValuesKnn:
             "my_param": [100.0, 200.0],
         })
 
-        result = fill_missing_values_knn(param_df, [3], merged_gdf, "my_param", 1, logger)
+        result = fill_missing_values_knn(param_df, [3], merged_gdf, "my_param", 1, "nat_hru_id", logger)
         assert len(result) == 3
         assert 3 in result["nat_hru_id"].values
         filled_val = result.loc[result["nat_hru_id"] == 3, "my_param"].iloc[0]
@@ -111,6 +123,24 @@ class TestFillMissingValuesKnn:
         )
         param_df = pd.DataFrame({"nat_hru_id": [1], "my_param": [42.0]})
 
-        result = fill_missing_values_knn(param_df, [], merged_gdf, "my_param", 1, logger)
+        result = fill_missing_values_knn(param_df, [], merged_gdf, "my_param", 1, "nat_hru_id", logger)
         assert len(result) == 1
         assert result["my_param"].iloc[0] == 42.0
+
+    def test_knn_fills_on_custom_id_feature(self):
+        """Filling keys on the configured id_feature (hru_id) for non-gfv2 fabrics."""
+        import logging
+        logger = logging.getLogger("test")
+
+        merged_gdf = gpd.GeoDataFrame(
+            {"hru_id": [1, 2, 3]},
+            geometry=[Point(0, 0), Point(10, 0), Point(5, 0)],
+            crs="EPSG:5070",
+        )
+        param_df = pd.DataFrame({"hru_id": [1, 2], "my_param": [100.0, 200.0]})
+
+        result = fill_missing_values_knn(param_df, [3], merged_gdf, "my_param", 1, "hru_id", logger)
+        assert len(result) == 3
+        assert 3 in result["hru_id"].values
+        filled_val = result.loc[result["hru_id"] == 3, "my_param"].iloc[0]
+        assert filled_val in [100.0, 200.0]

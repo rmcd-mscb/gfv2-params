@@ -11,7 +11,7 @@ from pathlib import Path
 import geopandas as gpd
 
 from gfv2_params.batching import spatial_batch, write_batches
-from gfv2_params.config import load_base_config
+from gfv2_params.config import load_base_config, require_config_key
 from gfv2_params.log import configure_logging
 
 
@@ -45,7 +45,7 @@ def main():
     batched = spatial_batch(gdf, batch_size=batch_size)
 
     batch_dir = Path(data_root) / fabric / "batches"
-    id_feature = base.get("id_feature", "nat_hru_id")
+    id_feature = require_config_key(base, "id_feature", "prepare_fabric")
     manifest = write_batches(batched, batch_dir, fabric, id_feature, batch_size=batch_size, target_layer=args.layer)
 
     n = manifest["n_batches"]

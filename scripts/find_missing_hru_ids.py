@@ -1,30 +1,30 @@
-"""Find missing nat_hru_id values in a parameter CSV file."""
+"""Find missing HRU id values in a parameter CSV file."""
 
 import argparse
 from pathlib import Path
 
 import pandas as pd
 
-from gfv2_params.config import load_base_config
+from gfv2_params.config import load_base_config, require_config_key
 from gfv2_params.log import configure_logging
 
 
-def find_missing_nat_hru_ids(csv_file, expected_max, output_file, logger):
+def find_missing_ids(csv_file, expected_max, id_feature, output_file, logger):
     df = pd.read_csv(csv_file)
-    nat_hru_ids = df["nat_hru_id"].sort_values()
+    hru_ids = df[id_feature].sort_values()
 
     expected_range = set(range(1, expected_max + 1))
-    actual_values = set(nat_hru_ids)
+    actual_values = set(hru_ids)
     missing_values = sorted(expected_range - actual_values)
 
     output_lines = []
-    output_lines.append(f"Analysis of missing nat_hru_id values in: {csv_file}")
+    output_lines.append(f"Analysis of missing {id_feature} values in: {csv_file}")
     output_lines.append("=" * 60)
     output_lines.append(f"Total expected values: {len(expected_range)}")
     output_lines.append(f"Total actual values: {len(actual_values)}")
     output_lines.append(f"Missing values count: {len(missing_values)}")
-    output_lines.append(f"Minimum nat_hru_id: {nat_hru_ids.min()}")
-    output_lines.append(f"Maximum nat_hru_id: {nat_hru_ids.max()}")
+    output_lines.append(f"Minimum {id_feature}: {hru_ids.min()}")
+    output_lines.append(f"Maximum {id_feature}: {hru_ids.max()}")
     output_lines.append("")
 
     if missing_values:
@@ -62,7 +62,7 @@ def find_missing_nat_hru_ids(csv_file, expected_max, output_file, logger):
                     output_lines.append(f"  Gap {i+1}: {gap[0]} (single missing value)")
 
         output_lines.append("")
-        output_lines.append("ALL MISSING nat_hru_id VALUES:")
+        output_lines.append(f"ALL MISSING {id_feature} VALUES:")
         output_lines.append("-" * 40)
 
         for i in range(0, len(missing_values), 10):
@@ -86,7 +86,7 @@ def find_missing_nat_hru_ids(csv_file, expected_max, output_file, logger):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Find missing nat_hru_id values in CSV file")
+    parser = argparse.ArgumentParser(description="Find missing HRU id values in CSV file")
     parser.add_argument("csv_file", help="Path to the CSV file")
     parser.add_argument("--output", "-o", help="Path to output text file (optional)")
     parser.add_argument("--fabric", default=None, help="Fabric name (overrides FABRIC env / default_fabric)")
@@ -96,8 +96,9 @@ def main():
 
     base = load_base_config(fabric=args.fabric)
     expected_max = base["expected_max_hru_id"]
+    id_feature = require_config_key(base, "id_feature", "find_missing_hru_ids")
 
-    find_missing_nat_hru_ids(args.csv_file, expected_max, args.output, logger)
+    find_missing_ids(args.csv_file, expected_max, id_feature, args.output, logger)
 
 
 if __name__ == "__main__":
