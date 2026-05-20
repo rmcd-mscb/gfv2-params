@@ -8,20 +8,18 @@ pixi once per user (see https://pixi.sh/latest/installation/) and ensure
 
 ```bash
 pixi install
-bash scripts/refresh_pixi_activation.sh
 ```
 
-The first command materialises `.pixi/envs/default/` from `pixi.lock` (config
-lives in `pyproject.toml` under `[tool.pixi.*]`). The second pre-bakes a
-static activation script (`.pixi-activate.sh`) that the slurm batches
-`source` instead of invoking pixi at task start. Why: concurrent
-`pixi shell-hook` calls under array submission race on
-`.pixi/envs/default/conda-meta/` reads ("File was modified during parsing",
-etc.) and a fraction of tasks fail before reaching python. Sourcing a
-pre-baked script is pure shell — no concurrency surface.
+This materialises `.pixi/envs/default/` from `pixi.lock` (config lives in
+`pyproject.toml` under `[tool.pixi.*]`). The slurm batches invoke the env with
+`pixi run --as-is` (= `--no-install --frozen`): the already-installed env is used
+verbatim — no lock check, no env mutation, no PyPI/conda sync — so concurrent
+array tasks never race on `.pixi/envs/default/conda-meta/`. (An earlier approach
+that ran `pixi shell-hook --locked` per task did race there: a fraction of array
+tasks failed with "File was modified during parsing" before reaching python.
+`--as-is` removes that surface entirely.)
 
-**Re-run `bash scripts/refresh_pixi_activation.sh`** any time `pyproject.toml`
-or `pixi.lock` change.
+**Re-run `pixi install`** any time `pyproject.toml` or `pixi.lock` change.
 
 For interactive use:
 

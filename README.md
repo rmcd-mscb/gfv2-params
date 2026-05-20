@@ -12,14 +12,14 @@ is on your `PATH`. From the repo root:
 
 ```bash
 pixi install
-bash scripts/refresh_pixi_activation.sh
 ```
 
 `pixi install` materialises `.pixi/envs/default/` from `pixi.lock` (config lives
-in `pyproject.toml` under `[tool.pixi.*]`). The activation refresh pre-bakes
-`.pixi-activate.sh` so SLURM batches can `source` it without racing on
-`pixi shell-hook` under array submission. Re-run the refresh script any time
-`pyproject.toml` or `pixi.lock` change.
+in `pyproject.toml` under `[tool.pixi.*]`). SLURM batches invoke the env with
+`pixi run --as-is` (= `--no-install --frozen`): the already-installed env is used
+verbatim with no lock check or env mutation, so concurrent array tasks don't race
+on `.pixi/envs/.../conda-meta`. Re-run `pixi install` after `pyproject.toml` or
+`pixi.lock` change.
 
 For interactive use:
 
@@ -49,7 +49,6 @@ gfv2-params/
 ├── scripts/                  # CLI processing scripts
 │   ├── init_data_root.py             # Scaffold data-root tree; verify staged inputs
 │   ├── stage_twi.sh                  # Stage per-RPU TWI rasters from shared FS
-│   ├── refresh_pixi_activation.sh    # Pre-bake .pixi-activate.sh for sbatch sourcing
 │   ├── prepare_fabric.py             # Spatially batch fabric into per-batch gpkgs
 │   ├── migrate_to_shared_layout.py   # One-shot: legacy work/ → shared/ on-disk migration
 │   ├── build_shared_rasters.py       # Part 1 orchestrator (CONUS shared raster prep)
