@@ -1,7 +1,11 @@
-"""Fill missing parameter values using KNN interpolation against a merged nhru geopackage.
+"""Fill missing parameter values using KNN interpolation against the fabric geopackage.
 
-The merged geopackage is produced by the notebooks/merge_vpu_targets.py notebook
-and serves as input to prepare_fabric.py for batching.
+The fabric geopackage is read from the active base_config.yml profile's
+hru_gpkg/hru_layer (the same gpkg prepare_fabric.py batched) — the single
+source of truth, not a {fabric}_nhru_merged.gpkg naming convention. For
+VPU-based fabrics that gpkg is produced by notebooks/merge_vpu_targets.py; for
+single-file fabrics (e.g. oregon) it is a pre-existing gpkg declared in the
+profile.
 """
 
 import argparse
@@ -107,9 +111,12 @@ def main():
     expected_max = base["expected_max_hru_id"]
     id_feature = require_config_key(base, "id_feature", "merge_and_fill_params")
 
-    # Resolve defaults from fabric namespace
+    # The merged fabric gpkg is authoritative in the active base_config.yml
+    # profile (hru_gpkg/hru_layer) — read it from there, not a
+    # {fabric}_nhru_merged.gpkg naming convention. --merged_gpkg is an override.
+    hru_layer = base.get("hru_layer", "nhru")
     if args.merged_gpkg is None:
-        args.merged_gpkg = f"{data_root}/{fabric}/fabric/{fabric}_nhru_merged.gpkg"
+        args.merged_gpkg = require_config_key(base, "hru_gpkg", "merge_and_fill_params")
     if args.param_file is None:
         args.param_file = f"{data_root}/{fabric}/params/merged/nhm_ssflux_params.csv"
     if args.output_dir is None:
@@ -128,13 +135,15 @@ def main():
 
     if not merged_gpkg.exists():
         raise FileNotFoundError(
-            f"Merged geopackage not found: {merged_gpkg}\n"
-            "Run notebooks/merge_vpu_targets.py or scripts/prepare_fabric.py first."
+            f"Fabric geopackage not found: {merged_gpkg}\n"
+            "Check the active fabric profile's hru_gpkg in configs/base_config.yml. "
+            "For VPU-based fabrics, run notebooks/merge_vpu_targets.py to produce it; "
+            "for single-file fabrics, place the gpkg at the hru_gpkg path."
         )
 
-    logger.info("Loading merged geopackage: %s", merged_gpkg)
+    logger.info("Loading merged geopackage: %s (layer=%s)", merged_gpkg, hru_layer)
     try:
-        merged_gdf = gpd.read_file(merged_gpkg, layer="nhru")
+        merged_gdf = gpd.read_file(merged_gpkg, layer=hru_layer)
     except Exception as exc:
         raise RuntimeError(
             f"Failed to read merged geopackage: {merged_gpkg}\n"

@@ -110,6 +110,12 @@ def _build_param_cfg(config: dict, entry: dict) -> dict:
     # default — pull it from the resolved base config so it flows through to
     # the merged parameter CSVs.
     param_cfg["id_feature"] = require_config_key(config, "id_feature", "derive_zonal_params")
+    # hru_gpkg/hru_layer are also fabric properties (base_config.yml profile).
+    # run_build_weights reads them off param_cfg instead of inferring a
+    # {fabric}_nhru_merged.gpkg path. Required for every fabric (mirrors
+    # id_feature), since the gpkg is also what prepare_fabric batched.
+    param_cfg["hru_gpkg"] = require_config_key(config, "hru_gpkg", "derive_zonal_params")
+    param_cfg["hru_layer"] = config.get("hru_layer", "nhru")
     return param_cfg
 
 
@@ -165,8 +171,7 @@ def run_build_weights_mode(args, logger) -> None:
     entry = weights_consumers[0]
     param_cfg = _build_param_cfg(config, entry)
     logger.info("=== build_weights: param=%s ===", entry["name"])
-    data_root = Path(config["data_root"])
-    run_build_weights(param_cfg, data_root, logger, force=args.force)
+    run_build_weights(param_cfg, logger, force=args.force)
 
 
 def main():
