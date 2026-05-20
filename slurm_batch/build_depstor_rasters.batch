@@ -24,12 +24,10 @@
 #   sbatch slurm_batch/build_depstor_rasters.batch --from routing --force
 
 cd "$SLURM_SUBMIT_DIR"
-[ -f .pixi-activate.sh ] || { echo "ERROR: missing .pixi-activate.sh — run scripts/refresh_pixi_activation.sh" >&2; exit 1; }
-source .pixi-activate.sh
 BASE_CONFIG=${BASE_CONFIG:-configs/base_config.yml}
 FABRIC=${FABRIC:-gfv2}
 
-python scripts/build_depstor_rasters.py \
+pixi run --as-is python scripts/build_depstor_rasters.py \
     --config configs/depstor/depstor_rasters.yml \
     --base_config "$BASE_CONFIG" \
     --fabric "$FABRIC" \

@@ -10,10 +10,8 @@
 #SBATCH --mem=128G
 
 cd "$SLURM_SUBMIT_DIR"
-[ -f .pixi-activate.sh ] || { echo "ERROR: missing .pixi-activate.sh — run scripts/refresh_pixi_activation.sh" >&2; exit 1; }
-source .pixi-activate.sh
 
-python - <<'PYEOF'
+pixi run --as-is python - <<'PYEOF'
 import rasterio
 import numpy as np
 from pathlib import Path

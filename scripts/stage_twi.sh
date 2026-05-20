@@ -22,9 +22,8 @@
 set -euo pipefail
 
 SRC=${1:-/caldera/hovenweep/projects/usgs/water/impd/nhgf/data_creation/nhm_data_bins/data_bins}
-# Read data_root from the project config without invoking pixi — keeps this
-# script independent of env activation state and avoids re-introducing the
-# pixi process race that the slurm batches now sidestep via .pixi-activate.sh.
+# Read data_root from the project config without invoking python — keeps this
+# pure-shell staging script independent of the pixi env entirely.
 DEST_ROOT=$(awk '/^data_root:/ {print $2}' configs/base_config.yml)
 if [ -z "$DEST_ROOT" ]; then
     echo "Error: could not parse data_root from configs/base_config.yml" >&2

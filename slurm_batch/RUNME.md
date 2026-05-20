@@ -8,20 +8,18 @@ pixi once per user (see https://pixi.sh/latest/installation/) and ensure
 
 ```bash
 pixi install
-bash scripts/refresh_pixi_activation.sh
 ```
 
-The first command materialises `.pixi/envs/default/` from `pixi.lock` (config
-lives in `pyproject.toml` under `[tool.pixi.*]`). The second pre-bakes a
-static activation script (`.pixi-activate.sh`) that the slurm batches
-`source` instead of invoking pixi at task start. Why: concurrent
-`pixi shell-hook` calls under array submission race on
-`.pixi/envs/default/conda-meta/` reads ("File was modified during parsing",
-etc.) and a fraction of tasks fail before reaching python. Sourcing a
-pre-baked script is pure shell — no concurrency surface.
+This materialises `.pixi/envs/default/` from `pixi.lock` (config lives in
+`pyproject.toml` under `[tool.pixi.*]`). The slurm batches invoke the env with
+`pixi run --as-is` (= `--no-install --frozen`): the already-installed env is used
+verbatim — no lock check, no env mutation, no PyPI/conda sync — so concurrent
+array tasks never race on `.pixi/envs/default/conda-meta/`. (An earlier approach
+that ran `pixi shell-hook --locked` per task did race there: a fraction of array
+tasks failed with "File was modified during parsing" before reaching python.
+`--as-is` removes that surface entirely.)
 
-**Re-run `bash scripts/refresh_pixi_activation.sh`** any time `pyproject.toml`
-or `pixi.lock` change.
+**Re-run `pixi install`** any time `pyproject.toml` or `pixi.lock` change.
 
 For interactive use:
 
@@ -47,13 +45,17 @@ All data lives under `data_root` (set in `configs/base_config.yml`):
 ```
 gfv2_param/
 ├── input/                  # External data (manually staged or downloaded)
-│   ├── fabrics/            # Per-VPU and custom watershed fabric gpkgs
-│   ├── nhd_downloads/
-│   ├── mrlc_impervious/
-│   ├── soils_litho/
-│   ├── lulc_veg/
+│   ├── fabric/             # Per-VPU watershed fabric gpkgs
+│   ├── soils_litho/        # TEXT_PRMS.tif, AWC.tif, Lithology_exp_Konly_Project.*
+│   ├── lulc_veg/           # RootDepth.tif, CNPY.tif, Imperv.tif
 │   │   └── nhm_v11/        # NHM v1.1 pre-derived LULC rasters (downloadable)
-│   └── nhm_defaults/
+│   ├── lulc/
+│   │   ├── nlcd_annual_imperv/   # NLCD fractional imperviousness (downloadable)
+│   │   └── nalcms_2020/    # NALCMS 2020 land cover (downloadable)
+│   ├── depstor/            # Per-fabric depression-storage inputs (<fabric>_segments_wbodies.gpkg)
+│   ├── twi/<rpu>/          # Per-RPU TWI (twi.tif + sidecars; staged via stage_twi.sh)
+│   ├── nhm_default/        # NHM default parameter files
+│   └── nhd_downloads/      # Raw NHDPlus zip archives (downloadable)
 ├── shared/                 # Fabric-independent intermediates (reused by every fabric)
 │   ├── source/             # Unzipped per-RPU NHDPlus rasters
 │   ├── per_vpu/<vpu>/      # Per-VPU merged GeoTIFFs (NED/Hydrodem/Fdr/Fac/Twi/slope/aspect/landmask)
@@ -62,9 +64,10 @@ gfv2_param/
 │       ├── derived/        # soil_moist_max.tif, radtrn, resampled CNPY/keep
 │       ├── borders/        # Copernicus border-DEM fill (Canada/Mexico)
 │       └── weights/        # P2P polygon weights for ssflux
-└── {fabric}/               # Per-fabric outputs (e.g., gfv2/, oregon/)
+└── {fabric}/               # Per-fabric outputs (e.g., gfv2/, gfv2_vpu01/, oregon/)
     ├── fabric/             # Merged fabric gpkg
     ├── batches/            # Per-batch gpkgs + manifest
+    ├── depstor_rasters/    # Depression-storage intermediate rasters (per fabric)
     └── params/             # Parameter outputs + merged + filled
 ```
 
@@ -158,13 +161,13 @@ job that walks the whole DAG.
 Scaffold the full directory tree under your `data_root`:
 
 ```bash
-python scripts/init_data_root.py
+pixi run init-data-root
 ```
 
 Verify that staged inputs are present:
 
 ```bash
-python scripts/init_data_root.py --check
+pixi run init-data-root --check
 ```
 
 The following externally-provided files must be placed in the scaffolded directories before running `--check`:
@@ -340,13 +343,13 @@ These stages require the merged fabric geopackage and the per-batch gpkgs produc
 Merge per-VPU fabric geopackages into a single CONUS fabric:
 
 ```bash
-marimo run notebooks/merge_vpu_targets.py
+pixi run -e notebooks marimo run notebooks/merge_vpu_targets.py
 ```
 
 Then spatially batch the merged fabric into per-batch geopackages (`batch_size` is read from `base_config.yml`):
 
 ```bash
-python scripts/prepare_fabric.py \
+pixi run python scripts/prepare_fabric.py \
     --fabric_gpkg {data_root}/gfv2/fabric/gfv2_nhru_merged.gpkg \
     --base_config configs/base_config.yml
 ```
@@ -382,7 +385,7 @@ that the orchestrator covers them. For single-param debugging, invoke the
 orchestrator directly:
 
 ```bash
-python scripts/derive_zonal_params.py --mode zonal --param elevation --batch_id 42 \
+pixi run python scripts/derive_zonal_params.py --mode zonal --param elevation --batch_id 42 \
     --config configs/zonal/zonal_params.yml --base_config configs/base_config.yml
 ```
 
@@ -422,7 +425,7 @@ step. To re-run a single param's merge (e.g., after manually fixing a
 batch CSV):
 
 ```bash
-python scripts/derive_zonal_params.py --mode merge --param elevation \
+pixi run python scripts/derive_zonal_params.py --mode merge --param elevation \
     --config configs/zonal/zonal_params.yml --base_config configs/base_config.yml
 ```
 
@@ -444,13 +447,13 @@ sbatch slurm_batch/build_zonal_weights.batch
 ### Stage 7: KNN gap-fill
 
 ```bash
-python scripts/merge_and_fill_params.py --base_config configs/base_config.yml
+pixi run python scripts/merge_and_fill_params.py --base_config configs/base_config.yml
 ```
 
 ### Stage 8: Merge NHM defaults (optional)
 
 ```bash
-python scripts/merge_default_params.py --base_config configs/base_config.yml
+pixi run python scripts/merge_default_params.py --base_config configs/base_config.yml
 ```
 
 ## Adding a new fabric (e.g., Oregon)
@@ -463,17 +466,17 @@ already merged or comes as per-VPU gpkgs.
 
 1. Add a profile under `fabrics:` in `configs/base_config.yml`. Required keys
    are `expected_max_hru_id` and `batch_size`. If the depstor pipeline will be
-   run for this fabric, also set `template_raster`, `fdr_raster`,
-   `segments_gpkg`, `waterbody_gpkg`, and `waterbody_layer`. The `oregon`
-   profile shows the minimum (no depstor inputs yet).
+   run for this fabric, also set `template_raster`, `fdr_raster`, `twi_raster`,
+   `segments_gpkg`, `waterbody_gpkg`, `waterbody_layer`, `hru_gpkg`, and
+   `hru_layer`. The `oregon` profile shows the minimum (no depstor inputs yet).
 2. Scaffold the fabric's output directories:
    ```bash
-   python scripts/init_data_root.py --fabric oregon
+   pixi run init-data-root --fabric oregon
    ```
 3. Place the fabric gpkg directly in `{data_root}/oregon/fabric/` (NOT in `input/fabric/`)
 4. Prepare batches:
    ```bash
-   python scripts/prepare_fabric.py \
+   pixi run python scripts/prepare_fabric.py \
        --fabric_gpkg {data_root}/oregon/fabric/NHM_OR_draft.gpkg \
        --fabric oregon
    ```
@@ -487,14 +490,23 @@ already merged or comes as per-VPU gpkgs.
    `--mode zonal --param <name> --batch_id <N>` (see "Single-batch run"
    in README.md or Stage 4 above).
 
+> **Scoping a regional test (e.g. Oregon = VPU 17):** the Part 2 zonal pass
+> reads the CONUS shared rasters from Part 1, so those VRTs must cover the
+> region your fabric overlaps. Oregon HRUs fall in VPU 17, so you can build
+> Part 1 for just that VPU rather than all of CONUS — pass `VPUS=17` to
+> `sbatch slurm_batch/build_shared_rasters.batch` (or `--vpus 17` to the
+> orchestrator). Stage 2d depstor is intentionally unavailable for `oregon`
+> until its depstor inputs + profile keys are staged; the zonal pass above
+> runs without them.
+
 **Case B: VPU-based fabric** (per-VPU gpkgs that need merging — e.g., gfv2)
 
 1. Add a profile under `fabrics:` in `configs/base_config.yml`
 2. Place per-VPU gpkgs in `input/fabric/`
 3. Scaffold and merge:
    ```bash
-   python scripts/init_data_root.py --fabric <name>
-   marimo run notebooks/merge_vpu_targets.py
+   pixi run init-data-root --fabric <name>
+   pixi run -e notebooks marimo run notebooks/merge_vpu_targets.py
    ```
 4. Continue from Stage 3 above, passing `--fabric <name>` (or `FABRIC=<name>` env)
 
@@ -510,7 +522,7 @@ sbatch --array=37 --export=ALL,PARAM=elevation,FABRIC=gfv2,BASE_CONFIG=configs/b
 ```
 
 (For Part 1 raster prep, re-run the single step via the orchestrator's
-`--step` flag: `python scripts/build_shared_rasters.py
+`--step` flag: `pixi run python scripts/build_shared_rasters.py
 --config configs/shared_rasters/shared_rasters.yml --step <name>`.)
 
 ## Monitoring
