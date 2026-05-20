@@ -71,3 +71,24 @@ fabrics:
     # staging (this gpkg has no waterbody layer).
     hru_gpkg: "{data_root}/oregon/fabric/model_layers 9.gpkg"
     hru_layer: nhru
+    # --- depstor inputs (COMMENTED; oregon stays zonal-only until staged) ---
+    # Tracked in issue #90. Do NOT uncomment until the waterbody source below
+    # is staged: the waterbody builder raises if waterbody_gpkg/waterbody_layer
+    # are unset (#88 decision).
+    #
+    # Rasters use the CONUS VRTs, exactly like the gfv2 profile: depstor clips
+    # every output to the HRU fabric via land_mask.tif (rasterised from
+    # hru_gpkg), so the rasters only need to *cover* the Oregon domain — no VPU
+    # scoping required. Oregon's HRUs happen to fall in VPU 17 and per-VPU Part 1
+    # tiles exist (shared/per_vpu/17/*_merged_17.tif), but using them is only a
+    # Part 1 compute-scoping optimization, not part of this fabric's identity.
+    # template_raster: "{data_root}/shared/conus/vrt/elevation.vrt"
+    # fdr_raster:      "{data_root}/shared/conus/vrt/fdr.vrt"
+    # twi_raster:      "{data_root}/shared/conus/vrt/twi.vrt"
+    # segments_gpkg:   "{data_root}/oregon/fabric/model_layers 9.gpkg"  # nsegment layer exists
+    # segments_layer:  nsegment
+    # BLOCKER (#90): the Oregon gpkg has no waterbody layer (layers are
+    # domain/main/nhru/npoi/npoigages/nsegment). A real waterbody source must be
+    # staged (NHDPlusV2 v2_wb-style, like gfv2) before depstor can run.
+    # waterbody_gpkg:  "{data_root}/input/depstor/oregon_waterbodies.gpkg"
+    # waterbody_layer: <layer-name>   # set once the waterbody source is staged
