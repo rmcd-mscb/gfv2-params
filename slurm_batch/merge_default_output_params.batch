@@ -10,8 +10,6 @@
 #SBATCH --mem=64G
 
 cd "$SLURM_SUBMIT_DIR"
-[ -f .pixi-activate.sh ] || { echo "ERROR: missing .pixi-activate.sh — run scripts/refresh_pixi_activation.sh" >&2; exit 1; }
-source .pixi-activate.sh
 BASE_CONFIG=${BASE_CONFIG:-configs/base_config.yml}
 
-python scripts/merge_default_params.py --base_config "$BASE_CONFIG"
+pixi run --as-is python scripts/merge_default_params.py --base_config "$BASE_CONFIG"

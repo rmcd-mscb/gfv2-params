@@ -10,6 +10,4 @@
 #SBATCH --mem=4G
 
 cd "$SLURM_SUBMIT_DIR"
-[ -f .pixi-activate.sh ] || { echo "ERROR: missing .pixi-activate.sh — run scripts/refresh_pixi_activation.sh" >&2; exit 1; }
-source .pixi-activate.sh
-python -m gfv2_params.download.nalcms_lulc
+pixi run --as-is python -m gfv2_params.download.nalcms_lulc

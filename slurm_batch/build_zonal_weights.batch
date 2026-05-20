@@ -25,14 +25,12 @@
 # memory-bound and takes hours.
 
 cd "$SLURM_SUBMIT_DIR"
-[ -f .pixi-activate.sh ] || { echo "ERROR: missing .pixi-activate.sh — run scripts/refresh_pixi_activation.sh" >&2; exit 1; }
-source .pixi-activate.sh
 BASE_CONFIG=${BASE_CONFIG:-configs/base_config.yml}
 FABRIC=${FABRIC:-gfv2}
 
 FORCE_FLAG=${FORCE:+--force}
 
-python scripts/derive_zonal_params.py \
+pixi run --as-is python scripts/derive_zonal_params.py \
     --config configs/zonal/zonal_params.yml \
     --base_config "$BASE_CONFIG" \
     --fabric "$FABRIC" \

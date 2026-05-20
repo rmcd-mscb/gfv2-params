@@ -14,8 +14,6 @@
 # FRACTION (e.g. perv_frac, dprst_frac, carea_t8_frac, ...) and FABRIC.
 
 cd "$SLURM_SUBMIT_DIR"
-[ -f .pixi-activate.sh ] || { echo "ERROR: missing .pixi-activate.sh — run scripts/refresh_pixi_activation.sh" >&2; exit 1; }
-source .pixi-activate.sh
 BASE_CONFIG=${BASE_CONFIG:-configs/base_config.yml}
 FABRIC=${FABRIC:-gfv2}
 
@@ -24,7 +22,7 @@ if [ -z "${FRACTION:-}" ]; then
     exit 1
 fi
 
-python scripts/derive_depstor_params.py \
+pixi run --as-is python scripts/derive_depstor_params.py \
     --config configs/depstor/depstor_params.yml \
     --base_config "$BASE_CONFIG" \
     --fabric "$FABRIC" \

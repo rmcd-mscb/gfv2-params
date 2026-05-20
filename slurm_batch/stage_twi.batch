@@ -10,8 +10,6 @@
 #SBATCH --mem=8G                # generous; cp uses negligible user-space RAM
 
 cd "$SLURM_SUBMIT_DIR"
-[ -f .pixi-activate.sh ] || { echo "ERROR: missing .pixi-activate.sh — run scripts/refresh_pixi_activation.sh" >&2; exit 1; }
-source .pixi-activate.sh
 
 # Optional override of the source path (default is the impd-group mirror baked
 # into stage_twi.sh):
