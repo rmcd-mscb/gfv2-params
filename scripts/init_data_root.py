@@ -11,7 +11,9 @@ or for a custom root:
 
 To register a brand-new fabric, append a profile stub to base_config.yml and
 scaffold its directories in one step:
-    python scripts/init_data_root.py --add-fabric oregon
+    pixi run init-data-root --add-fabric oregon
+Then fill the TODO placeholders in the new profile (expected_max_hru_id,
+id_feature, hru_gpkg/hru_layer; uncomment the depstor keys only if needed).
 """
 
 import argparse
@@ -223,8 +225,11 @@ def validate_inputs(data_root: Path, fabric: str, logger) -> None:
 def _fabric_profile_stub(fabric: str) -> str:
     """Return a YAML profile stub for a new fabric (2-space indented).
 
-    Carries the three keys every fabric needs (with TODO placeholders) plus a
-    commented depstor block to uncomment when that pipeline is run.
+    Carries the keys every fabric needs (expected_max_hru_id, batch_size,
+    id_feature, hru_gpkg, hru_layer) as active TODO placeholders, plus a
+    commented depstor block to uncomment only when that pipeline is run.
+    hru_gpkg/hru_layer are NOT depstor-only — prepare_fabric, the ssflux
+    build_weights step, and gap-fill all require hru_gpkg for every fabric.
     """
     return (
         f"\n"
@@ -233,15 +238,21 @@ def _fabric_profile_stub(fabric: str) -> str:
         f"    expected_max_hru_id: 0  # TODO: highest HRU id in the fabric\n"
         f"    batch_size: 10000\n"
         f"    id_feature: nat_hru_id  # TODO: HRU id column present in the fabric gpkg\n"
+        f"    # Fabric geopackage + layer. Required for EVERY fabric (read by\n"
+        f"    # prepare_fabric, ssflux build_weights, and gap-fill). For a\n"
+        f"    # VPU-merged fabric this is {{fabric}}_nhru_merged.gpkg (produced by\n"
+        f"    # notebooks/merge_vpu_targets.py); for a single-file/pre-merged\n"
+        f"    # fabric, point it at the gpkg you staged (any name).\n"
+        f'    hru_gpkg: "{{data_root}}/{{fabric}}/fabric/{{fabric}}_nhru_merged.gpkg"  # TODO: set to your fabric gpkg\n'
+        f"    hru_layer: nhru\n"
         f"    # Uncomment + set these only if the depstor pipeline is run for this fabric:\n"
         f'    # template_raster: "{{data_root}}/shared/conus/vrt/elevation.vrt"\n'
         f'    # fdr_raster: "{{data_root}}/shared/conus/vrt/fdr.vrt"\n'
         f'    # twi_raster: "{{data_root}}/shared/conus/vrt/twi.vrt"\n'
         f'    # segments_gpkg: "{{data_root}}/input/depstor/{{fabric}}_segments_wbodies.gpkg"\n'
+        f"    # segments_layer: nsegment\n"
         f'    # waterbody_gpkg: "{{data_root}}/input/depstor/{{fabric}}_segments_wbodies.gpkg"\n'
         f"    # waterbody_layer: v2_wb\n"
-        f'    # hru_gpkg: "{{data_root}}/{{fabric}}/fabric/{{fabric}}_nhru_merged.gpkg"\n'
-        f"    # hru_layer: nhru\n"
     )
 
 
@@ -288,8 +299,8 @@ def add_fabric_profile(base_config_path: Path, fabric: str, logger) -> None:
     base_config_path.write_text("".join(lines))
     logger.info("Added fabric profile stub '%s' to %s", fabric, base_config_path)
     logger.warning(
-        "Profile '%s' has TODO placeholders (expected_max_hru_id, id_feature) "
-        "— edit %s before running the pipeline.", fabric, base_config_path,
+        "Profile '%s' has TODO placeholders (expected_max_hru_id, id_feature, "
+        "hru_gpkg) — edit %s before running the pipeline.", fabric, base_config_path,
     )
 
 

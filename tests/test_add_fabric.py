@@ -44,10 +44,20 @@ def test_appends_parseable_profile_with_required_keys(tmp_path):
 
     cfg = yaml.safe_load(p.read_text())
     assert "oregon" in cfg["fabrics"]
-    assert cfg["fabrics"]["oregon"]["batch_size"] == 10000
+    oregon = cfg["fabrics"]["oregon"]
+    assert oregon["batch_size"] == 10000
     # required keys present as stubs (id_feature defaults to nat_hru_id placeholder)
-    assert "expected_max_hru_id" in cfg["fabrics"]["oregon"]
-    assert cfg["fabrics"]["oregon"]["id_feature"] == "nat_hru_id"
+    assert "expected_max_hru_id" in oregon
+    assert oregon["id_feature"] == "nat_hru_id"
+    # hru_gpkg/hru_layer are required for EVERY fabric (prepare_fabric,
+    # build_weights, gap-fill) — they must be active keys in the stub, not
+    # buried in the commented depstor block, or the first pipeline step
+    # (prepare_fabric) fails with a KeyError.
+    assert "hru_gpkg" in oregon
+    assert oregon["hru_layer"] == "nhru"
+    # depstor keys stay commented out (absent until that pipeline is staged)
+    assert "template_raster" not in oregon
+    assert "waterbody_gpkg" not in oregon
     # existing fabric untouched
     assert cfg["fabrics"]["gfv2"]["id_feature"] == "nat_hru_id"
 
