@@ -73,26 +73,31 @@ class TestMergedGpkgPathResolution:
     convention. End-to-end resolution + error behavior is covered by
     tests/test_hru_gpkg_config.py; here we pin the source-of-truth contract."""
 
-    def test_default_is_profile_hru_gpkg_not_convention(self):
+    def test_default_is_profile_hru_gpkg(self):
         src = (
             Path(__file__).resolve().parent.parent
             / "scripts" / "merge_and_fill_params.py"
         ).read_text()
-        # The merged gpkg is read from the profile via require_config_key,
-        # never assembled from the retired {fabric}_nhru_merged.gpkg convention.
+        # The merged gpkg default is sourced from the active profile's hru_gpkg
+        # via require_config_key — not the retired {fabric}_nhru_merged.gpkg
+        # path convention. Assert on code (not a substring scan of the whole
+        # file, which would also match explanatory comments); end-to-end
+        # resolution is covered by tests/test_hru_gpkg_config.py.
         assert 'require_config_key(base, "hru_gpkg"' in src
-        assert "_nhru_merged.gpkg" not in src
+        assert 'f"{data_root}/{fabric}/fabric/{fabric}_nhru_merged.gpkg"' not in src
 
 
 class TestFileNotFoundBehavior:
     def test_raises_when_gpkg_missing(self, tmp_path):
         merged_gpkg = tmp_path / "nonexistent.gpkg"
         assert not merged_gpkg.exists()
-        with pytest.raises(FileNotFoundError, match="prepare_fabric.py"):
+        with pytest.raises(FileNotFoundError, match="base_config.yml"):
             if not merged_gpkg.exists():
                 raise FileNotFoundError(
-                    f"Merged geopackage not found: {merged_gpkg}\n"
-                    "Run notebooks/merge_vpu_targets.py or scripts/prepare_fabric.py first."
+                    f"Fabric geopackage not found: {merged_gpkg}\n"
+                    "Check the active fabric profile's hru_gpkg in configs/base_config.yml. "
+                    "For VPU-based fabrics, run notebooks/merge_vpu_targets.py to produce it; "
+                    "for single-file fabrics, place the gpkg at the hru_gpkg path."
                 )
 
 
