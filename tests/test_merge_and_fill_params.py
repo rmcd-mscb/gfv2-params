@@ -139,6 +139,36 @@ class TestFillMissingValuesKnn:
         assert len(result) == 1
         assert result["my_param"].iloc[0] == 42.0
 
+    def test_knn_fills_multiple_columns_without_duplicates(self):
+        """Filling N columns must append ONE row per missing id with every
+        column populated — not N fragmented rows (regression for the
+        per-column re-append bug surfaced by the oregon ssflux gap-fill)."""
+        import logging
+        logger = logging.getLogger("test")
+
+        merged_gdf = gpd.GeoDataFrame(
+            {"hru_id": [1, 2, 3]},
+            geometry=[Point(0, 0), Point(10, 0), Point(5, 0)],
+            crs="EPSG:5070",
+        )
+        param_df = pd.DataFrame({
+            "hru_id": [1, 2],
+            "p1": [100.0, 200.0],
+            "p2": [1.0, 2.0],
+        })
+
+        result = fill_missing_values_knn(
+            param_df, [3], merged_gdf, ["p1", "p2"], 1, "hru_id", logger
+        )
+        # Exactly one row per id — no duplicates from per-column appends.
+        assert len(result) == 3
+        assert result["hru_id"].duplicated().sum() == 0
+        # The filled row has BOTH columns populated, not just one.
+        filled = result.loc[result["hru_id"] == 3]
+        assert len(filled) == 1
+        assert filled["p1"].notna().all() and filled["p2"].notna().all()
+        assert not result.isna().any().any()
+
     def test_knn_fills_on_custom_id_feature(self):
         """Filling keys on the configured id_feature (hru_id) for non-gfv2 fabrics."""
         import logging

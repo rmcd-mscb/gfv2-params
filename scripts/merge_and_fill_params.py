@@ -31,8 +31,19 @@ def find_missing_ids(param_file, expected_max, id_feature, logger):
     return param_df, missing_ids
 
 
-def fill_missing_values_knn(param_df, missing_ids, merged_gdf, param_column, k, id_feature, logger):
+def fill_missing_values_knn(param_df, missing_ids, merged_gdf, param_columns, k, id_feature, logger):
+    """KNN-interpolate every missing HRU across all `param_columns` at once.
+
+    Builds a single block of filled rows (one row per missing id, every column
+    populated) and appends it to `param_df` exactly once. Filling per column
+    and re-appending would duplicate each missing id once per column, leaving
+    most cells NaN — see the multi-column regression test.
+    """
     logger.info("Filling missing values using KNN interpolation (k=%d)...", k)
+
+    # Normalise to a list so a single column name still works.
+    if isinstance(param_columns, str):
+        param_columns = [param_columns]
 
     if not missing_ids:
         logger.info("No missing values to fill!")
@@ -47,17 +58,15 @@ def fill_missing_values_knn(param_df, missing_ids, merged_gdf, param_column, k, 
 
     existing_coords = existing_df[["x", "y"]].values
     missing_coords = missing_df[["x", "y"]].values
-    existing_values = existing_df[param_column].values
 
-    # Filter NaN coordinates from existing data (null/invalid geometries)
+    # Coordinates are column-independent, so the NaN-coordinate mask and the
+    # null-geometry guard are computed once for the whole block.
     nan_mask = np.isnan(existing_coords).any(axis=1)
     if nan_mask.any():
         logger.warning(
             "%d features have NaN coordinates (null/invalid geometry). "
             "Excluding from KNN fitting.", nan_mask.sum()
         )
-        existing_coords = existing_coords[~nan_mask]
-        existing_values = existing_values[~nan_mask]
 
     nan_missing = np.isnan(missing_coords).any(axis=1)
     if nan_missing.any():
@@ -66,19 +75,18 @@ def fill_missing_values_knn(param_df, missing_ids, merged_gdf, param_column, k, 
             "and cannot be filled via KNN interpolation."
         )
 
+    fit_coords = existing_coords[~nan_mask]
     knn = NearestNeighbors(n_neighbors=k)
-    knn.fit(existing_coords)
+    knn.fit(fit_coords)
     distances, indices = knn.kneighbors(missing_coords)
 
-    interpolated_values = []
-    for neighbor_indices in tqdm(indices, desc="Filling missing HRUs"):
-        neighbor_values = existing_values[neighbor_indices]
-        interpolated_values.append(np.mean(neighbor_values))
-
-    missing_filled = pd.DataFrame({
-        id_feature: missing_df[id_feature].values,
-        param_column: interpolated_values,
-    })
+    # One filled row per missing id, with every parameter column populated.
+    missing_filled = pd.DataFrame({id_feature: missing_df[id_feature].values})
+    for param_column in tqdm(param_columns, desc="Filling param columns"):
+        existing_values = existing_df[param_column].values[~nan_mask]
+        missing_filled[param_column] = [
+            np.mean(existing_values[neighbor_indices]) for neighbor_indices in indices
+        ]
     # gfv2's merged CSVs carry a secondary local `hru_id` alongside the
     # national nat_hru_id key; populate it for filled rows. When id_feature
     # is already `hru_id` (e.g. oregon) this is a harmless self-assignment.
@@ -86,7 +94,7 @@ def fill_missing_values_knn(param_df, missing_ids, merged_gdf, param_column, k, 
 
     complete_df = pd.concat([param_df, missing_filled], ignore_index=True)
     complete_df = complete_df.sort_values(id_feature).reset_index(drop=True)
-    logger.info("Filled %d missing values", len(missing_ids))
+    logger.info("Filled %d missing values across %d column(s)", len(missing_ids), len(param_columns))
     return complete_df
 
 
@@ -162,10 +170,9 @@ def main():
 
         logger.info("Filling parameter columns: %s", param_columns)
 
-        complete_df = param_df
-        for param_column in param_columns:
-            logger.info("Filling parameter column: %s", param_column)
-            complete_df = fill_missing_values_knn(complete_df, missing_ids, merged_gdf, param_column, args.k_neighbors, id_feature, logger)
+        complete_df = fill_missing_values_knn(
+            param_df, missing_ids, merged_gdf, param_columns, args.k_neighbors, id_feature, logger
+        )
         complete_df.to_csv(filled_param_file, index=False)
         logger.info("Filled parameter file saved to: %s", filled_param_file)
 
