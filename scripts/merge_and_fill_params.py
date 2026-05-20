@@ -13,21 +13,21 @@ import pandas as pd
 from sklearn.neighbors import NearestNeighbors
 from tqdm import tqdm
 
-from gfv2_params.config import load_base_config
+from gfv2_params.config import load_base_config, require_config_key
 from gfv2_params.log import configure_logging
 
 
-def find_missing_ids(param_file, expected_max, logger):
-    logger.info("Finding missing nat_hru_id values...")
+def find_missing_ids(param_file, expected_max, id_feature, logger):
+    logger.info("Finding missing %s values...", id_feature)
     param_df = pd.read_csv(param_file)
-    existing_ids = set(param_df["nat_hru_id"])
+    existing_ids = set(param_df[id_feature])
     expected_ids = set(range(1, expected_max + 1))
     missing_ids = sorted(expected_ids - existing_ids)
-    logger.info("Found %d missing nat_hru_id values out of %d", len(missing_ids), expected_max)
+    logger.info("Found %d missing %s values out of %d", len(missing_ids), id_feature, expected_max)
     return param_df, missing_ids
 
 
-def fill_missing_values_knn(param_df, missing_ids, merged_gdf, param_column, k, logger):
+def fill_missing_values_knn(param_df, missing_ids, merged_gdf, param_column, k, id_feature, logger):
     logger.info("Filling missing values using KNN interpolation (k=%d)...", k)
 
     if not missing_ids:
@@ -38,8 +38,8 @@ def fill_missing_values_knn(param_df, missing_ids, merged_gdf, param_column, k, 
     merged_gdf["x"] = merged_gdf["centroid"].x
     merged_gdf["y"] = merged_gdf["centroid"].y
 
-    existing_df = param_df.merge(merged_gdf[["nat_hru_id", "x", "y"]], on="nat_hru_id", how="left")
-    missing_df = merged_gdf[merged_gdf["nat_hru_id"].isin(missing_ids)][["nat_hru_id", "x", "y"]]
+    existing_df = param_df.merge(merged_gdf[[id_feature, "x", "y"]], on=id_feature, how="left")
+    missing_df = merged_gdf[merged_gdf[id_feature].isin(missing_ids)][[id_feature, "x", "y"]]
 
     existing_coords = existing_df[["x", "y"]].values
     missing_coords = missing_df[["x", "y"]].values
@@ -72,13 +72,16 @@ def fill_missing_values_knn(param_df, missing_ids, merged_gdf, param_column, k, 
         interpolated_values.append(np.mean(neighbor_values))
 
     missing_filled = pd.DataFrame({
-        "nat_hru_id": missing_df["nat_hru_id"].values,
+        id_feature: missing_df[id_feature].values,
         param_column: interpolated_values,
     })
-    missing_filled["hru_id"] = missing_filled["nat_hru_id"]
+    # gfv2's merged CSVs carry a secondary local `hru_id` alongside the
+    # national nat_hru_id key; populate it for filled rows. When id_feature
+    # is already `hru_id` (e.g. oregon) this is a harmless self-assignment.
+    missing_filled["hru_id"] = missing_filled[id_feature]
 
     complete_df = pd.concat([param_df, missing_filled], ignore_index=True)
-    complete_df = complete_df.sort_values("nat_hru_id").reset_index(drop=True)
+    complete_df = complete_df.sort_values(id_feature).reset_index(drop=True)
     logger.info("Filled %d missing values", len(missing_ids))
     return complete_df
 
@@ -102,6 +105,7 @@ def main():
     data_root = base["data_root"]
     fabric = base["fabric"]
     expected_max = base["expected_max_hru_id"]
+    id_feature = require_config_key(base, "id_feature", "merge_and_fill_params")
 
     # Resolve defaults from fabric namespace
     if args.merged_gpkg is None:
@@ -140,10 +144,10 @@ def main():
 
     filled_param_file = output_dir / f"filled_{param_file.name}"
 
-    param_df, missing_ids = find_missing_ids(param_file, expected_max, logger)
+    param_df, missing_ids = find_missing_ids(param_file, expected_max, id_feature, logger)
 
     if missing_ids:
-        param_columns = [col for col in param_df.columns if col not in ["hru_id", "nat_hru_id", "vpu"]]
+        param_columns = [col for col in param_df.columns if col not in {id_feature, "hru_id", "nat_hru_id", "vpu"}]
         if not param_columns:
             raise ValueError("No parameter columns found in the data")
 
@@ -152,11 +156,11 @@ def main():
         complete_df = param_df
         for param_column in param_columns:
             logger.info("Filling parameter column: %s", param_column)
-            complete_df = fill_missing_values_knn(complete_df, missing_ids, merged_gdf, param_column, args.k_neighbors, logger)
+            complete_df = fill_missing_values_knn(complete_df, missing_ids, merged_gdf, param_column, args.k_neighbors, id_feature, logger)
         complete_df.to_csv(filled_param_file, index=False)
         logger.info("Filled parameter file saved to: %s", filled_param_file)
 
-        final_ids = set(complete_df["nat_hru_id"])
+        final_ids = set(complete_df[id_feature])
         expected_ids = set(range(1, expected_max + 1))
         still_missing = expected_ids - final_ids
 

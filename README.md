@@ -220,7 +220,9 @@ via (highest precedence first):
 **Pre-merged fabric** (single gpkg covering the full domain — e.g., Oregon):
 
 1. Add a profile under `fabrics:` in `configs/base_config.yml`. Required keys
-   are `expected_max_hru_id` and `batch_size`. If the depstor pipeline will be
+   are `expected_max_hru_id`, `batch_size`, and `id_feature` (the HRU id column
+   present in the fabric — e.g. `nat_hru_id` for gfv2, `hru_id` for oregon —
+   which flows through to the merged parameter CSVs). If the depstor pipeline will be
    run, also set `template_raster`, `fdr_raster`, `twi_raster`, `segments_gpkg`,
    `waterbody_gpkg`, `waterbody_layer`, `hru_gpkg`, and `hru_layer`.
 2. Scaffold output dirs: `pixi run init-data-root --fabric oregon`

@@ -31,7 +31,8 @@
 defaults:
   batch_dir:     "{data_root}/{fabric}/batches"
   target_layer:  nhru
-  id_feature:    nat_hru_id
+  # id_feature comes from the active fabric profile in base_config.yml
+  # (e.g. gfv2 -> nat_hru_id, oregon -> hru_id), injected at load time.
   output_dir:    "{data_root}/{fabric}/params"
   merged_subdir: merged
   weight_dir:    "{data_root}/shared/conus/weights"

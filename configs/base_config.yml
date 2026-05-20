@@ -1,8 +1,9 @@
 # Single source of truth for fabric identities and per-fabric inputs.
 # Active fabric resolution: --fabric CLI arg -> FABRIC env var -> default_fabric.
 # Process configs (configs/*.yml) are fabric-agnostic; they pull
-# template_raster, fdr_raster, and segments/waterbody gpkg+layer from the
-# active profile via load_config().
+# template_raster, fdr_raster, segments/waterbody gpkg+layer, and id_feature
+# (the HRU id column, which must exist in the fabric and flows through to the
+# final parameter CSVs) from the active profile via load_config().
 
 data_root: /caldera/hovenweep/projects/usgs/water/impd/nhgf/gfv2_param_v2
 default_fabric: gfv2
@@ -30,6 +31,10 @@ fabrics:
     # footprints bulge past each VPU's HRU boundary.
     hru_gpkg: "{data_root}/{fabric}/fabric/gfv2_nhru_merged.gpkg"
     hru_layer: nhru
+    # HRU id column carried through every zonal/merge step into the final
+    # parameter CSVs. nat_hru_id is the national NHM id assigned during the
+    # per-VPU merge (notebooks/merge_vpu_targets.py).
+    id_feature: nat_hru_id
 
   gfv2_vpu01:
     # VPU01 validation overlay (issue #38). Uses the per-VPU staged inputs
@@ -45,6 +50,7 @@ fabrics:
     waterbody_layer: wbs
     hru_gpkg: "{data_root}/{fabric}/fabric/gfv2_vpu01_nhru.gpkg"
     hru_layer: nhru
+    id_feature: nat_hru_id
 
   oregon:
     # Depstor inputs not yet staged for oregon. Depstor scripts will raise
@@ -52,3 +58,6 @@ fabrics:
     # invoked with --fabric oregon until the inputs are wired up.
     expected_max_hru_id: 16814
     batch_size: 10000
+    # Oregon's pre-merged fabric uses `hru_id` (contiguous 1..16814, matching
+    # expected_max_hru_id) as its HRU id column — it has no `nat_hru_id`.
+    id_feature: hru_id
