@@ -8,13 +8,18 @@ Run this once before populating a new data root:
     python scripts/init_data_root.py
 or for a custom root:
     python scripts/init_data_root.py --data_root /path/to/new_root --fabric myfabric
+
+To register a brand-new fabric, append a profile stub to base_config.yml and
+scaffold its directories in one step:
+    python scripts/init_data_root.py --add-fabric oregon
 """
 
 import argparse
+import re
 import textwrap
 from pathlib import Path
 
-from gfv2_params.config import load_base_config
+from gfv2_params.config import _DEFAULT_BASE_CONFIG, load_base_config
 from gfv2_params.log import configure_logging
 
 # ---------------------------------------------------------------------------
@@ -215,6 +220,79 @@ def validate_inputs(data_root: Path, fabric: str, logger) -> None:
         logger.info("All required staged inputs are present.")
 
 
+def _fabric_profile_stub(fabric: str) -> str:
+    """Return a YAML profile stub for a new fabric (2-space indented).
+
+    Carries the three keys every fabric needs (with TODO placeholders) plus a
+    commented depstor block to uncomment when that pipeline is run.
+    """
+    return (
+        f"\n"
+        f"  {fabric}:\n"
+        f"    # TODO: fill these in for the '{fabric}' fabric, then drop the TODO notes.\n"
+        f"    expected_max_hru_id: 0  # TODO: highest HRU id in the fabric\n"
+        f"    batch_size: 10000\n"
+        f"    id_feature: nat_hru_id  # TODO: HRU id column present in the fabric gpkg\n"
+        f"    # Uncomment + set these only if the depstor pipeline is run for this fabric:\n"
+        f'    # template_raster: "{{data_root}}/shared/conus/vrt/elevation.vrt"\n'
+        f'    # fdr_raster: "{{data_root}}/shared/conus/vrt/fdr.vrt"\n'
+        f'    # twi_raster: "{{data_root}}/shared/conus/vrt/twi.vrt"\n'
+        f'    # segments_gpkg: "{{data_root}}/input/depstor/{{fabric}}_segments_wbodies.gpkg"\n'
+        f'    # waterbody_gpkg: "{{data_root}}/input/depstor/{{fabric}}_segments_wbodies.gpkg"\n'
+        f"    # waterbody_layer: v2_wb\n"
+        f'    # hru_gpkg: "{{data_root}}/{{fabric}}/fabric/{{fabric}}_nhru_merged.gpkg"\n'
+        f"    # hru_layer: nhru\n"
+    )
+
+
+def add_fabric_profile(base_config_path: Path, fabric: str, logger) -> None:
+    """Append a new fabric profile stub under the `fabrics:` mapping.
+
+    Edits the file as text (not load/dump) so the extensive comments in
+    base_config.yml are preserved. Idempotency is a hard error: a fabric that
+    already exists is never silently overwritten.
+    """
+    if not re.fullmatch(r"[A-Za-z0-9_]+", fabric):
+        raise ValueError(
+            f"Invalid fabric name '{fabric}': use letters, digits, underscores only."
+        )
+    if not base_config_path.exists():
+        raise FileNotFoundError(f"base_config not found: {base_config_path}")
+
+    lines = base_config_path.read_text().splitlines(keepends=True)
+
+    fabrics_idx = next(
+        (i for i, ln in enumerate(lines) if re.match(r"^fabrics:\s*$", ln)), None
+    )
+    if fabrics_idx is None:
+        raise ValueError(f"No top-level `fabrics:` mapping in {base_config_path}")
+
+    if any(re.match(rf"^  {re.escape(fabric)}:\s*$", ln) for ln in lines):
+        raise ValueError(
+            f"Fabric '{fabric}' already exists in {base_config_path}; "
+            "edit it by hand rather than re-adding."
+        )
+
+    # End of the fabrics block = first column-0 (non-indented, non-blank) line
+    # after `fabrics:`, or EOF when `fabrics:` is the last top-level key.
+    end = len(lines)
+    for i in range(fabrics_idx + 1, len(lines)):
+        ln = lines[i]
+        if ln.strip() and not ln[0].isspace():
+            end = i
+            break
+
+    if end > 0 and not lines[end - 1].endswith("\n"):
+        lines[end - 1] += "\n"
+    lines.insert(end, _fabric_profile_stub(fabric))
+    base_config_path.write_text("".join(lines))
+    logger.info("Added fabric profile stub '%s' to %s", fabric, base_config_path)
+    logger.warning(
+        "Profile '%s' has TODO placeholders (expected_max_hru_id, id_feature) "
+        "— edit %s before running the pipeline.", fabric, base_config_path,
+    )
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Scaffold the data_root directory layout for gfv2-params."
@@ -235,6 +313,12 @@ def main():
         help="Path to base_config.yml (default: auto-detected)",
     )
     parser.add_argument(
+        "--add-fabric",
+        default=None,
+        metavar="NAME",
+        help="Append a new fabric profile stub to base_config.yml, then scaffold its dirs",
+    )
+    parser.add_argument(
         "--check",
         action="store_true",
         help="After scaffolding, warn about missing staged input files",
@@ -242,9 +326,14 @@ def main():
     args = parser.parse_args()
 
     logger = configure_logging("init_data_root")
+    base_config_path = Path(args.base_config) if args.base_config else _DEFAULT_BASE_CONFIG
+
+    if args.add_fabric:
+        add_fabric_profile(base_config_path, args.add_fabric, logger)
+
     base = load_base_config(
-        Path(args.base_config) if args.base_config else None,
-        fabric=args.fabric,
+        base_config_path,
+        fabric=args.add_fabric or args.fabric,
     )
 
     data_root = Path(args.data_root) if args.data_root else Path(base["data_root"])
