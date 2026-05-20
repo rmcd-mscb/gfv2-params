@@ -496,10 +496,13 @@ already merged or comes as per-VPU gpkgs.
    `segments_gpkg`/`segments_layer`, and `waterbody_gpkg`/`waterbody_layer`
    (waterbody is **required** for depstor — the step raises if unset). For a
    single-file fabric like `oregon`, `segments_gpkg` can point at the same gpkg
-   as `hru_gpkg` with `segments_layer: nsegment`; the `oregon` profile shows the
-   zonal-only minimum (depstor inputs, including a waterbody source, not yet
-   staged). (Prefer hand-editing? Just add the profile block directly — the
-   stub is only a convenience.)
+   as `hru_gpkg` with `segments_layer: nsegment`. The `oregon` profile now
+   carries the depstor keys **commented out** — CONUS VRTs for the rasters (like
+   `gfv2`) and `segments_gpkg` pointing at the model gpkg — with the waterbody
+   source called out as the staging blocker (issue #90: the Oregon gpkg has no
+   waterbody layer). It stays zonal-only until that source is staged. (Prefer
+   hand-editing? Just add the profile block directly — the stub is only a
+   convenience.)
 2. Place the fabric gpkg at the `hru_gpkg` path you set, under
    `{data_root}/oregon/fabric/` (NOT in `input/fabric/`)
 3. Prepare batches (the fabric gpkg + layer come from the profile's
@@ -517,14 +520,17 @@ already merged or comes as per-VPU gpkgs.
    `--mode zonal --param <name> --batch_id <N>` (see "Single-batch run"
    in README.md or Stage 4 above).
 
-> **Scoping a regional test (e.g. Oregon = VPU 17):** the Part 2 zonal pass
-> reads the CONUS shared rasters from Part 1, so those VRTs must cover the
-> region your fabric overlaps. Oregon HRUs fall in VPU 17, so you can build
-> Part 1 for just that VPU rather than all of CONUS — pass `VPUS=17` to
-> `sbatch slurm_batch/build_shared_rasters.batch` (or `--vpus 17` to the
-> orchestrator). Stage 2d depstor is intentionally unavailable for `oregon`
-> until its depstor inputs + profile keys are staged; the zonal pass above
-> runs without them.
+> **Scoping a regional test (e.g. Oregon, whose HRUs fall in VPU 17):** the
+> Part 2 zonal pass — and depstor (Stage 2d) — read the **CONUS** shared rasters
+> from Part 1 and clip to the HRU fabric, so those VRTs only need to *cover* the
+> region your fabric overlaps. VPU 17 is incidental here: Oregon's HRUs happen
+> to fall in it, so you can build Part 1 for just that VPU rather than all of
+> CONUS (pass `VPUS=17` to `sbatch slurm_batch/build_shared_rasters.batch`, or
+> `--vpus 17` to the orchestrator) — but the fabric configs still point at the
+> CONUS VRTs, not per-VPU tiles. Stage 2d depstor is intentionally unavailable
+> for `oregon` until its depstor inputs + profile keys are staged (the commented
+> keys in the profile, gated on a waterbody source — issue #90); the zonal pass
+> above runs without them.
 
 **Case B: VPU-based fabric** (per-VPU gpkgs that need merging — e.g., gfv2)
 

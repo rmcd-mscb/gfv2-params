@@ -232,8 +232,11 @@ via (highest precedence first):
    gap-fill). If the depstor pipeline will be run, also uncomment + set
    `template_raster`, `fdr_raster`, `twi_raster`, `segments_gpkg`/`segments_layer`,
    and `waterbody_gpkg`/`waterbody_layer` (waterbody is **required** for depstor —
-   the step raises if it is unset). For a single-file fabric, `segments_gpkg`
-   can point at the same gpkg as `hru_gpkg` with `segments_layer: nsegment`.
+   the step raises if it is unset). The rasters use the CONUS VRTs (depstor clips
+   to the HRU fabric via `land_mask`, so no VPU scoping is needed). For a
+   single-file fabric, `segments_gpkg` can point at the same gpkg as `hru_gpkg`
+   with `segments_layer: nsegment`. The `oregon` profile carries these keys
+   commented out, gated on staging a waterbody source (issue #90).
 2. Place the fabric gpkg at the `hru_gpkg` path you set, under
    `{data_root}/oregon/fabric/` (NOT in `input/fabric/`)
 3. Run `prepare_fabric.py --fabric oregon` (reads `hru_gpkg` from the profile —
@@ -241,11 +244,13 @@ via (highest precedence first):
    `slurm_batch/submit_zonal_params.sh $BATCHES oregon configs/base_config.yml`
    (loops every entry in `configs/zonal/zonal_params.yml` and chains array
    + merge per param). For Part 1 raster prep, `sbatch slurm_batch/build_shared_rasters.batch`.
-   The Part 2 zonal pass reads the CONUS shared rasters from Part 1, so scope
-   Part 1 to the VPUs your fabric overlaps — Oregon HRUs fall in VPU 17, so
+   The Part 2 zonal pass (and depstor) read the CONUS shared rasters from Part 1
+   and clip to the HRU fabric, so scope Part 1 to the VPUs your fabric overlaps —
+   Oregon HRUs fall in VPU 17 (incidental), so
    `VPUS=17 sbatch slurm_batch/build_shared_rasters.batch` avoids rebuilding all
    of CONUS for a regional test. Stage 2d depstor is unavailable for `oregon`
-   until its depstor inputs + profile keys are staged.
+   until its depstor inputs + profile keys are staged (gated on a waterbody
+   source — issue #90).
 
 **VPU-based fabric** (per-VPU gpkgs that need merging — e.g., gfv2):
 
