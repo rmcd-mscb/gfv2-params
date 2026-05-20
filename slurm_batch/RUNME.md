@@ -80,10 +80,14 @@ gfv2_param/
 
 ## Selecting a fabric
 
-Fabric identities and their per-fabric inputs (`template_raster`, `fdr_raster`,
-`waterbody_gpkg`/layer, `expected_max_hru_id`, `batch_size`, `id_feature`) live as profiles
-in a single `configs/base_config.yml` under a `fabrics:` mapping. The active
-profile is selected via:
+Fabric identities and **all shared, required per-fabric inputs** live as profiles
+in a single `configs/base_config.yml` under a `fabrics:` mapping — nothing
+required lives only on a CLI arg or is inferred from a naming convention. Every
+profile carries `hru_gpkg`/`hru_layer` (the fabric geopackage + layer),
+`id_feature`, `expected_max_hru_id`, and `batch_size`; depstor fabrics add
+`template_raster`, `fdr_raster`, `twi_raster`, `segments_gpkg`/`segments_layer`,
+and the required `waterbody_gpkg`/`waterbody_layer`. The active profile is
+selected via:
 
 1. `--fabric <name>` CLI flag on any script, OR
 2. `FABRIC` env var passed through sbatch, OR
@@ -346,13 +350,17 @@ Merge per-VPU fabric geopackages into a single CONUS fabric:
 pixi run -e notebooks marimo run notebooks/merge_vpu_targets.py
 ```
 
-Then spatially batch the merged fabric into per-batch geopackages (`batch_size` is read from `base_config.yml`):
+Then spatially batch the merged fabric into per-batch geopackages. The fabric
+gpkg + layer and `batch_size` are read from the active profile in
+`base_config.yml` (`hru_gpkg`/`hru_layer`), so no `--fabric_gpkg` is needed:
 
 ```bash
 pixi run python scripts/prepare_fabric.py \
-    --fabric_gpkg {data_root}/gfv2/fabric/gfv2_nhru_merged.gpkg \
+    --fabric gfv2 \
     --base_config configs/base_config.yml
 ```
+
+`--fabric_gpkg`/`--layer` remain as optional overrides for one-off runs.
 
 ### Stage 4: Generate parameters (SLURM array jobs)
 
@@ -464,23 +472,29 @@ already merged or comes as per-VPU gpkgs.
 
 **Case A: Pre-merged fabric** (single gpkg covering the full domain — e.g., Oregon)
 
-1. Add a profile under `fabrics:` in `configs/base_config.yml`. Required keys
-   are `expected_max_hru_id`, `batch_size`, and `id_feature` (the HRU id column
-   present in the fabric — e.g. `nat_hru_id` for gfv2, `hru_id` for oregon —
-   which flows through to the merged parameter CSVs). If the depstor pipeline will be
-   run for this fabric, also set `template_raster`, `fdr_raster`, `twi_raster`,
-   `segments_gpkg`, `waterbody_gpkg`, `waterbody_layer`, `hru_gpkg`, and
-   `hru_layer`. The `oregon` profile shows the minimum (no depstor inputs yet).
+1. Add a profile under `fabrics:` in `configs/base_config.yml`. **All shared,
+   required fabric inputs live in the profile.** Every fabric needs
+   `expected_max_hru_id`, `batch_size`, `id_feature` (the HRU id column present
+   in the fabric — e.g. `nat_hru_id` for gfv2, `hru_id` for oregon — which flows
+   through to the merged parameter CSVs), and `hru_gpkg`/`hru_layer` (the fabric
+   geopackage + layer, authoritative for `prepare_fabric`, the ssflux
+   `build_weights` step, and gap-fill). If the depstor pipeline will be run for
+   this fabric, also set `template_raster`, `fdr_raster`, `twi_raster`,
+   `segments_gpkg`/`segments_layer`, and `waterbody_gpkg`/`waterbody_layer`
+   (waterbody is **required** for depstor — the step raises if unset). For a
+   single-file fabric like `oregon`, `segments_gpkg` can point at the same gpkg
+   as `hru_gpkg` with `segments_layer: nsegment`; the `oregon` profile shows the
+   zonal-only minimum (depstor inputs, including a waterbody source, not yet
+   staged).
 2. Scaffold the fabric's output directories:
    ```bash
    pixi run init-data-root --fabric oregon
    ```
 3. Place the fabric gpkg directly in `{data_root}/oregon/fabric/` (NOT in `input/fabric/`)
-4. Prepare batches:
+4. Prepare batches (the fabric gpkg + layer come from the profile's
+   `hru_gpkg`/`hru_layer` — no `--fabric_gpkg` needed):
    ```bash
-   pixi run python scripts/prepare_fabric.py \
-       --fabric_gpkg {data_root}/oregon/fabric/NHM_OR_draft.gpkg \
-       --fabric oregon
+   pixi run python scripts/prepare_fabric.py --fabric oregon
    ```
 5. Submit parameter jobs. Easiest is the unified Part 2 dispatcher (one
    invocation walks every param + chained merges + ssflux's weights prereq):

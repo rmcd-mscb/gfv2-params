@@ -219,15 +219,22 @@ via (highest precedence first):
 
 **Pre-merged fabric** (single gpkg covering the full domain — e.g., Oregon):
 
-1. Add a profile under `fabrics:` in `configs/base_config.yml`. Required keys
-   are `expected_max_hru_id`, `batch_size`, and `id_feature` (the HRU id column
-   present in the fabric — e.g. `nat_hru_id` for gfv2, `hru_id` for oregon —
-   which flows through to the merged parameter CSVs). If the depstor pipeline will be
-   run, also set `template_raster`, `fdr_raster`, `twi_raster`, `segments_gpkg`,
-   `waterbody_gpkg`, `waterbody_layer`, `hru_gpkg`, and `hru_layer`.
+1. Add a profile under `fabrics:` in `configs/base_config.yml`. **All shared,
+   required fabric inputs live in the profile** — no required path on a CLI arg
+   or inferred from a naming convention. Every fabric needs `expected_max_hru_id`,
+   `batch_size`, `id_feature` (the HRU id column present in the fabric — e.g.
+   `nat_hru_id` for gfv2, `hru_id` for oregon — which flows through to the merged
+   parameter CSVs), and `hru_gpkg`/`hru_layer` (the fabric geopackage + layer,
+   authoritative for `prepare_fabric`, the ssflux `build_weights` step, and
+   gap-fill). If the depstor pipeline will be run, also set `template_raster`,
+   `fdr_raster`, `twi_raster`, `segments_gpkg`/`segments_layer`, and
+   `waterbody_gpkg`/`waterbody_layer` (waterbody is **required** for depstor —
+   the step raises if it is unset). For a single-file fabric, `segments_gpkg`
+   can point at the same gpkg as `hru_gpkg` with `segments_layer: nsegment`.
 2. Scaffold output dirs: `pixi run init-data-root --fabric oregon`
 3. Place the fabric gpkg directly in `{data_root}/oregon/fabric/` (NOT in `input/fabric/`)
-4. Run `prepare_fabric.py --fabric oregon`, then submit Part 2 jobs via
+4. Run `prepare_fabric.py --fabric oregon` (reads `hru_gpkg` from the profile —
+   no `--fabric_gpkg` needed), then submit Part 2 jobs via
    `slurm_batch/submit_zonal_params.sh $BATCHES oregon configs/base_config.yml`
    (loops every entry in `configs/zonal/zonal_params.yml` and chains array
    + merge per param). For Part 1 raster prep, `sbatch slurm_batch/build_shared_rasters.batch`.
