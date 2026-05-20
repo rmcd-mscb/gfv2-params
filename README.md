@@ -52,6 +52,7 @@ gfv2-params/
 │   ├── prepare_fabric.py             # Spatially batch fabric into per-batch gpkgs
 │   ├── migrate_to_shared_layout.py   # One-shot: legacy work/ → shared/ on-disk migration
 │   ├── build_shared_rasters.py       # Part 1 orchestrator (CONUS shared raster prep)
+│   ├── clip_shared_to_fabric.py      # Stage a fabric-bounds FDR clip → depstor template/fdr
 │   ├── build_depstor_rasters.py      # Part 2a depstor raster stack (10 steps)
 │   ├── derive_depstor_params.py      # Part 2a depstor params (zonal/merge/ratios)
 │   ├── derive_zonal_params.py        # Part 2b zonal-pass orchestrator (zonal/merge/build_weights)
@@ -229,14 +230,23 @@ via (highest precedence first):
    for gfv2, `hru_id` for oregon — which flows through to the merged parameter
    CSVs), and `hru_gpkg`/`hru_layer` (the fabric geopackage + layer,
    authoritative for `prepare_fabric`, the ssflux `build_weights` step, and
-   gap-fill). If the depstor pipeline will be run, also uncomment + set
-   `template_raster`, `fdr_raster`, `twi_raster`, `segments_gpkg`/`segments_layer`,
-   and `waterbody_gpkg`/`waterbody_layer` (waterbody is **required** for depstor —
-   the step raises if it is unset). The rasters use the CONUS VRTs (depstor clips
-   to the HRU fabric via `land_mask`, so no VPU scoping is needed). For a
-   single-file fabric, `segments_gpkg` can point at the same gpkg as `hru_gpkg`
-   with `segments_layer: nsegment`. The `oregon` profile carries these keys
-   commented out, gated on staging a waterbody source (issue #90).
+   gap-fill). If the depstor pipeline will be run, also set `template_raster`,
+   `fdr_raster`, `twi_raster`, `segments_gpkg`/`segments_layer`, and
+   `waterbody_gpkg`/`waterbody_layer` (waterbody is **required** for depstor —
+   the step raises if it is unset). For `template_raster`/`fdr_raster`, stage a
+   fabric-bounds clip of the CONUS FDR with
+   `pixi run --as-is python scripts/clip_shared_to_fabric.py --fabric <name>`
+   (writes `{data_root}/<name>/shared/<name>_fdr.vrt`) and point both keys at it.
+   Every depstor builder sizes its arrays to the `template_raster` grid, so the
+   clip scopes compute to the fabric extent while staying VPU-agnostic (works for
+   fabrics that straddle VPU boundaries). The clip comes from `fdr.vrt` — the
+   hydrology lattice `carea_map` requires the template to share with `twi.vrt`
+   (`elevation.vrt` is on the offset DEM lattice and is rejected). `twi_raster`
+   uses the CONUS `twi.vrt` (warp-windowed onto the template). For a single-file
+   fabric, `segments_gpkg` can point at the same gpkg as `hru_gpkg` with
+   `segments_layer: nsegment`. The `oregon` profile has these keys active
+   (issue #90), using the CONUS NHDPlusV2 waterbodies at
+   `input/nhd/conus_waterbodies.gpkg` (layer `waterbodies`).
 2. Place the fabric gpkg at the `hru_gpkg` path you set, under
    `{data_root}/oregon/fabric/` (NOT in `input/fabric/`)
 3. Run `prepare_fabric.py --fabric oregon` (reads `hru_gpkg` from the profile —
@@ -244,13 +254,12 @@ via (highest precedence first):
    `slurm_batch/submit_zonal_params.sh $BATCHES oregon configs/base_config.yml`
    (loops every entry in `configs/zonal/zonal_params.yml` and chains array
    + merge per param). For Part 1 raster prep, `sbatch slurm_batch/build_shared_rasters.batch`.
-   The Part 2 zonal pass (and depstor) read the CONUS shared rasters from Part 1
-   and clip to the HRU fabric, so scope Part 1 to the VPUs your fabric overlaps —
-   Oregon HRUs fall in VPU 17 (incidental), so
-   `VPUS=17 sbatch slurm_batch/build_shared_rasters.batch` avoids rebuilding all
-   of CONUS for a regional test. Stage 2d depstor is unavailable for `oregon`
-   until its depstor inputs + profile keys are staged (gated on a waterbody
-   source — issue #90).
+   The Part 2 zonal pass (and depstor) read the CONUS shared rasters from Part 1,
+   so scope Part 1 to the VPUs your fabric overlaps — Oregon HRUs fall in VPU 17
+   (incidental), so `VPUS=17 sbatch slurm_batch/build_shared_rasters.batch`
+   avoids rebuilding all of CONUS for a regional test. Stage 2d depstor is
+   **active** for `oregon` (issue #90); after staging the FDR clip (step 1),
+   run `FABRIC=oregon sbatch slurm_batch/build_depstor_rasters.batch`.
 
 **VPU-based fabric** (per-VPU gpkgs that need merging — e.g., gfv2):
 

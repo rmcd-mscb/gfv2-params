@@ -306,17 +306,20 @@ sbatch command.
 
 ### Stage 2d: Build depstor rasters (per fabric)
 
-Build the full depression-storage raster stack on the elevation-VRT template
+Build the full depression-storage raster stack on a fabric-bounds template
 grid. Outputs go to `{fabric}/depstor_rasters/` and feed the Stage 4 depstor
 zonal-stats orchestrator below.
 
-Inputs (manually staged per fabric):
-- `input/depstor/<fabric>_segments_wbodies.gpkg` (layers `nsegment`, `v2_wb`)
-- Per-fabric `hru_gpkg` / `twi_raster` (from `base_config.yml`).
-- Shared `fdr_raster` from `shared/conus/vrt/fdr.vrt` (Part 1 output; no per-fabric FDR needed).
-- The NLCD 2015 fractional-impervious raster (path set in
-  `configs/depstor/depstor_rasters.yml` under `imperv_source`) and
-  `shared/conus/vrt/elevation.vrt`.
+Inputs (per fabric, from `base_config.yml`):
+- `template_raster` **and** `fdr_raster`: a fabric-bounds clip of the CONUS FDR,
+  staged with `pixi run --as-is python scripts/clip_shared_to_fabric.py --fabric <name>`
+  (writes `{data_root}/<name>/shared/<name>_fdr.vrt`). The template grid sizes
+  every builder's arrays, so this scopes compute to the fabric; the clip is on
+  the hydrology lattice `carea_map` requires the template to share with `twi.vrt`.
+- `twi_raster` (CONUS `shared/conus/vrt/twi.vrt`; warp-windowed onto the template).
+- `hru_gpkg`, `segments_gpkg`/`segments_layer`, `waterbody_gpkg`/`waterbody_layer`.
+- The NLCD fractional-impervious raster (`imperv_source` in
+  `configs/depstor/depstor_rasters.yml`).
 
 One sbatch builds the entire stack in dependency order
 (landmask → imperv/streambuffer/waterbody → dprst → perv/routing →
@@ -339,9 +342,10 @@ Default resources size the job for the long pole (`routing` — WhiteboxTools
 Watershed on CONUS). For VPU01 / smaller fabrics, override `--time` and
 `--mem` at submission as shown above.
 
-Note: Stage 2d depends on Stage 2a (the elevation VRT exists) but is otherwise
-fabric-independent of the rest of Part 1. It can run in parallel with Part 2's
-fabric prep.
+Note: Stage 2d depends on the Part 1 FDR VRT (`shared/conus/vrt/fdr.vrt`, the
+source the per-fabric clip is cut from) but is otherwise fabric-independent of
+the rest of Part 1. Stage the clip (`clip_shared_to_fabric.py`) first; it can
+run in parallel with Part 2's fabric prep.
 
 ---
 
@@ -491,18 +495,21 @@ already merged or comes as per-VPU gpkgs.
    for gfv2, `hru_id` for oregon — which flows through to the merged parameter
    CSVs), and `hru_gpkg`/`hru_layer` (the fabric geopackage + layer,
    authoritative for `prepare_fabric`, the ssflux `build_weights` step, and
-   gap-fill). If the depstor pipeline will be run for this fabric, also
-   uncomment + set `template_raster`, `fdr_raster`, `twi_raster`,
-   `segments_gpkg`/`segments_layer`, and `waterbody_gpkg`/`waterbody_layer`
-   (waterbody is **required** for depstor — the step raises if unset). For a
-   single-file fabric like `oregon`, `segments_gpkg` can point at the same gpkg
-   as `hru_gpkg` with `segments_layer: nsegment`. The `oregon` profile now
-   carries the depstor keys **commented out** — CONUS VRTs for the rasters (like
-   `gfv2`) and `segments_gpkg` pointing at the model gpkg — with the waterbody
-   source called out as the staging blocker (issue #90: the Oregon gpkg has no
-   waterbody layer). It stays zonal-only until that source is staged. (Prefer
-   hand-editing? Just add the profile block directly — the stub is only a
-   convenience.)
+   gap-fill). If the depstor pipeline will be run for this fabric, also set
+   `template_raster`, `fdr_raster`, `twi_raster`, `segments_gpkg`/`segments_layer`,
+   and `waterbody_gpkg`/`waterbody_layer` (waterbody is **required** for depstor —
+   the step raises if unset). Stage the `template_raster`/`fdr_raster` clip with
+   `pixi run --as-is python scripts/clip_shared_to_fabric.py --fabric <name>`
+   (writes `{data_root}/<name>/shared/<name>_fdr.vrt`, a fabric-bounds clip of
+   the CONUS FDR) and point both keys at it — this scopes depstor compute to the
+   fabric extent and stays VPU-agnostic (see the boxed note below). `twi_raster`
+   uses the CONUS `twi.vrt`. For a single-file fabric like `oregon`,
+   `segments_gpkg` can point at the same gpkg as `hru_gpkg` with
+   `segments_layer: nsegment`. The `oregon` profile has the depstor keys
+   **active** (issue #90) — the FDR clip for template/fdr, CONUS `twi.vrt`,
+   `segments_gpkg` at the model gpkg, and the CONUS NHDPlusV2 waterbodies at
+   `input/nhd/conus_waterbodies.gpkg` (layer `waterbodies`). (Prefer
+   hand-editing? Just add the profile block directly — the stub is a convenience.)
 2. Place the fabric gpkg at the `hru_gpkg` path you set, under
    `{data_root}/oregon/fabric/` (NOT in `input/fabric/`)
 3. Prepare batches (the fabric gpkg + layer come from the profile's
@@ -520,17 +527,22 @@ already merged or comes as per-VPU gpkgs.
    `--mode zonal --param <name> --batch_id <N>` (see "Single-batch run"
    in README.md or Stage 4 above).
 
-> **Scoping a regional test (e.g. Oregon, whose HRUs fall in VPU 17):** the
-> Part 2 zonal pass — and depstor (Stage 2d) — read the **CONUS** shared rasters
-> from Part 1 and clip to the HRU fabric, so those VRTs only need to *cover* the
-> region your fabric overlaps. VPU 17 is incidental here: Oregon's HRUs happen
-> to fall in it, so you can build Part 1 for just that VPU rather than all of
-> CONUS (pass `VPUS=17` to `sbatch slurm_batch/build_shared_rasters.batch`, or
-> `--vpus 17` to the orchestrator) — but the fabric configs still point at the
-> CONUS VRTs, not per-VPU tiles. Stage 2d depstor is intentionally unavailable
-> for `oregon` until its depstor inputs + profile keys are staged (the commented
-> keys in the profile, gated on a waterbody source — issue #90); the zonal pass
-> above runs without them.
+> **Scoping depstor to a fabric (e.g. Oregon):** every depstor builder sizes its
+> arrays to the `template_raster` grid, so the template controls compute extent.
+> A CONUS template would force CONUS-scale memory/time; a per-VPU tile is cheap
+> but breaks for fabrics that straddle VPU boundaries. Instead, clip the CONUS
+> FDR to the fabric bounds with
+> `pixi run --as-is python scripts/clip_shared_to_fabric.py --fabric oregon`
+> (a tiny zero-copy VRT) and use it for `template_raster`/`fdr_raster`. Oregon's
+> clip is ~0.56B cells vs ~15B CONUS. The clip comes from `fdr.vrt` because
+> `carea_map` requires the template to share the hydrology lattice with
+> `twi.vrt`; `elevation.vrt` is on the offset DEM lattice and is rejected. The
+> `fdr.vrt` source also lets `routing` read only the fabric window. `twi_raster`
+> and `imperv` stay CONUS (their builders warp-window them onto the template);
+> the waterbody source is the CONUS NHDPlusV2 gpkg. Part 1 itself can still be
+> scoped per-VPU (`VPUS=17 sbatch slurm_batch/build_shared_rasters.batch`) to
+> avoid rebuilding all of CONUS. Then run Stage 2d:
+> `FABRIC=oregon sbatch slurm_batch/build_depstor_rasters.batch`.
 
 **Case B: VPU-based fabric** (per-VPU gpkgs that need merging — e.g., gfv2)
 
