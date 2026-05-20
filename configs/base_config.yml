@@ -1,9 +1,11 @@
 # Single source of truth for fabric identities and per-fabric inputs.
 # Active fabric resolution: --fabric CLI arg -> FABRIC env var -> default_fabric.
 # Process configs (configs/*.yml) are fabric-agnostic; they pull
-# template_raster, fdr_raster, segments/waterbody gpkg+layer, and id_feature
-# (the HRU id column, which must exist in the fabric and flows through to the
-# final parameter CSVs) from the active profile via load_config().
+# hru_gpkg/hru_layer (the fabric geopackage + layer, authoritative for
+# prepare_fabric, the ssflux build_weights step, and gap-fill), template_raster,
+# fdr_raster, segments/waterbody gpkg+layer, and id_feature (the HRU id column,
+# which must exist in the fabric and flows through to the final parameter CSVs)
+# from the active profile via load_config().
 
 data_root: /caldera/hovenweep/projects/usgs/water/impd/nhgf/gfv2_param_v2
 default_fabric: gfv2

@@ -1,7 +1,11 @@
-"""Fill missing parameter values using KNN interpolation against a merged nhru geopackage.
+"""Fill missing parameter values using KNN interpolation against the fabric geopackage.
 
-The merged geopackage is produced by the notebooks/merge_vpu_targets.py notebook
-and serves as input to prepare_fabric.py for batching.
+The fabric geopackage is read from the active base_config.yml profile's
+hru_gpkg/hru_layer (the same gpkg prepare_fabric.py batched) — the single
+source of truth, not a {fabric}_nhru_merged.gpkg naming convention. For
+VPU-based fabrics that gpkg is produced by notebooks/merge_vpu_targets.py; for
+single-file fabrics (e.g. oregon) it is a pre-existing gpkg declared in the
+profile.
 """
 
 import argparse
@@ -131,8 +135,10 @@ def main():
 
     if not merged_gpkg.exists():
         raise FileNotFoundError(
-            f"Merged geopackage not found: {merged_gpkg}\n"
-            "Run notebooks/merge_vpu_targets.py or scripts/prepare_fabric.py first."
+            f"Fabric geopackage not found: {merged_gpkg}\n"
+            "Check the active fabric profile's hru_gpkg in configs/base_config.yml. "
+            "For VPU-based fabrics, run notebooks/merge_vpu_targets.py to produce it; "
+            "for single-file fabrics, place the gpkg at the hru_gpkg path."
         )
 
     logger.info("Loading merged geopackage: %s (layer=%s)", merged_gpkg, hru_layer)

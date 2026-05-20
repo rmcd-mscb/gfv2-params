@@ -8,7 +8,8 @@ work logic lives in exactly one place.
 The `config` dict each function receives is a flat mapping containing the
 keys the existing per-param configs already provide (source_type,
 source_raster, batch_dir, target_layer, id_feature, output_dir, merged_file,
-categorical, fabric, plus per-script extras like canopy_raster, crosswalk_file,
+categorical, fabric, the fabric-profile hru_gpkg/hru_layer that run_build_weights
+reads, plus per-script extras like canopy_raster, crosswalk_file,
 keep_raster, source_shapefile, merged_slope_file, weight_dir, k_perm_min,
 flux_params). The orchestrator builds this dict by flattening the active
 param entry in ``configs/zonal/zonal_params.yml`` onto the top-level ``defaults:``
