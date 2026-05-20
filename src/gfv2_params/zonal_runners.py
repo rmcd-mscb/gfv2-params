@@ -515,17 +515,22 @@ def run_ssflux_batch(config: dict, batch_id: int, logger) -> None:
 # CONUS-once worker (ssflux prereq)
 # ---------------------------------------------------------------------------
 
-def run_build_weights(config: dict, data_root: Path, logger, force: bool = False) -> None:
+def run_build_weights(config: dict, logger, force: bool = False) -> None:
     """Pre-compute the CONUS-wide P2P weight matrix that ssflux consumes.
 
     Originally extracted from the now-retired scripts/build_weights.py
     (see PR #85). One CSV per fabric, written
     to ``config['weight_dir']/lith_weights_<fabric>.csv``. Idempotent: skips
     if the file exists unless force=True.
+
+    The target fabric is read from ``config['hru_gpkg']``/``hru_layer`` (the
+    active base_config.yml profile, threaded in via _build_param_cfg) — the
+    single source of truth, not a {fabric}_nhru_merged.gpkg naming convention.
     """
     fabric = config["fabric"]
     id_feature = config["id_feature"]
-    target_layer = config["target_layer"]
+    hru_gpkg = Path(config["hru_gpkg"])
+    hru_layer = config.get("hru_layer", "nhru")
 
     weight_dir = Path(config["weight_dir"])
     weight_dir.mkdir(parents=True, exist_ok=True)
@@ -535,10 +540,9 @@ def run_build_weights(config: dict, data_root: Path, logger, force: bool = False
         logger.info("Weight file already exists: %s (use --force to overwrite)", weight_file)
         return
 
-    fabric_gpkg = data_root / fabric / "fabric" / f"{fabric}_nhru_merged.gpkg"
-    if not fabric_gpkg.exists():
-        raise FileNotFoundError(f"Merged fabric not found: {fabric_gpkg}")
-    target_gdf = gpd.read_file(fabric_gpkg, layer=target_layer)
+    if not hru_gpkg.exists():
+        raise FileNotFoundError(f"HRU fabric gpkg not found: {hru_gpkg}")
+    target_gdf = gpd.read_file(hru_gpkg, layer=hru_layer)
     logger.info("Loaded target fabric: %d features", len(target_gdf))
 
     source_gdf = gpd.read_file(Path(config["source_shapefile"]))

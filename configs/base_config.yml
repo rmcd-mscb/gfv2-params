@@ -61,3 +61,11 @@ fabrics:
     # Oregon's pre-merged fabric uses `hru_id` (contiguous 1..16814, matching
     # expected_max_hru_id) as its HRU id column — it has no `nat_hru_id`.
     id_feature: hru_id
+    # Single-file fabric: one gpkg holds nhru/nsegment/... layers. hru_gpkg is
+    # authoritative for prepare_fabric, the ssflux build_weights step, and
+    # gap-fill (merge_and_fill_params) — no {fabric}_nhru_merged.gpkg naming
+    # convention. When depstor is staged, segments_gpkg can point at this same
+    # file with segments_layer: nsegment; a waterbody source still needs
+    # staging (this gpkg has no waterbody layer).
+    hru_gpkg: "{data_root}/oregon/fabric/model_layers 9.gpkg"
+    hru_layer: nhru

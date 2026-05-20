@@ -17,11 +17,11 @@ from gfv2_params.log import configure_logging
 
 def main():
     parser = argparse.ArgumentParser(description="Prepare fabric for batch processing.")
-    parser.add_argument("--fabric_gpkg", required=True, help="Path to merged fabric geopackage")
+    parser.add_argument("--fabric_gpkg", default=None, help="Path to fabric geopackage (default: active profile's hru_gpkg)")
     parser.add_argument("--base_config", default=None, help="Path to base_config.yml")
     parser.add_argument("--fabric", default=None, help="Fabric name (overrides FABRIC env / default_fabric)")
     parser.add_argument("--batch_size", type=int, default=None, help="Target features per batch (overrides base_config.yml)")
-    parser.add_argument("--layer", default="nhru", help="Layer name in the geopackage (default nhru)")
+    parser.add_argument("--layer", default=None, help="Layer name in the geopackage (default: active profile's hru_layer)")
     args = parser.parse_args()
 
     logger = configure_logging("prepare_fabric")
@@ -34,19 +34,27 @@ def main():
     data_root = base["data_root"]
     fabric = base["fabric"]
 
-    fabric_gpkg = Path(args.fabric_gpkg)
+    # Fabric gpkg + layer come from the active profile's hru_gpkg/hru_layer in
+    # base_config.yml; --fabric_gpkg/--layer are optional overrides. This is the
+    # single source of truth — no {fabric}_nhru_merged.gpkg naming convention.
+    if args.fabric_gpkg:
+        fabric_gpkg = Path(args.fabric_gpkg)
+    else:
+        fabric_gpkg = Path(require_config_key(base, "hru_gpkg", "prepare_fabric"))
+    layer = args.layer if args.layer is not None else base.get("hru_layer", "nhru")
+
     if not fabric_gpkg.exists():
         raise FileNotFoundError(f"Fabric geopackage not found: {fabric_gpkg}")
 
-    logger.info("Reading fabric: %s (layer=%s)", fabric_gpkg, args.layer)
-    gdf = gpd.read_file(fabric_gpkg, layer=args.layer)
+    logger.info("Reading fabric: %s (layer=%s)", fabric_gpkg, layer)
+    gdf = gpd.read_file(fabric_gpkg, layer=layer)
     logger.info("Loaded %d features", len(gdf))
 
     batched = spatial_batch(gdf, batch_size=batch_size)
 
     batch_dir = Path(data_root) / fabric / "batches"
     id_feature = require_config_key(base, "id_feature", "prepare_fabric")
-    manifest = write_batches(batched, batch_dir, fabric, id_feature, batch_size=batch_size, target_layer=args.layer)
+    manifest = write_batches(batched, batch_dir, fabric, id_feature, batch_size=batch_size, target_layer=layer)
 
     n = manifest["n_batches"]
     logger.info("Fabric '%s' prepared: %d features -> %d batches in %s", fabric, len(gdf), n, batch_dir)
