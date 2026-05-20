@@ -36,7 +36,7 @@ _t_imports = time.time()
 
 import pandas as pd
 
-from gfv2_params.config import load_config
+from gfv2_params.config import load_config, require_config_key
 from gfv2_params.depstor_ratios import compute_ratio
 from gfv2_params.log import configure_logging
 
@@ -68,7 +68,11 @@ def _load_resolved_config(args) -> dict:
         fabric=args.fabric,
     )
     replacements = {"data_root": raw["data_root"], "fabric": raw["fabric"]}
-    return {k: _resolve_nested(v, replacements) for k, v in raw.items()}
+    config = {k: _resolve_nested(v, replacements) for k, v in raw.items()}
+    # id_feature is a fabric property (base_config.yml profile), not a per-step
+    # default. Inject it into defaults where every depstor consumer reads it.
+    config["defaults"]["id_feature"] = require_config_key(config, "id_feature", "derive_depstor_params")
+    return config
 
 
 def _find_fraction(config: dict, name: str) -> dict:
