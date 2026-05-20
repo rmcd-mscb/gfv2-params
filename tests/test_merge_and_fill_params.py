@@ -68,13 +68,20 @@ class TestFindMissingIds:
 
 
 class TestMergedGpkgPathResolution:
-    def test_default_path_uses_new_filename(self, tmp_path):
-        targets_dir = tmp_path / "targets"
-        targets_dir.mkdir()
-        expected = targets_dir / "gfv2_nhru_merged.gpkg"
-        old_name = targets_dir / "gfv2_merged_simplified.gpkg"
-        assert expected.name == "gfv2_nhru_merged.gpkg"
-        assert expected.name != old_name.name
+    """The merged gpkg default now comes from the active profile's hru_gpkg
+    (configs/base_config.yml), not a {fabric}_nhru_merged.gpkg naming
+    convention. End-to-end resolution + error behavior is covered by
+    tests/test_hru_gpkg_config.py; here we pin the source-of-truth contract."""
+
+    def test_default_is_profile_hru_gpkg_not_convention(self):
+        src = (
+            Path(__file__).resolve().parent.parent
+            / "scripts" / "merge_and_fill_params.py"
+        ).read_text()
+        # The merged gpkg is read from the profile via require_config_key,
+        # never assembled from the retired {fabric}_nhru_merged.gpkg convention.
+        assert 'require_config_key(base, "hru_gpkg"' in src
+        assert "_nhru_merged.gpkg" not in src
 
 
 class TestFileNotFoundBehavior:
