@@ -21,6 +21,13 @@ tasks failed with "File was modified during parsing" before reaching python.
 
 **Re-run `pixi install`** any time `pyproject.toml` or `pixi.lock` change.
 
+> Because the slurm batches invoke `pixi run --as-is`, the `pixi` binary must be
+> on `PATH` on the compute node. SLURM jobs inherit the submitting shell's
+> environment, so always submit (`sbatch ...`, `submit_*.sh`) from a shell where
+> `~/.pixi/bin` is on your `PATH` (e.g. after the install step above). If a
+> batch fails immediately with `pixi: command not found`, that PATH was missing
+> at submit time.
+
 For interactive use:
 
 ```bash
@@ -472,31 +479,35 @@ already merged or comes as per-VPU gpkgs.
 
 **Case A: Pre-merged fabric** (single gpkg covering the full domain — e.g., Oregon)
 
-1. Add a profile under `fabrics:` in `configs/base_config.yml`. **All shared,
-   required fabric inputs live in the profile.** Every fabric needs
-   `expected_max_hru_id`, `batch_size`, `id_feature` (the HRU id column present
-   in the fabric — e.g. `nat_hru_id` for gfv2, `hru_id` for oregon — which flows
-   through to the merged parameter CSVs), and `hru_gpkg`/`hru_layer` (the fabric
-   geopackage + layer, authoritative for `prepare_fabric`, the ssflux
-   `build_weights` step, and gap-fill). If the depstor pipeline will be run for
-   this fabric, also set `template_raster`, `fdr_raster`, `twi_raster`,
+1. Register the fabric and scaffold its output directories in one step:
+   ```bash
+   pixi run init-data-root --add-fabric oregon
+   ```
+   This appends a profile stub under `fabrics:` in `configs/base_config.yml`
+   (preserving comments) and creates the fabric's dirs. Then fill the stub's
+   TODO placeholders. **All shared, required fabric inputs live in the
+   profile.** Every fabric needs `expected_max_hru_id`, `batch_size`,
+   `id_feature` (the HRU id column present in the fabric — e.g. `nat_hru_id`
+   for gfv2, `hru_id` for oregon — which flows through to the merged parameter
+   CSVs), and `hru_gpkg`/`hru_layer` (the fabric geopackage + layer,
+   authoritative for `prepare_fabric`, the ssflux `build_weights` step, and
+   gap-fill). If the depstor pipeline will be run for this fabric, also
+   uncomment + set `template_raster`, `fdr_raster`, `twi_raster`,
    `segments_gpkg`/`segments_layer`, and `waterbody_gpkg`/`waterbody_layer`
    (waterbody is **required** for depstor — the step raises if unset). For a
    single-file fabric like `oregon`, `segments_gpkg` can point at the same gpkg
    as `hru_gpkg` with `segments_layer: nsegment`; the `oregon` profile shows the
    zonal-only minimum (depstor inputs, including a waterbody source, not yet
-   staged).
-2. Scaffold the fabric's output directories:
-   ```bash
-   pixi run init-data-root --fabric oregon
-   ```
-3. Place the fabric gpkg directly in `{data_root}/oregon/fabric/` (NOT in `input/fabric/`)
-4. Prepare batches (the fabric gpkg + layer come from the profile's
+   staged). (Prefer hand-editing? Just add the profile block directly — the
+   stub is only a convenience.)
+2. Place the fabric gpkg at the `hru_gpkg` path you set, under
+   `{data_root}/oregon/fabric/` (NOT in `input/fabric/`)
+3. Prepare batches (the fabric gpkg + layer come from the profile's
    `hru_gpkg`/`hru_layer` — no `--fabric_gpkg` needed):
    ```bash
    pixi run python scripts/prepare_fabric.py --fabric oregon
    ```
-5. Submit parameter jobs. Easiest is the unified Part 2 dispatcher (one
+4. Submit parameter jobs. Easiest is the unified Part 2 dispatcher (one
    invocation walks every param + chained merges + ssflux's weights prereq):
    ```bash
    BATCHES={data_root}/oregon/batches
@@ -517,11 +528,12 @@ already merged or comes as per-VPU gpkgs.
 
 **Case B: VPU-based fabric** (per-VPU gpkgs that need merging — e.g., gfv2)
 
-1. Add a profile under `fabrics:` in `configs/base_config.yml`
+1. Register the fabric + scaffold dirs: `pixi run init-data-root --add-fabric <name>`
+   (or hand-edit `fabrics:` in `configs/base_config.yml`), then fill the stub's
+   TODO placeholders.
 2. Place per-VPU gpkgs in `input/fabric/`
-3. Scaffold and merge:
+3. Merge:
    ```bash
-   pixi run init-data-root --fabric <name>
    pixi run -e notebooks marimo run notebooks/merge_vpu_targets.py
    ```
 4. Continue from Stage 3 above, passing `--fabric <name>` (or `FABRIC=<name>` env)
