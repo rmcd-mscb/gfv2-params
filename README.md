@@ -246,7 +246,10 @@ via (highest precedence first):
    fabric, `segments_gpkg` can point at the same gpkg as `hru_gpkg` with
    `segments_layer: nsegment`. The `oregon` profile has these keys active
    (issue #90), using the CONUS NHDPlusV2 waterbodies at
-   `input/nhd/conus_waterbodies.gpkg` (layer `waterbodies`).
+   `input/nhd/conus_waterbodies.gpkg` (layer `waterbodies`). Caveat: `twi.vrt`
+   only carries ArcPy TWI for VPU 01 (issue #94), so for any other fabric Stage 2d
+   builds the raster stack and the non-TWI params correctly, but `carea_max`/
+   `smidx_coef` are degenerate until that gap is resolved.
 2. Place the fabric gpkg at the `hru_gpkg` path you set, under
    `{data_root}/oregon/fabric/` (NOT in `input/fabric/`)
 3. Run `prepare_fabric.py --fabric oregon` (reads `hru_gpkg` from the profile —
@@ -259,7 +262,8 @@ via (highest precedence first):
    (incidental), so `VPUS=17 sbatch slurm_batch/build_shared_rasters.batch`
    avoids rebuilding all of CONUS for a regional test. Stage 2d depstor is
    **active** for `oregon` (issue #90); after staging the FDR clip (step 1),
-   run `FABRIC=oregon sbatch slurm_batch/build_depstor_rasters.batch`.
+   run `FABRIC=oregon sbatch slurm_batch/build_depstor_rasters.batch`. (As above,
+   the TWI-derived `carea_max`/`smidx_coef` await issue #94; the rest is valid.)
 
 **VPU-based fabric** (per-VPU gpkgs that need merging — e.g., gfv2):
 

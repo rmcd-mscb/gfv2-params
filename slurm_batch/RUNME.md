@@ -508,7 +508,10 @@ already merged or comes as per-VPU gpkgs.
    `segments_layer: nsegment`. The `oregon` profile has the depstor keys
    **active** (issue #90) — the FDR clip for template/fdr, CONUS `twi.vrt`,
    `segments_gpkg` at the model gpkg, and the CONUS NHDPlusV2 waterbodies at
-   `input/nhd/conus_waterbodies.gpkg` (layer `waterbodies`). (Prefer
+   `input/nhd/conus_waterbodies.gpkg` (layer `waterbodies`). ⚠️ `twi.vrt` only
+   carries ArcPy TWI for VPU 01 (issue #94), so for `oregon` (and any non-VPU-01
+   fabric) Stage 2d builds the raster stack + non-TWI params correctly but
+   `carea_max`/`smidx_coef` are degenerate until #94 is resolved. (Prefer
    hand-editing? Just add the profile block directly — the stub is a convenience.)
 2. Place the fabric gpkg at the `hru_gpkg` path you set, under
    `{data_root}/oregon/fabric/` (NOT in `input/fabric/`)
@@ -543,6 +546,11 @@ already merged or comes as per-VPU gpkgs.
 > scoped per-VPU (`VPUS=17 sbatch slurm_batch/build_shared_rasters.batch`) to
 > avoid rebuilding all of CONUS. Then run Stage 2d:
 > `FABRIC=oregon sbatch slurm_batch/build_depstor_rasters.batch`.
+>
+> ⚠️ **TWI gap (issue #94):** `twi.vrt` only carries ArcPy TWI for VPU 01, so for
+> any other fabric the TWI-derived params (`carea_max`, `smidx_coef`) are
+> degenerate. Stage 2d still builds the full raster stack and the non-TWI params
+> correctly — just don't trust `carea_max`/`smidx_coef` until #94 is resolved.
 
 **Case B: VPU-based fabric** (per-VPU gpkgs that need merging — e.g., gfv2)
 
