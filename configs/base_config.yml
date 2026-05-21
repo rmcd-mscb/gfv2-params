@@ -25,9 +25,11 @@ fabrics:
     # Run: pixi run --as-is python scripts/clip_shared_to_fabric.py --fabric gfv2
     template_raster: "{data_root}/gfv2/shared/gfv2_fdr.vrt"
     fdr_raster: "{data_root}/gfv2/shared/gfv2_fdr.vrt"
-    # NOTE: twi.vrt does not cover gfv2's northernmost HRUs (a TWI data-coverage
-    # gap, tracked separately from the template-lattice fix above).
-    twi_raster: "{data_root}/shared/conus/vrt/twi.vrt"
+    # Depstor TWI source: open-source Twi_hydrodem (CONUS-complete; #94), which
+    # also covers gfv2's northernmost HRUs that twi.vrt (ArcPy) misses. carea_map
+    # runs in percentile mode; per-VPU thresholds are keyed by the per-HRU `vpu`
+    # attribute on this fabric (no profile `vpu` scalar — gfv2 is multi-VPU).
+    twi_raster: "{data_root}/shared/conus/vrt/twi_hydrodem.vrt"
     segments_gpkg: "{data_root}/input/depstor/{fabric}_segments_wbodies.gpkg"
     waterbody_gpkg: "{data_root}/input/depstor/{fabric}_segments_wbodies.gpkg"
     waterbody_layer: v2_wb
@@ -87,13 +89,16 @@ fabrics:
     # Run: pixi run --as-is python scripts/clip_shared_to_fabric.py --fabric oregon
     template_raster: "{data_root}/oregon/shared/oregon_fdr.vrt"
     fdr_raster: "{data_root}/oregon/shared/oregon_fdr.vrt"
-    # TWI: carea_map WarpedVRT-windows the CONUS twi.vrt onto the template grid
-    # (its footprint covers the Oregon extent). ⚠️ But twi.vrt currently carries
-    # ArcPy TWI for VPU 01 ONLY (issue #94) — over Oregon (VPU 17) every TWI cell
-    # is nodata, so carea_max/smidx_coef come out degenerate. Stage 2d still
-    # builds the full raster stack and the non-TWI params correctly; do not treat
-    # carea_max/smidx_coef as valid here until #94 is resolved.
-    twi_raster: "{data_root}/shared/conus/vrt/twi.vrt"
+    # Single-VPU fabric: declare the VPU so vpu_id is a constant fill and the
+    # per-VPU reference threshold resolves to VPU 17.
+    vpu: "17"
+    # Depstor TWI source: open-source Twi_hydrodem (CONUS-complete; #94).
+    # carea_map runs in percentile mode (threshold_mode: percentile,
+    # reference_scope: vpu in depstor_rasters.yml), deriving the TWI cutoff from
+    # the data, so carea_max/smidx_coef are no longer degenerate over VPU 17 —
+    # this resolves the former #94 caveat. Reference table:
+    # twi_reference_percentiles.hydrodem.csv.
+    twi_raster: "{data_root}/shared/conus/vrt/twi_hydrodem.vrt"
     segments_gpkg: "{data_root}/oregon/fabric/model_layers 9.gpkg"
     segments_layer: nsegment
     # CONUS NHDPlusV2 waterbodies (POLYGON, EPSG:5070); the waterbody builder
