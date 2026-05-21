@@ -168,7 +168,7 @@ def compute_carea_map_binary(
     perv: np.ndarray,
     onstream: np.ndarray,
     twi: np.ndarray,
-    threshold: float,
+    threshold,  # float scalar OR np.ndarray broadcastable to twi (per-cell T_P)
     twi_nodata: Optional[float],
     land_valid: np.ndarray,
 ) -> np.ndarray:
@@ -188,6 +188,11 @@ def compute_carea_map_binary(
     Short-circuits on the perv test first so NaN / sentinel TWI values in
     non-perv cells do not pollute the result. Handles both NaN and the
     -9999-style sentinel nodata that the merged TWI rasters carry.
+
+    `threshold` may be a scalar (absolute mode, or percentile-conus / single-VPU)
+    or a per-cell float array the same shape as `twi` (percentile per-VPU mode,
+    where each cell carries its HRU's home-VPU T_P). `twi > threshold` broadcasts
+    either way.
     """
     is_perv = perv == 1
     is_onstream = onstream == 1
