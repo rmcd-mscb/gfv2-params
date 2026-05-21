@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import csv
 from contextlib import ExitStack
 
 import rasterio
@@ -44,6 +45,26 @@ def _assert_aligned(src, info: RasterInfo, name: str) -> None:
         raise ValueError(f"{name} CRS {src.crs} != template CRS {info.crs}")
     if src.transform != info.transform:
         raise ValueError(f"{name} transform mismatch with template")
+
+
+def load_reference_table(path) -> dict:
+    """Load a twi_reference_percentiles.<source>.csv into {(scope, vpu): row}."""
+    table = {}
+    with open(path, newline="") as f:
+        for row in csv.DictReader(f):
+            for k in ("p_carea", "p_smidx", "t_carea", "t_smidx"):
+                row[k] = float(row[k])
+            table[(row["scope"], row["vpu"])] = row
+    return table
+
+
+def resolve_scalar_thresholds(table: dict, scope: str, vpu) -> tuple:
+    """Return (t_carea, t_smidx) scalars for conus scope or a single VPU."""
+    key = ("conus", "CONUS") if scope == "conus" else ("vpu", str(vpu))
+    if key not in table:
+        raise KeyError(f"no reference row for {key}; have {sorted(table)}")
+    row = table[key]
+    return row["t_carea"], row["t_smidx"]
 
 
 def build(step_cfg: dict, ctx: BuildContext, logger) -> dict:

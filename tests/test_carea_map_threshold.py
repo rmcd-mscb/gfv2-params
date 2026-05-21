@@ -2,9 +2,17 @@
 mode, per-VPU) and match the scalar path cell-for-cell when the array is
 constant (issue #55)."""
 
+import csv
+from pathlib import Path
+
 import numpy as np
+import pytest
 
 from gfv2_params.depstor import compute_carea_map_binary
+from gfv2_params.depstor_builders.carea_map import (
+    load_reference_table,
+    resolve_scalar_thresholds,
+)
 
 
 def _inputs():
@@ -38,3 +46,37 @@ def test_per_cell_array_threshold_varies():
     out = compute_carea_map_binary(perv, onstream, twi, arr, -9999.0, land)
     assert out[0, 1] == 255  # 9 !> 10
     assert out[0, 2] == 1    # onstream rescues
+
+
+def _write_table(tmp_path) -> Path:
+    p = tmp_path / "twi_reference_percentiles.hydrodem.csv"
+    with open(p, "w", newline="") as f:
+        w = csv.DictWriter(f, fieldnames=["source", "scope", "vpu", "p_carea", "p_smidx", "t_carea", "t_smidx"])
+        w.writeheader()
+        w.writerow({"source": "hydrodem", "scope": "conus", "vpu": "CONUS", "p_carea": 8, "p_smidx": 16, "t_carea": 7.7, "t_smidx": 14.9})
+        w.writerow({"source": "hydrodem", "scope": "vpu", "vpu": "17", "p_carea": 8, "p_smidx": 16, "t_carea": 6.2, "t_smidx": 12.1})
+    return p
+
+
+def test_load_reference_table_indexes_by_scope_vpu(tmp_path):
+    table = load_reference_table(_write_table(tmp_path))
+    assert table[("conus", "CONUS")]["t_carea"] == 7.7
+    assert table[("vpu", "17")]["t_smidx"] == 12.1
+
+
+def test_resolve_scalar_conus(tmp_path):
+    table = load_reference_table(_write_table(tmp_path))
+    tc, ts = resolve_scalar_thresholds(table, scope="conus", vpu=None)
+    assert (tc, ts) == (7.7, 14.9)
+
+
+def test_resolve_scalar_single_vpu(tmp_path):
+    table = load_reference_table(_write_table(tmp_path))
+    tc, ts = resolve_scalar_thresholds(table, scope="vpu", vpu="17")
+    assert (tc, ts) == (6.2, 12.1)
+
+
+def test_resolve_scalar_missing_vpu_raises(tmp_path):
+    table = load_reference_table(_write_table(tmp_path))
+    with pytest.raises(KeyError, match="no reference row"):
+        resolve_scalar_thresholds(table, scope="vpu", vpu="09")
