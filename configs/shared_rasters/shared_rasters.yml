@@ -82,6 +82,13 @@ steps:
   # (GDAL last-source-wins), writes VRTs to ctx.vrt_dir.
   - name: build_vrt
 
+  # Stage 2a': valid-land TWI percentile cutoffs per source (issue #55/#94).
+  # Defaults derived by inverting 8.0/15.6 on ArcPy VPU 01; override with
+  # `percentiles: {carea_max: <P>, smidx: <P>}`.
+  - name: twi_reference
+    sources: [arcpy, hydrodem]
+    decimate: 20
+
   # Stage 2b: derived rasters (soil_moist_max = RootDepth * AWC).
   - name: build_derived_rasters
 
