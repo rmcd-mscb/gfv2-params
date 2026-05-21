@@ -18,8 +18,8 @@ from typing import Optional
 
 import numpy as np
 import rasterio
-from rasterio.crs import CRS
 from rasterio.coords import BoundingBox
+from rasterio.crs import CRS
 from rasterio.features import rasterize as rio_rasterize
 from rasterio.transform import Affine
 from scipy import ndimage

@@ -14,9 +14,8 @@ These modules are thin orchestration wrappers around those helpers.
 
 from __future__ import annotations
 
-from .context import BuildContext
-
 from . import carea_map, dprst, imperv, intersect, landmask, perv, routing, streambuffer, vpu_id, waterbody
+from .context import BuildContext
 
 BUILDERS = {
     "landmask":      landmask.build,

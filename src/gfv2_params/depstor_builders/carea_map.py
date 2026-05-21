@@ -74,6 +74,7 @@ def _threshold_lut(table: dict, column: str):
     vpu_id nodata code; fill it with +inf so unmapped cells never pass twi>thr.
     """
     import numpy as np  # noqa: PLC0415
+
     from .vpu_id import vpu_to_code  # noqa: PLC0415
     rows = {vpu: row for (scope, vpu), row in table.items() if scope == "vpu"}
     size = max((vpu_to_code(v) for v in rows), default=0) + 1

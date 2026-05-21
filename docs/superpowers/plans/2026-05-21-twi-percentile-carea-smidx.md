@@ -1328,7 +1328,7 @@ Expected: percentile-mode parameters barely move between ArcPy and hydrodem (sma
 
 - [ ] **Step 1: Update docs**
 
-- `slurm_batch/RUNME.md`: add a stage for `submit_twi_completion.sh` (finish `twi.vrt` + build `twi_hydrodem.vrt`), the `twi_reference` step, and percentile-mode carea_map (note the `vpu_id` step + mode↔source pairing). 
+- `slurm_batch/RUNME.md`: add a stage for `submit_twi_completion.sh` (finish `twi.vrt` + build `twi_hydrodem.vrt`), the `twi_reference` step, and percentile-mode carea_map (note the `vpu_id` step + mode↔source pairing).
 - `README.md`: replace the line that says the calibration thresholds reference the canonical ArcPy TWI with a pointer to the percentile refactor + the spec; note `twi_hydrodem.vrt` is now a first-class source.
 - `build_vrt.py`: soften the "DO NOT SWAP" comment on the `twi` type to: absolute mode still requires ArcPy TWI, but percentile mode (`twi_reference` + carea_map `threshold_mode: percentile`) makes `twi_hydrodem` safe — cross-reference the spec.
 - `configs/base_config.yml`: replace the oregon `⚠️ #94` carea-degenerate caveat with a note that percentile mode + `twi_hydrodem.vrt` resolves it.

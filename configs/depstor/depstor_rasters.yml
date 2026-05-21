@@ -67,12 +67,12 @@ steps:
     # Percentile reads the reference table for the matching twi_source; pick the
     # source by pointing the profile's twi_raster at twi.vrt or twi_hydrodem.vrt.
     threshold_mode: percentile
-    reference_scope: vpu          # vpu | conus
+    reference_scope: vpu # vpu | conus
     reference_table: "{data_root}/shared/conus/twi_reference_percentiles.hydrodem.csv"
     # Used only when threshold_mode: absolute
     thresholds:
       carea_max: 8.0
-      smidx:     15.6
+      smidx: 15.6
     outputs:
       carea_max: carea_map_t8_binary.tif
-      smidx:     carea_map_t156_binary.tif
+      smidx: carea_map_t156_binary.tif

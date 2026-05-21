@@ -2,7 +2,7 @@
 
 import pytest
 
-from gfv2_params.depstor_builders.vpu_id import vpu_to_code, resolve_vpu_source
+from gfv2_params.depstor_builders.vpu_id import resolve_vpu_source, vpu_to_code
 
 
 def test_vpu_to_code_zero_padded():
