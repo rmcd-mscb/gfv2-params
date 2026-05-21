@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from .context import BuildContext
 
-from . import carea_map, dprst, imperv, intersect, landmask, perv, routing, streambuffer, waterbody
+from . import carea_map, dprst, imperv, intersect, landmask, perv, routing, streambuffer, vpu_id, waterbody
 
 BUILDERS = {
     "landmask":      landmask.build,
@@ -28,6 +28,7 @@ BUILDERS = {
     "routing":       routing.build,
     "drains_perv":   intersect.build,
     "drains_imperv": intersect.build,
+    "vpu_id":        vpu_id.build,
     "carea_map":     carea_map.build,
 }
 
@@ -41,6 +42,7 @@ STEP_ORDER = [
     "routing",
     "drains_perv",
     "drains_imperv",
+    "vpu_id",
     "carea_map",
 ]
 
