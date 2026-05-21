@@ -26,8 +26,14 @@ SB=(sbatch --parsable -p cpu -A impd --ntasks=1
     --output=logs/job_%j.out --error=logs/job_%j.err)
 
 # 1) merge ArcPy per-RPU TWI -> per-VPU Twi_merged for every raster VPU in the
-#    manifest (idempotent; --force re-merges 01 too so all 18 are consistent).
-merge=$("${SB[@]}" --job-name=twi_merge --time=12:00:00 --cpus-per-task=16 --mem=96G \
+#    manifest. --force is REQUIRED here: the builder's skip-if-output-exists is
+#    idempotent on file existence, but VPUs 02..18 already exist as empty ~stubs
+#    from the #94 gap, so a non-forced run would skip them and never fill the
+#    gap. --force overwrites the stubs. (To resume after a partial failure, scope
+#    it: --vpus 10,11,...,18 --force leaves the already-good 01..09 untouched.)
+#    384G: VPU 10 (largest, 9 RPUs) holds several full-extent float32 copies in
+#    the merge+mask+write path and OOMs at 96G; the cpu partition has 503G nodes.
+merge=$("${SB[@]}" --job-name=twi_merge --time=12:00:00 --cpus-per-task=8 --mem=384G \
   --wrap="pixi run --as-is python scripts/build_shared_rasters.py \
           --config $CFG --step merge_rpu_by_vpu_twi --vpus $RASTER_VPUS --force")
 echo "merge_rpu_by_vpu_twi: $merge"
