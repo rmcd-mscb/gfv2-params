@@ -15,16 +15,21 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 mkdir -p logs
 CFG=configs/shared_rasters/shared_rasters.yml
+# The TWI manifest (merge_rpu_by_vpu_twi.yml) is keyed by RASTER VPUs (01..18),
+# but shared_rasters.yml's `vpus:` is the DETAILED list (03N/03S/03W, 10L/10U).
+# Iterating the detailed list makes the merge skip VPU 03 and 10 ("not in
+# manifest"), leaving twi.vrt incomplete. Drive the merge with the raster VPUs.
+RASTER_VPUS=01,02,03,04,05,06,07,08,09,10,11,12,13,14,15,16,17,18
 # Common directives every job needs (partition/account/logs); the QOS rejects
 # jobs that omit partition/account/time/mem.
 SB=(sbatch --parsable -p cpu -A impd --ntasks=1
     --output=logs/job_%j.out --error=logs/job_%j.err)
 
-# 1) merge ArcPy per-RPU TWI -> per-VPU Twi_merged for every VPU in the manifest
-#    (idempotent; --force re-merges 01 too so all 18 are consistent).
+# 1) merge ArcPy per-RPU TWI -> per-VPU Twi_merged for every raster VPU in the
+#    manifest (idempotent; --force re-merges 01 too so all 18 are consistent).
 merge=$("${SB[@]}" --job-name=twi_merge --time=12:00:00 --cpus-per-task=16 --mem=96G \
   --wrap="pixi run --as-is python scripts/build_shared_rasters.py \
-          --config $CFG --step merge_rpu_by_vpu_twi --force")
+          --config $CFG --step merge_rpu_by_vpu_twi --vpus $RASTER_VPUS --force")
 echo "merge_rpu_by_vpu_twi: $merge"
 
 # 2) (re)build CONUS VRTs after the merge — builds twi.vrt AND twi_hydrodem.vrt.
