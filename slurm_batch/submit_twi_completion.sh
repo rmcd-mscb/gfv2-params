@@ -1,24 +1,44 @@
 #!/usr/bin/env bash
-# Finish twi.vrt (ArcPy Twi_merged for VPUs 02-18 were never merged) and build
-# both TWI VRTs (twi.vrt + twi_hydrodem.vrt). Inputs are all staged: per-RPU
-# TWI at input/twi/<rpu>/twi.tif (59 RPUs) and per-VPU land masks for all 18.
-# Pure on-cluster; no ArcPy. Run from a shell with ~/.pixi/bin on PATH.
+# Finish twi.vrt (ArcPy Twi_merged for VPUs 02-18 were never merged), build both
+# TWI VRTs (twi.vrt + twi_hydrodem.vrt), and compute the TWI reference percentiles
+# — the three shared-raster steps the percentile carea_map pipeline depends on.
+# Inputs are all staged: per-RPU TWI at input/twi/<rpu>/twi.tif (59 RPUs) and
+# per-VPU land masks for all 18. Pure on-cluster; no ArcPy.
+#
+# Submits three afterok-chained jobs (merge -> build_vrt -> twi_reference) with
+# the cluster's required directives (-p cpu -A impd + time/mem), mirroring
+# slurm_batch/build_shared_rasters.batch. Run from a shell with ~/.pixi/bin on
+# PATH (sbatch inherits it):
 #
 #   bash slurm_batch/submit_twi_completion.sh
 set -euo pipefail
 cd "$(dirname "$0")/.."
+mkdir -p logs
 CFG=configs/shared_rasters/shared_rasters.yml
+# Common directives every job needs (partition/account/logs); the QOS rejects
+# jobs that omit partition/account/time/mem.
+SB=(sbatch --parsable -p cpu -A impd --ntasks=1
+    --output=logs/job_%j.out --error=logs/job_%j.err)
 
-# 1) merge ArcPy per-RPU TWI -> per-VPU Twi_merged for every VPU (idempotent;
-#    --force re-merges 01 too so all 18 are consistent).
-merge=$(sbatch --parsable --job-name=twi_merge \
+# 1) merge ArcPy per-RPU TWI -> per-VPU Twi_merged for every VPU in the manifest
+#    (idempotent; --force re-merges 01 too so all 18 are consistent).
+merge=$("${SB[@]}" --job-name=twi_merge --time=12:00:00 --cpus-per-task=16 --mem=96G \
   --wrap="pixi run --as-is python scripts/build_shared_rasters.py \
           --config $CFG --step merge_rpu_by_vpu_twi --force")
 echo "merge_rpu_by_vpu_twi: $merge"
 
 # 2) (re)build CONUS VRTs after the merge — builds twi.vrt AND twi_hydrodem.vrt.
-vrt=$(sbatch --parsable --dependency=afterok:$merge --job-name=twi_vrt \
+vrt=$("${SB[@]}" --dependency=afterok:"$merge" --job-name=twi_vrt \
+  --time=02:00:00 --cpus-per-task=8 --mem=48G \
   --wrap="pixi run --as-is python scripts/build_shared_rasters.py \
           --config $CFG --step build_vrt --force")
 echo "build_vrt: $vrt"
-echo "Submitted. When done, verify with: scripts/build_shared_rasters.py logs + gdalinfo on both VRTs."
+
+# 3) valid-land TWI percentile cutoffs per VPU + CONUS, both sources.
+ref=$("${SB[@]}" --dependency=afterok:"$vrt" --job-name=twi_ref \
+  --time=04:00:00 --cpus-per-task=8 --mem=64G \
+  --wrap="pixi run --as-is python scripts/build_shared_rasters.py \
+          --config $CFG --step twi_reference --force")
+echo "twi_reference: $ref"
+
+echo "Chained merge($merge) -> vrt($vrt) -> twi_reference($ref). Watch: squeue -u \$USER"
