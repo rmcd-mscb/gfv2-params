@@ -44,7 +44,21 @@ RASTER_TYPES = {
     "aspect":    ("NEDSnapshot_merged_aspect_*.tif", "-9999"),
     "fdr":       ("Fdr_merged_*.tif", "255"),
     "twi":       ("Twi_merged_*.tif", "-9999"),
+    # Open-source WhiteboxTools TWI (issue #94): CONUS-complete, drop-in grid
+    # with fdr.vrt. Tiles report an "unnamed" Albers CRS, so the VRT must be
+    # stamped with a named EPSG:5070 to satisfy carea_map's CRS-equality check.
+    "twi_hydrodem": ("Twi_hydrodem_*.tif", "-9999"),
 }
+
+# VRT types whose source tiles carry an unnamed/implicit CRS and must be
+# stamped with an explicit EPSG so strict CRS-equality checks downstream pass.
+_SRS_OVERRIDES = {"twi_hydrodem": "EPSG:5070"}
+
+
+def _srs_override(vrt_name: str) -> str | None:
+    """EPSG string to force onto the built VRT, or None to keep source CRS."""
+    return _SRS_OVERRIDES.get(vrt_name)
+
 
 def build(step_cfg: dict, ctx: SharedRastersContext, logger) -> dict:
     """Build CONUS-wide VRTs for elevation, slope, aspect, fdr, twi.
@@ -93,6 +107,17 @@ def build(step_cfg: dict, ctx: SharedRastersContext, logger) -> dict:
             raise RuntimeError(f"gdal.BuildVRT failed for {vrt_name}")
         vrt_ds.FlushCache()
         del vrt_ds
+
+        epsg = _srs_override(vrt_name)
+        if epsg is not None:
+            from osgeo import osr
+            srs = osr.SpatialReference()
+            srs.SetFromUserInput(epsg)
+            ds = gdal.Open(str(vrt_path), gdal.GA_Update)
+            ds.SetProjection(srs.ExportToWkt())
+            ds.FlushCache()
+            del ds
+            logger.info("Stamped %s with %s", vrt_path, epsg)
 
         built_count += 1
         produced[f"{vrt_name}_vrt"] = vrt_path
