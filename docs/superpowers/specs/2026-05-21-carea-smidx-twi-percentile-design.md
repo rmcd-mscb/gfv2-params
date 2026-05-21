@@ -186,23 +186,28 @@ A new step computes the `T_P` table over valid-land TWI:
   VPU 01 ArcPy distribution, used to seed `P_carea` / `P_smidx`.
 - Cheap (decimated/streamed percentile over land-masked TWI per VPU + CONUS).
 
-### 4.3 `carea_max` / `smidx_coef` refactor (Approach A — zonal stage)
+### 4.3 `carea_max` / `smidx_coef` refactor (reuse the existing builder)
 
-A `threshold_mode` switch:
+Because the reference-population choice (§3.2–3.3) makes the cutoff a **per-region
+value applied per cell** — the same shape as today's `8.0` — there is **no new
+zonal runner.** The existing `carea_map` binary builder + count + ratio pipeline is
+reused end to end; only the *source of the threshold number* changes, fed via a
+`threshold_mode` switch in [depstor_rasters.yml](../../../configs/depstor/depstor_rasters.yml):
 
-- **`absolute`** (default for now) — 8.0 / 15.6 via the **existing binary-raster
-  builder + count/ratio**, untouched. This is the calibrated A/B baseline.
-- **`percentile`** with `reference_scope: vpu | conus` and
-  `twi_source: arcpy | hydrodem` — a **new zonal runner** resolves each HRU's
-  threshold (`mode × scope × source`; per-VPU keyed by the HRU's VPU — a profile
-  scalar for single-VPU fabrics like oregon, an HRU attribute for multi-VPU gfv2)
-  and computes the parameter directly per HRU: same numpy classify as
-  `compute_carea_map_binary`, aggregated per HRU instead of rasterized.
+- **`absolute`** (default) — scalar 8.0 / 15.6, exactly as today.
+- **`percentile`** with `reference_scope: vpu | conus` and `twi_source: arcpy |
+  hydrodem` — the builder reads the §4.2 reference table:
+  - **`conus` scope** (or any single-VPU fabric) → a **scalar** `T_P` per param;
+    drop-in for `8.0`/`15.6` in the existing per-strip classify.
+  - **`vpu` scope on a multi-VPU fabric** (gfv2) → a **per-cell threshold array**
+    built from a `vpu_id` raster (§4.5): each cell's `T_P = table[source][vpu_id]`.
 
-**Decision:** keep `absolute` on the existing builder (zero regression risk to the
-trusted baseline, exact byte-for-byte A/B reference) rather than unifying both modes
-into one runner. Accepts two code paths short-term; can collapse to one once
-percentile mode is validated.
+The classify itself (`compute_carea_map_binary`) is unchanged except that
+`threshold` may be a scalar **or** a per-cell array (`twi > threshold` broadcasts
+either way). The two `carea_map_t8/t156_binary.tif` artifacts are still produced —
+useful for the §5 source A/B byte-diff. The existing `carea_t8_frac` /
+`carea_t156_frac` zonal counts and the `carea_max` / `smidx_coef` ratios are
+**untouched.**
 
 The parameter contract is **unchanged**: same pervious denominator, same onstream
 inclusion, same clamp to 1.0, same per-HRU [0, 1] float into the same PRMS slots.
@@ -237,26 +242,27 @@ the off-diagonal) when `threshold_mode: absolute` is paired with any non-ArcPy
 ### 4.5 Per-VPU threshold application (multi-VPU fabrics, e.g. gfv2)
 
 `reference_scope: vpu` resolves a different `T_P` per VPU, so a fabric spanning
-multiple VPUs (gfv2 = all 18) needs an HRU→VPU mapping. Because the percentile
-runner processes HRUs one at a time (Approach A, §4.3), this is a per-HRU lookup,
-not a spatial operation.
+multiple VPUs (gfv2 = all 18) needs an HRU→VPU mapping. This is realized as a
+**`vpu_id` raster on the template grid** (a small new builder step): the fabric
+HRU polygons are rasterised burning an integer VPU code, so every cell of an HRU
+carries **that HRU's home VPU**. The `carea_map` builder maps `vpu_id → T_P` to
+form the per-cell threshold array (§4.3).
 
-**HRU→VPU resolution precedence:**
+**VPU-code resolution precedence (for building the `vpu_id` raster):**
 
 1. **Profile `vpu:` scalar** — single-VPU fabrics (oregon → `vpu: "17"`) declare
-   their VPU in the profile; every HRU uses that `T_P`.
-2. **Fabric `vpu` attribute** — multi-VPU fabrics use the per-HRU column. Verified
-   present on gfv2 (`gfv2_nhru_merged.gpkg` layer `nhru`: fields include `vpu`,
-   `source_vpu`, `vpu_agg_id`; 361,471 HRUs). The runner loads an
-   `id_feature → vpu` map once from the fabric and looks up each HRU by id within
-   the batch (no dependency on batch files carrying the attribute).
+   their VPU in the profile; the `vpu_id` raster is a constant fill (or the builder
+   uses the scalar `T_P` directly and skips the raster).
+2. **Fabric `vpu` attribute** — multi-VPU fabrics rasterise the per-HRU column.
+   Verified present on gfv2 (`gfv2_nhru_merged.gpkg` layer `nhru`: fields include
+   `vpu`, `source_vpu`, `vpu_agg_id`; 361,471 HRUs).
 3. **Neither present** — `percentile` + `vpu` scope raises with a clear message
    (require a profile `vpu:` or a fabric `vpu` column).
 
-**Border HRUs:** an HRU is assigned to its single home `vpu` (the attribute value),
-so it gets exactly one threshold even if its cells drape slightly across a VPU
-boundary — well-defined, no per-cell ambiguity. This matches how the parameter is
-already a single per-HRU value.
+**Border cells:** because the rasteriser burns the *HRU polygon's* `vpu` value,
+every cell of an HRU gets that HRU's home-VPU threshold even where the HRU drapes
+across a VPU divide — i.e. the raster realises exactly the per-HRU home-VPU
+assignment, with no per-cell ambiguity.
 
 **Reference-percentile coverage:** the §4.2 table must contain a per-VPU `T_P` for
 every VPU present in the fabric. The pre-step computes all 18 regardless, so gfv2
@@ -281,10 +287,11 @@ loudly otherwise.
 
 ## 6. Tests & docs
 
-- **Unit tests** (builder + test together, repo convention): percentile
-  computation over a masked array; threshold resolution (`mode × scope × source`,
-  per-VPU lookup); per-HRU classify + aggregate equivalence with
-  `compute_carea_map_binary` on a synthetic grid; CDF-inversion helper.
+- **Unit tests** (builder + test together, repo convention): valid-land
+  percentile computation over a masked array; CDF-inversion helper (percentile of
+  8.0/15.6); threshold resolution (`mode × scope × source`); `vpu_id → T_P` per-cell
+  threshold mapping; `compute_carea_map_binary` accepting a per-cell array threshold
+  (equivalence with the scalar path on a synthetic grid).
 - **Docs:** README, `slurm_batch/RUNME.md` (new Stage: TWI merge completion +
   reference-percentile + percentile-mode params), update the #94 caveat in
   [base_config.yml](../../../configs/base_config.yml), refresh the
