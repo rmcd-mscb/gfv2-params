@@ -14,12 +14,19 @@ fabrics:
   gfv2:
     expected_max_hru_id: 361471
     batch_size: 10000
-    template_raster: "{data_root}/shared/conus/vrt/elevation.vrt"
-    # FDR is CONUS hydrology, not fabric-specific. Use the shared open-source
-    # VRT assembled by build_vrt.py from per-VPU Fdr_merged_*.tif. (Contrast
-    # with twi_raster, where the ArcPy `Twi_merged_*` source is preferred over
-    # the open-source `Twi_hydrodem_*` for PRMS calibration thresholds.)
-    fdr_raster: "{data_root}/shared/conus/vrt/fdr.vrt"
+    # template_raster + fdr_raster point at a fabric-bounds clip of the CONUS
+    # fdr.vrt (here ~CONUS, since gfv2 is CONUS), staged by
+    # scripts/clip_shared_to_fabric.py. The template MUST share the hydrology
+    # (Lattice-B) grid with twi.vrt — carea_map rejects a template that is not
+    # whole-cell aligned with TWI. The former elevation.vrt template is on the
+    # DEM lattice (a fractional-cell offset from twi.vrt) and would fail that
+    # check at CONUS scale. The clip is also the FDR source (open-source CONUS
+    # FDR, the same data the VRT mosaics — not a per-fabric ArcPy FDR).
+    # Run: pixi run --as-is python scripts/clip_shared_to_fabric.py --fabric gfv2
+    template_raster: "{data_root}/gfv2/shared/gfv2_fdr.vrt"
+    fdr_raster: "{data_root}/gfv2/shared/gfv2_fdr.vrt"
+    # NOTE: twi.vrt does not cover gfv2's northernmost HRUs (a TWI data-coverage
+    # gap, tracked separately from the template-lattice fix above).
     twi_raster: "{data_root}/shared/conus/vrt/twi.vrt"
     segments_gpkg: "{data_root}/input/depstor/{fabric}_segments_wbodies.gpkg"
     waterbody_gpkg: "{data_root}/input/depstor/{fabric}_segments_wbodies.gpkg"
@@ -55,9 +62,6 @@ fabrics:
     id_feature: nat_hru_id
 
   oregon:
-    # Depstor inputs not yet staged for oregon. Depstor scripts will raise
-    # a clear "fabric profile 'oregon' missing 'template_raster'" error if
-    # invoked with --fabric oregon until the inputs are wired up.
     expected_max_hru_id: 16814
     batch_size: 10000
     # Oregon's pre-merged fabric uses `hru_id` (contiguous 1..16814, matching
@@ -66,29 +70,33 @@ fabrics:
     # Single-file fabric: one gpkg holds nhru/nsegment/... layers. hru_gpkg is
     # authoritative for prepare_fabric, the ssflux build_weights step, and
     # gap-fill (merge_and_fill_params) — no {fabric}_nhru_merged.gpkg naming
-    # convention. When depstor is staged, segments_gpkg can point at this same
-    # file with segments_layer: nsegment; a waterbody source still needs
-    # staging (this gpkg has no waterbody layer).
+    # convention. segments_gpkg points at this same file (segments_layer:
+    # nsegment).
     hru_gpkg: "{data_root}/oregon/fabric/model_layers 9.gpkg"
     hru_layer: nhru
-    # --- depstor inputs (COMMENTED; oregon stays zonal-only until staged) ---
-    # Tracked in issue #90. Do NOT uncomment until the waterbody source below
-    # is staged: the waterbody builder raises if waterbody_gpkg/waterbody_layer
-    # are unset (#88 decision).
-    #
-    # Rasters use the CONUS VRTs, exactly like the gfv2 profile: depstor clips
-    # every output to the HRU fabric via land_mask.tif (rasterised from
-    # hru_gpkg), so the rasters only need to *cover* the Oregon domain — no VPU
-    # scoping required. Oregon's HRUs happen to fall in VPU 17 and per-VPU Part 1
-    # tiles exist (shared/per_vpu/17/*_merged_17.tif), but using them is only a
-    # Part 1 compute-scoping optimization, not part of this fabric's identity.
-    # template_raster: "{data_root}/shared/conus/vrt/elevation.vrt"
-    # fdr_raster:      "{data_root}/shared/conus/vrt/fdr.vrt"
-    # twi_raster:      "{data_root}/shared/conus/vrt/twi.vrt"
-    # segments_gpkg:   "{data_root}/oregon/fabric/model_layers 9.gpkg"  # nsegment layer exists
-    # segments_layer:  nsegment
-    # BLOCKER (#90): the Oregon gpkg has no waterbody layer (layers are
-    # domain/main/nhru/npoi/npoigages/nsegment). A real waterbody source must be
-    # staged (NHDPlusV2 v2_wb-style, like gfv2) before depstor can run.
-    # waterbody_gpkg:  "{data_root}/input/depstor/oregon_waterbodies.gpkg"
-    # waterbody_layer: <layer-name>   # set once the waterbody source is staged
+    # --- depstor inputs (active; see issue #90) ---
+    # template_raster + fdr_raster both point at a fabric-bounds clip of the
+    # CONUS fdr.vrt, staged by scripts/clip_shared_to_fabric.py. Every depstor
+    # builder sizes its arrays to the template grid, so clipping scopes compute
+    # to the fabric extent (~0.56B cells here vs ~15B CONUS) while staying
+    # VPU-agnostic (works for fabrics that straddle VPU boundaries). The clip
+    # comes from fdr.vrt — the hydrology (Lattice-B) grid that carea_map requires
+    # the template to share with twi.vrt; elevation.vrt is on a different lattice.
+    # The same VRT serves as fdr_raster: routing's whole-source reproject_match
+    # then reads only the fabric window, not the full ~18 GB CONUS FDR.
+    # Run: pixi run --as-is python scripts/clip_shared_to_fabric.py --fabric oregon
+    template_raster: "{data_root}/oregon/shared/oregon_fdr.vrt"
+    fdr_raster: "{data_root}/oregon/shared/oregon_fdr.vrt"
+    # TWI: carea_map WarpedVRT-windows the CONUS twi.vrt onto the template grid
+    # (its footprint covers the Oregon extent). ⚠️ But twi.vrt currently carries
+    # ArcPy TWI for VPU 01 ONLY (issue #94) — over Oregon (VPU 17) every TWI cell
+    # is nodata, so carea_max/smidx_coef come out degenerate. Stage 2d still
+    # builds the full raster stack and the non-TWI params correctly; do not treat
+    # carea_max/smidx_coef as valid here until #94 is resolved.
+    twi_raster: "{data_root}/shared/conus/vrt/twi.vrt"
+    segments_gpkg: "{data_root}/oregon/fabric/model_layers 9.gpkg"
+    segments_layer: nsegment
+    # CONUS NHDPlusV2 waterbodies (POLYGON, EPSG:5070); the waterbody builder
+    # reprojects to the template grid and clips to the Oregon land mask.
+    waterbody_gpkg: "{data_root}/input/nhd/conus_waterbodies.gpkg"
+    waterbody_layer: waterbodies

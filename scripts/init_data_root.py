@@ -245,9 +245,13 @@ def _fabric_profile_stub(fabric: str) -> str:
         f"    # fabric, point it at the gpkg you staged (any name).\n"
         f'    hru_gpkg: "{{data_root}}/{{fabric}}/fabric/{{fabric}}_nhru_merged.gpkg"  # TODO: set to your fabric gpkg\n'
         f"    hru_layer: nhru\n"
-        f"    # Uncomment + set these only if the depstor pipeline is run for this fabric:\n"
-        f'    # template_raster: "{{data_root}}/shared/conus/vrt/elevation.vrt"\n'
-        f'    # fdr_raster: "{{data_root}}/shared/conus/vrt/fdr.vrt"\n'
+        f"    # Uncomment + set these only if the depstor pipeline is run for this fabric.\n"
+        f"    # template_raster + fdr_raster: stage a fabric-bounds FDR clip first with\n"
+        f"    #   pixi run --as-is python scripts/clip_shared_to_fabric.py --fabric {fabric}\n"
+        f"    # then point BOTH at the clip (it sizes depstor compute to the fabric and\n"
+        f"    # shares the hydrology lattice carea_map requires vs twi.vrt).\n"
+        f'    # template_raster: "{{data_root}}/{{fabric}}/shared/{{fabric}}_fdr.vrt"\n'
+        f'    # fdr_raster: "{{data_root}}/{{fabric}}/shared/{{fabric}}_fdr.vrt"\n'
         f'    # twi_raster: "{{data_root}}/shared/conus/vrt/twi.vrt"\n'
         f'    # segments_gpkg: "{{data_root}}/input/depstor/{{fabric}}_segments_wbodies.gpkg"\n'
         f"    # segments_layer: nsegment\n"
