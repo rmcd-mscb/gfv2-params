@@ -30,3 +30,11 @@ def test_resolve_falls_back_to_attribute():
 def test_resolve_errors_when_neither():
     with pytest.raises(ValueError, match="requires a profile `vpu`"):
         resolve_vpu_source(profile_vpu=None, fabric_has_vpu_attr=False)
+
+
+def test_vpu_to_code_subregions_map_to_parent():
+    assert vpu_to_code("03N") == 3
+    assert vpu_to_code("03S") == 3
+    assert vpu_to_code("03W") == 3
+    assert vpu_to_code("10L") == 10
+    assert vpu_to_code("10U") == 10

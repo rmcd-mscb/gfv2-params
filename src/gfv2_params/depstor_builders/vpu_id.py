@@ -17,19 +17,28 @@ import numpy as np
 import rasterio
 from rasterio.features import rasterize
 
+from gfv2_params.config import VPU_RASTER_MAP
+
 from ..depstor import RasterInfo
 from .context import BuildContext
 
 VPU_NODATA = 0  # 0 is not a valid VPU code (VPUs are 01..18 -> 1..18)
+MAX_VPU_CODE = 18  # NHDPlus raster VPUs 01..18 (sub-regions map to parent)
 
 
 def vpu_to_code(vpu: str) -> int:
-    """'01'..'18' -> 1..18. Raises on anything that isn't a VPU label."""
+    """Detailed or raster VPU label -> integer raster-VPU code (1..18).
+
+    Sub-region labels (03N/03S/03W, 10L/10U) map to their parent raster VPU via
+    VPU_RASTER_MAP (03->3, 10->10), so they share one code/threshold — matching
+    the per-raster-VPU TWI tiles and the reference table. '01'..'18' -> 1..18.
+    """
+    raster = VPU_RASTER_MAP.get(str(vpu), str(vpu))
     try:
-        code = int(str(vpu).lstrip("0") or "0")
+        code = int(raster.lstrip("0") or "0")
     except (TypeError, ValueError):
         raise ValueError(f"Not a VPU label: {vpu!r}")
-    if not 1 <= code <= 21:  # NHDPlus VPUs run 01..18 (+ a few sub-regions)
+    if not 1 <= code <= MAX_VPU_CODE:
         raise ValueError(f"VPU code out of range: {vpu!r} -> {code}")
     return code
 

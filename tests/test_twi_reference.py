@@ -8,6 +8,7 @@ from gfv2_params.shared_rasters.twi_reference import (
     assemble_reference_table,
     percentile_of_values,
     rank_of_value,
+    raster_vpus,
 )
 
 
@@ -80,3 +81,10 @@ def test_assemble_reference_table_explicit_percentiles_skip_inversion():
     r = next(x for x in rows if x["scope"] == "vpu")
     assert r["p_carea"] == 75.0 and r["p_smidx"] == 95.0
     assert r["t_carea"] == pytest.approx(75.25, abs=0.5)
+
+
+def test_raster_vpus_dedup_subregions():
+    assert raster_vpus(["01", "02", "03N", "03S", "03W", "10L", "10U", "17"]) == [
+        "01", "02", "03", "10", "17",
+    ]
+    assert raster_vpus(["01", "01", "18"]) == ["01", "18"]

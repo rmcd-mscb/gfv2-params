@@ -5,6 +5,7 @@ from __future__ import annotations
 import csv
 from contextlib import ExitStack
 
+import numpy as np
 import rasterio
 from rasterio.enums import Resampling
 from rasterio.vrt import WarpedVRT
@@ -12,6 +13,7 @@ from rasterio.windows import Window
 
 from ..depstor import RasterInfo, compute_carea_map_binary
 from .context import BuildContext
+from .vpu_id import MAX_VPU_CODE, vpu_to_code
 
 # TWI is float32 — ~4x the per-strip memory of the uint8 inputs.
 STRIP_ROWS = 1024
@@ -71,14 +73,11 @@ def _threshold_lut(table: dict, column: str):
     """Build a code-indexed lookup array: lut[vpu_code] = threshold.
 
     vpu_code is the integer from vpu_id.vpu_to_code ('17' -> 17). Index 0 is the
-    vpu_id nodata code; fill it with +inf so unmapped cells never pass twi>thr.
+    vpu_id nodata code and any unmapped code stays +inf so those cells never pass
+    twi>thr. Sized to MAX_VPU_CODE+1 so any valid raster-VPU code indexes safely.
     """
-    import numpy as np  # noqa: PLC0415
-
-    from .vpu_id import vpu_to_code  # noqa: PLC0415
     rows = {vpu: row for (scope, vpu), row in table.items() if scope == "vpu"}
-    size = max((vpu_to_code(v) for v in rows), default=0) + 1
-    lut = np.full(size, np.inf, dtype="float64")
+    lut = np.full(MAX_VPU_CODE + 1, np.inf, dtype="float64")
     for vpu, row in rows.items():
         lut[vpu_to_code(vpu)] = row[column]
     return lut
@@ -117,6 +116,8 @@ def build(step_cfg: dict, ctx: BuildContext, logger) -> dict:
             carea_t, smidx_t = resolve_scalar_thresholds(
                 table, scope, ctx.vpu if scope == "vpu" else None)
             per_cell = False
+            logger.info("  percentile thresholds (scope=%s, vpu=%s): carea=%.4f smidx=%.4f",
+                        scope, ctx.vpu if scope == "vpu" else "CONUS", carea_t, smidx_t)
         else:
             # multi-VPU fabric, per-VPU scope -> per-cell threshold via vpu_id
             per_cell = True

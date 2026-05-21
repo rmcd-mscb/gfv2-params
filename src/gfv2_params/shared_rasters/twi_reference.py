@@ -20,6 +20,8 @@ from pathlib import Path
 import numpy as np
 import rasterio
 
+from gfv2_params.config import VPU_RASTER_MAP
+
 
 def _valid(values: np.ndarray, nodata: float | None) -> np.ndarray:
     """Return the finite, non-nodata subset as a 1-D float64 array."""
@@ -54,6 +56,21 @@ LEGACY_CAREA_THRESHOLD = 8.0
 LEGACY_SMIDX_THRESHOLD = 15.6
 
 _TABLE_FIELDS = ["source", "scope", "vpu", "p_carea", "p_smidx", "t_carea", "t_smidx"]
+
+
+def raster_vpus(vpus):
+    """Dedup detailed VPU labels to ordered-unique raster VPUs.
+
+    03N/03S/03W -> 03, 10L/10U -> 10 (via VPU_RASTER_MAP); pass-through otherwise.
+    The per-VPU TWI tiles and land masks live in the raster-VPU namespace, so the
+    reference table is keyed by raster VPU to match.
+    """
+    out = []
+    for v in vpus:
+        rv = VPU_RASTER_MAP.get(str(v), str(v))
+        if rv not in out:
+            out.append(rv)
+    return out
 
 
 def assemble_reference_table(
@@ -125,7 +142,14 @@ def _sample_land_masked_twi(twi_path: Path, mask_path: Path, decimate: int, noda
         oh, ow = max(1, t.height // decimate), max(1, t.width // decimate)
         twi = t.read(1, out_shape=(1, oh, ow))
         tnod = t.nodata if nodata is None else nodata
+        t_hw = (t.height, t.width)
     with rasterio.open(mask_path) as m:
+        if (m.height, m.width) != t_hw:
+            raise ValueError(
+                f"TWI/mask grid mismatch for percentile sampling: "
+                f"TWI {twi_path.name}={t_hw}, mask {mask_path.name}="
+                f"({m.height},{m.width}); they must share a grid."
+            )
         land = m.read(1, out_shape=(1, oh, ow)) == 1
     sample = twi[land]
     return _valid(sample, tnod)
@@ -172,7 +196,7 @@ def build(step_cfg: dict, ctx, logger) -> dict:
             return _sample_land_masked_twi(twi, mask_path(vpu), decimate, nodata)
 
         rows = assemble_reference_table(
-            source=source, vpus=list(ctx.vpus), sampler=sampler,
+            source=source, vpus=raster_vpus(ctx.vpus), sampler=sampler,
             arcpy_vpu01_sample=arcpy01, p_carea=p_carea, p_smidx=p_smidx,
             nodata=nodata,
         )
