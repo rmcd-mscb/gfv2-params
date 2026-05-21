@@ -5,6 +5,7 @@ import numpy as np
 import pytest
 
 from gfv2_params.shared_rasters.twi_reference import (
+    assemble_reference_table,
     percentile_of_values,
     rank_of_value,
 )
@@ -39,9 +40,6 @@ def test_rank_of_value_handles_nodata():
 def test_percentile_empty_raises():
     with pytest.raises(ValueError, match="no valid"):
         percentile_of_values(np.array([-9999.0, np.nan]), [50.0], nodata=-9999.0)
-
-
-from gfv2_params.shared_rasters.twi_reference import assemble_reference_table
 
 
 def test_assemble_reference_table_uses_inverted_defaults():

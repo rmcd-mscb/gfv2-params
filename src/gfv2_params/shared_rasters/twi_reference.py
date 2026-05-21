@@ -14,7 +14,11 @@ This module holds the pure math (percentile / CDF-inversion) plus the
 
 from __future__ import annotations
 
+import csv
+from pathlib import Path
+
 import numpy as np
+import rasterio
 
 
 def _valid(values: np.ndarray, nodata: float | None) -> np.ndarray:
@@ -43,11 +47,6 @@ def rank_of_value(values: np.ndarray, value: float, nodata: float | None = None)
         raise ValueError("rank_of_value: no valid values")
     return float(100.0 * np.count_nonzero(valid <= value) / valid.size)
 
-
-import csv
-from pathlib import Path
-
-import rasterio
 
 # Legacy ArcPy thresholds (docs/0b_TB_depr_stor.py); used to derive default
 # percentiles by inversion so percentile-mode reproduces VPU 01 by construction.
