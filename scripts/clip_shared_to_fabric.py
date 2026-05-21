@@ -52,6 +52,14 @@ def _snap_bounds_to_grid(bounds, transform, buffer_cells: int):
     py = transform.e          # -cellsize
     ox = transform.c          # left edge of column 0
     oy = transform.f          # top edge of row 0
+    # The floor/ceil snapping below is only correct for an axis-aligned, north-up
+    # raster. Fail loudly on a rotated/flipped --source rather than emitting a
+    # silently-wrong window.
+    if transform.b != 0 or transform.d != 0 or px <= 0 or py >= 0:
+        raise ValueError(
+            f"Source raster is not axis-aligned north-up (a={px}, e={py}, "
+            f"b={transform.b}, d={transform.d}); _snap_bounds_to_grid assumes it."
+        )
     cell_x = abs(px)
     cell_y = abs(py)
 
@@ -123,7 +131,15 @@ def main() -> int:
         src_bounds = src.bounds
 
     hru = gpd.read_file(hru_gpkg, layer=hru_layer)
+    n_all = len(hru)
     hru = hru[hru.geometry.notna() & ~hru.geometry.is_empty]
+    if len(hru) == 0:
+        raise ValueError(
+            f"HRU layer '{hru_layer}' in {hru_gpkg} has no valid geometries "
+            f"(read {n_all} rows; all null/empty). Check the hru_layer name."
+        )
+    if len(hru) < n_all:
+        logger.info("  Dropped %d null/empty HRU geometries (%d remain)", n_all - len(hru), len(hru))
     if hru.crs != src_crs:
         logger.info("  Reprojecting HRU bounds from %s to source CRS %s", hru.crs, src_crs)
         hru = hru.to_crs(src_crs)
@@ -149,7 +165,13 @@ def main() -> int:
     )
 
     output.parent.mkdir(parents=True, exist_ok=True)
-    gdal.Translate(str(output), str(source), projWin=[ulx, uly, lrx, lry], format="VRT")
+    # gdal.UseExceptions() makes error-level GDAL failures raise, but some failure
+    # modes return a None dataset without raising — check explicitly so a botched
+    # clip can't leave a stale/missing VRT that the self-checks then read.
+    ds = gdal.Translate(str(output), str(source), projWin=[ulx, uly, lrx, lry], format="VRT")
+    if ds is None:
+        raise RuntimeError(f"gdal.Translate produced no dataset for {output} — clip failed.")
+    ds = None  # close/flush
 
     # Self-checks: clip covers the fabric and is whole-cell aligned with twi.vrt.
     with rasterio.open(output) as clip:
@@ -169,6 +191,12 @@ def main() -> int:
                     "Clip is not whole-cell aligned with twi.vrt; carea_map would "
                     "reject it. Is the source on the hydrology (fdr/twi) lattice?"
                 )
+        else:
+            logger.warning(
+                "  twi.vrt not found at %s — SKIPPED the whole-cell alignment check. "
+                "Clip lattice is UNVERIFIED; if the source is not on the hydrology "
+                "(fdr/twi) lattice, carea_map will reject the template downstream.", twi,
+            )
     logger.info("  Wrote fabric-scoped VRT: %s (%dx%d)", output, width, height)
     logger.info("  Point the profile's template_raster AND fdr_raster at this file.")
     return 0
