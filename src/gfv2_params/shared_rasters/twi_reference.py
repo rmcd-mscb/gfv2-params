@@ -44,9 +44,8 @@ def rank_of_value(values: np.ndarray, value: float, nodata: float | None = None)
     return float(100.0 * np.count_nonzero(valid <= value) / valid.size)
 
 
-from pathlib import Path
-
 import csv
+from pathlib import Path
 
 import rasterio
 
