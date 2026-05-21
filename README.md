@@ -246,10 +246,13 @@ via (highest precedence first):
    fabric, `segments_gpkg` can point at the same gpkg as `hru_gpkg` with
    `segments_layer: nsegment`. The `oregon` profile has these keys active
    (issue #90), using the CONUS NHDPlusV2 waterbodies at
-   `input/nhd/conus_waterbodies.gpkg` (layer `waterbodies`). Caveat: `twi.vrt`
-   only carries ArcPy TWI for VPU 01 (issue #94), so for any other fabric Stage 2d
-   builds the raster stack and the non-TWI params correctly, but `carea_max`/
-   `smidx_coef` are degenerate until that gap is resolved.
+   `input/nhd/conus_waterbodies.gpkg` (layer `waterbodies`). To obtain valid
+   `carea_max`/`smidx_coef` for non-VPU-01 fabrics, use
+   `threshold_mode: percentile` with `twi_raster` pointing at
+   `twi_hydrodem.vrt` (the CONUS-complete open-source source built by
+   `build_vrt`) and build the `twi_reference` percentile table first (Stage
+   2a' in `slurm_batch/RUNME.md`); see
+   `docs/superpowers/specs/2026-05-21-carea-smidx-twi-percentile-design.md`.
 2. Place the fabric gpkg at the `hru_gpkg` path you set, under
    `{data_root}/oregon/fabric/` (NOT in `input/fabric/`)
 3. Run `prepare_fabric.py --fabric oregon` (reads `hru_gpkg` from the profile —
@@ -262,8 +265,9 @@ via (highest precedence first):
    (incidental), so `VPUS=17 sbatch slurm_batch/build_shared_rasters.batch`
    avoids rebuilding all of CONUS for a regional test. Stage 2d depstor is
    **active** for `oregon` (issue #90); after staging the FDR clip (step 1),
-   run `FABRIC=oregon sbatch slurm_batch/build_depstor_rasters.batch`. (As above,
-   the TWI-derived `carea_max`/`smidx_coef` await issue #94; the rest is valid.)
+   run `FABRIC=oregon sbatch slurm_batch/build_depstor_rasters.batch`. For valid
+   `carea_max`/`smidx_coef`, use `threshold_mode: percentile` with
+   `twi_hydrodem.vrt` after completing Stage 2a' (`twi_reference`).
 
 **VPU-based fabric** (per-VPU gpkgs that need merging — e.g., gfv2):
 
@@ -290,9 +294,16 @@ one orchestrator and one unified config:
   (`merge_rpu_by_vpu_twi`), CONUS VRT assembly (`build_vrt`), and CONUS
   derived rasters (`build_derived_rasters`, `build_lulc_rasters`).
 - `compute_dem_derivatives` is registered as an opt-in step (parallel
-  open-source TWI pipeline; not in the default `steps:` list because PRMS
-  calibration thresholds reference the canonical ArcPy-derived TWI — see
-  the [module docstring](src/gfv2_params/shared_rasters/compute_dem_derivatives.py)).
+  open-source TWI pipeline). The absolute calibration thresholds (8.0/15.6)
+  used by `carea_max`/`smidx_coef` still require the ArcPy-derived
+  `twi.vrt` when `threshold_mode: absolute`. However, `carea_map` now also
+  supports `threshold_mode: percentile` (configured in
+  `configs/depstor/depstor_rasters.yml`): it derives the TWI cutoff from the
+  data via the per-VPU reference table produced by the `twi_reference`
+  shared-raster step, making the open-source `twi_hydrodem.vrt` a first-class
+  source that is safe to use. See
+  `docs/superpowers/specs/2026-05-21-carea-smidx-twi-percentile-design.md`
+  for the full design rationale.
 
 These outputs live under `{data_root}/shared/` and are **fabric-independent**:
 every fabric reuses the same CONUS rasters. Per-VPU iteration happens

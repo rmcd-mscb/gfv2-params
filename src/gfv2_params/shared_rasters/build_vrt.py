@@ -32,12 +32,15 @@ from .context import SharedRastersContext
 #   slope/aspect: RichDEM SaveGDAL always writes -9999 (NED-based, raw DEM).
 #   fdr: NHDPlus FDR tiles are Byte rasters with nodata=255 (D8 codes are 1-128).
 #   twi: merge_rpu_by_vpu's TWI case writes float32 and remaps the source
-#        -FLT_MAX sentinel to -9999. **DO NOT SWAP** this to the open-source
-#        Twi_hydrodem_*.tif produced by compute_dem_derivatives: PRMS
-#        parameter extraction (carea_max, smidx_coef) thresholds TWI at
-#        calibrated values (8.0, 15.6) that depend on the original ArcPy TWI
-#        distribution shape. Swapping the source would invalidate those
-#        thresholds. See PR #54 discussion.
+#        -FLT_MAX sentinel to -9999. The absolute thresholds (8.0, 15.6) in
+#        carea_map are calibrated to the ArcPy TWI distribution, so
+#        ``threshold_mode: absolute`` still requires twi.vrt as the source.
+#        However, ``threshold_mode: percentile`` (the ``twi_reference`` shared-
+#        raster step + ``carea_map threshold_mode: percentile`` in
+#        depstor_rasters.yml) derives the cutoff from the data and makes the
+#        open-source ``twi_hydrodem.vrt`` a fully supported first-class source —
+#        see the entry below and
+#        docs/superpowers/specs/2026-05-21-carea-smidx-twi-percentile-design.md.
 RASTER_TYPES = {
     "elevation": ("NEDSnapshot_merged_fixed_*.tif", "-9999"),
     "slope":     ("NEDSnapshot_merged_slope_*.tif", "-9999"),
