@@ -208,6 +208,61 @@ The parameter contract is **unchanged**: same pervious denominator, same onstrea
 inclusion, same clamp to 1.0, same per-HRU [0, 1] float into the same PRMS slots.
 Only the source of the cutoff number changes.
 
+### 4.4 Mode ↔ source pairing
+
+`threshold_mode` and `twi_source` are **independent config axes**, but only one
+combination of each is a valid *production* output. The defaults wire up the
+correct pairing; the cross combinations exist solely for validation.
+
+**Production pairing (the "diagonal" — these are the only shippable outputs):**
+
+| `threshold_mode` | `twi_source` | Meaning |
+|---|---|---|
+| `absolute` (8.0 / 15.6) | `twi.vrt` (ArcPy `Twi_merged`) | The only source those constants were calibrated against. Valid only where ArcPy TWI exists (VPU 01, or anywhere once §4.1 finishes `twi.vrt`). |
+| `percentile` (data-derived) | `twi_hydrodem.vrt` | CONUS-complete open-source source; the path forward for every fabric outside VPU 01. |
+
+**Off-diagonal (validation-only, never shipped):**
+
+- `absolute` × `twi_hydrodem.vrt` — the *broken* case (absolute thresholds on a
+  distribution they were not calibrated to). Run **only** in the §5 invariance
+  proof as the counterexample that demonstrates absolute-mode fragility.
+- `percentile` × `twi.vrt` — used in the §3.4 CDF inversion (measure where
+  8.0/15.6 land in VPU 01's ArcPy distribution) and as the percentile-mode arm of
+  the VPU 01 calibration A/B.
+
+**Guard:** the config loader emits a warning (not a hard error — validation needs
+the off-diagonal) when `threshold_mode: absolute` is paired with any non-ArcPy
+`twi_source`, so a broken combination cannot be shipped by accident.
+
+### 4.5 Per-VPU threshold application (multi-VPU fabrics, e.g. gfv2)
+
+`reference_scope: vpu` resolves a different `T_P` per VPU, so a fabric spanning
+multiple VPUs (gfv2 = all 18) needs an HRU→VPU mapping. Because the percentile
+runner processes HRUs one at a time (Approach A, §4.3), this is a per-HRU lookup,
+not a spatial operation.
+
+**HRU→VPU resolution precedence:**
+
+1. **Profile `vpu:` scalar** — single-VPU fabrics (oregon → `vpu: "17"`) declare
+   their VPU in the profile; every HRU uses that `T_P`.
+2. **Fabric `vpu` attribute** — multi-VPU fabrics use the per-HRU column. Verified
+   present on gfv2 (`gfv2_nhru_merged.gpkg` layer `nhru`: fields include `vpu`,
+   `source_vpu`, `vpu_agg_id`; 361,471 HRUs). The runner loads an
+   `id_feature → vpu` map once from the fabric and looks up each HRU by id within
+   the batch (no dependency on batch files carrying the attribute).
+3. **Neither present** — `percentile` + `vpu` scope raises with a clear message
+   (require a profile `vpu:` or a fabric `vpu` column).
+
+**Border HRUs:** an HRU is assigned to its single home `vpu` (the attribute value),
+so it gets exactly one threshold even if its cells drape slightly across a VPU
+boundary — well-defined, no per-cell ambiguity. This matches how the parameter is
+already a single per-HRU value.
+
+**Reference-percentile coverage:** the §4.2 table must contain a per-VPU `T_P` for
+every VPU present in the fabric. The pre-step computes all 18 regardless, so gfv2
+is covered; the runner validates that each HRU's `vpu` has an entry and fails
+loudly otherwise.
+
 ---
 
 ## 5. Validation & success criteria
@@ -241,10 +296,9 @@ Only the source of the cutoff number changes.
 
 ## 7. Open questions / follow-ups
 
-- **Multi-VPU per-VPU application (gfv2):** per-VPU thresholds on a CONUS fabric
-  need an HRU→VPU mapping (HRU attribute or spatial join). Oregon is single-VPU
-  (profile scalar), so this is only exercised when gfv2 runs percentile-mode —
-  resolve in the implementation plan.
 - **`smidx_exp`** is still not produced by this pipeline (NHM default); unchanged
   by this work, noted for completeness.
 - **Stage 2** (observational decoupling) — separate spec.
+
+(The multi-VPU per-VPU application is resolved in §4.5: gfv2 carries a per-HRU
+`vpu` attribute, so it's a direct lookup, not a spatial join.)
