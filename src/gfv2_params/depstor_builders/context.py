@@ -27,6 +27,7 @@ class BuildContext:
     waterbody_layer: str | None = None
     fdr_raster: Path | None = None
     twi_raster: Path | None = None
+    vpu: str | None = None  # single-VPU fabric's VPU label (e.g. "17"); None = use fabric `vpu` attr
     imperv_source: Path | None = None
     paths: dict[str, Path] = field(default_factory=dict)
     force: bool = False
