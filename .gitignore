@@ -183,6 +183,11 @@ cython_debug/
 output/
 logs/
 
+# Fabric results-viewer figures: the PNGs under docs/figures/<fabric>/ are
+# committed (regenerate with `scripts/render_figures.py`); only the executed
+# notebook copies in the .cache/ subdir are ignored.
+docs/figures/.cache/
+
 # abock's stray working copies, renamed out of the way so they don't shadow
 # imports from the repo root (canonical homes are scripts/ and src/)
 /_gfv2_params_legacy/
