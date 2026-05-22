@@ -421,53 +421,117 @@ pixi run python scripts/prepare_fabric.py \
 
 ### Stage 4: Generate parameters (SLURM array jobs)
 
-#### Recommended: run Part 2 via the unified zonal-params dispatcher
+There are two equivalent ways to run Part 2, and they produce identical
+outputs. Use **4A (run by parameter)** to follow the workflow one parameter at
+a time, inspect each output, or re-run a single one; use **4B (run wholesale)**
+to submit everything in one command. 4B is just a loop over the 4A steps.
 
-After Stage 3 completes (fabric merged + batched), every Part 2 param can
-be driven from one shell invocation:
+Common preamble for both (after Stage 3 — fabric merged + batched):
 
 ```bash
-BATCHES=/path/to/gfv2/batches
-slurm_batch/submit_zonal_params.sh $BATCHES gfv2 configs/base_config.yml
+BATCHES=/path/to/gfv2/batches            # from scripts/prepare_fabric.py; holds manifest.yml
+FABRIC=gfv2
+BASE_CONFIG=configs/base_config.yml
+N=$(grep '^n_batches:' "$BATCHES/manifest.yml" | awk '{print $2}')   # SLURM array size
+THROTTLE=4                               # %N array concurrency cap (avoids shared-FS import storms)
 ```
 
-This loops every entry in `configs/zonal/zonal_params.yml` (10 params today:
-elevation, slope, aspect, soils, soil_moist_max, 4× LULC, ssflux) and
-submits per-param array + merge jobs chained via `afterok`. ssflux's
-`depends_on: build_weights` prereq is detected automatically: the wrapper
-submits `build_zonal_weights.batch` first and chains the ssflux array on
-its `afterok` (the weight matrix is CONUS-once per fabric — idempotent).
-ssflux also chains on the merged slope CSV.
+#### Stage 4A: Run by parameter (incremental)
 
-Env knobs:
+**Zonal params.** Each parameter is a two-step unit: an array job over every
+HRU batch, then a merge that runs `afterok` it. Run them in this order — `slope`
+must be merged before `ssflux`:
 
-- `FABRIC=gfv2_vpu01` — switch to a non-default fabric
-- `SUBMIT_JOBS_MAX_CONCURRENT=4` — concurrency cap per array job (default 4)
-- `FORCE=1` — passed to build_zonal_weights to overwrite the existing matrix
+| # | parameter | | # | parameter |
+|--|--|--|--|--|
+| 1 | elevation | | 6 | lulc_nhm_v11 |
+| 2 | slope | | 7 | lulc_nalcms |
+| 3 | aspect | | 8 | lulc_nlcd |
+| 4 | soils | | 9 | lulc_foresce |
+| 5 | soil_moist_max | | 10 | ssflux *(special — see below)* |
 
-The per-param Python CLIs and per-param sbatch wrappers were retired now
-that the orchestrator covers them. For single-param debugging, invoke the
-orchestrator directly:
+```bash
+P=elevation                              # repeat for each parameter in the table
+AID=$(sbatch --parsable --array=0-$((N-1))%$THROTTLE \
+      --export=ALL,BASE_CONFIG=$BASE_CONFIG,FABRIC=$FABRIC,PARAM=$P \
+      slurm_batch/derive_zonal_params.batch)
+sbatch --dependency=afterok:$AID \
+      --export=ALL,BASE_CONFIG=$BASE_CONFIG,FABRIC=$FABRIC,PARAM=$P \
+      slurm_batch/merge_zonal_param.batch
+```
+
+`ssflux` needs the CONUS-wide P2P weight matrix and the merged `slope` CSV
+first. If you ran the table in order, slope is already merged — just build the
+weights, then submit ssflux like any other parameter (`P=ssflux`):
+
+```bash
+sbatch --export=ALL,BASE_CONFIG=$BASE_CONFIG,FABRIC=$FABRIC slurm_batch/build_zonal_weights.batch
+# after weights finish, submit ssflux's array + merge as above with P=ssflux
+```
+
+The weight matrix is CONUS-once per fabric and idempotent; export `FORCE=1` to
+rebuild it.
+
+**Depstor params.** Same two-step unit per fraction, then one ratios job after
+**all** fractions have merged. Fractions (`hru_total` is the denominator for two
+of the ratios):
+
+`perv_frac`, `imperv_frac`, `dprst_frac`, `drains_perv_frac`,
+`drains_imperv_frac`, `onstream_storage_frac`, `drains_to_dprst_frac`,
+`carea_t8_frac`, `carea_t156_frac`, `hru_total`
+
+```bash
+F=perv_frac                              # repeat for each fraction
+AID=$(sbatch --parsable --array=0-$((N-1))%$THROTTLE \
+      --export=ALL,BASE_CONFIG=$BASE_CONFIG,FABRIC=$FABRIC,FRACTION=$F \
+      slurm_batch/create_depstor_zonal.batch)
+sbatch --dependency=afterok:$AID \
+      --export=ALL,BASE_CONFIG=$BASE_CONFIG,FABRIC=$FABRIC,FRACTION=$F \
+      slurm_batch/merge_depstor_fraction.batch
+
+# once all 10 fraction merge jobs have COMPLETED (check `squeue -u $USER` — not
+# just submitted; the by-parameter path has no afterok on the ratios job),
+# derive the 6 PRMS ratios:
+sbatch --export=ALL,BASE_CONFIG=$BASE_CONFIG,FABRIC=$FABRIC \
+      slurm_batch/derive_depstor_ratios.batch
+```
+
+(The wholesale path 4B instead chains this ratios job `afterok` on every merge,
+so it can be submitted up front.)
+
+For a quick single-batch sanity check without SLURM, invoke an orchestrator
+directly:
 
 ```bash
 pixi run python scripts/derive_zonal_params.py --mode zonal --param elevation --batch_id 42 \
     --config configs/zonal/zonal_params.yml --base_config configs/base_config.yml
 ```
 
-`--mode merge --param <name>` runs just the merge for one param;
-`--mode build_weights` builds the CONUS-once ssflux prereq.
+`--mode merge --param <name>` runs just one merge; `--mode build_weights` builds
+the ssflux prereq.
 
-Depression-storage zonal stats + Level-5 ratios (require Stage 2d outputs):
+#### Stage 4B: Run wholesale (one command per stage)
+
+Each wrapper loops the per-parameter steps from 4A — the same array + merge
+(+ ratios) jobs, chained via `afterok`:
 
 ```bash
-slurm_batch/submit_depstor_params.sh $BATCHES
-# or for a non-default fabric:
-slurm_batch/submit_depstor_params.sh $BATCHES gfv2_vpu01
+slurm_batch/submit_zonal_params.sh   $BATCHES $FABRIC $BASE_CONFIG   # all 10 zonal params
+slurm_batch/submit_depstor_params.sh $BATCHES $FABRIC $BASE_CONFIG   # 10 fractions + ratios
 ```
 
-A single call submits 10 zonal-stats array jobs (one per fraction), chains 10
-merge jobs via `afterok`, and finally chains one ratios job that depends on
-every merge. Outputs land in two subdirectories under `{fabric}/params/merged/`:
+`submit_zonal_params.sh` auto-detects ssflux's `depends_on: build_weights`:
+it submits `build_zonal_weights.batch` first and chains the ssflux array on its
+`afterok` (and on the merged slope CSV). `submit_depstor_params.sh` chains the
+single ratios job on every fraction's merge. Env knobs (both wrappers):
+
+- `FABRIC=gfv2_vpu01` — non-default fabric (or pass as the 2nd positional arg)
+- `SUBMIT_JOBS_MAX_CONCURRENT=4` — array concurrency cap (or the 4th positional arg)
+- `FORCE=1` — rebuild the ssflux weight matrix
+
+#### Depstor outputs (either path)
+
+Depstor results land in two subdirectories under `{fabric}/params/merged/`:
 
 - `{fabric}/params/merged/` — **6 final PRMS-ready ratio CSVs**, all
   dimensionless and bounded in [0, 1]:
@@ -484,10 +548,10 @@ every merge. Outputs land in two subdirectories under `{fabric}/params/merged/`:
 
 ### Stage 5: Merge and validate
 
-`submit_zonal_params.sh` chains a merge job after every per-param array via
-`afterok`, so Stage 5 is automatic — there is no separate manual-merge
-step. To re-run a single param's merge (e.g., after manually fixing a
-batch CSV):
+Merging is part of Stage 4, not a separate stage: the by-parameter path (4A)
+submits each merge as the second command of every unit, and the wholesale
+wrappers (4B) chain it automatically via `afterok`. Either way, to re-run a
+single param's merge on its own (e.g., after manually fixing a batch CSV):
 
 ```bash
 pixi run python scripts/derive_zonal_params.py --mode merge --param elevation \
@@ -500,7 +564,7 @@ Handled automatically by `submit_zonal_params.sh` — the dispatcher sees
 `depends_on: build_weights` on the ssflux entry in
 `configs/zonal/zonal_params.yml`, submits `build_zonal_weights.batch`
 first, and chains the ssflux array + merge on its `afterok`. ssflux also
-chains on the merged slope CSV.
+chains on the merged slope CSV. (To run ssflux by hand, see Stage 4A.)
 
 To build the CONUS-once weight matrix on its own (idempotent — skips if
 the matrix already exists, pass `FORCE=1` to overwrite):
@@ -650,10 +714,11 @@ sacct -j <JOBID> -o JobID,State,Elapsed,MaxRSS
 
 ## Script -> Config -> Entry Point Mapping
 
-Every production workflow is now driven by an orchestrator. The per-step
-Python CLIs and per-step sbatch wrappers were retired now that the
-orchestrators cover them — the library code they delegated to lives under
-`src/gfv2_params/`.
+Every production workflow is driven by an orchestrator (Part 1 / depstor
+rasters) or a Part-2 submission wrapper. The old per-step *Python* CLIs were
+retired — the library code they delegated to lives under `src/gfv2_params/` —
+but the Part-2 worker `.batch` files remain a supported surface you can drive
+by hand, one parameter at a time (see Stage 4A); the wrappers just loop them.
 
 ### Orchestrators (the primary surface)
 
@@ -664,7 +729,7 @@ orchestrators cover them — the library code they delegated to lives under
 | `submit_depstor_params.sh` | `depstor/depstor_params.yml` | `derive_depstor_params.py` (dispatches 10 fractions × zonal+merge, then ratios via afterok) |
 | `submit_zonal_params.sh` | `zonal/zonal_params.yml` | `derive_zonal_params.py` (dispatches 10 params × zonal+merge, with ssflux's `build_weights` prereq chained automatically) |
 
-### Workers invoked by the orchestrators (don't sbatch these directly)
+### Part-2 workers (looped by the wrappers; also runnable by hand per Stage 4A)
 
 | Batch | Used by | Config | Script |
 |---|---|---|---|

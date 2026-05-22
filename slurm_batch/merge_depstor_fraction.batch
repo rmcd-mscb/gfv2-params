@@ -12,13 +12,19 @@
 # Merge per-batch CSVs into one merged CSV for a single depstor fraction.
 # Submitted with afterok dependency on the matching zonal array job by
 # slurm_batch/submit_depstor_params.sh; the wrapper exports FRACTION.
+#
+# Standalone (run by fraction) — afterok the fraction's zonal array job $AID:
+#   sbatch --dependency=afterok:$AID \
+#       --export=ALL,BASE_CONFIG=configs/base_config.yml,FABRIC=gfv2,FRACTION=perv_frac \
+#       slurm_batch/merge_depstor_fraction.batch
+# See slurm_batch/RUNME.md Stage 4A.
 
 cd "$SLURM_SUBMIT_DIR"
 BASE_CONFIG=${BASE_CONFIG:-configs/base_config.yml}
 FABRIC=${FABRIC:-gfv2}
 
 if [ -z "${FRACTION:-}" ]; then
-    echo "ERROR: FRACTION env var not set. Submit via submit_depstor_params.sh." >&2
+    echo "ERROR: FRACTION env var not set. Set it via --export (run by fraction, RUNME Stage 4A) or submit_depstor_params.sh." >&2
     exit 1
 fi
 

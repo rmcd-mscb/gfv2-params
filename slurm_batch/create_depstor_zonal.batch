@@ -12,13 +12,20 @@
 # Array task: zonal-stats one depstor fraction over one HRU batch.
 # Submitted by slurm_batch/submit_depstor_params.sh; the wrapper exports
 # FRACTION (e.g. perv_frac, dprst_frac, carea_t8_frac, ...) and FABRIC.
+#
+# Standalone (run by fraction) — size the array from the fabric manifest:
+#   N=$(grep '^n_batches:' "$BATCHES/manifest.yml" | awk '{print $2}')
+#   sbatch --array=0-$((N-1))%4 \
+#       --export=ALL,BASE_CONFIG=configs/base_config.yml,FABRIC=gfv2,FRACTION=perv_frac \
+#       slurm_batch/create_depstor_zonal.batch
+# then merge_depstor_fraction.batch afterok on it. See slurm_batch/RUNME.md Stage 4A.
 
 cd "$SLURM_SUBMIT_DIR"
 BASE_CONFIG=${BASE_CONFIG:-configs/base_config.yml}
 FABRIC=${FABRIC:-gfv2}
 
 if [ -z "${FRACTION:-}" ]; then
-    echo "ERROR: FRACTION env var not set. Submit via submit_depstor_params.sh." >&2
+    echo "ERROR: FRACTION env var not set. Set it via --export (run by fraction, RUNME Stage 4A) or submit_depstor_params.sh." >&2
     exit 1
 fi
 

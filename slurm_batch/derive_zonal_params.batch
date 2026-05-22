@@ -19,13 +19,20 @@
 #
 # Time bumped to 4h to cover ssflux + LULC param types (which do more work
 # per batch than elev/slope/aspect). Lighter params finish well under this.
+#
+# Standalone (run by parameter) — size the array from the fabric manifest:
+#   N=$(grep '^n_batches:' "$BATCHES/manifest.yml" | awk '{print $2}')
+#   sbatch --array=0-$((N-1))%4 \
+#       --export=ALL,BASE_CONFIG=configs/base_config.yml,FABRIC=gfv2,PARAM=elevation \
+#       slurm_batch/derive_zonal_params.batch
+# then merge_zonal_param.batch afterok on it. See slurm_batch/RUNME.md Stage 4A.
 
 cd "$SLURM_SUBMIT_DIR"
 BASE_CONFIG=${BASE_CONFIG:-configs/base_config.yml}
 FABRIC=${FABRIC:-gfv2}
 
 if [ -z "${PARAM:-}" ]; then
-    echo "ERROR: PARAM env var not set. Submit via submit_zonal_params.sh." >&2
+    echo "ERROR: PARAM env var not set. Set it via --export (run by parameter, RUNME Stage 4A) or submit_zonal_params.sh." >&2
     exit 1
 fi
 

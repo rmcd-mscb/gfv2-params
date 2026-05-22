@@ -13,6 +13,11 @@
 #
 # The 10 fractions are the canonical list from configs/depstor/depstor_params.yml; if
 # you add or remove fractions there, update FRACTIONS below.
+#
+# This is the "run wholesale" path. To run the same work one fraction at a
+# time (submit + inspect each in turn, then ratios last), see
+# slurm_batch/RUNME.md Stage 4A — this wrapper just loops those per-fraction
+# array + merge steps and chains the ratios job.
 
 set -euo pipefail
 
