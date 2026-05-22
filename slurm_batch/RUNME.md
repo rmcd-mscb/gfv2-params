@@ -704,6 +704,45 @@ sbatch --array=37 --export=ALL,PARAM=elevation,FABRIC=gfv2,BASE_CONFIG=configs/b
 `--step` flag: `pixi run python scripts/build_shared_rasters.py
 --config configs/shared_rasters/shared_rasters.yml --step <name>`.)
 
+### Recovery: refill a VPU after a merge-manifest / source fix
+
+When a per-VPU source gap is fixed (e.g. an RPU added to a VPU's merge entry in
+`configs/shared_rasters/merge_rpu_by_vpu.yml`, or a stale merge that predates a
+staged RPU), re-merge **just that VPU** and rebuild the products that depend on
+it, then re-run the affected fabric's depstor stage. Run the steps in order,
+waiting for each to finish (they aren't auto-chained). Example for **VPU 17**
+(the W Oregon 17d FDR gap); the per-VPU merge is memory-heavy, so bump `--mem`:
+
+```bash
+V=17
+# 1. re-merge NED / Hydrodem / Fdr / Fac for the VPU (now incl. the added RPU)
+VPUS=$V FORCE=1 sbatch --mem=384G slurm_batch/build_shared_rasters.batch --step merge_rpu_by_vpu
+# 2. regenerate the open-source hydrology derivatives (Fdr_hydrodem, Twi_hydrodem)
+#    from the refreshed Hydrodem — NOT in the default DAG, so name it explicitly
+VPUS=$V FORCE=1 sbatch --mem=192G slurm_batch/build_shared_rasters.batch --step compute_dem_derivatives
+# 3. re-merge the ArcPy TWI (masked) for the VPU
+VPUS=$V FORCE=1 sbatch --mem=384G slurm_batch/build_shared_rasters.batch --step merge_rpu_by_vpu_twi
+# 4. rebuild the CONUS VRTs (fdr.vrt, twi.vrt, twi_hydrodem.vrt, elevation/slope/aspect)
+FORCE=1 sbatch slurm_batch/build_shared_rasters.batch --step build_vrt
+# 5. recompute the TWI percentile reference tables
+FORCE=1 sbatch slurm_batch/build_shared_rasters.batch --step twi_reference
+```
+
+Then refresh the affected fabric and re-run **only its depstor stage** (the
+zonal params — elevation/slope/aspect/soils/LULC/ssflux — are on the gap-free
+DEM lattice and do not need re-running):
+
+```bash
+# re-clip the fabric template/fdr from the rebuilt fdr.vrt
+pixi run python scripts/clip_shared_to_fabric.py --fabric oregon
+# re-derive depstor rasters (routing + carea_map) and params
+FABRIC=oregon sbatch slurm_batch/build_depstor_rasters.batch --force
+slurm_batch/submit_depstor_params.sh {data_root}/oregon/batches oregon configs/base_config.yml
+```
+
+Verify with `notebooks/fabric_results/01_input_rasters.ipynb` (the `fdr` /
+`twi_hydrodem` panels should no longer have a nodata void inside the fabric).
+
 ## Monitoring
 
 ```bash
