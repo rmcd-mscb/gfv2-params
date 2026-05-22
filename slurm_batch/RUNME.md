@@ -291,6 +291,34 @@ downstream zonal aggregation. Depends on Stage 1c1.
 
 **Stage 2a — `build_vrt`:** Combine per-VPU rasters and optional Copernicus
 fill into CONUS-wide GDAL virtual rasters (elevation/slope/aspect/fdr/twi).
+Also builds `twi_hydrodem.vrt` (open-source WhiteboxTools TWI, CONUS-complete)
+if `Twi_hydrodem_*.tif` tiles are present in `per_vpu/`. If the ArcPy
+`Twi_merged_*.tif` tiles for VPUs 02-18 were never merged (issue #94),
+finish them first and then rebuild both VRTs in one shot:
+
+```bash
+bash slurm_batch/submit_twi_completion.sh
+```
+
+This submits three chained jobs: `merge_rpu_by_vpu_twi --force` (rebuilds all
+18 VPUs idempotently) → `build_vrt --force` (writes `twi.vrt` and
+`twi_hydrodem.vrt`) → `twi_reference --force` (writes the per-VPU percentile
+CSVs used by `carea_map threshold_mode: percentile`). Verify afterwards with
+`gdalinfo` on both VRTs.
+
+**Stage 2a' — `twi_reference`:** Compute valid-land TWI percentile cutoffs
+per VPU (and CONUS) for each TWI source (`arcpy`, `hydrodem`). Outputs
+`shared/conus/twi_reference_percentiles.arcpy.csv` and
+`shared/conus/twi_reference_percentiles.hydrodem.csv`. These tables are the
+input to `carea_map threshold_mode: percentile` (Stage 2d). The default
+percentiles are derived by inverting the legacy 8.0/15.6 thresholds through
+VPU 01's ArcPy TWI CDF. Runs automatically after `build_vrt` in the
+orchestrator DAG; run on its own with:
+
+```bash
+pixi run python scripts/build_shared_rasters.py \
+    --config configs/shared_rasters/shared_rasters.yml --step twi_reference
+```
 
 **Stage 2b — `build_derived_rasters`:** Pre-compute `rd_250_raw.tif` and
 `soil_moist_max.tif`.
@@ -323,9 +351,27 @@ Inputs (per fabric, from `base_config.yml`):
 
 One sbatch builds the entire stack in dependency order
 (landmask → imperv/streambuffer/waterbody → dprst → perv/routing →
-drains_perv/drains_imperv → carea_map). The 10-step DAG is encoded in
-`src/gfv2_params/depstor_builders/__init__.py`; selective re-runs are supported
-via `--step <name>` or `--from <name>` passed through to the python script.
+drains_perv/drains_imperv → vpu_id → carea_map). The 11-step DAG is encoded
+in `src/gfv2_params/depstor_builders/__init__.py`; selective re-runs are
+supported via `--step <name>` or `--from <name>` passed through to the python
+script.
+
+**`vpu_id` step:** rasterises the HRU fabric's `vpu` attribute onto the
+template grid. Required by `carea_map` when `threshold_mode: percentile` and
+the fabric spans multiple VPUs (multi-VPU fabrics look up each cell's VPU in
+the reference table; single-VPU fabrics set `vpu: "17"` in their profile and
+skip this step).
+
+**`carea_map` threshold modes:** configured in `configs/depstor/depstor_rasters.yml`.
+- `threshold_mode: absolute` — legacy 8.0/15.6 thresholds. Requires ArcPy
+  `twi.vrt` as `twi_raster`; the builder warns if paired with a non-ArcPy
+  (hydrodem) source.
+- `threshold_mode: percentile` — derives the TWI cutoff from the data by
+  reading the per-VPU reference table produced by Stage 2a'. Source-agnostic:
+  use with `twi.vrt` (ArcPy) or `twi_hydrodem.vrt` (open-source). The
+  `reference_table` key (here in `depstor_rasters.yml`) and the profile's
+  `twi_raster` must be set to the same source together — there is no
+  auto-selection or guard for the pairing.
 
 ```bash
 sbatch slurm_batch/build_depstor_rasters.batch
@@ -619,6 +665,7 @@ orchestrators cover them — the library code they delegated to lives under
 | Batch / shell | Config | Script |
 |---|---|---|
 | `stage_twi.batch` | `base_config.yml` (indirectly) | `scripts/stage_twi.sh` |
+| `submit_twi_completion.sh` | `shared_rasters/shared_rasters.yml` | `build_shared_rasters.py --step merge_rpu_by_vpu_twi --force` → `--step build_vrt --force` → `--step twi_reference --force` (three chained jobs: finishes `twi.vrt` + `twi_hydrodem.vrt` + writes percentile CSVs) |
 | `download_rpu_rasters.batch` | `base_config.yml` | `gfv2_params.download.rpu_rasters` |
 | `download_nalcms.batch` | `base_config.yml` | `gfv2_params.download.nalcms_lulc` |
 | `download_nhm_v11.batch` | `base_config.yml` | `gfv2_params.download.nhm_v11_lulc` |

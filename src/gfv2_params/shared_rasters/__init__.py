@@ -24,6 +24,7 @@ from . import (
     compute_dem_derivatives,
     compute_slope_aspect,
     merge_rpu_by_vpu,
+    twi_reference,
 )
 from .context import SharedRastersContext
 
@@ -42,6 +43,7 @@ BUILDERS: dict = {
     "compute_dem_derivatives": compute_dem_derivatives.build,
     "merge_rpu_by_vpu_twi":    merge_rpu_by_vpu.build,  # post-landmask invocation
     "build_vrt":               build_vrt.build,
+    "twi_reference":           twi_reference.build,
     "build_derived_rasters":   build_derived_rasters.build,
     "build_lulc_rasters":      build_lulc_rasters.build,
 }
@@ -54,6 +56,7 @@ STEP_ORDER: list[str] = [
     "compute_dem_derivatives",  # optional / parallel
     "merge_rpu_by_vpu_twi",
     "build_vrt",
+    "twi_reference",
     "build_derived_rasters",
     "build_lulc_rasters",
 ]

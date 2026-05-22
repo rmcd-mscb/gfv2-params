@@ -59,10 +59,21 @@ steps:
     output_key: drains_imperv
     output: drains_imperv_binary.tif
 
+  - name: vpu_id
+    output: vpu_id.tif
+
   - name: carea_map
+    # threshold_mode: absolute (legacy 8.0/15.6, ArcPy TWI) | percentile (#55).
+    # Percentile uses reference_table: below; twi_raster (in the fabric profile)
+    # and reference_table must be set to the same source together — there is no
+    # auto-selection or guard for the pairing.
+    threshold_mode: percentile
+    reference_scope: vpu # vpu | conus
+    reference_table: "{data_root}/shared/conus/twi_reference_percentiles.hydrodem.csv"
+    # Used only when threshold_mode: absolute
     thresholds:
-      carea_max: 8.0   # feeds PRMS carea_max
-      smidx:     15.6  # feeds PRMS smidx_coef
+      carea_max: 8.0
+      smidx: 15.6
     outputs:
       carea_max: carea_map_t8_binary.tif
-      smidx:     carea_map_t156_binary.tif
+      smidx: carea_map_t156_binary.tif

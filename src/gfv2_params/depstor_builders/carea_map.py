@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import csv
 from contextlib import ExitStack
 
+import numpy as np
 import rasterio
 from rasterio.enums import Resampling
 from rasterio.vrt import WarpedVRT
@@ -11,6 +13,7 @@ from rasterio.windows import Window
 
 from ..depstor import RasterInfo, compute_carea_map_binary
 from .context import BuildContext
+from .vpu_id import MAX_VPU_CODE, VPU_NODATA, vpu_to_code
 
 # TWI is float32 — ~4x the per-strip memory of the uint8 inputs.
 STRIP_ROWS = 1024
@@ -46,6 +49,56 @@ def _assert_aligned(src, info: RasterInfo, name: str) -> None:
         raise ValueError(f"{name} transform mismatch with template")
 
 
+def load_reference_table(path) -> dict:
+    """Load a twi_reference_percentiles.<source>.csv into {(scope, vpu): row}."""
+    table = {}
+    with open(path, newline="") as f:
+        for row in csv.DictReader(f):
+            for k in ("p_carea", "p_smidx", "t_carea", "t_smidx"):
+                row[k] = float(row[k])
+            table[(row["scope"], row["vpu"])] = row
+    return table
+
+
+def resolve_scalar_thresholds(table: dict, scope: str, vpu) -> tuple:
+    """Return (t_carea, t_smidx) scalars for conus scope or a single VPU."""
+    key = ("conus", "CONUS") if scope == "conus" else ("vpu", str(vpu))
+    if key not in table:
+        raise KeyError(f"no reference row for {key}; have {sorted(table)}")
+    row = table[key]
+    return row["t_carea"], row["t_smidx"]
+
+
+def _threshold_lut(table: dict, column: str):
+    """Build a code-indexed lookup array: lut[vpu_code] = threshold.
+
+    vpu_code is the integer from vpu_id.vpu_to_code ('17' -> 17). Index 0 is the
+    vpu_id nodata code and any unmapped code stays +inf so those cells never pass
+    twi>thr. Sized to MAX_VPU_CODE+1 so any valid raster-VPU code indexes safely.
+    """
+    rows = {vpu: row for (scope, vpu), row in table.items() if scope == "vpu"}
+    lut = np.full(MAX_VPU_CODE + 1, np.inf, dtype="float64")
+    for vpu, row in rows.items():
+        lut[vpu_to_code(vpu)] = row[column]
+    return lut
+
+
+def uncovered_vpu_codes(present_codes, *luts) -> list:
+    """VPU codes present in the vpu_id raster but lacking a finite threshold.
+
+    A code maps to +inf in a LUT when its VPU has no row in the reference table
+    (e.g. twi_reference skipped an empty-sample VPU). Such cells would be silently
+    classified never-wet, so the caller raises on a non-empty result.
+    """
+    out = []
+    for c in sorted({int(x) for x in present_codes}):
+        if c == VPU_NODATA:
+            continue
+        if any(c >= len(lut) or not np.isfinite(lut[c]) for lut in luts):
+            out.append(c)
+    return out
+
+
 def build(step_cfg: dict, ctx: BuildContext, logger) -> dict:
     if ctx.twi_raster is None:
         raise KeyError("carea_map step needs `twi_raster` in fabric profile.")
@@ -56,24 +109,57 @@ def build(step_cfg: dict, ctx: BuildContext, logger) -> dict:
     perv_path = ctx.require("perv")
     onstream_path = ctx.require("onstream")
 
-    thresholds = step_cfg["thresholds"]
+    mode = step_cfg.get("threshold_mode", "absolute")
     outputs = step_cfg["outputs"]
+
+    if mode == "absolute":
+        thr = step_cfg["thresholds"]
+        carea_t, smidx_t = float(thr["carea_max"]), float(thr["smidx"])
+        per_cell = False
+        # Guard: absolute thresholds are calibrated to ArcPy TWI only.
+        if ctx.twi_raster and "hydrodem" in ctx.twi_raster.name:
+            logger.warning(
+                "  threshold_mode=absolute paired with a non-ArcPy TWI source "
+                "(%s) — 8.0/15.6 are calibrated to ArcPy TWI; this is a "
+                "validation-only counterexample, not a shippable output.",
+                ctx.twi_raster.name,
+            )
+    elif mode == "percentile":
+        scope = step_cfg["reference_scope"]          # "conus" | "vpu"
+        table = load_reference_table(step_cfg["reference_table"])
+        if scope == "conus" or ctx.vpu:
+            # single threshold pair (CONUS, or a single-VPU fabric's VPU)
+            carea_t, smidx_t = resolve_scalar_thresholds(
+                table, scope, ctx.vpu if scope == "vpu" else None)
+            per_cell = False
+            logger.info("  percentile thresholds (scope=%s, vpu=%s): carea=%.4f smidx=%.4f",
+                        scope, ctx.vpu if scope == "vpu" else "CONUS", carea_t, smidx_t)
+        else:
+            # multi-VPU fabric, per-VPU scope -> per-cell threshold via vpu_id
+            per_cell = True
+            present_codes: set = set()
+            vpu_id_path = ctx.require("vpu_id")
+            carea_lut = _threshold_lut(table, "t_carea")
+            smidx_lut = _threshold_lut(table, "t_smidx")
+    else:
+        raise ValueError(f"carea_map: unknown threshold_mode {mode!r}")
+
     runs = [
-        (float(thresholds["carea_max"]), ctx.resolve_output(outputs["carea_max"]), "carea_max"),
-        (float(thresholds["smidx"]),     ctx.resolve_output(outputs["smidx"]),     "smidx_coef"),
+        (ctx.resolve_output(outputs["carea_max"]), "carea_max"),
+        (ctx.resolve_output(outputs["smidx"]),     "smidx_coef"),
     ]
 
     logger.info("--- carea_map ---")
     logger.info("  TWI     : %s", ctx.twi_raster)
-    for _, out, label in runs:
+    for out, label in runs:
         logger.info("  Output (%s): %s", label, out)
 
-    if not ctx.force and all(out.exists() for _, out, _ in runs):
+    if not ctx.force and all(out.exists() for out, _ in runs):
         logger.info("  All outputs exist — skipping (pass --force to rebuild)")
-        return {"carea_max": runs[0][1], "smidx": runs[1][1]}
+        return {"carea_max": runs[0][0], "smidx": runs[1][0]}
 
     info = RasterInfo.from_path(ctx.template_path)
-    for _, out, _ in runs:
+    for out, _ in runs:
         out.parent.mkdir(parents=True, exist_ok=True)
 
     counts = [0 for _ in runs]
@@ -117,7 +203,11 @@ def build(step_cfg: dict, ctx: BuildContext, logger) -> dict:
         twi_nodata = twi_src.nodata
 
         twi_vrt = stack.enter_context(WarpedVRT(twi_src, **vrt_options))
-        dsts = [stack.enter_context(rasterio.open(out, "w", **profile)) for _, out, _ in runs]
+        dsts = [stack.enter_context(rasterio.open(out, "w", **profile)) for out, _ in runs]
+
+        if per_cell:
+            vpu_id_src = stack.enter_context(rasterio.open(vpu_id_path))
+            _assert_aligned(vpu_id_src, info, "vpu_id")
 
         for row_off in range(0, info.height, STRIP_ROWS):
             h = min(STRIP_ROWS, info.height - row_off)
@@ -126,18 +216,33 @@ def build(step_cfg: dict, ctx: BuildContext, logger) -> dict:
             perv = perv_src.read(1, window=window)
             onstream = onstream_src.read(1, window=window)
             twi = twi_vrt.read(1, window=window)
-            for i, (thresh, _, _) in enumerate(runs):
+            if per_cell:
+                codes = vpu_id_src.read(1, window=window)
+                present_codes.update(np.unique(codes).tolist())
+                thresholds = [carea_lut[codes], smidx_lut[codes]]
+            else:
+                thresholds = [carea_t, smidx_t]
+            for i, (out_path, _label) in enumerate(runs):
                 out = compute_carea_map_binary(
-                    perv, onstream, twi, thresh, twi_nodata, land_valid
+                    perv, onstream, twi, thresholds[i], twi_nodata, land_valid
                 )
                 dsts[i].write(out, 1, window=window)
                 counts[i] += int((out == 1).sum())
 
+    if per_cell:
+        bad = uncovered_vpu_codes(present_codes, carea_lut, smidx_lut)
+        if bad:
+            raise ValueError(
+                f"carea_map percentile vpu mode: VPU code(s) {bad} present in the "
+                f"vpu_id raster but absent from {step_cfg['reference_table']}; re-run "
+                f"twi_reference so every fabric VPU has a row."
+            )
+
     total = info.height * info.width
-    for (thresh, out, label), n in zip(runs, counts):
+    for (out, label), n in zip(runs, counts):
         logger.info(
             "  %s: %d cells (%.4f%% of grid) -> %s",
             label, n, 100 * n / total, out,
         )
 
-    return {"carea_max": runs[0][1], "smidx": runs[1][1]}
+    return {"carea_max": runs[0][0], "smidx": runs[1][0]}

@@ -21,7 +21,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from osgeo import gdal
+from osgeo import gdal, osr
 
 from .context import SharedRastersContext
 
@@ -32,19 +32,36 @@ from .context import SharedRastersContext
 #   slope/aspect: RichDEM SaveGDAL always writes -9999 (NED-based, raw DEM).
 #   fdr: NHDPlus FDR tiles are Byte rasters with nodata=255 (D8 codes are 1-128).
 #   twi: merge_rpu_by_vpu's TWI case writes float32 and remaps the source
-#        -FLT_MAX sentinel to -9999. **DO NOT SWAP** this to the open-source
-#        Twi_hydrodem_*.tif produced by compute_dem_derivatives: PRMS
-#        parameter extraction (carea_max, smidx_coef) thresholds TWI at
-#        calibrated values (8.0, 15.6) that depend on the original ArcPy TWI
-#        distribution shape. Swapping the source would invalidate those
-#        thresholds. See PR #54 discussion.
+#        -FLT_MAX sentinel to -9999. The absolute thresholds (8.0, 15.6) in
+#        carea_map are calibrated to the ArcPy TWI distribution, so
+#        ``threshold_mode: absolute`` still requires twi.vrt as the source.
+#        However, ``threshold_mode: percentile`` (the ``twi_reference`` shared-
+#        raster step + ``carea_map threshold_mode: percentile`` in
+#        depstor_rasters.yml) derives the cutoff from the data and makes the
+#        open-source ``twi_hydrodem.vrt`` a fully supported first-class source —
+#        see the entry below and
+#        docs/superpowers/specs/2026-05-21-carea-smidx-twi-percentile-design.md.
 RASTER_TYPES = {
     "elevation": ("NEDSnapshot_merged_fixed_*.tif", "-9999"),
     "slope":     ("NEDSnapshot_merged_slope_*.tif", "-9999"),
     "aspect":    ("NEDSnapshot_merged_aspect_*.tif", "-9999"),
     "fdr":       ("Fdr_merged_*.tif", "255"),
     "twi":       ("Twi_merged_*.tif", "-9999"),
+    # Open-source WhiteboxTools TWI (issue #94): CONUS-complete, drop-in grid
+    # with fdr.vrt. Tiles report an "unnamed" Albers CRS, so the VRT must be
+    # stamped with a named EPSG:5070 to satisfy carea_map's CRS-equality check.
+    "twi_hydrodem": ("Twi_hydrodem_*.tif", "-9999"),
 }
+
+# VRT types whose source tiles carry an unnamed/implicit CRS and must be
+# stamped with an explicit EPSG so strict CRS-equality checks downstream pass.
+_SRS_OVERRIDES = {"twi_hydrodem": "EPSG:5070"}
+
+
+def _srs_override(vrt_name: str) -> str | None:
+    """EPSG string to force onto the built VRT, or None to keep source CRS."""
+    return _SRS_OVERRIDES.get(vrt_name)
+
 
 def build(step_cfg: dict, ctx: SharedRastersContext, logger) -> dict:
     """Build CONUS-wide VRTs for elevation, slope, aspect, fdr, twi.
@@ -93,6 +110,19 @@ def build(step_cfg: dict, ctx: SharedRastersContext, logger) -> dict:
             raise RuntimeError(f"gdal.BuildVRT failed for {vrt_name}")
         vrt_ds.FlushCache()
         del vrt_ds
+
+        epsg = _srs_override(vrt_name)
+        if epsg is not None:
+            srs = osr.SpatialReference()
+            srs.SetFromUserInput(epsg)
+            ds = gdal.Open(str(vrt_path), gdal.GA_Update)
+            if ds is None:
+                raise RuntimeError(f"could not reopen {vrt_path} to stamp {epsg}")
+            if ds.SetProjection(srs.ExportToWkt()) != gdal.CE_None:
+                raise RuntimeError(f"SetProjection({epsg}) failed for {vrt_path}")
+            ds.FlushCache()
+            del ds
+            logger.info("Stamped %s with %s", vrt_path, epsg)
 
         built_count += 1
         produced[f"{vrt_name}_vrt"] = vrt_path
