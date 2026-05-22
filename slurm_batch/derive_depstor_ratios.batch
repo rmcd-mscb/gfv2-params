@@ -15,8 +15,9 @@
 # Submitted with afterok dependency on every fraction's merge job by
 # slurm_batch/submit_depstor_params.sh.
 #
-# Standalone (run by fraction) — run this LAST, once all 10 fraction merges
-# have landed on disk (no afterok needed if you gate by running in order):
+# Standalone (run by fraction) — run this LAST, after all 10 fraction merge
+# jobs have COMPLETED (check `squeue`; the by-parameter path has no afterok
+# on this job, so submission order is not enough):
 #   sbatch --export=ALL,BASE_CONFIG=configs/base_config.yml,FABRIC=gfv2 \
 #       slurm_batch/derive_depstor_ratios.batch
 # See slurm_batch/RUNME.md Stage 4A.

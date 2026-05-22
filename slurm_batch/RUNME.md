@@ -489,10 +489,15 @@ sbatch --dependency=afterok:$AID \
       --export=ALL,BASE_CONFIG=$BASE_CONFIG,FABRIC=$FABRIC,FRACTION=$F \
       slurm_batch/merge_depstor_fraction.batch
 
-# once ALL 10 fraction merges have landed, derive the 6 PRMS ratios:
+# once all 10 fraction merge jobs have COMPLETED (check `squeue -u $USER` — not
+# just submitted; the by-parameter path has no afterok on the ratios job),
+# derive the 6 PRMS ratios:
 sbatch --export=ALL,BASE_CONFIG=$BASE_CONFIG,FABRIC=$FABRIC \
       slurm_batch/derive_depstor_ratios.batch
 ```
+
+(The wholesale path 4B instead chains this ratios job `afterok` on every merge,
+so it can be submitted up front.)
 
 For a quick single-batch sanity check without SLURM, invoke an orchestrator
 directly:
@@ -559,7 +564,7 @@ Handled automatically by `submit_zonal_params.sh` — the dispatcher sees
 `depends_on: build_weights` on the ssflux entry in
 `configs/zonal/zonal_params.yml`, submits `build_zonal_weights.batch`
 first, and chains the ssflux array + merge on its `afterok`. ssflux also
-chains on the merged slope CSV.
+chains on the merged slope CSV. (To run ssflux by hand, see Stage 4A.)
 
 To build the CONUS-once weight matrix on its own (idempotent — skips if
 the matrix already exists, pass `FORCE=1` to overwrite):
@@ -709,10 +714,11 @@ sacct -j <JOBID> -o JobID,State,Elapsed,MaxRSS
 
 ## Script -> Config -> Entry Point Mapping
 
-Every production workflow is now driven by an orchestrator. The per-step
-Python CLIs and per-step sbatch wrappers were retired now that the
-orchestrators cover them — the library code they delegated to lives under
-`src/gfv2_params/`.
+Every production workflow is driven by an orchestrator (Part 1 / depstor
+rasters) or a Part-2 submission wrapper. The old per-step *Python* CLIs were
+retired — the library code they delegated to lives under `src/gfv2_params/` —
+but the Part-2 worker `.batch` files remain a supported surface you can drive
+by hand, one parameter at a time (see Stage 4A); the wrappers just loop them.
 
 ### Orchestrators (the primary surface)
 
@@ -723,7 +729,7 @@ orchestrators cover them — the library code they delegated to lives under
 | `submit_depstor_params.sh` | `depstor/depstor_params.yml` | `derive_depstor_params.py` (dispatches 10 fractions × zonal+merge, then ratios via afterok) |
 | `submit_zonal_params.sh` | `zonal/zonal_params.yml` | `derive_zonal_params.py` (dispatches 10 params × zonal+merge, with ssflux's `build_weights` prereq chained automatically) |
 
-### Workers invoked by the orchestrators (don't sbatch these directly)
+### Part-2 workers (looped by the wrappers; also runnable by hand per Stage 4A)
 
 | Batch | Used by | Config | Script |
 |---|---|---|---|
