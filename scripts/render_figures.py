@@ -52,6 +52,7 @@ def main() -> int:
 
     env = dict(os.environ, FABRIC=args.fabric, SAVE_FIGURES="1", MPLBACKEND="Agg")
 
+    executed = 0
     for nb in args.notebooks:
         src = NB_DIR / nb
         if not src.exists():
@@ -64,13 +65,32 @@ def main() -> int:
             f"--ExecutePreprocessor.kernel_name={args.kernel}",
             "--output-dir", str(cache), "--output", nb, str(src),
         ]
-        result = subprocess.run(cmd, env=env)
+        try:
+            result = subprocess.run(cmd, env=env)
+        except FileNotFoundError:
+            logger.error(
+                "`jupyter` not found on PATH. Run inside a JupyterHub session or "
+                "the notebooks env, e.g. `pixi run -e notebooks python %s`.",
+                " ".join(["scripts/render_figures.py", "--fabric", args.fabric]),
+            )
+            return 1
         if result.returncode != 0:
             logger.error("nbconvert failed for %s (exit %d)", nb, result.returncode)
             return result.returncode
+        executed += 1
+
+    if executed == 0:
+        logger.error("no notebooks executed (all missing) — check --notebooks; "
+                     "nothing was rendered.")
+        return 1
 
     pngs = sorted(figdir.glob("*.png")) if figdir.exists() else []
-    logger.info("done: %d figure(s) in %s", len(pngs), figdir)
+    if not pngs:
+        logger.error("ran %d notebook(s) but found no figures in %s — "
+                     "check that SAVE_FIGURES took effect.", executed, figdir)
+        return 1
+    logger.info("done: ran %d notebook(s), %d figure(s) in %s",
+                executed, len(pngs), figdir)
     for p in pngs:
         logger.info("  %s", p.name)
     return 0
