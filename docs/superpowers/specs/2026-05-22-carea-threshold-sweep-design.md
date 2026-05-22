@@ -135,9 +135,12 @@ No new production wiring — the chosen value flows through the existing #95 pat
 `carea_map` at the default percentile threshold `t*`, confirm
 `evaluate_threshold(artifact, t*)` matches the production `carea_max` CSV per HRU
 **within histogram-bin resolution**. Extraction mirrors `compute_carea_map_binary`
-exactly, so the only expected difference is the ≤1-bin quantization of the threshold
-(cells in the bin straddling `t*`); agreement of `mean`/`frac_one` to ~1e-2 confirms
-fidelity. (To make a specific `t*` exact, snap it to a bin edge.)
+exactly, so the primary expected difference is the ≤1-bin quantization of the
+threshold (cells in the bin straddling `t*`); a secondary difference is whole-cell
+`all_touched` rasterization in the artifact vs coverage-weighted exactextract in
+production (small — empirically <1% on oregon — but not bounded by bin resolution
+alone). Agreement of `mean`/`frac_one` to ~1e-2 confirms fidelity. (To make a
+specific `t*` exact, snap it to a bin edge.)
 
 ---
 

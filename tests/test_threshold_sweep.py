@@ -149,3 +149,42 @@ def test_reference_grid_linear():
     assert value[0] == pytest.approx(0.0)    # p0 -> first edge
     assert value[1] == pytest.approx(10.0)   # p50 of uniform [0,20] -> 10.0 (edge-based CDF)
     assert value[2] == pytest.approx(20.0)   # p100 -> last edge
+
+
+def test_evaluate_threshold_clamps_above_one():
+    # numerator > denominator must clamp to 1.0
+    a = CareaTwiArtifact(
+        ids=np.array([1]), vpu=np.array(["17"], dtype=object),
+        n_perv=np.array([2], dtype="int64"), n_perv_onstream=np.array([3], dtype="int64"),
+        hist=np.zeros((1, 4), dtype="int64"), bin_edges=np.array([0.0, 5.0, 10.0, 15.0, 20.0]),
+        ref_pctl=np.array([0.0, 100.0]), ref_value=np.array([0.0, 20.0]),
+        fabric="oregon", twi_source="hydrodem",
+    )
+    assert evaluate_threshold(a, 0.0)[0] == 1.0   # (3 + 0) / 2 = 1.5 -> clamped
+
+
+def test_value_percentile_interpolation_and_extrapolation():
+    a = _toy_artifact()
+    # interior interpolation between grid nodes (ref_value 0->0, 10->50, 20->100)
+    assert value_to_percentile(a, 5.0) == pytest.approx(25.0)
+    assert percentile_to_value(a, 25.0) == pytest.approx(5.0)
+    # np.interp clamps out-of-range inputs to grid ends
+    assert value_to_percentile(a, -5.0) == pytest.approx(0.0)
+    assert value_to_percentile(a, 99.0) == pytest.approx(100.0)
+    assert percentile_to_value(a, 150.0) == pytest.approx(20.0)
+
+
+def test_sweep_fractions_at_high_threshold():
+    a = _toy_artifact()
+    df = sweep(a, np.array([100.0]))
+    row = df.iloc[0]
+    # at t=100: HRU0=(1+0)/5=0.2, HRU1=(3+0)/3=1.0, HRU2=(0+0)/10=0.0
+    assert row["frac_zero"] == pytest.approx(1 / 3)
+    assert row["frac_one"] == pytest.approx(1 / 3)
+    assert row["mean"] == pytest.approx(0.4)
+
+
+def test_reference_grid_empty_histogram_raises():
+    from gfv2_params.threshold_sweep import reference_grid
+    with pytest.raises(ValueError, match="empty"):
+        reference_grid(np.zeros(4, dtype="int64"), np.linspace(0, 20, 5), np.array([0.0, 50.0, 100.0]))

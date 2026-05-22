@@ -285,6 +285,16 @@ def _(art, mo, t_carea, t_smidx, value_to_percentile):
     # Persist: print the config snippets for the chosen value (both paths).
     _pc = value_to_percentile(art, t_carea.value)
     _ps = value_to_percentile(art, t_smidx.value)
+    _abs_note = (
+        f"The absolute values above were measured on the **{art.twi_source}** TWI distribution "
+        f"and must be paired with that same source's VRT."
+        + (
+            "\n\n        > **Caution:** legacy absolute mode (8.0/15.6) is calibrated to ArcPy TWI. "
+            "Because this artifact was built from a **hydrodem** source, prefer the percentile path "
+            "above to avoid a source-mismatch bias."
+            if art.twi_source != "arcpy" else ""
+        )
+    )
     mo.md(
         f"""
         ## Persist the chosen value
@@ -304,7 +314,7 @@ def _(art, mo, t_carea, t_smidx, value_to_percentile):
               carea_max: {t_carea.value:.2f}
               smidx: {t_smidx.value:.2f}
         ```
-        (absolute thresholds pair with the ArcPy `twi.vrt`; see the mode↔source pairing note).
+        {_abs_note}
         """
     )
     return

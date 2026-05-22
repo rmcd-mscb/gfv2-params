@@ -43,9 +43,27 @@ class CareaTwiArtifact:
     fabric: str
     twi_source: str
 
+    def __post_init__(self):
+        n = len(self.ids)
+        if not (len(self.vpu) == len(self.n_perv) == len(self.n_perv_onstream) == self.hist.shape[0] == n):
+            raise ValueError(
+                f"CareaTwiArtifact parallel arrays misaligned: ids={n}, vpu={len(self.vpu)}, "
+                f"n_perv={len(self.n_perv)}, n_perv_onstream={len(self.n_perv_onstream)}, "
+                f"hist_rows={self.hist.shape[0]}"
+            )
+        if self.hist.shape[1] != len(self.bin_edges) - 1:
+            raise ValueError(
+                f"CareaTwiArtifact hist has {self.hist.shape[1]} cols but bin_edges implies "
+                f"{len(self.bin_edges) - 1} bins"
+            )
+        if len(self.ref_pctl) != len(self.ref_value):
+            raise ValueError(
+                f"CareaTwiArtifact ref_pctl ({len(self.ref_pctl)}) != ref_value ({len(self.ref_value)})"
+            )
+
     def save(self, path) -> None:
         np.savez_compressed(
-            path, ids=self.ids, vpu=self.vpu.astype("U8"),
+            path, ids=self.ids, vpu=self.vpu.astype(str),
             n_perv=self.n_perv, n_perv_onstream=self.n_perv_onstream,
             hist=self.hist, bin_edges=self.bin_edges,
             ref_pctl=self.ref_pctl, ref_value=self.ref_value,
@@ -155,7 +173,7 @@ def reference_grid(land_twi_hist: np.ndarray, bin_edges: np.ndarray, pctls: np.n
     """Percentile->TWI-value grid from a valid-land TWI histogram.
 
     Returns (pctls, values) where values[i] is the TWI at percentile pctls[i].
-    Uses bin centers and the cumulative fraction (CDF) of the histogram.
+    Uses the cumulative fraction (CDF) of the histogram evaluated at bin edges.
     """
     counts = np.asarray(land_twi_hist, dtype="float64")
     total = counts.sum()
@@ -245,18 +263,27 @@ def build_artifact(
             resampling=Resampling.nearest, nodata=twi_src.nodata,
         ))
         twi_nodata = twi_src.nodata
+        n_over_max = 0
         for row_off in range(0, info.height, _STRIP_ROWS):
             h = min(_STRIP_ROWS, info.height - row_off)
             win = Window(0, row_off, info.width, h)
+            perv_s = perv_src.read(1, window=win)
+            onstream_s = onstream_src.read(1, window=win)
+            twi_s = twi_vrt.read(1, window=win)
+            land_s = land_src.read(1, window=win) == 1
+            n_over_max += int(((twi_s > bin_max) & land_s).sum())
             accumulate_strip(
                 hru_idx_full[row_off:row_off + h, :],
-                perv_src.read(1, window=win),
-                onstream_src.read(1, window=win),
-                twi_vrt.read(1, window=win),
-                land_src.read(1, window=win) == 1,
+                perv_s, onstream_s, twi_s, land_s,
                 twi_nodata, bin_edges,
                 n_perv, n_perv_onstream, hist, land_twi_hist,
             )
+    if n_over_max:
+        log.warning(
+            "build_artifact: %d valid-land TWI cells exceed bin_max=%.1f and were "
+            "clipped into the top bin; the high-end percentile reference grid is "
+            "truncated. Raise bin_max if the TWI tail extends past it.", n_over_max, bin_max,
+        )
 
     ref_pctl = np.linspace(0.0, 100.0, n_ref_grid)
     ref_pctl, ref_value = reference_grid(land_twi_hist, bin_edges, ref_pctl)

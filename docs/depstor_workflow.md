@@ -458,6 +458,8 @@ you do that without rerunning the cluster pipeline:
    - `configs/depstor/depstor_rasters.yml` → `carea_map` `thresholds:` +
      `threshold_mode: absolute` (eyeball path; pairs with the ArcPy `twi.vrt`).
 
-The artifact mirrors `compute_carea_map_binary` exactly, so a swept threshold
-reproduces a production `carea_map` run within histogram-bin resolution (~0.05 TWI);
-snap a threshold to a bin edge for an exact match.
+The artifact mirrors `compute_carea_map_binary`'s per-cell mask logic; a swept
+threshold matches production within ~one histogram bin (~0.05 TWI) PLUS a small
+per-HRU aggregation difference (the artifact uses whole-cell `all_touched`
+rasterization vs production's coverage-weighted exactextract). Empirically the two
+agree to <1% on oregon. Snap a threshold to a bin edge for the closest absolute match.
