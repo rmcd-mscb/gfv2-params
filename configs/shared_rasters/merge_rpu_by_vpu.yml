@@ -15,16 +15,12 @@
 
   FdrFac_Fdr:
     rpus:
-      [
-        "shared/source/01/01a/FdrFac/NHDPlusNE/NHDPlus01/NHDPlusFdrFac01a/fdr",
-      ]
+      ["shared/source/01/01a/FdrFac/NHDPlusNE/NHDPlus01/NHDPlusFdrFac01a/fdr"]
     output: "shared/per_vpu/01/Fdr_merged_01.tif"
 
   FdrFac_Fac:
     rpus:
-      [
-        "shared/source/01/01a/FdrFac/NHDPlusNE/NHDPlus01/NHDPlusFdrFac01a/fac",
-      ]
+      ["shared/source/01/01a/FdrFac/NHDPlusNE/NHDPlus01/NHDPlusFdrFac01a/fac"]
     output: "shared/per_vpu/01/Fac_merged_01.tif"
 
 "02":
@@ -208,16 +204,12 @@
 
   FdrFac_Fdr:
     rpus:
-      [
-        "shared/source/06/06a/FdrFac/NHDPlusMS/NHDPlus06/NHDPlusFdrFac06a/fdr",
-      ]
+      ["shared/source/06/06a/FdrFac/NHDPlusMS/NHDPlus06/NHDPlusFdrFac06a/fdr"]
     output: "shared/per_vpu/06/Fdr_merged_06.tif"
 
   FdrFac_Fac:
     rpus:
-      [
-        "shared/source/06/06a/FdrFac/NHDPlusMS/NHDPlus06/NHDPlusFdrFac06a/fac",
-      ]
+      ["shared/source/06/06a/FdrFac/NHDPlusMS/NHDPlus06/NHDPlusFdrFac06a/fac"]
     output: "shared/per_vpu/06/Fac_merged_06.tif"
 
 "07":
@@ -311,16 +303,12 @@
 
   FdrFac_Fdr:
     rpus:
-      [
-        "shared/source/09/09a/FdrFac/NHDPlusSR/NHDPlus09/NHDPlusFdrFac09a/fdr",
-      ]
+      ["shared/source/09/09a/FdrFac/NHDPlusSR/NHDPlus09/NHDPlusFdrFac09a/fdr"]
     output: "shared/per_vpu/09/Fdr_merged_09.tif"
 
   FdrFac_Fac:
     rpus:
-      [
-        "shared/source/09/09a/FdrFac/NHDPlusSR/NHDPlus09/NHDPlusFdrFac09a/fac",
-      ]
+      ["shared/source/09/09a/FdrFac/NHDPlusSR/NHDPlus09/NHDPlusFdrFac09a/fac"]
     output: "shared/per_vpu/09/Fac_merged_09.tif"
 
 "10":
@@ -633,6 +621,7 @@
         "shared/source/17/17a/FdrFac/NHDPlusPN/NHDPlus17/NHDPlusFdrFac17a/fdr",
         "shared/source/17/17b/FdrFac/NHDPlusPN/NHDPlus17/NHDPlusFdrFac17b/fdr",
         "shared/source/17/17c/FdrFac/NHDPlusPN/NHDPlus17/NHDPlusFdrFac17c/fdr",
+        "shared/source/17/17d/FdrFac/NHDPlusPN/NHDPlus17/NHDPlusFdrFac17d/fdr",
       ]
     output: "shared/per_vpu/17/Fdr_merged_17.tif"
 
@@ -642,6 +631,7 @@
         "shared/source/17/17a/FdrFac/NHDPlusPN/NHDPlus17/NHDPlusFdrFac17a/fac",
         "shared/source/17/17b/FdrFac/NHDPlusPN/NHDPlus17/NHDPlusFdrFac17b/fac",
         "shared/source/17/17c/FdrFac/NHDPlusPN/NHDPlus17/NHDPlusFdrFac17c/fac",
+        "shared/source/17/17d/FdrFac/NHDPlusPN/NHDPlus17/NHDPlusFdrFac17d/fac",
       ]
     output: "shared/per_vpu/17/Fac_merged_17.tif"
 
