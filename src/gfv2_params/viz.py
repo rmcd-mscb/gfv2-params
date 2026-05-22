@@ -279,7 +279,7 @@ def map_categorical(gdf, col, title, *, labels=None):
     cats = sorted(gdf[col].dropna().unique())
     if not cats:
         cats = [0]
-    cmap_base = plt.cm.get_cmap("tab20", max(len(cats), 1))
+    cmap_base = plt.get_cmap("tab20", max(len(cats), 1))
     colors = [cmap_base(i) for i in range(len(cats))]
     cmap = mcolors.ListedColormap(colors)
     norm = mcolors.BoundaryNorm([c - 0.5 for c in cats] + [cats[-1] + 0.5], len(cats))
