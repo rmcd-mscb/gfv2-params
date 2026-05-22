@@ -146,5 +146,6 @@ def test_reference_grid_linear():
     land_twi_hist = np.array([10, 10, 10, 10], "int64")
     pctl, value = reference_grid(land_twi_hist, bin_edges, np.array([0.0, 50.0, 100.0]))
     assert pctl[1] == 50.0
-    assert 7.5 <= value[1] <= 12.5          # median near the middle
-    assert value[0] <= value[1] <= value[2]
+    assert value[0] == pytest.approx(0.0)    # p0 -> first edge
+    assert value[1] == pytest.approx(10.0)   # p50 of uniform [0,20] -> 10.0 (edge-based CDF)
+    assert value[2] == pytest.approx(20.0)   # p100 -> last edge

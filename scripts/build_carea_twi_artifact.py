@@ -23,6 +23,8 @@ def main() -> int:
     ap.add_argument("--output", default=None,
                     help="Output .npz (default: {data_root}/{fabric}/params/carea_twi_artifact.npz)")
     ap.add_argument("--bin-width", type=float, default=0.05)
+    ap.add_argument("--twi-source", default=None, choices=["arcpy", "hydrodem"],
+                    help="Source label stored in the artifact (default: inferred from twi_raster name).")
     args = ap.parse_args()
 
     logger = configure_logging("build_carea_twi_artifact")
@@ -39,7 +41,7 @@ def main() -> int:
     depstor = Path(data_root) / fabric / "depstor_rasters"
     out = Path(args.output) if args.output else Path(data_root) / fabric / "params" / "carea_twi_artifact.npz"
 
-    twi_source = "hydrodem" if "hydrodem" in twi_raster.name else "arcpy"
+    twi_source = args.twi_source or ("hydrodem" if "hydrodem" in twi_raster.name else "arcpy")
     logger.info("Building artifact: fabric=%s twi=%s (%s)", fabric, twi_raster.name, twi_source)
 
     artifact = build_artifact(

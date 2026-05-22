@@ -69,7 +69,11 @@ def _bin_centers(bin_edges: np.ndarray) -> np.ndarray:
 
 
 def evaluate_threshold(artifact: CareaTwiArtifact, t: float) -> np.ndarray:
-    """Per-HRU parameter f_hru(t) in [0, 1] for a single TWI threshold."""
+    """Per-HRU parameter f_hru(t) in [0, 1] for a single TWI threshold.
+
+    Bins are left-closed (np.digitize); a swept value matches production's strict
+    `twi > t` within one bin. Snap `t` to a lower bin edge for exactness.
+    """
     centers = _bin_centers(artifact.bin_edges)
     above = artifact.hist[:, centers > t].sum(axis=1)
     num = artifact.n_perv_onstream + above
@@ -153,13 +157,15 @@ def reference_grid(land_twi_hist: np.ndarray, bin_edges: np.ndarray, pctls: np.n
     Returns (pctls, values) where values[i] is the TWI at percentile pctls[i].
     Uses bin centers and the cumulative fraction (CDF) of the histogram.
     """
-    centers = _bin_centers(bin_edges)
     counts = np.asarray(land_twi_hist, dtype="float64")
     total = counts.sum()
     if total <= 0:
         raise ValueError("reference_grid: empty valid-land TWI histogram")
-    cdf_pct = 100.0 * np.cumsum(counts) / total   # percentile at each bin's upper extent
-    values = np.interp(pctls, cdf_pct, centers)
+    # CDF evaluated at bin EDGES: cdf_edges[k] = fraction of cells below bin_edges[k].
+    # Pairing the edge-CDF with bin_edges (not centers) removes the half-bin bias in
+    # the percentile<->value mapping. p=0 -> first edge, p=100 -> last edge.
+    cdf_edges = np.concatenate([[0.0], 100.0 * np.cumsum(counts) / total])
+    values = np.interp(pctls, cdf_edges, bin_edges)
     return np.asarray(pctls, dtype="float64"), values
 
 
@@ -191,6 +197,8 @@ def build_artifact(
     order = np.argsort(ids)
     ids = ids[order]
     n_hru = len(ids)
+    if len(np.unique(ids)) != n_hru:
+        raise ValueError(f"Duplicate {id_feature} values in the HRU layer; ids must be unique.")
     id_to_idx = {int(v): i for i, v in enumerate(ids)}
     if vpu_column and vpu_column in hru.columns:
         vpu_by_id = dict(zip(hru[id_feature].to_numpy(), hru[vpu_column].astype(str)))
@@ -221,6 +229,16 @@ def build_artifact(
         twi_src = stack.enter_context(rasterio.open(twi_raster))
         if twi_src.crs != info.crs:
             raise ValueError(f"TWI CRS {twi_src.crs} != template CRS {info.crs}")
+        col_off = twi_src.transform.c - info.transform.c
+        row_off_align = twi_src.transform.f - info.transform.f
+        col_frac = (col_off / info.transform.a) - round(col_off / info.transform.a)
+        row_frac = (row_off_align / info.transform.e) - round(row_off_align / info.transform.e)
+        if abs(col_frac) > 1e-6 or abs(row_frac) > 1e-6:
+            raise ValueError(
+                f"TWI origin not whole-cell-aligned with template "
+                f"(col_frac={col_frac:.2e}, row_frac={row_frac:.2e}); "
+                f"re-stage TWI on the template grid."
+            )
         twi_vrt = stack.enter_context(WarpedVRT(
             twi_src, crs=info.crs, transform=info.transform,
             width=info.width, height=info.height,
