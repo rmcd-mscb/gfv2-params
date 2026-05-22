@@ -186,18 +186,25 @@ on the orchestrator.
 ### 4. Run fabric-dependent tasks
 
 Once raster prep is complete and the merged fabric is available, prepare
-the fabric batches and run parameter generation. The unified Part 2
-dispatcher walks every zonal param + chained merges + the ssflux weights
-prereq in one invocation:
+the fabric batches and run parameter generation. There are two equivalent
+ways to run Part 2 (they produce identical outputs):
 
-```bash
-bash slurm_batch/submit_zonal_params.sh \
-    {data_root}/{fabric}/batches {fabric} configs/base_config.yml
-```
+- **Run by parameter** — submit each param/fraction as a small array + merge
+  unit, in sequence, so you can follow the workflow and inspect one parameter
+  at a time. See `slurm_batch/RUNME.md` **Stage 4A** for the per-parameter
+  commands and order.
+- **Run wholesale** — one command per stage; each wrapper just loops the
+  by-parameter steps and chains them via `afterok`:
+
+  ```bash
+  BATCHES={data_root}/{fabric}/batches
+  slurm_batch/submit_zonal_params.sh   $BATCHES {fabric} configs/base_config.yml
+  slurm_batch/submit_depstor_params.sh $BATCHES {fabric} configs/base_config.yml
+  ```
 
 See [Zonal-pass parameter pipeline](#zonal-pass-parameter-pipeline) below
-for the design notes, and `slurm_batch/RUNME.md` **Part 2** for the full
-sequence including the depstor pipeline and gap-fill.
+for the design notes, and `slurm_batch/RUNME.md` **Part 2 / Stage 4** for the
+full sequence (both paths) including the depstor pipeline and gap-fill.
 
 ### Single-batch run (debugging one param + batch)
 

@@ -15,6 +15,10 @@
 #
 # The 10 params are listed in configs/zonal/zonal_params.yml — if you add or remove
 # entries there, also update PARAMS below.
+#
+# This is the "run wholesale" path. To run the same work one parameter at a
+# time (submit + inspect each in turn), see slurm_batch/RUNME.md Stage 4A —
+# this wrapper just loops those per-parameter array + merge steps.
 
 set -euo pipefail
 

@@ -9,10 +9,17 @@
 #SBATCH --cpus-per-task=2
 #SBATCH --mem=16G
 #
-# Read the 9 merged depstor fraction CSVs and produce the 4 PRMS Level-5
-# ratio CSVs (sro_to_dprst_perv, sro_to_dprst_imperv, carea_max, smidx_coef).
+# Read the 10 merged depstor fraction CSVs and produce the 6 PRMS Level-5
+# ratio CSVs (sro_to_dprst_perv, sro_to_dprst_imperv, carea_max, smidx_coef,
+# hru_percent_imperv, dprst_frac).
 # Submitted with afterok dependency on every fraction's merge job by
 # slurm_batch/submit_depstor_params.sh.
+#
+# Standalone (run by fraction) — run this LAST, once all 10 fraction merges
+# have landed on disk (no afterok needed if you gate by running in order):
+#   sbatch --export=ALL,BASE_CONFIG=configs/base_config.yml,FABRIC=gfv2 \
+#       slurm_batch/derive_depstor_ratios.batch
+# See slurm_batch/RUNME.md Stage 4A.
 
 cd "$SLURM_SUBMIT_DIR"
 BASE_CONFIG=${BASE_CONFIG:-configs/base_config.yml}

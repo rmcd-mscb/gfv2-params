@@ -23,6 +23,11 @@
 # Resources mirror the legacy slurm_batch/build_weights.batch
 # (8h wall, 96G mem) — WeightGenP2P over the full CONUS fabric is
 # memory-bound and takes hours.
+#
+# Standalone (run by parameter) — run this once before ssflux:
+#   sbatch --export=ALL,BASE_CONFIG=configs/base_config.yml,FABRIC=gfv2 \
+#       slurm_batch/build_zonal_weights.batch
+# See slurm_batch/RUNME.md Stage 4A.
 
 cd "$SLURM_SUBMIT_DIR"
 BASE_CONFIG=${BASE_CONFIG:-configs/base_config.yml}
