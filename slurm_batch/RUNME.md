@@ -521,6 +521,21 @@ pixi run python scripts/merge_and_fill_params.py --base_config configs/base_conf
 pixi run python scripts/merge_default_params.py --base_config configs/base_config.yml
 ```
 
+### Stage 9: View results (notebooks)
+
+The three notebooks in `notebooks/fabric_results/` view a fabric's full
+parameterization — input rasters (clipped to the fabric), depstor rasters, and
+per-HRU param maps. They are parameterized by the `FABRIC` env var. **Run them in
+JupyterHub on a compute node with enough `--mem`** (not the login node — a full
+CONUS `gfv2` render loads ~361k HRU polygons). See
+`notebooks/<fabric>/README.md` for the launch recipe. To regenerate the figure
+set for a report headlessly:
+
+```bash
+pixi run -e notebooks python scripts/render_figures.py --fabric <name>
+# -> docs/figures/<name>/{input_raster_*,depstor_*,param_*}.png  (committed)
+```
+
 ## Adding a new fabric (e.g., Oregon)
 
 A new fabric is added by appending a profile to `configs/base_config.yml` —
