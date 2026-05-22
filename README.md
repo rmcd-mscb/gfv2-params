@@ -169,11 +169,11 @@ orchestrator over [configs/shared_rasters/shared_rasters.yml](configs/shared_ras
 pixi run python scripts/build_shared_rasters.py --config configs/shared_rasters/shared_rasters.yml
 ```
 
-This walks 7 production steps in dependency order (merge_rpu_by_vpu →
+This walks 9 production steps in dependency order (merge_rpu_by_vpu →
 compute_slope_aspect → build_border_dem → build_vpu_landmask →
-merge_rpu_by_vpu_twi → build_vrt → build_derived_rasters → build_lulc_rasters)
-and writes everything into the shared `work/` store consumed by every
-fabric. Add `--step <name>` to run one step or `--from <name>` to resume.
+merge_rpu_by_vpu_twi → build_vrt → twi_reference → build_derived_rasters →
+build_lulc_rasters) and writes everything into the shared `shared/` store
+consumed by every fabric. Add `--step <name>` to run one step or `--from <name>` to resume.
 `--vpus 01,02` scopes per-VPU steps to a subset; `--force` rebuilds
 existing outputs. See [Shared rasters pipeline](#shared-rasters-pipeline)
 below for the design notes.

@@ -250,7 +250,7 @@ Note: `--check` only validates manually-staged inputs (soils, litho, lulc_veg, t
 
 **All of these are now driven by `sbatch slurm_batch/build_shared_rasters.batch`** (or the
 `pixi run python scripts/build_shared_rasters.py --config configs/shared_rasters/shared_rasters.yml`
-interactive equivalent). The orchestrator walks the canonical 8-step DAG in
+interactive equivalent). The orchestrator walks the canonical 9-step DAG in
 dependency order — there is no longer a per-step batch surface; all the
 per-step CLIs/sbatches were retired now that the orchestrator covers them.
 
