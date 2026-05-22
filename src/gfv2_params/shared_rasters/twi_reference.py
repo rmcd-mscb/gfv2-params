@@ -19,6 +19,9 @@ from pathlib import Path
 
 import numpy as np
 import rasterio
+from rasterio.enums import Resampling
+from rasterio.transform import Affine
+from rasterio.vrt import WarpedVRT
 
 from gfv2_params.config import VPU_RASTER_MAP
 
@@ -136,21 +139,23 @@ def write_reference_table(rows: list[dict], out_path: Path) -> None:
 
 
 def _sample_land_masked_twi(twi_path: Path, mask_path: Path, decimate: int, nodata):
-    """Decimated valid-land TWI sample (1-D). Reads both rasters at a coarse
-    overview to keep CONUS-scale sampling cheap; mask==1 marks land."""
+    """Decimated valid-land TWI sample (1-D).
+
+    Reads TWI at a coarse overview, then resamples the per-VPU land mask (nearest)
+    onto that SAME decimated TWI grid via a WarpedVRT. The ArcPy Twi_merged tiles
+    and the Hydrodem-grid land mask do NOT share a grid, so the mask must be
+    regridded, not index-aligned (a plain same-shape read silently misaligns).
+    Cells outside the mask coverage read as nodata (255) -> not land.
+    """
     with rasterio.open(twi_path) as t:
         oh, ow = max(1, t.height // decimate), max(1, t.width // decimate)
         twi = t.read(1, out_shape=(1, oh, ow))
         tnod = t.nodata if nodata is None else nodata
-        t_hw = (t.height, t.width)
-    with rasterio.open(mask_path) as m:
-        if (m.height, m.width) != t_hw:
-            raise ValueError(
-                f"TWI/mask grid mismatch for percentile sampling: "
-                f"TWI {twi_path.name}={t_hw}, mask {mask_path.name}="
-                f"({m.height},{m.width}); they must share a grid."
-            )
-        land = m.read(1, out_shape=(1, oh, ow)) == 1
+        dec_transform = t.transform * Affine.scale(t.width / ow, t.height / oh)
+        with rasterio.open(mask_path) as m:
+            with WarpedVRT(m, crs=t.crs, transform=dec_transform,
+                           width=ow, height=oh, resampling=Resampling.nearest) as vrt:
+                land = vrt.read(1) == 1
     sample = twi[land]
     return _valid(sample, tnod)
 
