@@ -8,10 +8,11 @@ import geopandas as gpd
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+import pytest
 import rasterio
 from affine import Affine
 from rasterio.crs import CRS
-from shapely.geometry import box
+from shapely.geometry import Polygon, box
 
 from gfv2_params import viz
 
@@ -99,6 +100,40 @@ def test_clip_overview_shape_and_extent(tmp_path):
     assert sub_extent[2] >= full_extent[2] - 1e-6
 
 
+def test_clip_overview_pads_out_of_bounds(tmp_path):
+    # raster covers (0,0)-(3000,3000); request a window extending past its
+    # left/top edges. boundless=True must pad with nodata, and the pad masked.
+    arr = np.ones((100, 100), dtype="float32")
+    transform = Affine(30, 0, 0, 0, -30, 3000)
+    path = tmp_path / "oob.tif"
+    _write_tif(path, arr, nodata=-9999.0, transform=transform)
+
+    out, _ = viz.clip_overview(path, (-1500, 1500, 1500, 4500), target_px=300)
+    assert isinstance(out, np.ma.MaskedArray)
+    assert out.mask.any()            # the out-of-raster pad is masked
+    assert 1.0 in out.compressed()   # the in-raster cells survive
+
+
+# --------------------------------------------------------------------------- #
+# fabric bounds
+# --------------------------------------------------------------------------- #
+
+def test_fabric_bounds_reprojects(tmp_path):
+    gpkg = tmp_path / "f.gpkg"
+    _synthetic_fabric("hru_id").to_file(gpkg, layer="nhru", driver="GPKG")
+    native = viz.fabric_bounds(gpkg, "nhru")
+    reproj = viz.fabric_bounds(gpkg, "nhru", dst_crs="EPSG:4326")
+    assert native != reproj  # reprojection actually changed the bounds
+
+
+def test_fabric_bounds_raises_on_empty(tmp_path):
+    gdf = gpd.GeoDataFrame({"hru_id": [1], "geometry": [Polygon()]}, crs="EPSG:5070")
+    gpkg = tmp_path / "empty.gpkg"
+    gdf.to_file(gpkg, layer="nhru", driver="GPKG")
+    with pytest.raises(ValueError):
+        viz.fabric_bounds(gpkg, "nhru")
+
+
 # --------------------------------------------------------------------------- #
 # param load / join
 # --------------------------------------------------------------------------- #
@@ -139,6 +174,66 @@ def test_param_inventory_kinds():
     assert by_name["cov_type"].kind == "categorical"
     # a representative continuous one
     assert by_name["elevation"].kind == "continuous"
+
+
+def test_shared_raster_inventory_skips_missing(tmp_path):
+    vrt_dir = tmp_path / "shared" / "conus" / "vrt"
+    vrt_dir.mkdir(parents=True)
+    for name in ("elevation.vrt", "slope.vrt", "aspect.vrt"):
+        (vrt_dir / name).write_text("")  # existence-only
+    twi = tmp_path / "twi.vrt"
+    twi.write_text("")
+    cfg = {
+        "data_root": str(tmp_path),
+        "twi_raster": str(twi),
+        "fdr_raster": str(tmp_path / "missing_fdr.vrt"),  # absent -> skipped
+    }
+    with pytest.warns(UserWarning, match="fdr"):
+        entries = viz.shared_raster_inventory(cfg)
+    names = {e.name for e in entries}
+    assert {"twi", "elevation", "slope", "aspect"} <= names
+    assert "fdr" not in names  # skipped because the path is missing
+    assert all(e.kind in ("continuous", "categorical") for e in entries)
+
+
+def test_zonal_source_inventory_resolves_placeholders(tmp_path):
+    # load_config leaves {data_root}/{fabric} unresolved inside the params list;
+    # the inventory builder must resolve them itself.
+    (tmp_path / "e.tif").write_text("")
+    (tmp_path / "s.tif").write_text("")
+    zonal_cfg = {
+        "data_root": str(tmp_path),
+        "fabric": "oregon",
+        "params": [
+            {"name": "elevation", "source_raster": "{data_root}/e.tif"},
+            {"name": "soils", "source_raster": "{data_root}/s.tif"},
+            {"name": "ssflux", "source_shapefile": "{data_root}/x.shp"},  # no raster
+        ],
+    }
+    entries = viz.zonal_source_inventory(zonal_cfg)
+    by_name = {e.name: e for e in entries}
+    assert set(by_name) == {"elevation", "soils"}  # ssflux excluded (no source_raster)
+    assert "{data_root}" not in str(by_name["elevation"].path)  # placeholder resolved
+    assert by_name["soils"].kind == "categorical"
+    assert by_name["elevation"].kind == "continuous"
+
+
+def test_depstor_raster_inventory_skips_missing(tmp_path):
+    base = tmp_path / "fab" / "depstor_rasters"
+    base.mkdir(parents=True)
+    (base / "land_mask.tif").write_text("")  # only one of the 14 present
+    cfg = {"data_root": str(tmp_path), "fabric": "fab"}
+    with pytest.warns(UserWarning):
+        entries = viz.depstor_raster_inventory(cfg)
+    assert [e.name for e in entries] == ["land_mask"]
+    assert entries[0].kind == "categorical"
+
+
+def test_entry_kind_validation():
+    with pytest.raises(ValueError):
+        viz.ParamEntry(name="x", csv_name="y.csv", column="z", kind="bogus")
+    with pytest.raises(ValueError):
+        viz.RasterEntry("x", "p.tif", "bogus")
 
 
 # --------------------------------------------------------------------------- #
@@ -183,3 +278,15 @@ def test_save_figure_noop_when_disabled(tmp_path, monkeypatch):
     viz.save_figure(fig, "x")
     plt.close(fig)
     assert not (tmp_path / "testfab" / "x.png").exists()
+
+
+def test_save_figure_warns_without_fabric(tmp_path, monkeypatch):
+    monkeypatch.setattr(viz, "FIGURES_DIR", tmp_path)
+    monkeypatch.setattr(viz, "FABRIC", None)
+    monkeypatch.setattr(viz, "SAVE_FIGURES", True)
+    fig, ax = plt.subplots()
+    with pytest.warns(UserWarning):
+        viz.save_figure(fig, "y")
+    plt.close(fig)
+    # un-namespaced: lands directly in the base dir, not a fabric subdir
+    assert (tmp_path / "y.png").exists()
