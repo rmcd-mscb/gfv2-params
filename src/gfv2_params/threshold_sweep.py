@@ -91,3 +91,62 @@ def sweep(artifact: CareaTwiArtifact, t_grid: np.ndarray) -> pd.DataFrame:
             "frac_one": float((p >= 1.0).mean()),
         })
     return pd.DataFrame(rows)
+
+
+def accumulate_strip(
+    hru_idx: np.ndarray, perv: np.ndarray, onstream: np.ndarray, twi: np.ndarray,
+    land_valid: np.ndarray, twi_nodata, bin_edges: np.ndarray,
+    n_perv: np.ndarray, n_perv_onstream: np.ndarray, hist: np.ndarray,
+    land_twi_hist: np.ndarray,
+) -> None:
+    """Accumulate one aligned strip into the per-HRU and global accumulators.
+
+    `hru_idx` is the per-cell HRU row-index (>=0 valid; <0 = no HRU). Mirrors
+    `compute_carea_map_binary`: a cell contributes to a parameter when it is land
+    & pervious & (TWI > t OR on-stream). Here we bin pervious non-onstream cells
+    by TWI so any threshold can be evaluated later; on-stream pervious cells are
+    counted separately (threshold-independent). `land_twi_hist` accumulates ALL
+    land valid-TWI cells for the percentile reference grid.
+    """
+    if twi_nodata is not None and isinstance(twi_nodata, float) and np.isnan(twi_nodata):
+        twi_valid = ~np.isnan(twi)
+    elif twi_nodata is not None:
+        twi_valid = (twi != twi_nodata) & ~np.isnan(twi)
+    else:
+        twi_valid = ~np.isnan(twi)
+
+    has_hru = hru_idx >= 0
+    land_hru = land_valid & has_hru
+
+    # Global valid-land TWI histogram (reference distribution).
+    gl = land_valid & twi_valid
+    if gl.any():
+        gbins = np.clip(np.digitize(twi[gl], bin_edges) - 1, 0, len(bin_edges) - 2)
+        np.add.at(land_twi_hist, gbins, 1)
+
+    is_perv = land_hru & (perv == 1)
+    np.add.at(n_perv, hru_idx[is_perv], 1)
+
+    is_os = is_perv & (onstream == 1)
+    np.add.at(n_perv_onstream, hru_idx[is_os], 1)
+
+    is_hist = is_perv & (onstream != 1) & twi_valid
+    if is_hist.any():
+        bins = np.clip(np.digitize(twi[is_hist], bin_edges) - 1, 0, len(bin_edges) - 2)
+        np.add.at(hist, (hru_idx[is_hist], bins), 1)
+
+
+def reference_grid(land_twi_hist: np.ndarray, bin_edges: np.ndarray, pctls: np.ndarray):
+    """Percentile->TWI-value grid from a valid-land TWI histogram.
+
+    Returns (pctls, values) where values[i] is the TWI at percentile pctls[i].
+    Uses bin centers and the cumulative fraction (CDF) of the histogram.
+    """
+    centers = _bin_centers(bin_edges)
+    counts = np.asarray(land_twi_hist, dtype="float64")
+    total = counts.sum()
+    if total <= 0:
+        raise ValueError("reference_grid: empty valid-land TWI histogram")
+    cdf_pct = 100.0 * np.cumsum(counts) / total   # percentile at each bin's upper extent
+    values = np.interp(pctls, cdf_pct, centers)
+    return np.asarray(pctls, dtype="float64"), values
