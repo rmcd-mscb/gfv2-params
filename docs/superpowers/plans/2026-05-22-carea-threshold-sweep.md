@@ -726,13 +726,15 @@ within bin resolution:
 
 ```bash
 DR=$(awk '/^data_root:/ {print $2}' configs/base_config.yml)
+test -f "$DR/oregon/params/carea_twi_artifact.npz" \
+  && echo "artifact present" \
+  || echo ">>> build it first (Step 1)"
+# Note: the path uses the SHELL var $DR expanded into the Python string literal —
+# do NOT write f"{DR}/..." (DR is not a Python variable in this heredoc).
 pixi run --as-is python - <<PY
-import numpy as np, rasterio
 from gfv2_params.threshold_sweep import CareaTwiArtifact, evaluate_threshold
-DR="$DR"
-art = CareaTwiArtifact.load(f"{DR}/oregon/params/carea_twi_artifact.npz")
+art = CareaTwiArtifact.load("$DR/oregon/params/carea_twi_artifact.npz")
 carea = evaluate_threshold(art, 8.9364); smidx = evaluate_threshold(art, 15.1503)
-# global kept-fraction sanity vs the production raster cell counts:
 print("sweep mean carea:", round(float(carea.mean()),4), " mean smidx:", round(float(smidx.mean()),4))
 print("frac HRUs carea>0:", round(float((carea>0).mean()),3), " smidx>0:", round(float((smidx>0).mean()),3))
 PY
