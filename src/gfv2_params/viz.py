@@ -378,12 +378,20 @@ def zonal_source_inventory(zonal_cfg) -> list[RasterEntry]:
     `zonal_cfg` is the result of ``load_config("configs/zonal/zonal_params.yml",
     fabric=...)``. Soils and LULC sources are categorical; the rest continuous.
     Missing files are skipped with a warning.
+
+    Note: ``load_config`` resolves ``{data_root}``/``{fabric}`` only in top-level
+    string values, not inside the nested ``params:`` list (the real orchestrator,
+    ``scripts/derive_zonal_params.py``, resolves those per-param). So we resolve
+    the same two placeholders here against the merged-in top-level keys.
     """
+    data_root = str(zonal_cfg.get("data_root", ""))
+    fabric = str(zonal_cfg.get("fabric", ""))
     entries: list[RasterEntry] = []
     for item in zonal_cfg.get("params", []):
         src = item.get("source_raster")
         if not src:
             continue
+        src = src.replace("{data_root}", data_root).replace("{fabric}", fabric)
         name = item["name"]
         kind = "categorical" if name in _ZONAL_CATEGORICAL else "continuous"
         cmap = "tab20" if kind == "categorical" else "viridis"
