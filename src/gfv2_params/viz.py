@@ -7,17 +7,18 @@ a save-figures workflow. Keeping that logic here (rather than inline in each
 notebook) lets CI exercise it on synthetic data.
 
 Conventions mirrored from the rest of the repo:
-- ``snap_bounds_to_grid`` / ``whole_cell_offset`` are lifted verbatim from
-  ``scripts/clip_shared_to_fabric.py`` (made public here).
+- ``snap_bounds_to_grid`` / ``whole_cell_offset`` are the canonical grid-snap
+  helpers (``scripts/clip_shared_to_fabric.py`` imports them from here).
 - ``read_overview`` follows the decimated ``out_shape`` pattern in
   ``notebooks/check_vrts.ipynb``; ``clip_overview`` follows the windowed
   ``rasterio.windows.from_bounds(..., boundless=True)`` pattern in
   ``src/gfv2_params/depstor.py:read_land_mask_for_grid``.
 - ``map_continuous`` / ``map_categorical`` follow ``notebooks/check_params.ipynb``
   but **return** the Figure so the notebook can save it.
-- Inventory builders read paths from a resolved config (``require_config_key`` /
-  ``cfg["data_root"]``) — never hardcoded — and skip missing entries with a
-  warning so the viewer is best-effort.
+- Inventory builders read paths from a resolved config (``cfg["data_root"]`` /
+  ``cfg.get(...)`` / fabric-profile keys) — never hardcoded — and skip missing
+  entries with a warning so the viewer is best-effort (intentionally lenient,
+  not fail-loud).
 """
 
 from __future__ import annotations
@@ -26,6 +27,7 @@ import math
 import warnings
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
 
 import matplotlib.colors as mcolors
 import matplotlib.pyplot as plt
@@ -35,6 +37,8 @@ import rasterio
 from matplotlib.patches import Patch
 from rasterio.enums import Resampling
 from rasterio.windows import from_bounds as window_from_bounds
+
+Kind = Literal["continuous", "categorical"]
 
 # ----------------------------------------------------------------------------- #
 # Grid snapping (verbatim from scripts/clip_shared_to_fabric.py, made public)
@@ -311,13 +315,23 @@ def map_categorical(gdf, col, title, *, labels=None):
 # ----------------------------------------------------------------------------- #
 
 
+def _validate_kind(kind: str) -> None:
+    if kind not in ("continuous", "categorical"):
+        raise ValueError(
+            f"kind must be 'continuous' or 'categorical', got {kind!r}"
+        )
+
+
 @dataclass(frozen=True)
 class RasterEntry:
     name: str
     path: Path
-    kind: str  # "continuous" | "categorical"
+    kind: Kind
     cmap: str = "viridis"
     units: str = ""
+
+    def __post_init__(self) -> None:
+        _validate_kind(self.kind)
 
 
 @dataclass(frozen=True)
@@ -325,9 +339,12 @@ class ParamEntry:
     name: str
     csv_name: str
     column: str
-    kind: str  # "continuous" | "categorical"
-    units: str = ""
+    kind: Kind
     cmap: str = "viridis"
+    units: str = ""
+
+    def __post_init__(self) -> None:
+        _validate_kind(self.kind)
 
 
 def _existing_raster_entries(entries: list[RasterEntry]) -> list[RasterEntry]:
@@ -436,23 +453,25 @@ def depstor_raster_inventory(cfg) -> list[RasterEntry]:
 
 # Curated display metadata for the merged param CSVs (display-only; not pipeline
 # logic). CSV names + columns confirmed against {fabric}/params/merged/.
+# Keyword args throughout: RasterEntry/ParamEntry share a (kind, cmap, units)
+# tail, so positional construction is an easy place to swap cmap/units.
 _PARAM_ENTRIES = [
-    ParamEntry("elevation", "nhm_elevation_params.csv", "mean", "continuous", "m", "terrain"),
-    ParamEntry("slope", "nhm_slope_params.csv", "mean", "continuous", "degrees", "YlOrRd"),
-    ParamEntry("aspect", "nhm_aspect_params.csv", "mean", "continuous", "degrees", "twilight"),
-    ParamEntry("soils", "nhm_soils_params.csv", "soils", "categorical"),
-    ParamEntry("soil_moist_max", "nhm_soil_moist_max_params.csv", "soil_moist_max", "continuous", "cm", "Blues"),
-    ParamEntry("cov_type", "nhm_lulc_nhm_v11_params.csv", "cov_type", "categorical"),
-    ParamEntry("covden_sum", "nhm_lulc_nhm_v11_params.csv", "covden_sum", "continuous", "fraction", "Greens"),
-    ParamEntry("covden_win", "nhm_lulc_nhm_v11_params.csv", "covden_win", "continuous", "fraction", "YlGn"),
-    ParamEntry("retention", "nhm_lulc_nhm_v11_params.csv", "retention", "continuous", "fraction", "PuBuGn"),
-    ParamEntry("snow_intcp", "nhm_lulc_nhm_v11_params.csv", "snow_intcp", "continuous", "in", "PuBu"),
-    ParamEntry("carea_max", "nhm_carea_max_params.csv", "carea_max", "continuous", "fraction", "magma"),
-    ParamEntry("smidx_coef", "nhm_smidx_coef_params.csv", "smidx_coef", "continuous", "fraction", "magma"),
-    ParamEntry("sro_to_dprst_perv", "nhm_sro_to_dprst_perv_params.csv", "sro_to_dprst_perv", "continuous", "fraction", "cividis"),
-    ParamEntry("sro_to_dprst_imperv", "nhm_sro_to_dprst_imperv_params.csv", "sro_to_dprst_imperv", "continuous", "fraction", "cividis"),
-    ParamEntry("hru_percent_imperv", "nhm_hru_percent_imperv_params.csv", "hru_percent_imperv", "continuous", "fraction", "OrRd"),
-    ParamEntry("dprst_frac", "nhm_dprst_frac_params.csv", "dprst_frac", "continuous", "fraction", "GnBu"),
+    ParamEntry(name="elevation", csv_name="nhm_elevation_params.csv", column="mean", kind="continuous", units="m", cmap="terrain"),
+    ParamEntry(name="slope", csv_name="nhm_slope_params.csv", column="mean", kind="continuous", units="degrees", cmap="YlOrRd"),
+    ParamEntry(name="aspect", csv_name="nhm_aspect_params.csv", column="mean", kind="continuous", units="degrees", cmap="twilight"),
+    ParamEntry(name="soils", csv_name="nhm_soils_params.csv", column="soils", kind="categorical"),
+    ParamEntry(name="soil_moist_max", csv_name="nhm_soil_moist_max_params.csv", column="soil_moist_max", kind="continuous", units="cm", cmap="Blues"),
+    ParamEntry(name="cov_type", csv_name="nhm_lulc_nhm_v11_params.csv", column="cov_type", kind="categorical"),
+    ParamEntry(name="covden_sum", csv_name="nhm_lulc_nhm_v11_params.csv", column="covden_sum", kind="continuous", units="fraction", cmap="Greens"),
+    ParamEntry(name="covden_win", csv_name="nhm_lulc_nhm_v11_params.csv", column="covden_win", kind="continuous", units="fraction", cmap="YlGn"),
+    ParamEntry(name="retention", csv_name="nhm_lulc_nhm_v11_params.csv", column="retention", kind="continuous", units="fraction", cmap="PuBuGn"),
+    ParamEntry(name="snow_intcp", csv_name="nhm_lulc_nhm_v11_params.csv", column="snow_intcp", kind="continuous", units="in", cmap="PuBu"),
+    ParamEntry(name="carea_max", csv_name="nhm_carea_max_params.csv", column="carea_max", kind="continuous", units="fraction", cmap="magma"),
+    ParamEntry(name="smidx_coef", csv_name="nhm_smidx_coef_params.csv", column="smidx_coef", kind="continuous", units="fraction", cmap="magma"),
+    ParamEntry(name="sro_to_dprst_perv", csv_name="nhm_sro_to_dprst_perv_params.csv", column="sro_to_dprst_perv", kind="continuous", units="fraction", cmap="cividis"),
+    ParamEntry(name="sro_to_dprst_imperv", csv_name="nhm_sro_to_dprst_imperv_params.csv", column="sro_to_dprst_imperv", kind="continuous", units="fraction", cmap="cividis"),
+    ParamEntry(name="hru_percent_imperv", csv_name="nhm_hru_percent_imperv_params.csv", column="hru_percent_imperv", kind="continuous", units="fraction", cmap="OrRd"),
+    ParamEntry(name="dprst_frac", csv_name="nhm_dprst_frac_params.csv", column="dprst_frac", kind="continuous", units="fraction", cmap="GnBu"),
 ]
 
 
