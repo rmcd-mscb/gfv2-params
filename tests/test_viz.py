@@ -1,13 +1,8 @@
 """Tests for the results-viewer helper library `gfv2_params.viz`.
 
 Synthetic data only — no real fabric files, so these run in CI. Plotting uses
-the non-interactive Agg backend.
+the non-interactive Agg backend (selected globally in tests/conftest.py).
 """
-
-
-import matplotlib
-
-matplotlib.use("Agg")
 
 import geopandas as gpd
 import matplotlib.pyplot as plt

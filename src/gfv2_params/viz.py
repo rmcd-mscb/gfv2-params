@@ -279,8 +279,9 @@ def map_categorical(gdf, col, title, *, labels=None):
     cats = sorted(gdf[col].dropna().unique())
     if not cats:
         cats = [0]
-    colors = list(plt.cm.Set2.colors[:len(cats)])
-    cmap = mcolors.ListedColormap(colors[:len(cats)])
+    cmap_base = plt.cm.get_cmap("tab20", max(len(cats), 1))
+    colors = [cmap_base(i) for i in range(len(cats))]
+    cmap = mcolors.ListedColormap(colors)
     norm = mcolors.BoundaryNorm([c - 0.5 for c in cats] + [cats[-1] + 0.5], len(cats))
 
     fig, (ax_map, ax_leg) = plt.subplots(
@@ -295,7 +296,7 @@ def map_categorical(gdf, col, title, *, labels=None):
     counts = gdf[col].value_counts().sort_index()
     total = counts.sum() or 1
     patches = []
-    for cat, color in zip(cats, colors[:len(cats)]):
+    for cat, color in zip(cats, colors):
         lbl = labels.get(cat, str(cat)) if labels else str(cat)
         n = counts.get(cat, 0)
         patches.append(Patch(color=color, label=f"{lbl}\n({n:,}, {100 * n / total:.1f}%)"))
