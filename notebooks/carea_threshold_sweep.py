@@ -1,5 +1,6 @@
 import marimo
 
+__generated_with = "0.23.5"
 app = marimo.App(width="full")
 
 
@@ -12,28 +13,26 @@ def _():
 
 @app.cell
 def _(mo):
-    mo.md(
-        r"""
-        # carea_max / smidx_coef — TWI threshold sweep
+    mo.md(r"""
+    # carea_max / smidx_coef — TWI threshold sweep
 
-        Tune the TWI threshold for the two PRMS depression-storage parameters and
-        see the resulting per-HRU distributions **instantly** — no cluster reruns.
+    Tune the TWI threshold for the two PRMS depression-storage parameters and
+    see the resulting per-HRU distributions **instantly** — no cluster reruns.
 
-        `carea_max` and `smidx_coef` are the same per-HRU function evaluated at two
-        thresholds:
+    `carea_max` and `smidx_coef` are the same per-HRU function evaluated at two
+    thresholds:
 
-        `f_hru(t) = clip( (n_perv_onstream + #(pervious non-onstream cells, TWI > t)) / n_perv , 0, 1 )`
+    `f_hru(t) = clip( (n_perv_onstream + #(pervious non-onstream cells, TWI > t)) / n_perv , 0, 1 )`
 
-        This notebook loads the pre-extracted artifact
-        (`{data_root}/{fabric}/params/carea_twi_artifact.npz`, built by
-        `scripts/build_carea_twi_artifact.py --fabric <f>`) and evaluates any
-        candidate threshold against it.
+    This notebook loads the pre-extracted artifact
+    (`{data_root}/{fabric}/params/carea_twi_artifact.npz`, built by
+    `scripts/build_carea_twi_artifact.py --fabric <f>`) and evaluates any
+    candidate threshold against it.
 
-        **Workflow:** set the two thresholds (absolute TWI **or** percentile), read the
-        distribution / map / diffs, sweep a range, then paste the printed config
-        snippet into the production config and run the pipeline.
-        """
-    )
+    **Workflow:** set the two thresholds (absolute TWI **or** percentile), read the
+    distribution / map / diffs, sweep a range, then paste the printed config
+    snippet into the production config and run the pipeline.
+    """)
     return
 
 
@@ -50,7 +49,6 @@ def _():
     from gfv2_params.threshold_sweep import (
         CareaTwiArtifact,
         evaluate_threshold,
-        percentile_to_value,
         sweep,
         value_to_percentile,
     )
@@ -75,7 +73,6 @@ def _():
         gpd,
         np,
         pd,
-        percentile_to_value,
         plt,
         sweep,
         value_to_percentile,
@@ -84,13 +81,11 @@ def _():
 
 @app.cell
 def _(ARTIFACT_PATH, FABRIC, art, mo):
-    mo.md(
-        f"""
-        **Loaded:** `{ARTIFACT_PATH}`
-        fabric = **{FABRIC}**, twi_source = **{art.twi_source}**, HRUs = **{len(art.ids):,}**,
-        bins = {len(art.bin_edges) - 1} over [{art.bin_edges[0]:.1f}, {art.bin_edges[-1]:.1f}] TWI.
-        """
-    )
+    mo.md(f"""
+    **Loaded:** `{ARTIFACT_PATH}`
+    fabric = **{FABRIC}**, twi_source = **{art.twi_source}**, HRUs = **{len(art.ids):,}**,
+    bins = {len(art.bin_edges) - 1} over [{art.bin_edges[0]:.1f}, {art.bin_edges[-1]:.1f}] TWI.
+    """)
     return
 
 
@@ -129,8 +124,10 @@ def _(art, evaluate_threshold, t_carea, t_smidx):
 
 
 @app.cell
-def _(carea, mo, np, smidx):
-    def _stats(name, p):
+def _(mo, np):
+    # NOTE: marimo treats names starting with "_" as cell-local; a shared helper
+    # must use a plain name and be returned so other cells can take it as an arg.
+    def param_stats(name, p):
         return {
             "param": name,
             "mean": float(p.mean()),
@@ -140,13 +137,13 @@ def _(carea, mo, np, smidx):
         }
 
     mo.md("## View 1 — per-HRU distribution")
-    return (_stats,)
+    return (param_stats,)
 
 
 @app.cell
-def _(_stats, carea, mo, pd, smidx):
+def _(carea, mo, param_stats, pd, smidx):
     mo.ui.table(
-        pd.DataFrame([_stats("carea_max", carea), _stats("smidx_coef", smidx)]),
+        pd.DataFrame([param_stats("carea_max", carea), param_stats("smidx_coef", smidx)]),
         selection=None,
     )
     return
@@ -168,7 +165,9 @@ def _(carea, plt, smidx):
 
 @app.cell
 def _(mo):
-    mo.md("## View 2 — spatial map")
+    mo.md("""
+    ## View 2 — spatial map
+    """)
     return
 
 
@@ -191,15 +190,13 @@ def _(HRU_GPKG, HRU_LAYER, ID_FEATURE, art, carea, gpd, pd, plt, smidx):
 
 @app.cell
 def _(mo):
-    mo.md(
-        """
-        ## View 3 — diff vs legacy 8.0 / 15.6 output
+    mo.md("""
+    ## View 3 — diff vs legacy 8.0 / 15.6 output
 
-        Set `LEGACY_CSV` to a CSV with columns (`<id_feature>`, `carea_max`,
-        `smidx_coef`) from a legacy absolute-threshold run. Inactive for oregon
-        (no valid legacy output here); activates on VPU 01 / gfv2.
-        """
-    )
+    Set `LEGACY_CSV` to a CSV with columns (`<id_feature>`, `carea_max`,
+    `smidx_coef`) from a legacy absolute-threshold run. Inactive for oregon
+    (no valid legacy output here); activates on VPU 01 / gfv2.
+    """)
     return
 
 
@@ -229,19 +226,17 @@ def _(ID_FEATURE, art, carea, mo, pd, plt, smidx):
 
 @app.cell
 def _(mo):
-    mo.md(
-        """
-        ## View 4 — diff vs existing NHM / gauge-tuned values
+    mo.md("""
+    ## View 4 — diff vs existing NHM / gauge-tuned values
 
-        Set `GAUGE_CSV` to a CSV with (`<id_feature>`, `carea_max`, `smidx_coef`)
-        from a prior calibration to compare the candidate against the real target.
-        """
-    )
+    Set `GAUGE_CSV` to a CSV with (`<id_feature>`, `carea_max`, `smidx_coef`)
+    from a prior calibration to compare the candidate against the real target.
+    """)
     return
 
 
 @app.cell
-def _(ID_FEATURE, art, carea, mo, pd, plt, smidx):
+def _(ID_FEATURE, art, carea, mo, pd, smidx):
     from pathlib import Path as _Path2
 
     GAUGE_CSV = ""  # e.g. "/path/to/nhm_calibrated_params.csv"
@@ -263,7 +258,9 @@ def _(ID_FEATURE, art, carea, mo, pd, plt, smidx):
 
 @app.cell
 def _(mo):
-    mo.md("## Sweep curve — sensitivity of mean parameter to threshold")
+    mo.md("""
+    ## Sweep curve — sensitivity of mean parameter to threshold
+    """)
     return
 
 
