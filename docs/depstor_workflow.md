@@ -431,3 +431,33 @@ The 13 PRMS depstor parameters not produced here (`dprst_frac_open`,
 `dprst_frac_init`, `imperv_stor_max`, `smidx_exp`) come from NHM defaults
 or a separate sourcing decision — see the "Out-of-scope PRMS dprst params"
 cell in `notebooks/qaqc_depstor_vpu01.ipynb`.
+
+## Calibrating the TWI threshold (`carea_max` / `smidx_coef`)
+
+`carea_max`/`smidx_coef` are *a priori* estimates — the fraction of each HRU's
+pervious area whose TWI clears a cutoff (or sits on-stream storage). The cutoff is
+data-derived (a percentile of valid-land TWI; the default is the inversion of the
+legacy 8.0/15.6 through VPU 01's ArcPy TWI CDF — see #55). The original developer
+*eyeballed* 8.0/15.6, so picking a final value is an iteration. The sweep tool lets
+you do that without rerunning the cluster pipeline:
+
+1. **Build the per-fabric artifact once** (per-HRU pervious-TWI histograms):
+   ```bash
+   sbatch -p cpu -A impd --time=01:00:00 --ntasks=1 --cpus-per-task=4 --mem=48G \
+     --output=logs/job_%j.out --error=logs/job_%j.err \
+     --wrap="pixi run --as-is python scripts/build_carea_twi_artifact.py --fabric <fabric>"
+   # -> {data_root}/{fabric}/params/carea_twi_artifact.npz
+   ```
+2. **Iterate in the notebook** (`notebooks/carea_threshold_sweep.py`, marimo): set a
+   candidate as an absolute TWI value **or** a percentile (live two-way readout),
+   inspect the per-HRU distribution, spatial map, optional legacy/gauge diffs, and
+   the sensitivity sweep curve. Evaluating a candidate is instant (no cluster run).
+3. **Persist the chosen value** — paste the printed config snippet into either:
+   - `configs/shared_rasters/shared_rasters.yml` → `twi_reference` `percentiles:`
+     (percentile path; rerun the `twi_reference` step + depstor `carea_map`), or
+   - `configs/depstor/depstor_rasters.yml` → `carea_map` `thresholds:` +
+     `threshold_mode: absolute` (eyeball path; pairs with the ArcPy `twi.vrt`).
+
+The artifact mirrors `compute_carea_map_binary` exactly, so a swept threshold
+reproduces a production `carea_map` run within histogram-bin resolution (~0.05 TWI);
+snap a threshold to a bin edge for an exact match.
