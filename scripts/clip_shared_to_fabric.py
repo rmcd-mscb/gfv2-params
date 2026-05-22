@@ -27,7 +27,6 @@ Usage:
 """
 
 import argparse
-import math
 from pathlib import Path
 
 import geopandas as gpd
@@ -36,55 +35,15 @@ from osgeo import gdal
 
 from gfv2_params.config import load_base_config, require_config_key
 from gfv2_params.log import configure_logging
+from gfv2_params.viz import snap_bounds_to_grid, whole_cell_offset
 
 gdal.UseExceptions()
 
-
-def _snap_bounds_to_grid(bounds, transform, buffer_cells: int):
-    """Expand HRU bounds by `buffer_cells` then snap OUTWARD to the source grid.
-
-    Returns (ulx, uly, lrx, lry) on the source pixel lattice, guaranteed to
-    fully contain the (buffered) input bounds. Works for a north-up raster
-    (transform.a > 0, transform.e < 0).
-    """
-    minx, miny, maxx, maxy = bounds
-    px = transform.a          # +cellsize
-    py = transform.e          # -cellsize
-    ox = transform.c          # left edge of column 0
-    oy = transform.f          # top edge of row 0
-    # The floor/ceil snapping below is only correct for an axis-aligned, north-up
-    # raster. Fail loudly on a rotated/flipped --source rather than emitting a
-    # silently-wrong window.
-    if transform.b != 0 or transform.d != 0 or px <= 0 or py >= 0:
-        raise ValueError(
-            f"Source raster is not axis-aligned north-up (a={px}, e={py}, "
-            f"b={transform.b}, d={transform.d}); _snap_bounds_to_grid assumes it."
-        )
-    cell_x = abs(px)
-    cell_y = abs(py)
-
-    minx -= buffer_cells * cell_x
-    maxx += buffer_cells * cell_x
-    miny -= buffer_cells * cell_y
-    maxy += buffer_cells * cell_y
-
-    c_left = math.floor((minx - ox) / cell_x)
-    c_right = math.ceil((maxx - ox) / cell_x)
-    r_top = math.floor((oy - maxy) / cell_y)
-    r_bot = math.ceil((oy - miny) / cell_y)
-
-    ulx = ox + c_left * cell_x
-    lrx = ox + c_right * cell_x
-    uly = oy - r_top * cell_y
-    lry = oy - r_bot * cell_y
-    return ulx, uly, lrx, lry
-
-
-def _whole_cell_offset(t_a, ref_transform):
-    """Fractional-cell offset of transform origin vs a reference lattice."""
-    col = (t_a.c - ref_transform.c) / ref_transform.a
-    row = (t_a.f - ref_transform.f) / ref_transform.e
-    return col - round(col), row - round(row)
+# The grid-snap helpers now live in gfv2_params.viz (shared with the results-viewer
+# notebooks). Keep the underscore-prefixed names as thin aliases so the call sites
+# below — and any external importers — stay unchanged.
+_snap_bounds_to_grid = snap_bounds_to_grid
+_whole_cell_offset = whole_cell_offset
 
 
 def main() -> int:
