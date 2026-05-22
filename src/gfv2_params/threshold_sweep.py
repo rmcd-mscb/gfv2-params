@@ -13,10 +13,21 @@ This module holds the artifact, the pure sweep math, and the extraction driver
 
 from __future__ import annotations
 
+import logging
+from contextlib import ExitStack
 from dataclasses import dataclass
+from pathlib import Path
 
+import geopandas as gpd
 import numpy as np
 import pandas as pd
+import rasterio
+from rasterio.enums import Resampling
+from rasterio.features import rasterize
+from rasterio.vrt import WarpedVRT
+from rasterio.windows import Window
+
+from .depstor import RasterInfo
 
 
 @dataclass
@@ -150,3 +161,91 @@ def reference_grid(land_twi_hist: np.ndarray, bin_edges: np.ndarray, pctls: np.n
     cdf_pct = 100.0 * np.cumsum(counts) / total   # percentile at each bin's upper extent
     values = np.interp(pctls, cdf_pct, centers)
     return np.asarray(pctls, dtype="float64"), values
+
+
+_STRIP_ROWS = 1024
+
+
+def build_artifact(
+    *, fabric: str, twi_raster: Path, template_raster: Path, hru_gpkg: Path,
+    hru_layer: str, id_feature: str, perv_path: Path, onstream_path: Path,
+    landmask_path: Path, vpu_column: str | None, twi_source: str,
+    bin_min: float = 0.0, bin_max: float = 30.0, bin_width: float = 0.05,
+    n_ref_grid: int = 1001, logger: logging.Logger | None = None,
+) -> CareaTwiArtifact:
+    """Single pass over a fabric's depstor stack -> CareaTwiArtifact.
+
+    Mirrors compute_carea_map_binary (land & perv & (twi>t | onstream)) so a swept
+    threshold reproduces a production carea_map run within bin resolution.
+    """
+    log = logger or logging.getLogger("build_carea_twi_artifact")
+    info = RasterInfo.from_path(template_raster)
+    bin_edges = np.arange(bin_min, bin_max + bin_width, bin_width)
+    n_bins = len(bin_edges) - 1
+
+    hru = gpd.read_file(hru_gpkg, layer=hru_layer)
+    hru = hru[hru.geometry.notna() & ~hru.geometry.is_empty]
+    if hru.crs != info.crs:
+        hru = hru.to_crs(info.crs)
+    ids = hru[id_feature].to_numpy()
+    order = np.argsort(ids)
+    ids = ids[order]
+    n_hru = len(ids)
+    id_to_idx = {int(v): i for i, v in enumerate(ids)}
+    if vpu_column and vpu_column in hru.columns:
+        vpu_by_id = dict(zip(hru[id_feature].to_numpy(), hru[vpu_column].astype(str)))
+        vpu = np.array([vpu_by_id[int(v)] for v in ids], dtype=object)
+    else:
+        vpu = np.array(["" for _ in ids], dtype=object)
+    log.info("build_artifact: fabric=%s n_hru=%d grid=%dx%d bins=%d",
+             fabric, n_hru, info.width, info.height, n_bins)
+
+    # Per-cell HRU row-index raster (full template; oregon-scale OK). int32 -1=none.
+    geoms = hru.geometry.values
+    idxvals = np.array([id_to_idx[int(v)] for v in hru[id_feature].to_numpy()], dtype="int32")
+    hru_idx_full = rasterize(
+        ((g, int(i)) for g, i in zip(geoms, idxvals)),
+        out_shape=(info.height, info.width), transform=info.transform,
+        fill=-1, dtype="int32", all_touched=True,
+    )
+
+    n_perv = np.zeros(n_hru, "int64")
+    n_perv_onstream = np.zeros(n_hru, "int64")
+    hist = np.zeros((n_hru, n_bins), "int64")
+    land_twi_hist = np.zeros(n_bins, "int64")
+
+    with ExitStack() as stack:
+        land_src = stack.enter_context(rasterio.open(landmask_path))
+        perv_src = stack.enter_context(rasterio.open(perv_path))
+        onstream_src = stack.enter_context(rasterio.open(onstream_path))
+        twi_src = stack.enter_context(rasterio.open(twi_raster))
+        if twi_src.crs != info.crs:
+            raise ValueError(f"TWI CRS {twi_src.crs} != template CRS {info.crs}")
+        twi_vrt = stack.enter_context(WarpedVRT(
+            twi_src, crs=info.crs, transform=info.transform,
+            width=info.width, height=info.height,
+            resampling=Resampling.nearest, nodata=twi_src.nodata,
+        ))
+        twi_nodata = twi_src.nodata
+        for row_off in range(0, info.height, _STRIP_ROWS):
+            h = min(_STRIP_ROWS, info.height - row_off)
+            win = Window(0, row_off, info.width, h)
+            accumulate_strip(
+                hru_idx_full[row_off:row_off + h, :],
+                perv_src.read(1, window=win),
+                onstream_src.read(1, window=win),
+                twi_vrt.read(1, window=win),
+                land_src.read(1, window=win) == 1,
+                twi_nodata, bin_edges,
+                n_perv, n_perv_onstream, hist, land_twi_hist,
+            )
+
+    ref_pctl = np.linspace(0.0, 100.0, n_ref_grid)
+    ref_pctl, ref_value = reference_grid(land_twi_hist, bin_edges, ref_pctl)
+    log.info("build_artifact: %d pervious cells total; %d valid-land TWI cells",
+             int(n_perv.sum()), int(land_twi_hist.sum()))
+    return CareaTwiArtifact(
+        ids=ids, vpu=vpu, n_perv=n_perv, n_perv_onstream=n_perv_onstream,
+        hist=hist, bin_edges=bin_edges, ref_pctl=ref_pctl, ref_value=ref_value,
+        fabric=fabric, twi_source=twi_source,
+    )
