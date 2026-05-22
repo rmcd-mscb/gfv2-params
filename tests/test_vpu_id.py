@@ -38,3 +38,14 @@ def test_vpu_to_code_subregions_map_to_parent():
     assert vpu_to_code("03W") == 3
     assert vpu_to_code("10L") == 10
     assert vpu_to_code("10U") == 10
+
+
+def test_vpu_to_code_out_of_range_raises():
+    with pytest.raises(ValueError, match="out of range"):
+        vpu_to_code("19")
+    with pytest.raises(ValueError):
+        vpu_to_code("00")
+
+
+def test_vpu_to_code_oregon_alias():
+    assert vpu_to_code("OR") == 17

@@ -87,6 +87,7 @@ def assemble_reference_table(
     p_carea: float | None = None,
     p_smidx: float | None = None,
     nodata: float | None = -9999.0,
+    logger=None,
 ) -> list[dict]:
     """Build the reference-percentile rows for one TWI source.
 
@@ -110,6 +111,11 @@ def assemble_reference_table(
         s = sampler(vpu)
         valid = _valid(s, nodata)
         if valid.size == 0:
+            if logger is not None:
+                logger.warning(
+                    "twi_reference[%s]: VPU %s has no valid-land TWI; skipping (no row written)",
+                    source, vpu,
+                )
             continue
         pooled.append(valid)
         tc, ts = percentile_of_values(valid, [p_carea, p_smidx])
@@ -203,7 +209,7 @@ def build(step_cfg: dict, ctx, logger) -> dict:
         rows = assemble_reference_table(
             source=source, vpus=raster_vpus(ctx.vpus), sampler=sampler,
             arcpy_vpu01_sample=arcpy01, p_carea=p_carea, p_smidx=p_smidx,
-            nodata=nodata,
+            nodata=nodata, logger=logger,
         )
         out_path = out_dir / f"twi_reference_percentiles.{source}.csv"
         write_reference_table(rows, out_path)

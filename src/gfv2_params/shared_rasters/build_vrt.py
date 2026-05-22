@@ -21,7 +21,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from osgeo import gdal
+from osgeo import gdal, osr
 
 from .context import SharedRastersContext
 
@@ -113,11 +113,13 @@ def build(step_cfg: dict, ctx: SharedRastersContext, logger) -> dict:
 
         epsg = _srs_override(vrt_name)
         if epsg is not None:
-            from osgeo import osr
             srs = osr.SpatialReference()
             srs.SetFromUserInput(epsg)
             ds = gdal.Open(str(vrt_path), gdal.GA_Update)
-            ds.SetProjection(srs.ExportToWkt())
+            if ds is None:
+                raise RuntimeError(f"could not reopen {vrt_path} to stamp {epsg}")
+            if ds.SetProjection(srs.ExportToWkt()) != gdal.CE_None:
+                raise RuntimeError(f"SetProjection({epsg}) failed for {vrt_path}")
             ds.FlushCache()
             del ds
             logger.info("Stamped %s with %s", vrt_path, epsg)

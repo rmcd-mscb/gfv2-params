@@ -13,7 +13,7 @@ from rasterio.windows import Window
 
 from ..depstor import RasterInfo, compute_carea_map_binary
 from .context import BuildContext
-from .vpu_id import MAX_VPU_CODE, vpu_to_code
+from .vpu_id import MAX_VPU_CODE, VPU_NODATA, vpu_to_code
 
 # TWI is float32 — ~4x the per-strip memory of the uint8 inputs.
 STRIP_ROWS = 1024
@@ -83,6 +83,22 @@ def _threshold_lut(table: dict, column: str):
     return lut
 
 
+def uncovered_vpu_codes(present_codes, *luts) -> list:
+    """VPU codes present in the vpu_id raster but lacking a finite threshold.
+
+    A code maps to +inf in a LUT when its VPU has no row in the reference table
+    (e.g. twi_reference skipped an empty-sample VPU). Such cells would be silently
+    classified never-wet, so the caller raises on a non-empty result.
+    """
+    out = []
+    for c in sorted({int(x) for x in present_codes}):
+        if c == VPU_NODATA:
+            continue
+        if any(c >= len(lut) or not np.isfinite(lut[c]) for lut in luts):
+            out.append(c)
+    return out
+
+
 def build(step_cfg: dict, ctx: BuildContext, logger) -> dict:
     if ctx.twi_raster is None:
         raise KeyError("carea_map step needs `twi_raster` in fabric profile.")
@@ -121,6 +137,7 @@ def build(step_cfg: dict, ctx: BuildContext, logger) -> dict:
         else:
             # multi-VPU fabric, per-VPU scope -> per-cell threshold via vpu_id
             per_cell = True
+            present_codes: set = set()
             vpu_id_path = ctx.require("vpu_id")
             carea_lut = _threshold_lut(table, "t_carea")
             smidx_lut = _threshold_lut(table, "t_smidx")
@@ -201,6 +218,7 @@ def build(step_cfg: dict, ctx: BuildContext, logger) -> dict:
             twi = twi_vrt.read(1, window=window)
             if per_cell:
                 codes = vpu_id_src.read(1, window=window)
+                present_codes.update(np.unique(codes).tolist())
                 thresholds = [carea_lut[codes], smidx_lut[codes]]
             else:
                 thresholds = [carea_t, smidx_t]
@@ -210,6 +228,15 @@ def build(step_cfg: dict, ctx: BuildContext, logger) -> dict:
                 )
                 dsts[i].write(out, 1, window=window)
                 counts[i] += int((out == 1).sum())
+
+    if per_cell:
+        bad = uncovered_vpu_codes(present_codes, carea_lut, smidx_lut)
+        if bad:
+            raise ValueError(
+                f"carea_map percentile vpu mode: VPU code(s) {bad} present in the "
+                f"vpu_id raster but absent from {step_cfg['reference_table']}; re-run "
+                f"twi_reference so every fabric VPU has a row."
+            )
 
     total = info.height * info.width
     for (out, label), n in zip(runs, counts):

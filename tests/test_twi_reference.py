@@ -88,3 +88,7 @@ def test_raster_vpus_dedup_subregions():
         "01", "02", "03", "10", "17",
     ]
     assert raster_vpus(["01", "01", "18"]) == ["01", "18"]
+
+
+def test_raster_vpus_maps_oregon_alias():
+    assert raster_vpus(["OR", "17"]) == ["17"]

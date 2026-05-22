@@ -10,9 +10,12 @@ import pytest
 
 from gfv2_params.depstor import compute_carea_map_binary
 from gfv2_params.depstor_builders.carea_map import (
+    _threshold_lut,
     load_reference_table,
     resolve_scalar_thresholds,
+    uncovered_vpu_codes,
 )
+from gfv2_params.depstor_builders.vpu_id import VPU_NODATA, vpu_to_code
 
 
 def _inputs():
@@ -80,3 +83,27 @@ def test_resolve_scalar_missing_vpu_raises(tmp_path):
     table = load_reference_table(_write_table(tmp_path))
     with pytest.raises(KeyError, match="no reference row"):
         resolve_scalar_thresholds(table, scope="vpu", vpu="09")
+
+
+def _vpu_ref_table():
+    return {
+        ("vpu", "17"): {"t_carea": 8.94, "t_smidx": 15.15},
+        ("vpu", "01"): {"t_carea": 8.0, "t_smidx": 15.6},
+        ("conus", "CONUS"): {"t_carea": 7.7, "t_smidx": 14.9},
+    }
+
+
+def test_threshold_lut_fills_and_maps():
+    lut = _threshold_lut(_vpu_ref_table(), "t_carea")
+    assert lut[vpu_to_code("17")] == 8.94
+    assert lut[vpu_to_code("01")] == 8.0
+    assert not np.isfinite(lut[VPU_NODATA])   # index 0 nodata stays +inf
+    assert not np.isfinite(lut[9])            # VPU 09 absent -> +inf
+
+
+def test_uncovered_vpu_codes_detects_missing():
+    t = _vpu_ref_table()
+    ca = _threshold_lut(t, "t_carea")
+    sm = _threshold_lut(t, "t_smidx")
+    assert uncovered_vpu_codes({0, 1, 9}, ca, sm) == [9]   # 0 ignored, 9 missing
+    assert uncovered_vpu_codes({0, 1, 17}, ca, sm) == []   # all covered

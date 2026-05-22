@@ -300,9 +300,11 @@ finish them first and then rebuild both VRTs in one shot:
 bash slurm_batch/submit_twi_completion.sh
 ```
 
-This submits two chained jobs: `merge_rpu_by_vpu_twi --force` (rebuilds all
+This submits three chained jobs: `merge_rpu_by_vpu_twi --force` (rebuilds all
 18 VPUs idempotently) → `build_vrt --force` (writes `twi.vrt` and
-`twi_hydrodem.vrt`). Verify afterwards with `gdalinfo` on both VRTs.
+`twi_hydrodem.vrt`) → `twi_reference --force` (writes the per-VPU percentile
+CSVs used by `carea_map threshold_mode: percentile`). Verify afterwards with
+`gdalinfo` on both VRTs.
 
 **Stage 2a' — `twi_reference`:** Compute valid-land TWI percentile cutoffs
 per VPU (and CONUS) for each TWI source (`arcpy`, `hydrodem`). Outputs
@@ -363,13 +365,13 @@ skip this step).
 **`carea_map` threshold modes:** configured in `configs/depstor/depstor_rasters.yml`.
 - `threshold_mode: absolute` — legacy 8.0/15.6 thresholds. Requires ArcPy
   `twi.vrt` as `twi_raster`; the builder warns if paired with a non-ArcPy
-  source.
+  (hydrodem) source.
 - `threshold_mode: percentile` — derives the TWI cutoff from the data by
   reading the per-VPU reference table produced by Stage 2a'. Source-agnostic:
-  use with `twi.vrt` (ArcPy) or `twi_hydrodem.vrt` (open-source). Point the
-  profile's `twi_raster` at the chosen VRT and set `reference_table`
-  accordingly. The off-diagonal pairings (absolute + hydrodem, percentile +
-  arcpy) are valid for validation but the builder warns.
+  use with `twi.vrt` (ArcPy) or `twi_hydrodem.vrt` (open-source). The
+  `reference_table` key (here in `depstor_rasters.yml`) and the profile's
+  `twi_raster` must be set to the same source together — there is no
+  auto-selection or guard for the pairing.
 
 ```bash
 sbatch slurm_batch/build_depstor_rasters.batch
@@ -663,7 +665,7 @@ orchestrators cover them — the library code they delegated to lives under
 | Batch / shell | Config | Script |
 |---|---|---|
 | `stage_twi.batch` | `base_config.yml` (indirectly) | `scripts/stage_twi.sh` |
-| `submit_twi_completion.sh` | `shared_rasters/shared_rasters.yml` | `build_shared_rasters.py --step merge_rpu_by_vpu_twi --force` then `--step build_vrt --force` (finishes `twi.vrt` + builds `twi_hydrodem.vrt`) |
+| `submit_twi_completion.sh` | `shared_rasters/shared_rasters.yml` | `build_shared_rasters.py --step merge_rpu_by_vpu_twi --force` → `--step build_vrt --force` → `--step twi_reference --force` (three chained jobs: finishes `twi.vrt` + `twi_hydrodem.vrt` + writes percentile CSVs) |
 | `download_rpu_rasters.batch` | `base_config.yml` | `gfv2_params.download.rpu_rasters` |
 | `download_nalcms.batch` | `base_config.yml` | `gfv2_params.download.nalcms_lulc` |
 | `download_nhm_v11.batch` | `base_config.yml` | `gfv2_params.download.nhm_v11_lulc` |
