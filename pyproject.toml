@@ -127,6 +127,7 @@ intake-parquet = "*"
 s3fs = "*"
 ipykernel = "*"
 nbformat = "*"  # for `marimo export ipynb` round-trip
+nbconvert = "*"  # headless notebook execution (scripts/render_figures.py)
 
 [tool.pixi.feature.dev.dependencies]
 pytest = "*"

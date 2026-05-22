@@ -68,7 +68,8 @@ gfv2-params/
 │   ├── submit_jobs.sh        # SLURM array job submission wrapper
 │   └── RUNME.md              # HPC workflow documentation (authoritative)
 ├── docs/                     # Pipeline reference docs (depstor workflow, validation, port summary)
-├── notebooks/                # Marimo interactive notebooks (incl. VPU01 QA/QC)
+├── notebooks/                # Interactive notebooks (marimo + Jupyter QA/QC)
+│   └── fabric_results/        # Fabric results viewers (01 inputs, 02 depstor, 03 params)
 ├── tests/                    # Unit tests
 ├── pyproject.toml            # Package + pixi config
 ├── pixi.lock                 # Pinned pixi environment
@@ -168,11 +169,11 @@ orchestrator over [configs/shared_rasters/shared_rasters.yml](configs/shared_ras
 pixi run python scripts/build_shared_rasters.py --config configs/shared_rasters/shared_rasters.yml
 ```
 
-This walks 7 production steps in dependency order (merge_rpu_by_vpu →
+This walks 9 production steps in dependency order (merge_rpu_by_vpu →
 compute_slope_aspect → build_border_dem → build_vpu_landmask →
-merge_rpu_by_vpu_twi → build_vrt → build_derived_rasters → build_lulc_rasters)
-and writes everything into the shared `work/` store consumed by every
-fabric. Add `--step <name>` to run one step or `--from <name>` to resume.
+merge_rpu_by_vpu_twi → build_vrt → twi_reference → build_derived_rasters →
+build_lulc_rasters) and writes everything into the shared `shared/` store
+consumed by every fabric. Add `--step <name>` to run one step or `--from <name>` to resume.
 `--vpus 01,02` scopes per-VPU steps to a subset; `--force` rebuilds
 existing outputs. See [Shared rasters pipeline](#shared-rasters-pipeline)
 below for the design notes.
@@ -371,6 +372,36 @@ The orchestrator's per-step library functions live under
 [src/gfv2_params/zonal_runners.py](src/gfv2_params/zonal_runners.py).
 For per-step debugging, invoke the orchestrator directly with
 `--mode zonal --param <name> --batch_id <N>` (see "Single-batch run" above).
+
+## Viewing fabric results
+
+Once a fabric is processed, the three Jupyter notebooks in
+[notebooks/fabric_results/](notebooks/fabric_results/) give a complete picture of
+a fabric's parameterization — the inputs that fed it and the per-HRU results:
+
+| Notebook | Shows |
+|---|---|
+| `01_input_rasters.ipynb` | Every shared/zonal source raster clipped to the fabric bounds, HRU outline overlaid. |
+| `02_depstor_rasters.ipynb` | The 14 per-fabric depression-storage binary/label rasters + coverage stats. |
+| `03_param_results.ipynb` | Choropleth + distribution of all 16 merged per-HRU params, plus a depstor-ratio summary. |
+
+All three are **parameterized by the `FABRIC` env var** (default `oregon`) and read
+the active profile via `load_base_config`; they share the tested helpers in
+[src/gfv2_params/viz.py](src/gfv2_params/viz.py). Run them **inside JupyterHub on a
+compute node with enough `--mem`** — a full CONUS `gfv2` render loads ~361k HRU
+polygons and is too large for the login node. Per-fabric launch notes live in
+`notebooks/<fabric>/README.md` (e.g. [notebooks/oregon/README.md](notebooks/oregon/README.md)).
+
+**Saving figures for a report.** Set `SAVE_FIGURES=1` (or `viz.SAVE_FIGURES = True`
+in the first cell) to write each plot to `docs/figures/<fabric>/` with a
+`{section}_{item}.png` name. To regenerate the whole set headlessly:
+
+```bash
+pixi run -e notebooks python scripts/render_figures.py --fabric oregon
+```
+
+The PNGs under `docs/figures/<fabric>/` are committed; the executed notebook copies
+in `docs/figures/.cache/` are gitignored.
 
 ## Configuration
 

@@ -250,7 +250,7 @@ Note: `--check` only validates manually-staged inputs (soils, litho, lulc_veg, t
 
 **All of these are now driven by `sbatch slurm_batch/build_shared_rasters.batch`** (or the
 `pixi run python scripts/build_shared_rasters.py --config configs/shared_rasters/shared_rasters.yml`
-interactive equivalent). The orchestrator walks the canonical 8-step DAG in
+interactive equivalent). The orchestrator walks the canonical 9-step DAG in
 dependency order — there is no longer a per-step batch surface; all the
 per-step CLIs/sbatches were retired now that the orchestrator covers them.
 
@@ -519,6 +519,21 @@ pixi run python scripts/merge_and_fill_params.py --base_config configs/base_conf
 
 ```bash
 pixi run python scripts/merge_default_params.py --base_config configs/base_config.yml
+```
+
+### Stage 9: View results (notebooks)
+
+The three notebooks in `notebooks/fabric_results/` view a fabric's full
+parameterization — input rasters (clipped to the fabric), depstor rasters, and
+per-HRU param maps. They are parameterized by the `FABRIC` env var. **Run them in
+JupyterHub on a compute node with enough `--mem`** (not the login node — a full
+CONUS `gfv2` render loads ~361k HRU polygons). See
+`notebooks/<fabric>/README.md` for the launch recipe. To regenerate the figure
+set for a report headlessly:
+
+```bash
+pixi run -e notebooks python scripts/render_figures.py --fabric <name>
+# -> docs/figures/<name>/{input_raster_*,depstor_*,param_*}.png  (committed)
 ```
 
 ## Adding a new fabric (e.g., Oregon)
