@@ -292,9 +292,10 @@ downstream zonal aggregation. Depends on Stage 1c1.
 **Stage 2a — `build_vrt`:** Combine per-VPU rasters and optional Copernicus
 fill into CONUS-wide GDAL virtual rasters (elevation/slope/aspect/fdr/twi).
 Also builds `twi_hydrodem.vrt` (open-source WhiteboxTools TWI, CONUS-complete)
-if `Twi_hydrodem_*.tif` tiles are present in `per_vpu/`. If the ArcPy
-`Twi_merged_*.tif` tiles for VPUs 02-18 were never merged (issue #94),
-finish them first and then rebuild both VRTs in one shot:
+if `Twi_hydrodem_*.tif` tiles are present in `per_vpu/`. The historical
+staging gap where `Twi_merged_<vpu>.tif` was only populated for VPU 01 was
+resolved by PR #95; if you ever need to re-finish the ArcPy TWI tiles + both
+VRTs in one shot, the recovery wrapper is:
 
 ```bash
 bash slurm_batch/submit_twi_completion.sh
@@ -633,10 +634,11 @@ already merged or comes as per-VPU gpkgs.
    `segments_layer: nsegment`. The `oregon` profile has the depstor keys
    **active** (issue #90) — the FDR clip for template/fdr, CONUS `twi.vrt`,
    `segments_gpkg` at the model gpkg, and the CONUS NHDPlusV2 waterbodies at
-   `input/nhd/conus_waterbodies.gpkg` (layer `waterbodies`). ⚠️ `twi.vrt` only
-   carries ArcPy TWI for VPU 01 (issue #94), so for `oregon` (and any non-VPU-01
-   fabric) Stage 2d builds the raster stack + non-TWI params correctly but
-   `carea_max`/`smidx_coef` are degenerate until #94 is resolved. (Prefer
+   `input/nhd/conus_waterbodies.gpkg` (layer `waterbodies`). To get valid
+   `carea_max`/`smidx_coef` outside VPU 01, set `threshold_mode: percentile`
+   in `configs/depstor/depstor_rasters.yml` (the new default after PR #95)
+   and point `twi_raster` at the CONUS-complete `twi_hydrodem.vrt`; the
+   percentile cutoffs come from the `twi_reference` step (Stage 2a'). (Prefer
    hand-editing? Just add the profile block directly — the stub is a convenience.)
 2. Place the fabric gpkg at the `hru_gpkg` path you set, under
    `{data_root}/oregon/fabric/` (NOT in `input/fabric/`)
@@ -672,10 +674,14 @@ already merged or comes as per-VPU gpkgs.
 > avoid rebuilding all of CONUS. Then run Stage 2d:
 > `FABRIC=oregon sbatch slurm_batch/build_depstor_rasters.batch`.
 >
-> ⚠️ **TWI gap (issue #94):** `twi.vrt` only carries ArcPy TWI for VPU 01, so for
-> any other fabric the TWI-derived params (`carea_max`, `smidx_coef`) are
-> degenerate. Stage 2d still builds the full raster stack and the non-TWI params
-> correctly — just don't trust `carea_max`/`smidx_coef` until #94 is resolved.
+> **TWI source pairing (resolved by PR #95):** `twi.vrt` only carries ArcPy
+> TWI for VPU 01 and is paired with `threshold_mode: absolute` (legacy
+> 8.0/15.6 thresholds). For multi-VPU or non-VPU-01 fabrics like `oregon`,
+> use `threshold_mode: percentile` (the default in
+> `configs/depstor/depstor_rasters.yml`) with `twi_raster` pointing at the
+> CONUS-complete `twi_hydrodem.vrt`; the percentile cutoffs are sourced from
+> the `twi_reference` step (Stage 2a'). With this pairing Stage 2d produces
+> valid `carea_max`/`smidx_coef` everywhere.
 
 **Case B: VPU-based fabric** (per-VPU gpkgs that need merging — e.g., gfv2)
 
