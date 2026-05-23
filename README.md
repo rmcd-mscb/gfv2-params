@@ -354,7 +354,7 @@ orchestrator over one unified config:
   Part 2 param type (`elevation`, `slope`, `aspect`, `soils`,
   `soil_moist_max`, `lulc_nhm_v11`, `lulc_nalcms`, `lulc_nlcd`,
   `lulc_foresce`, `ssflux`) into the matching per-script work function
-  under [src/gfv2_params/zonal_runners.py](src/gfv2_params/zonal_runners.py).
+  under [src/gfv2_params/zonal_runners/](src/gfv2_params/zonal_runners/).
   Three modes: `--mode zonal --param <name> --batch_id <N>`,
   `--mode merge --param <name>`, `--mode build_weights` (CONUS-once ssflux
   prereq).
@@ -376,7 +376,7 @@ non-default fabric resolution for the per-job library calls but is
 redundant when the positional is given.)
 
 The orchestrator's per-step library functions live under
-[src/gfv2_params/zonal_runners.py](src/gfv2_params/zonal_runners.py).
+[src/gfv2_params/zonal_runners/](src/gfv2_params/zonal_runners/).
 For per-step debugging, invoke the orchestrator directly with
 `--mode zonal --param <name> --batch_id <N>` (see "Single-batch run" above).
 
