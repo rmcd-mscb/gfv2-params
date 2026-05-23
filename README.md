@@ -390,7 +390,7 @@ a fabric's parameterization — the inputs that fed it and the per-HRU results:
 |---|---|
 | `01_input_rasters.ipynb` | Every shared/zonal source raster clipped to the fabric bounds, HRU outline overlaid. |
 | `02_depstor_rasters.ipynb` | The 14 per-fabric depression-storage binary/label rasters + coverage stats. |
-| `03_param_results.ipynb` | Choropleth + distribution of all 16 merged per-HRU params, plus a depstor-ratio summary. |
+| `03_param_results.ipynb` | Choropleth + distribution of all 25 merged per-HRU params (DEM stats, soils, LULC incl. rain/snow interception, depstor ratios, ssflux), plus a depstor-ratio summary. |
 | `04_depstor_overlay.ipynb` | Interactive folium map: the 7 depstor binaries that directly feed a PRMS ratio (`carea_max`, `smidx_coef`, `sro_to_dprst_perv/imperv`, `hru_percent_imperv`, `dprst_frac`), each as a toggleable color overlay on OpenStreetMap / CartoDB / Esri imagery basemaps. |
 
 All are **parameterized by the `FABRIC` env var** (default `oregon`) and read
