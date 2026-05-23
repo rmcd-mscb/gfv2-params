@@ -111,10 +111,12 @@ sbatch slurm_batch/build_depstor_rasters.batch
 FABRIC=gfv2_vpu01 sbatch --time=02:00:00 --mem=48G slurm_batch/build_depstor_rasters.batch
 ```
 
-`submit_jobs.sh` accepts fabric as its 5th positional argument and forwards it
-via `--export=ALL,FABRIC=...` to the array job (and the chained merge job).
+`submit_jobs.sh` accepts fabric as its 4th positional argument and forwards it
+via `--export=ALL,FABRIC=...` to the array job. (The legacy 4th-position
+`merge_config` argument was dropped — for chained merges, use
+`submit_zonal_params.sh` / `submit_depstor_params.sh`.)
 
-It also accepts an optional 6th argument (or `SUBMIT_JOBS_MAX_CONCURRENT` env
+It also accepts an optional 5th argument (or `SUBMIT_JOBS_MAX_CONCURRENT` env
 var) capping how many array tasks run at once — defaults to 4. The cap exists
 because concurrent geo-library imports (rasterio / GDAL / PROJ / pyogrio) can
 deadlock under shared-FS metadata contention when many tasks start
