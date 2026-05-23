@@ -167,13 +167,20 @@ def test_load_param_left_join_preserves_all_hrus(tmp_path):
 
 def test_param_inventory_kinds():
     entries = viz.param_inventory()
-    assert len(entries) == 16
+    assert len(entries) == 25
     assert all(isinstance(e, viz.ParamEntry) for e in entries)
     by_name = {e.name: e for e in entries}
     assert by_name["soils"].kind == "categorical"
     assert by_name["cov_type"].kind == "categorical"
-    # a representative continuous one
+    # representative continuous params from each pipeline section
     assert by_name["elevation"].kind == "continuous"
+    assert by_name["srain_intcp"].csv_name == "nhm_lulc_nhm_v11_params.csv"
+    assert by_name["wrain_intcp"].csv_name == "nhm_lulc_nhm_v11_params.csv"
+    # ssflux PRMS params read from the gap-filled Stage 7 CSV
+    for n in ("soil2gw_max", "ssr2gw_rate", "fastcoef_lin", "slowcoef_lin",
+              "gwflow_coef", "dprst_seep_rate_open", "dprst_flow_coef"):
+        assert by_name[n].csv_name == "filled_nhm_ssflux_params.csv"
+        assert by_name[n].kind == "continuous"
 
 
 def test_shared_raster_inventory_skips_missing(tmp_path):
