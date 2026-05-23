@@ -83,9 +83,17 @@ def _load_data_root(base_config_path: Path) -> str:
 def _select_steps(all_steps, only_step, from_step):
     names = [s["name"] for s in all_steps]
     if only_step:
-        if only_step not in names:
-            raise ValueError(f"--step '{only_step}' not in config; available: {names}")
-        return [s for s in all_steps if s["name"] == only_step]
+        if only_step in names:
+            return [s for s in all_steps if s["name"] == only_step]
+        # Allow --step to invoke a registered builder that isn't in the default
+        # DAG (e.g. `compute_dem_derivatives`, the optional/parallel hydro-DEM
+        # step). Its build() uses ctx defaults when step_cfg keys are absent.
+        if only_step in BUILDERS:
+            return [{"name": only_step}]
+        raise ValueError(
+            f"--step '{only_step}' not in config and not a registered builder. "
+            f"In config: {names}; registered: {sorted(BUILDERS)}"
+        )
     if from_step:
         if from_step not in names:
             raise ValueError(f"--from '{from_step}' not in config; available: {names}")

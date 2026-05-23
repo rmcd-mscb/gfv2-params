@@ -24,9 +24,13 @@
 #   FORCE=1            rebuild outputs that already exist
 #   VPUS=01,10         restrict per-VPU steps to a comma-separated subset
 #
-# Per-step debugging: the individual slurm_batch/*.batch files remain as thin
-# shells around the same library builders — use them when you want per-step
-# granularity or per-VPU parallelism via SLURM arrays.
+# Extra args after the batch name are forwarded to the orchestrator, so you can
+# run a single step (or resume) incrementally, e.g. to refill one VPU after a
+# merge-manifest fix (see RUNME.md "Recovery: refill a VPU"):
+#   VPUS=17 sbatch slurm_batch/build_shared_rasters.batch --step merge_rpu_by_vpu --force
+#   VPUS=17 sbatch slurm_batch/build_shared_rasters.batch --step compute_dem_derivatives --force
+# Note compute_dem_derivatives is registered but NOT in the default step list,
+# so it only runs when named explicitly with --step.
 
 set -euo pipefail
 
@@ -37,4 +41,4 @@ VPUS_OVERRIDE=${VPUS:+--vpus $VPUS}
 
 pixi run --as-is python scripts/build_shared_rasters.py \
     --config configs/shared_rasters/shared_rasters.yml \
-    $VPUS_OVERRIDE $FORCE
+    $VPUS_OVERRIDE $FORCE "$@"
