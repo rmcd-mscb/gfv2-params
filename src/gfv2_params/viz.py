@@ -9,11 +9,12 @@ notebook) lets CI exercise it on synthetic data.
 Conventions mirrored from the rest of the repo:
 - ``snap_bounds_to_grid`` / ``whole_cell_offset`` are the canonical grid-snap
   helpers (``scripts/clip_shared_to_fabric.py`` imports them from here).
-- ``read_overview`` follows the decimated ``out_shape`` pattern in
-  ``notebooks/check_vrts.ipynb``; ``clip_overview`` follows the windowed
-  ``rasterio.windows.from_bounds(..., boundless=True)`` pattern in
-  ``src/gfv2_params/depstor.py:read_land_mask_for_grid``.
-- ``map_continuous`` / ``map_categorical`` follow ``notebooks/check_params.ipynb``
+- ``read_overview`` follows the decimated ``out_shape`` pattern originally
+  prototyped in ``notebooks/_archive/check_vrts.ipynb``; ``clip_overview``
+  follows the windowed ``rasterio.windows.from_bounds(..., boundless=True)``
+  pattern in ``src/gfv2_params/depstor.py:read_land_mask_for_grid``.
+- ``map_continuous`` / ``map_categorical`` follow the per-HRU choropleth
+  pattern originally prototyped in ``notebooks/_archive/check_params.ipynb``
   but **return** the Figure so the notebook can save it.
 - Inventory builders read paths from a resolved config (``cfg["data_root"]`` /
   ``cfg.get(...)`` / fabric-profile keys) — never hardcoded — and skip missing
