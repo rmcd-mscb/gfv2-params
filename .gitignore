@@ -194,3 +194,6 @@ docs/figures/.cache/
 # WSL/Windows security sidecar files dropped next to downloaded artifacts
 *:Zone.Identifier
 *:sec.endpointdlp
+
+# Prettier pre-commit hook stages its cache here
+node_modules/
