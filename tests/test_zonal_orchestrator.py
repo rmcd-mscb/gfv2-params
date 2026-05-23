@@ -9,17 +9,21 @@ import subprocess
 import sys
 from pathlib import Path
 
-import pytest
 import yaml
+
+from gfv2_params.zonal_runners import BATCH_RUNNERS
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 ORCHESTRATOR = REPO_ROOT / "scripts" / "derive_zonal_params.py"
 ZONAL_PARAMS_CONFIG = REPO_ROOT / "configs" / "zonal" / "zonal_params.yml"
 
 
-# Dispatch tags the orchestrator recognises. Must match _BATCH_RUNNERS in
-# scripts/derive_zonal_params.py.
-_KNOWN_SCRIPT_TAGS = {"zonal", "soils", "lulc", "ssflux"}
+# Dispatch tags the orchestrator recognises. Single source of truth lives in
+# the package itself (BATCH_RUNNERS in src/gfv2_params/zonal_runners/__init__.py);
+# reading it live here means the test fails immediately if a new dispatch key
+# is added to BATCH_RUNNERS but not wired through to a config entry, or vice
+# versa — no manual "keep these in sync" obligation.
+_KNOWN_SCRIPT_TAGS = set(BATCH_RUNNERS)
 
 # Params expected to be present in the production zonal_params.yml. If you
 # add a new param entry to the config, also add it here so the test catches
