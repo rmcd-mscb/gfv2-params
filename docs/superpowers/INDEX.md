@@ -46,7 +46,7 @@ worked through in this order:
 | T2-E — promote depstor helpers (closes #64) | ✅ landed | [#107](https://github.com/rmcd-mscb/gfv2-params/pull/107) |
 | T2-B — archive scratch notebooks | ✅ landed | [#108](https://github.com/rmcd-mscb/gfv2-params/pull/108) |
 | T2-D — `docs/superpowers/INDEX.md` (this file) | in flight | (this PR) |
-| T2-C — `docs/ARCHITECTURE.md` + slim CLAUDE.md/README | open | — |
+| T2-C — `docs/ARCHITECTURE.md` + slim CLAUDE.md/README | in flight | (this branch) |
 | Tier 3 (discussion items) | open | — |
 
 ## Topical index (specs + plans)
@@ -98,7 +98,8 @@ what the spec/plan originally scoped.
 
 ## Cross-references
 
-- Project conventions and architectural invariants: [`CLAUDE.md`](../../CLAUDE.md)
+- Project architecture (canonical): [`docs/ARCHITECTURE.md`](../ARCHITECTURE.md)
+- Project conventions and Claude project rules: [`CLAUDE.md`](../../CLAUDE.md)
 - User-facing setup + usage: [`README.md`](../../README.md)
 - HPC workflow walkthrough: [`slurm_batch/RUNME.md`](../../slurm_batch/RUNME.md)
 - Pipeline reference docs (live, not snapshots): [`docs/depstor_workflow.md`](../depstor_workflow.md), [`docs/depstor_port_summary.md`](../depstor_port_summary.md), [`docs/depstor_vpu01_validation_results.md`](../depstor_vpu01_validation_results.md)

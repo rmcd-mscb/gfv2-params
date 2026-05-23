@@ -38,78 +38,37 @@ deprecated fallback only — new work should use pixi.
 gfv2-params/
 ├── src/gfv2_params/          # Installable Python package
 │   ├── config.py             # Config loading, fabric profile resolution
-│   ├── raster_ops.py         # Raster utilities (resample, multiply, slope conversion)
-│   ├── batching.py           # Spatial batching helpers
+│   ├── raster_ops.py         # Raster utilities
+│   ├── batching.py           # Spatial batching
 │   ├── lulc.py               # LULC reclassification helpers
-│   ├── depstor.py            # Depression-storage raster helpers (binarize, intersect, write)
-│   ├── depstor_builders/     # Per-step depstor raster builders (used by build_depstor_rasters.py)
-│   ├── depstor_ratios.py     # PRMS Level-5 ratio arithmetic (compute_ratio)
+│   ├── depstor.py            # Depression-storage helpers
+│   ├── depstor_builders/     # Per-step depstor raster builders
+│   ├── depstor_ratios.py     # PRMS Level-5 ratio arithmetic
+│   ├── shared_rasters/       # Part 1 CONUS raster builders
+│   ├── zonal_runners/        # Part 2 zonal-pass runners
 │   ├── log.py                # Logging setup
 │   └── download/             # Data download utilities
-├── scripts/                  # CLI processing scripts
-│   ├── init_data_root.py             # Scaffold data-root tree; verify staged inputs
-│   ├── stage_twi.sh                  # Stage per-RPU TWI rasters from shared FS
-│   ├── prepare_fabric.py             # Spatially batch fabric into per-batch gpkgs
-│   ├── migrate_to_shared_layout.py   # One-shot: legacy work/ → shared/ on-disk migration
-│   ├── build_shared_rasters.py       # Part 1 orchestrator (CONUS shared raster prep)
-│   ├── clip_shared_to_fabric.py      # Stage a fabric-bounds FDR clip → depstor template/fdr
-│   ├── build_depstor_rasters.py      # Part 2a depstor raster stack (10 steps)
-│   ├── derive_depstor_params.py      # Part 2a depstor params (zonal/merge/ratios)
-│   ├── derive_zonal_params.py        # Part 2b zonal-pass orchestrator (zonal/merge/build_weights)
-│   ├── merge_default_params.py       # Stage 8: merge NHM default params
-│   ├── merge_and_fill_params.py      # KNN gap-filling
-│   └── find_missing_hru_ids.py       # Identify missing HRU IDs
-├── configs/                  # YAML configuration files
-│   ├── base_config.yml       # Data root + fabric profiles (single source of truth)
-│   ├── shared_rasters/       # Part 1 raster-prep configs (orchestrator + per-step + lulc/)
-│   ├── depstor/              # Part 2 depstor configs (rasters + params)
-│   └── zonal/                # Part 2 zonal-pass configs (orchestrator + per-script fallbacks)
-├── slurm_batch/              # HPC SLURM batch scripts
-│   ├── submit_jobs.sh        # SLURM array job submission wrapper
-│   └── RUNME.md              # HPC workflow documentation (authoritative)
-├── docs/                     # Pipeline reference docs (depstor workflow, validation, port summary)
-├── notebooks/                # Interactive notebooks (marimo + Jupyter QA/QC)
-│   └── fabric_results/        # Fabric results viewers (01 inputs, 02 depstor, 03 params)
+├── scripts/                  # CLI orchestrators + standalone helpers
+├── configs/                  # Per-stage YAML configs (base + shared_rasters/ + depstor/ + zonal/)
+├── slurm_batch/              # HPC SLURM batch scripts (RUNME.md is the workflow walkthrough)
+├── docs/                     # ARCHITECTURE.md, depstor docs, superpowers/ design tree
+├── notebooks/                # Interactive notebooks (fabric_results/, oregon/, _archive/)
 ├── tests/                    # Unit tests
 ├── pyproject.toml            # Package + pixi config
 ├── pixi.lock                 # Pinned pixi environment
 └── environment.yml           # Legacy conda environment (deprecated fallback)
 ```
 
+See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the orchestrator +
+builder + unified-config pattern that shapes `src/gfv2_params/`,
+`scripts/`, and `configs/`.
+
 ## Output Directory Structure
 
-The data root (`data_root`) is set in `configs/base_config.yml`. All source data and outputs live under this root:
-
-```
-gfv2_param/
-├── input/                          # External data (manually staged or downloaded)
-│   ├── fabric/                     # Per-VPU watershed fabric gpkgs
-│   ├── soils_litho/                # TEXT_PRMS.tif, AWC.tif, Lithology_exp_Konly_Project.*
-│   ├── lulc_veg/                   # RootDepth.tif, CNPY.tif, Imperv.tif
-│   │   └── nhm_v11/                # NHM v1.1 pre-derived LULC (downloadable)
-│   ├── lulc/
-│   │   ├── nlcd_annual_imperv/     # NLCD fractional imperviousness (downloadable)
-│   │   └── nalcms_2020/            # NALCMS 2020 land cover (downloadable)
-│   ├── depstor/                    # Per-fabric depression-storage inputs
-│   │   └── <fabric>_segments_wbodies.gpkg   # nsegment + v2_wb layers
-│   │                               # (FDR comes from shared/conus/vrt/fdr.vrt)
-│   ├── twi/<rpu>/                  # Per-RPU TWI (twi.tif + sidecars; staged via stage_twi.sh)
-│   ├── nhm_default/                # NHM default parameter files
-│   └── nhd_downloads/              # Raw NHDPlus zip archives (downloadable)
-├── shared/                         # Fabric-independent intermediates (reused by every fabric)
-│   ├── source/                     # Unzipped per-RPU NHDPlus rasters
-│   ├── per_vpu/<vpu>/              # Per-VPU merged GeoTIFFs (NED/Hydrodem/Fdr/Fac/Twi/slope/aspect/landmask)
-│   └── conus/
-│       ├── vrt/                    # CONUS-wide GDAL virtual rasters (elevation/slope/aspect/fdr/twi)
-│       ├── derived/                # soil_moist_max.tif, radtrn, resampled CNPY/keep
-│       ├── borders/                # Copernicus border-DEM fill (Canada/Mexico)
-│       └── weights/                # P2P polygon weights for ssflux
-└── {fabric}/                       # Per-fabric outputs (e.g., gfv2/, gfv2_vpu01/, oregon/)
-    ├── fabric/                     # Merged fabric gpkg
-    ├── batches/                    # Per-batch gpkgs + manifest
-    ├── depstor_rasters/            # Depression-storage intermediate rasters (per fabric)
-    └── params/                     # Parameter outputs + merged/ + filled
-```
+All source data and outputs live under `data_root` (set in
+`configs/base_config.yml`) in the `input/` → `shared/` → `{fabric}/`
+layout. See [`docs/ARCHITECTURE.md#data-root-layout-the-key-invariant`](docs/ARCHITECTURE.md#data-root-layout-the-key-invariant)
+for the canonical tree.
 
 ## Usage
 
@@ -228,39 +187,20 @@ via (highest precedence first):
 
 **Pre-merged fabric** (single gpkg covering the full domain — e.g., Oregon):
 
-1. Register the fabric and scaffold its output dirs in one step:
+1. Register the fabric and scaffold its output dirs:
    `pixi run init-data-root --add-fabric oregon` appends a profile stub under
-   `fabrics:` in `configs/base_config.yml` (or hand-edit it). Then fill the
-   stub's TODO placeholders. **All shared, required fabric inputs live in the
-   profile** — no required path on a CLI arg or inferred from a naming
-   convention. Every fabric needs `expected_max_hru_id`, `batch_size`,
-   `id_feature` (the HRU id column present in the fabric — e.g. `nat_hru_id`
-   for gfv2, `hru_id` for oregon — which flows through to the merged parameter
-   CSVs), and `hru_gpkg`/`hru_layer` (the fabric geopackage + layer,
-   authoritative for `prepare_fabric`, the ssflux `build_weights` step, and
-   gap-fill). If the depstor pipeline will be run, also set `template_raster`,
-   `fdr_raster`, `twi_raster`, `segments_gpkg`/`segments_layer`, and
-   `waterbody_gpkg`/`waterbody_layer` (waterbody is **required** for depstor —
-   the step raises if it is unset). For `template_raster`/`fdr_raster`, stage a
-   fabric-bounds clip of the CONUS FDR with
-   `pixi run --as-is python scripts/clip_shared_to_fabric.py --fabric <name>`
-   (writes `{data_root}/<name>/shared/<name>_fdr.vrt`) and point both keys at it.
-   Every depstor builder sizes its arrays to the `template_raster` grid, so the
-   clip scopes compute to the fabric extent while staying VPU-agnostic (works for
-   fabrics that straddle VPU boundaries). The clip comes from `fdr.vrt` — the
-   hydrology lattice `carea_map` requires the template to share with `twi.vrt`
-   (`elevation.vrt` is on the offset DEM lattice and is rejected). `twi_raster`
-   uses the CONUS `twi.vrt` (warp-windowed onto the template). For a single-file
-   fabric, `segments_gpkg` can point at the same gpkg as `hru_gpkg` with
-   `segments_layer: nsegment`. The `oregon` profile has these keys active
-   (issue #90), using the CONUS NHDPlusV2 waterbodies at
-   `input/nhd/conus_waterbodies.gpkg` (layer `waterbodies`). To obtain valid
-   `carea_max`/`smidx_coef` for non-VPU-01 fabrics, use
-   `threshold_mode: percentile` with `twi_raster` pointing at
-   `twi_hydrodem.vrt` (the CONUS-complete open-source source built by
-   `build_vrt`) and build the `twi_reference` percentile table first (Stage
-   2a' in `slurm_batch/RUNME.md`); see
-   `docs/superpowers/specs/2026-05-21-carea-smidx-twi-percentile-design.md`.
+   `fabrics:` in `configs/base_config.yml`. Then fill the stub's TODO
+   placeholders. **All shared, required fabric inputs live in the profile**
+   — see [`docs/ARCHITECTURE.md#required-profile-keys`](docs/ARCHITECTURE.md#required-profile-keys)
+   for the per-key required-field table (which keys are always required, which
+   are depstor-only, and how to stage the fabric-bounds clip for
+   `template_raster`/`fdr_raster` via
+   `scripts/clip_shared_to_fabric.py`).
+
+   For non-VPU-01 fabrics with depstor, use `threshold_mode: percentile` in
+   `configs/depstor/depstor_rasters.yml` with `twi_raster` pointing at
+   `twi_hydrodem.vrt`, and run the `twi_reference` step first (Stage 2a' in
+   `slurm_batch/RUNME.md`).
 2. Place the fabric gpkg at the `hru_gpkg` path you set, under
    `{data_root}/oregon/fabric/` (NOT in `input/fabric/`)
 3. Run `prepare_fabric.py --fabric oregon` (reads `hru_gpkg` from the profile —
@@ -289,96 +229,72 @@ See `slurm_batch/RUNME.md` for the full step-by-step workflow.
 
 ## Shared rasters pipeline
 
-The CONUS shared-raster preparation (Part 1 of the workflow) is driven by
-one orchestrator and one unified config:
+Part 1 (fabric-independent CONUS raster prep) is driven by
+[`scripts/build_shared_rasters.py`](scripts/build_shared_rasters.py) over
+[`configs/shared_rasters/shared_rasters.yml`](configs/shared_rasters/shared_rasters.yml),
+walking the step DAG via builder modules in
+[`src/gfv2_params/shared_rasters/`](src/gfv2_params/shared_rasters/).
+Outputs land under `{data_root}/shared/` and are reused by every fabric.
 
-- [scripts/build_shared_rasters.py](scripts/build_shared_rasters.py) reads
-  [configs/shared_rasters/shared_rasters.yml](configs/shared_rasters/shared_rasters.yml) and walks the
-  step DAG via the builder modules under
-  [src/gfv2_params/shared_rasters/](src/gfv2_params/shared_rasters/).
-- The DAG covers per-VPU NHDPlus prep (`merge_rpu_by_vpu`,
-  `compute_slope_aspect`), border-DEM fill (`build_border_dem`), per-VPU
-  HRU landmask (`build_vpu_landmask`), the masked TWI merge
-  (`merge_rpu_by_vpu_twi`), CONUS VRT assembly (`build_vrt`), and CONUS
-  derived rasters (`build_derived_rasters`, `build_lulc_rasters`).
-- `compute_dem_derivatives` is registered as an opt-in step (parallel
-  open-source TWI pipeline). The absolute calibration thresholds (8.0/15.6)
-  used by `carea_max`/`smidx_coef` still require the ArcPy-derived
-  `twi.vrt` when `threshold_mode: absolute`. However, `carea_map` now also
-  supports `threshold_mode: percentile` (configured in
-  `configs/depstor/depstor_rasters.yml`): it derives the TWI cutoff from the
-  data via the per-VPU reference table produced by the `twi_reference`
-  shared-raster step, making the open-source `twi_hydrodem.vrt` a first-class
-  source that is safe to use. See
-  `docs/superpowers/specs/2026-05-21-carea-smidx-twi-percentile-design.md`
-  for the full design rationale.
+The DAG covers per-VPU NHDPlus prep, border-DEM fill, per-VPU HRU landmask,
+masked TWI merge, CONUS VRT assembly, the TWI percentile reference, and
+CONUS derived rasters. `compute_dem_derivatives` is an opt-in parallel
+open-source TWI pipeline.
 
-These outputs live under `{data_root}/shared/` and are **fabric-independent**:
-every fabric reuses the same CONUS rasters. Per-VPU iteration happens
-inside the builders, not in per-VPU sbatch launches, so the orchestrator
-runs as a single job. The per-script entrypoints and sbatch wrappers are
-preserved as thin shells around the same builders.
+See [`docs/ARCHITECTURE.md#orchestrator-builder-unified-config-pattern`](docs/ARCHITECTURE.md#orchestrator-builder-unified-config-pattern)
+for the pattern, and the package's
+[`__init__.py`](src/gfv2_params/shared_rasters/__init__.py) for per-step
+detail.
 
 ## Depression-storage pipeline
 
-The depstor pipeline (Levels 2-5) is driven by two orchestrators and two
+Part 2a (per-fabric depstor) is driven by two orchestrators over two
 unified configs:
 
-- [scripts/build_depstor_rasters.py](scripts/build_depstor_rasters.py) reads
-  [configs/depstor/depstor_rasters.yml](configs/depstor/depstor_rasters.yml) and walks the
-  10-step DAG (landmask → imperv/streambuffer/waterbody → dprst → perv/routing
-  → drains_perv/drains_imperv → carea_map) via the builder modules under
-  [src/gfv2_params/depstor_builders/](src/gfv2_params/depstor_builders/).
-- [scripts/derive_depstor_params.py](scripts/derive_depstor_params.py) reads
-  [configs/depstor/depstor_params.yml](configs/depstor/depstor_params.yml) and dispatches the
-  10 fractions (`perv_frac`, `imperv_frac`, `dprst_frac`,
-  `drains_perv_frac`, `drains_imperv_frac`, `onstream_storage_frac`,
-  `drains_to_dprst_frac`, `carea_t8_frac`, `carea_t156_frac`, `hru_total`)
-  plus the 6 PRMS Level-5 ratios (`sro_to_dprst_perv`, `sro_to_dprst_imperv`,
-  `carea_max`, `smidx_coef`, `hru_percent_imperv`, `dprst_frac`). The slurm
-  wrapper [slurm_batch/submit_depstor_params.sh](slurm_batch/submit_depstor_params.sh)
-  chains 10 zonal arrays → 10 merges → 1 ratios job via afterok.
+- [`scripts/build_depstor_rasters.py`](scripts/build_depstor_rasters.py)
+  + [`configs/depstor/depstor_rasters.yml`](configs/depstor/depstor_rasters.yml)
+  → 10-step raster DAG via
+  [`src/gfv2_params/depstor_builders/`](src/gfv2_params/depstor_builders/).
+- [`scripts/derive_depstor_params.py`](scripts/derive_depstor_params.py)
+  + [`configs/depstor/depstor_params.yml`](configs/depstor/depstor_params.yml)
+  → 10 fractions + 6 PRMS Level-5 ratios. The slurm wrapper
+  [`slurm_batch/submit_depstor_params.sh`](slurm_batch/submit_depstor_params.sh)
+  chains 10 zonal arrays → 10 merges → 1 ratios job via `afterok`.
 
-See [docs/depstor_workflow.md](docs/depstor_workflow.md) for the design notes
-and [docs/depstor_port_summary.md](docs/depstor_port_summary.md) for the
-ArcPy-to-open-source port summary. Stage 2d in `slurm_batch/RUNME.md` lists the
-build order and dependencies.
+See [`docs/depstor_workflow.md`](docs/depstor_workflow.md) and
+[`docs/depstor_port_summary.md`](docs/depstor_port_summary.md) for the
+historical port reference. Stage 2d in `slurm_batch/RUNME.md` lists the
+build order.
 
 ## Zonal-pass parameter pipeline
 
-The Part 2 per-fabric zonal-pass parameter pipeline is driven by one
-orchestrator over one unified config:
+Part 2b (per-fabric zonal-pass params) is driven by
+[`scripts/derive_zonal_params.py`](scripts/derive_zonal_params.py) over
+[`configs/zonal/zonal_params.yml`](configs/zonal/zonal_params.yml),
+dispatching every Part-2 param type (`elevation`, `slope`, `aspect`,
+`soils`, `soil_moist_max`, `lulc_{nhm_v11,nalcms,nlcd,foresce}`, `ssflux`)
+into the matching `run_*_batch` function in
+[`src/gfv2_params/zonal_runners/`](src/gfv2_params/zonal_runners/) via the
+package's `BATCH_RUNNERS` dispatch table.
 
-- [scripts/derive_zonal_params.py](scripts/derive_zonal_params.py) reads
-  [configs/zonal/zonal_params.yml](configs/zonal/zonal_params.yml) and dispatches every
-  Part 2 param type (`elevation`, `slope`, `aspect`, `soils`,
-  `soil_moist_max`, `lulc_nhm_v11`, `lulc_nalcms`, `lulc_nlcd`,
-  `lulc_foresce`, `ssflux`) into the matching per-script work function
-  under [src/gfv2_params/zonal_runners/](src/gfv2_params/zonal_runners/).
-  Three modes: `--mode zonal --param <name> --batch_id <N>`,
-  `--mode merge --param <name>`, `--mode build_weights` (CONUS-once ssflux
-  prereq).
-- The slurm wrapper
-  [slurm_batch/submit_zonal_params.sh](slurm_batch/submit_zonal_params.sh)
-  loops every entry in `params:` and submits per-param array + merge jobs
-  in one go (chained via `afterok`). When an entry carries
-  `depends_on: build_weights` (typically `ssflux`), the wrapper submits
-  `build_zonal_weights.batch` first and chains the ssflux array + merge on
-  its `afterok`. ssflux also chains on the merged slope CSV.
+Three modes: `--mode zonal --param <name> --batch_id <N>`,
+`--mode merge --param <name>`, `--mode build_weights` (CONUS-once ssflux
+prereq).
+
+The slurm wrapper
+[`slurm_batch/submit_zonal_params.sh`](slurm_batch/submit_zonal_params.sh)
+loops every entry in `params:` and chains per-param array + merge jobs via
+`afterok`. When an entry carries `depends_on: build_weights` (typically
+`ssflux`), the wrapper first submits `build_zonal_weights.batch` and
+chains ssflux on its `afterok`.
 
 ```bash
 bash slurm_batch/submit_zonal_params.sh \
     {data_root}/gfv2_vpu01/batches gfv2_vpu01 configs/base_config.yml
 ```
 
-(The fabric is the 2nd positional argument; `FABRIC=` env can also drive
-non-default fabric resolution for the per-job library calls but is
-redundant when the positional is given.)
-
-The orchestrator's per-step library functions live under
-[src/gfv2_params/zonal_runners/](src/gfv2_params/zonal_runners/).
-For per-step debugging, invoke the orchestrator directly with
-`--mode zonal --param <name> --batch_id <N>` (see "Single-batch run" above).
+See [`docs/ARCHITECTURE.md#orchestrator-builder-unified-config-pattern`](docs/ARCHITECTURE.md#orchestrator-builder-unified-config-pattern)
+for the pattern.
 
 ## Viewing fabric results
 
