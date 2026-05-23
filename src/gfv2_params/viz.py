@@ -188,12 +188,22 @@ def clip_overview(path, bounds, target_px: int = 800):
 # ----------------------------------------------------------------------------- #
 
 
+def _format_category(value):
+    """Render a category value as a compact label (1.0 -> '1')."""
+    f = float(value)
+    return str(int(f)) if f.is_integer() else f"{f:g}"
+
+
 def plot_raster(ax, arr, extent=None, *, cmap="viridis", pct=(2, 98),
-                categorical=False, title=None, label=""):
+                categorical=False, title=None, label="", max_legend=20):
     """Render a masked raster thumbnail onto `ax`.
 
     Continuous: percentile-stretch (`pct`) + colorbar. Categorical: discrete
-    classes via a BoundaryNorm + colorbar. Returns the matplotlib image.
+    classes with a per-class **legend** when there are <= `max_legend` distinct
+    classes (so soils/LULC/FDR codes are labelled), else a discrete colorbar
+    (e.g. region-label rasters with many values). Masked/nodata cells render as
+    light grey so gaps (ocean, off-fabric) read as intentional. Returns the
+    matplotlib image.
     """
     imshow_kwargs = {"interpolation": "nearest", "rasterized": True}
     if extent is not None:
@@ -207,20 +217,31 @@ def plot_raster(ax, arr, extent=None, *, cmap="viridis", pct=(2, 98),
         listed = mcolors.ListedColormap(
             plt.cm.tab20(np.linspace(0, 1, max(len(cats), 1)))
         )
+        listed.set_bad("lightgrey")
         bounds = list(cats - 0.5) + [cats[-1] + 0.5]
         norm = mcolors.BoundaryNorm(bounds, listed.N)
         im = ax.imshow(arr, cmap=listed, norm=norm, **imshow_kwargs)
+        if len(cats) <= max_legend:
+            handles = [Patch(color=listed(norm(cat)), label=_format_category(cat))
+                       for cat in cats]
+            ax.legend(handles=handles, title=label or None, loc="center left",
+                      bbox_to_anchor=(1.0, 0.5), fontsize=7, frameon=False,
+                      title_fontsize=8)
+        else:
+            ax.figure.colorbar(im, ax=ax, fraction=0.03, pad=0.02, label=label)
     else:
+        cmap_obj = plt.get_cmap(cmap).copy()
+        cmap_obj.set_bad("lightgrey")
         if len(valid):
             vmin, vmax = np.percentile(valid, pct)
         else:
             vmin, vmax = 0, 1
-        im = ax.imshow(arr, cmap=cmap, vmin=vmin, vmax=vmax, **imshow_kwargs)
+        im = ax.imshow(arr, cmap=cmap_obj, vmin=vmin, vmax=vmax, **imshow_kwargs)
+        ax.figure.colorbar(im, ax=ax, fraction=0.03, pad=0.02, label=label)
 
     if title:
         ax.set_title(title, fontsize=10)
     ax.axis("off")
-    ax.figure.colorbar(im, ax=ax, fraction=0.03, pad=0.02, label=label)
     return im
 
 
@@ -356,6 +377,25 @@ def _existing_raster_entries(entries: list[RasterEntry]) -> list[RasterEntry]:
         else:
             warnings.warn(f"Skipping raster '{e.name}': path not found: {e.path}")
     return kept
+
+
+def dedupe_raster_entries(entries: list[RasterEntry]) -> list[RasterEntry]:
+    """Drop entries whose resolved path repeats (first occurrence wins, order kept).
+
+    The input-raster view concatenates the shared and zonal-source inventories,
+    which both list the DEM VRTs (elevation/slope/aspect) and — for single-VPU
+    fabrics — the same fdr/template clip. Dedupe by path so each file is shown
+    once.
+    """
+    seen: set[str] = set()
+    out: list[RasterEntry] = []
+    for e in entries:
+        key = str(e.path)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(e)
+    return out
 
 
 def shared_raster_inventory(cfg) -> list[RasterEntry]:
