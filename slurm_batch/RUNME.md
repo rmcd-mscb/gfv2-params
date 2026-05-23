@@ -733,11 +733,15 @@ zonal params — elevation/slope/aspect/soils/LULC/ssflux — are on the gap-fre
 DEM lattice and do not need re-running):
 
 ```bash
+# resolve data_root from the base config (the submit script needs a real path,
+# not the {data_root} placeholder)
+DR=$(grep '^data_root:' configs/base_config.yml | awk '{print $2}' | tr -d '"')
+
 # re-clip the fabric template/fdr from the rebuilt fdr.vrt
 pixi run python scripts/clip_shared_to_fabric.py --fabric oregon
 # re-derive depstor rasters (routing + carea_map) and params
 FABRIC=oregon sbatch slurm_batch/build_depstor_rasters.batch --force
-slurm_batch/submit_depstor_params.sh {data_root}/oregon/batches oregon configs/base_config.yml
+slurm_batch/submit_depstor_params.sh "$DR/oregon/batches" oregon configs/base_config.yml
 ```
 
 Verify with `notebooks/fabric_results/01_input_rasters.ipynb` (the `fdr` /
