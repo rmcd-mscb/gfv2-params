@@ -16,8 +16,8 @@ the top-level ``defaults:`` block (plus the resolved fabric profile).
 
 Refactor invariant: the existing per-script behaviour is preserved verbatim
 — the functions in the submodules below are the prior single-file
-``zonal_runners.py`` extracted unchanged (PR #75 → followup; mirrors the
-``depstor_builders/`` pattern from PR #72).
+``zonal_runners.py`` (introduced in PR #83) extracted unchanged; mirrors the
+``depstor_builders/`` pattern from PR #72.
 
 Package-level concerns (heavy geo-library imports, GDAL exception toggle,
 startup heartbeat) live here in ``__init__.py`` so they fire exactly once
