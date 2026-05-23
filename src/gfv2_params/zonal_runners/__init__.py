@@ -24,7 +24,7 @@ startup heartbeat) live here in ``__init__.py`` so they fire exactly once
 per process at first package import.
 """
 
-# ruff: noqa: E402
+# ruff: noqa: E402  -- heartbeat print must fire before geo imports (see below); E402 is expected
 from __future__ import annotations
 
 import os
