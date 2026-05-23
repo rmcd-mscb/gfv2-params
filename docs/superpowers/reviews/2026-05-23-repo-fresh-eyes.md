@@ -274,9 +274,11 @@ tool).
 
 ### Hotspot F — Some committed notebooks carry large outputs
 
-- `notebooks/fabric_results/03_param_results.ipynb` — **12 MB**.
 - `notebooks/check_derived_rasters.ipynb` — **2.9 MB**.
 - `notebooks/qaqc_depstor_vpu01.ipynb` — **440 KB**.
+- `notebooks/fabric_results/03_param_results.ipynb` — was 12 MB on a working
+  tree pre-cleanup; already stripped on `main` HEAD (5 KB). Listed as a
+  recurrence risk, not a current offender.
 
 These are checked in with rendered cell outputs. For a viewing notebook, a
 **cleared** copy + a parallel exported PNG/HTML under `docs/figures/{fabric}/`
@@ -286,7 +288,8 @@ workflow with `SAVE_FIGURES=1` / `scripts/render_figures.py`). Worth adding
 
 ### Hotspot G — `slurm_batch/diagnose_slope_aspect.batch` is 4× the size of any other batch
 
-79 lines. Every other worker batch is 23–45 lines. This one carries an inline
+79 lines. Every other worker batch is 13–45 lines (download batches at the
+low end, full-DAG orchestration batches at the high end). This one carries an inline
 `python - <<'PYEOF'` heredoc plus absolute `/caldera/.../gfv2_param_v2/...`
 paths. Already tracked as #44. The fix is to lift the heredoc into a proper
 `scripts/diagnose_slope_aspect.py` (testable, config-driven) and the batch
@@ -308,7 +311,7 @@ tell. Promotion to `depstor.py` is ~80 LOC of mechanical refactor.
 `run_build_weights`, `run_merge`. **The depstor side split a comparable
 surface area into 11 small modules under
 `depstor_builders/`**; zonal kept everything in one file. The dispatch
-table in [scripts/derive_zonal_params.py:42](../../../scripts/derive_zonal_params.py#L42)
+table in [scripts/derive_zonal_params.py:41](../../../scripts/derive_zonal_params.py#L41)
 already routes by `script:` tag — the file split would mirror that table.
 
 Proposed shape:
@@ -533,7 +536,7 @@ No cross-function state. Shared imports are stdlib + gdptools + numpy + the
 package's own `lulc` and `raster_ops` modules. The split is a pure move + an
 `__init__.py` re-export to preserve the import surface
 `from gfv2_params.zonal_runners import run_zonal_batch, ...` that
-[derive_zonal_params.py:33](../../../scripts/derive_zonal_params.py#L33)
+[derive_zonal_params.py:31](../../../scripts/derive_zonal_params.py#L31)
 depends on. **Iteration-1 recommendation Z stands.**
 
 ### SLURM worker batches are well-formed
@@ -560,8 +563,9 @@ command + the per-cell env-var fallback. Every per-fabric stub
 
 ### Finding M1 — `.pre-commit-config.yaml` has 6 stale excludes
 
-[.pre-commit-config.yaml](../../../.pre-commit-config.yaml) lines 32–34
-exclude the following from `end-of-file-fixer` and `trailing-whitespace`:
+[.pre-commit-config.yaml](../../../.pre-commit-config.yaml) lines 30 and 32
+(the `end-of-file-fixer` and `trailing-whitespace` excludes) name the
+following paths:
 
 ```
 environment_minimal.yml
@@ -581,7 +585,7 @@ matching one of the names would silently skip the hooks.
 
 ### Finding M2 — `.pre-commit-config.yaml` registers yamllint twice
 
-Lines 14–21 and 38–43 register `yamllint` with the same args and version.
+Lines 16–21 and 41–45 register `yamllint` with the same args and version.
 Either is fine alone; both is redundant work on every commit and an invitation
 for the two entries to drift. **Action:** delete the second block.
 
@@ -602,12 +606,12 @@ describing its contents + how to populate it."*
 I flagged `zonal_runners.py` (638 LOC) as the next refactor target but
 didn't sample its siblings. For the record:
 
-- [`lulc.py`](../../../src/gfv2_params/lulc.py) (318 LOC) — 7 public
+- [`lulc.py`](../../../src/gfv2_params/lulc.py) (318 LOC) — 6 public
   functions each named after the concept (`load_crosswalk`,
   `class_percentages_from_histogram`, `assign_cov_type`, `compute_interception`,
-  `compute_covden`, `compute_retention`, `_warn_unmatched_codes`).
-  Geoscientist-readable. The `assign_cov_type` iteration pattern flagged in
-  #26 is the only blemish — not blocking.
+  `compute_covden`, `compute_retention`) plus a private helper
+  (`_warn_unmatched_codes`). Geoscientist-readable. The `assign_cov_type`
+  iteration pattern flagged in #26 is the only blemish — not blocking.
 - [`raster_ops.py`](../../../src/gfv2_params/raster_ops.py) (266 LOC) — 4
   public functions (`resample`, `mult_rasters`, `compute_radtrn`,
   `deg_to_fraction`). Small, focused, **does not need to be split**.
@@ -882,7 +886,7 @@ rm -rf _gfv2_params_legacy/ _create_lulc_params_legacy.py
 ### T1-D. **Fix** `slurm_batch/submit_jobs.sh` (Finding I3-1) — revised in iter 4
 
 **Recommendation revised** after iter-4 verification: `submit_jobs.sh` is
-still referenced by [`scripts/prepare_fabric.py:62`](../../../scripts/prepare_fabric.py#L62)
+still referenced by [`scripts/prepare_fabric.py:61`](../../../scripts/prepare_fabric.py#L61)
 as the **on-screen guidance the user sees at the end of `prepare_fabric`**:
 
 ```python
@@ -897,13 +901,13 @@ on-screen hint a hydrologist sees after batching their fabric. Two options:
 - Delete lines 74–77 of `submit_jobs.sh` (the broken `afterok` merge-chain
   against the deleted `merge_params.batch`).
 - Drop the `<merge_config>` 4th arg from the usage line + help text.
-- Refresh `prepare_fabric.py:62`'s logger message to mention both: the
+- Refresh `prepare_fabric.py:61`'s logger message to mention both: the
   wrapper (`./submit_jobs.sh ...`) for the simple per-fabric case AND the
   Part-2 dispatchers (`submit_zonal_params.sh`, `submit_depstor_params.sh`)
   for the chained workflow.
 
 **Option 2 (cleaner, ~30 min) — delete and replace:** delete the script,
-update `prepare_fabric.py:62` + README + RUNME to point users at the
+update `prepare_fabric.py:61` + README + RUNME to point users at the
 worker-batch standalone-usage recipes + Stage 4A.
 
 Option 1 is the conservative path and preserves the on-screen UX. Option 2
@@ -958,7 +962,7 @@ src/gfv2_params/zonal_runners/
 └── merge.py               # run_merge
 ```
 
-`scripts/derive_zonal_params.py:33` import surface preserved. Tests stay
+`scripts/derive_zonal_params.py:31` import surface preserved. Tests stay
 where they are.
 
 ### T2-B. Archive scratch notebooks — revised in iter 5
@@ -1067,7 +1071,7 @@ The pattern is good enough that propagation deserves a callout.
 | 1 | T1-A RUNME/README doc refresh | 2h | (none — but big credibility lift) |
 | 1 | T1-B delete `_legacy/` | 5m | #46 |
 | 1 | T1-C clean pre-commit | 15m | (M1, M2) |
-| 1 | T1-D delete `submit_jobs.sh` | 15m | (I3-1) |
+| 1 | T1-D fix `submit_jobs.sh` in place | 15m | (I3-1) |
 | 1 | T1-E audit `node_modules/` | 10m | (D) |
 | 1 | T1-F nbstripout + clean notebooks | 1h | (F, M7) |
 | 2 | T2-A split `zonal_runners.py` | 1d | (Z) |
