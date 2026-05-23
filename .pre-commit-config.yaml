@@ -36,3 +36,10 @@ repos:
     hooks:
       - id: prettier
         files: \.(yml|yaml)$
+  # nbstripout strips outputs from .ipynb on commit. Notebooks are kept
+  # output-free in git; figures get rendered to docs/figures/<fabric>/ via
+  # scripts/render_figures.py (see notebooks/<fabric>/README.md).
+  - repo: https://github.com/kynan/nbstripout
+    rev: 0.7.1
+    hooks:
+      - id: nbstripout
