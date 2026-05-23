@@ -236,6 +236,55 @@ def test_entry_kind_validation():
         viz.RasterEntry("x", "p.tif", "bogus")
 
 
+def test_dedupe_raster_entries_preserves_first_and_order():
+    e1 = viz.RasterEntry("twi", "/x/twi.vrt", "continuous")
+    e2 = viz.RasterEntry("fdr", "/x/oregon_fdr.vrt", "categorical")
+    e3 = viz.RasterEntry("template", "/x/oregon_fdr.vrt", "categorical")  # dup path
+    e4 = viz.RasterEntry("elevation", "/x/elev.vrt", "continuous")
+    e5 = viz.RasterEntry("elevation", "/x/elev.vrt", "continuous")        # dup path
+    out = viz.dedupe_raster_entries([e1, e2, e3, e4, e5])
+    assert [e.name for e in out] == ["twi", "fdr", "elevation"]  # first wins, order kept
+
+
+# --------------------------------------------------------------------------- #
+# plot_raster: categorical class legend (vs colorbar) + nodata grey
+# --------------------------------------------------------------------------- #
+
+def test_plot_raster_categorical_builds_class_legend():
+    # 3 classes (1, 2, 3) — should render one legend handle per class
+    data = np.array([[1, 2, 3], [3, 2, 1]], dtype="float32")
+    arr = np.ma.array(data, mask=np.zeros_like(data, dtype=bool))
+    fig, ax = plt.subplots()
+    viz.plot_raster(ax, arr, categorical=True, title="soils", label="class")
+    leg = ax.get_legend()
+    assert leg is not None
+    assert [t.get_text() for t in leg.get_texts()] == ["1", "2", "3"]
+    plt.close(fig)
+
+
+def test_plot_raster_categorical_falls_back_to_colorbar_above_max_legend():
+    # 5 classes with max_legend=4 -> falls back to colorbar (no legend)
+    data = np.array([[1, 2, 3, 4, 5]], dtype="float32")
+    arr = np.ma.array(data, mask=np.zeros_like(data, dtype=bool))
+    fig, ax = plt.subplots()
+    viz.plot_raster(ax, arr, categorical=True, label="vpu", max_legend=4)
+    assert ax.get_legend() is None
+    plt.close(fig)
+
+
+def test_plot_raster_masks_nodata_with_grey():
+    # Continuous: cmap.set_bad("lightgrey") should be applied so masked cells
+    # render distinguishably from valid data.
+    data = np.array([[1.0, 2.0], [3.0, 4.0]], dtype="float32")
+    arr = np.ma.array(data, mask=[[True, False], [False, False]])
+    fig, ax = plt.subplots()
+    im = viz.plot_raster(ax, arr, categorical=False, cmap="viridis")
+    bad_rgba = im.get_cmap().get_bad()
+    # matplotlib "lightgrey" == (0.827, 0.827, 0.827, 1.0)
+    assert bad_rgba[:3] == pytest.approx((0.8274509803921568,) * 3, abs=1e-3)
+    plt.close(fig)
+
+
 # --------------------------------------------------------------------------- #
 # plotting helpers return Figures
 # --------------------------------------------------------------------------- #
