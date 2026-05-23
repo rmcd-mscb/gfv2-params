@@ -6,7 +6,11 @@ import numpy as np
 import rasterio
 from rasterio.windows import Window
 
-from ..depstor import RasterInfo
+from ..depstor import (
+    RasterInfo,
+    assert_raster_aligned,
+    uint8_binary_profile,
+)
 from .context import BuildContext
 
 STRIP_ROWS = 1024
@@ -29,36 +33,6 @@ def compute_perv_binary(
     return out
 
 
-def _uint8_binary_profile(info: RasterInfo) -> dict:
-    return {
-        "driver": "GTiff",
-        "height": info.height,
-        "width": info.width,
-        "count": 1,
-        "dtype": "uint8",
-        "crs": info.crs,
-        "transform": info.transform,
-        "nodata": 255,
-        "compress": "LZW",
-        "tiled": True,
-        "blockxsize": 256,
-        "blockysize": 256,
-        "BIGTIFF": "YES",
-    }
-
-
-def _assert_aligned(src, info: RasterInfo, name: str) -> None:
-    if (src.width, src.height) != (info.width, info.height):
-        raise ValueError(
-            f"{name} shape ({src.width}x{src.height}) != template "
-            f"({info.width}x{info.height})"
-        )
-    if src.crs != info.crs:
-        raise ValueError(f"{name} CRS {src.crs} != template CRS {info.crs}")
-    if src.transform != info.transform:
-        raise ValueError(f"{name} transform mismatch with template")
-
-
 def build(step_cfg: dict, ctx: BuildContext, logger) -> dict:
     output_path = ctx.resolve_output(step_cfg["output"])
     landmask_path = ctx.require("landmask")
@@ -75,15 +49,15 @@ def build(step_cfg: dict, ctx: BuildContext, logger) -> dict:
     info = RasterInfo.from_path(ctx.template_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     n_perv = 0
-    profile = _uint8_binary_profile(info)
+    profile = uint8_binary_profile(info)
 
     with rasterio.open(landmask_path) as landmask_src, \
          rasterio.open(imperv_path) as imperv_src, \
          rasterio.open(dprst_path) as dprst_src, \
          rasterio.open(output_path, "w", **profile) as dst:
-        _assert_aligned(landmask_src, info, "land_mask")
-        _assert_aligned(imperv_src, info, "imperv")
-        _assert_aligned(dprst_src, info, "dprst")
+        assert_raster_aligned(landmask_src, info, "land_mask")
+        assert_raster_aligned(imperv_src, info, "imperv")
+        assert_raster_aligned(dprst_src, info, "dprst")
 
         for row_off in range(0, info.height, STRIP_ROWS):
             h = min(STRIP_ROWS, info.height - row_off)

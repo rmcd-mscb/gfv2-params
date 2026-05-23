@@ -248,11 +248,34 @@ def regions_to_binary(regions: np.ndarray, keep_ids: set[int]) -> np.ndarray:
     return np.where(keep, np.uint8(1), np.uint8(255))
 
 
-def write_uint8_binary(arr: np.ndarray, info: RasterInfo, out_path: Path) -> None:
-    """Write a uint8 binary mask using the template spatial metadata."""
-    out_path = Path(out_path)
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    profile = {
+def assert_raster_aligned(src, info: RasterInfo, name: str) -> None:
+    """Raise if `src` doesn't share shape/CRS/transform with `info`.
+
+    `src` is a rasterio dataset (any object with `.width`, `.height`, `.crs`,
+    `.transform`). `name` is used in the error message to identify the
+    offending input. Used by every streaming depstor builder to fail loudly
+    when an upstream raster diverges from the template grid.
+    """
+    if (src.width, src.height) != (info.width, info.height):
+        raise ValueError(
+            f"{name} shape ({src.width}x{src.height}) != template "
+            f"({info.width}x{info.height})"
+        )
+    if src.crs != info.crs:
+        raise ValueError(f"{name} CRS {src.crs} != template CRS {info.crs}")
+    if src.transform != info.transform:
+        raise ValueError(f"{name} transform mismatch with template")
+
+
+def uint8_binary_profile(info: RasterInfo) -> dict:
+    """Build the rasterio profile dict for a uint8 binary raster.
+
+    Used by both the full-array writer (`write_uint8_binary`, below) and the
+    streaming depstor builders (`perv`, `carea_map`, `intersect`). Keeping a
+    single source means the two write paths can't drift on compression,
+    tiling, nodata, or BIGTIFF settings.
+    """
+    return {
         "driver": "GTiff",
         "height": info.height,
         "width": info.width,
@@ -267,6 +290,13 @@ def write_uint8_binary(arr: np.ndarray, info: RasterInfo, out_path: Path) -> Non
         "blockysize": 256,
         "BIGTIFF": "YES",
     }
+
+
+def write_uint8_binary(arr: np.ndarray, info: RasterInfo, out_path: Path) -> None:
+    """Write a uint8 binary mask using the template spatial metadata."""
+    out_path = Path(out_path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    profile = uint8_binary_profile(info)
     with rasterio.open(out_path, "w", **profile) as dst:
         dst.write(arr.astype(np.uint8), 1)
 

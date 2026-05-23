@@ -11,42 +11,17 @@ from rasterio.enums import Resampling
 from rasterio.vrt import WarpedVRT
 from rasterio.windows import Window
 
-from ..depstor import RasterInfo, compute_carea_map_binary
+from ..depstor import (
+    RasterInfo,
+    assert_raster_aligned,
+    compute_carea_map_binary,
+    uint8_binary_profile,
+)
 from .context import BuildContext
 from .vpu_id import MAX_VPU_CODE, VPU_NODATA, vpu_to_code
 
 # TWI is float32 — ~4x the per-strip memory of the uint8 inputs.
 STRIP_ROWS = 1024
-
-
-def _uint8_binary_profile(info: RasterInfo) -> dict:
-    return {
-        "driver": "GTiff",
-        "height": info.height,
-        "width": info.width,
-        "count": 1,
-        "dtype": "uint8",
-        "crs": info.crs,
-        "transform": info.transform,
-        "nodata": 255,
-        "compress": "LZW",
-        "tiled": True,
-        "blockxsize": 256,
-        "blockysize": 256,
-        "BIGTIFF": "YES",
-    }
-
-
-def _assert_aligned(src, info: RasterInfo, name: str) -> None:
-    if (src.width, src.height) != (info.width, info.height):
-        raise ValueError(
-            f"{name} shape ({src.width}x{src.height}) != template "
-            f"({info.width}x{info.height})"
-        )
-    if src.crs != info.crs:
-        raise ValueError(f"{name} CRS {src.crs} != template CRS {info.crs}")
-    if src.transform != info.transform:
-        raise ValueError(f"{name} transform mismatch with template")
 
 
 def load_reference_table(path) -> dict:
@@ -163,16 +138,16 @@ def build(step_cfg: dict, ctx: BuildContext, logger) -> dict:
         out.parent.mkdir(parents=True, exist_ok=True)
 
     counts = [0 for _ in runs]
-    profile = _uint8_binary_profile(info)
+    profile = uint8_binary_profile(info)
 
     with ExitStack() as stack:
         landmask_src = stack.enter_context(rasterio.open(landmask_path))
         perv_src = stack.enter_context(rasterio.open(perv_path))
         onstream_src = stack.enter_context(rasterio.open(onstream_path))
         twi_src = stack.enter_context(rasterio.open(ctx.twi_raster))
-        _assert_aligned(landmask_src, info, "land_mask")
-        _assert_aligned(perv_src, info, "perv")
-        _assert_aligned(onstream_src, info, "onstream")
+        assert_raster_aligned(landmask_src, info, "land_mask")
+        assert_raster_aligned(perv_src, info, "perv")
+        assert_raster_aligned(onstream_src, info, "onstream")
         if twi_src.crs != info.crs:
             raise ValueError(f"TWI CRS {twi_src.crs} != template CRS {info.crs}")
 
@@ -207,7 +182,7 @@ def build(step_cfg: dict, ctx: BuildContext, logger) -> dict:
 
         if per_cell:
             vpu_id_src = stack.enter_context(rasterio.open(vpu_id_path))
-            _assert_aligned(vpu_id_src, info, "vpu_id")
+            assert_raster_aligned(vpu_id_src, info, "vpu_id")
 
         for row_off in range(0, info.height, STRIP_ROWS):
             h = min(STRIP_ROWS, info.height - row_off)
