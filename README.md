@@ -331,13 +331,13 @@ unified configs:
   [src/gfv2_params/depstor_builders/](src/gfv2_params/depstor_builders/).
 - [scripts/derive_depstor_params.py](scripts/derive_depstor_params.py) reads
   [configs/depstor/depstor_params.yml](configs/depstor/depstor_params.yml) and dispatches the
-  9 fractions (`perv_frac`, `imperv_frac`, `dprst_frac`,
+  10 fractions (`perv_frac`, `imperv_frac`, `dprst_frac`,
   `drains_perv_frac`, `drains_imperv_frac`, `onstream_storage_frac`,
-  `drains_to_dprst_frac`, `carea_t8_frac`, `carea_t156_frac`) plus the 4 PRMS
-  Level-5 ratios (`sro_to_dprst_perv`, `sro_to_dprst_imperv`, `carea_max`,
-  `smidx_coef`). The slurm wrapper
-  [slurm_batch/submit_depstor_params.sh](slurm_batch/submit_depstor_params.sh)
-  chains 9 zonal arrays → 9 merges → 1 ratios job via afterok.
+  `drains_to_dprst_frac`, `carea_t8_frac`, `carea_t156_frac`, `hru_total`)
+  plus the 6 PRMS Level-5 ratios (`sro_to_dprst_perv`, `sro_to_dprst_imperv`,
+  `carea_max`, `smidx_coef`, `hru_percent_imperv`, `dprst_frac`). The slurm
+  wrapper [slurm_batch/submit_depstor_params.sh](slurm_batch/submit_depstor_params.sh)
+  chains 10 zonal arrays → 10 merges → 1 ratios job via afterok.
 
 See [docs/depstor_workflow.md](docs/depstor_workflow.md) for the design notes
 and [docs/depstor_port_summary.md](docs/depstor_port_summary.md) for the

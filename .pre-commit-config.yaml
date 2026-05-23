@@ -27,19 +27,19 @@ repos:
     rev: v5.0.0
     hooks:
       - id: end-of-file-fixer
-        exclude: ^(environment\.yml|environment_minimal\.yml|scripts/1_create_dem_params\.py|scripts/6_create_ssflux_params\.py|slurm_batch/01_create_elev_params\.batch|slurm_batch/04_OR_create_soils_params\.batch|slurm_batch/06_OR_create_ssflux_params\.batch)$
+        exclude: ^environment\.yml$
       - id: trailing-whitespace
-        exclude: ^(environment\.yml|environment_minimal\.yml|scripts/1_create_dem_params\.py|scripts/6_create_ssflux_params\.py|slurm_batch/01_create_elev_params\.batch|slurm_batch/04_OR_create_soils_params\.batch|slurm_batch/06_OR_create_ssflux_params\.batch)$
-    # Prettier for YAML autoformatting
+        exclude: ^environment\.yml$
+  # Prettier for YAML autoformatting
   - repo: https://github.com/pre-commit/mirrors-prettier
     rev: v4.0.0-alpha.8 # Check for latest: https://github.com/pre-commit/mirrors-prettier/releases
     hooks:
       - id: prettier
         files: \.(yml|yaml)$
-
-  # Yamllint for YAML linting (checks style, errors)
-  - repo: https://github.com/adrienverge/yamllint.git
-    rev: v1.37.1 # Use latest
+  # nbstripout strips outputs from .ipynb on commit. Notebooks are kept
+  # output-free in git; figures get rendered to docs/figures/<fabric>/ via
+  # scripts/render_figures.py (see notebooks/<fabric>/README.md).
+  - repo: https://github.com/kynan/nbstripout
+    rev: 0.7.1
     hooks:
-      - id: yamllint
-        files: \.(yml|yaml)$
+      - id: nbstripout

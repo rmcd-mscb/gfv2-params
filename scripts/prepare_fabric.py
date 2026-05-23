@@ -58,7 +58,11 @@ def main():
 
     n = manifest["n_batches"]
     logger.info("Fabric '%s' prepared: %d features -> %d batches in %s", fabric, len(gdf), n, batch_dir)
-    logger.info("Use: ./submit_jobs.sh %s <batch_script.batch>", batch_dir)
+    logger.info("Next: submit Part-2 jobs. For the chained per-param workflow (recommended):")
+    logger.info("  ./slurm_batch/submit_zonal_params.sh   %s %s configs/base_config.yml", batch_dir, fabric)
+    logger.info("  ./slurm_batch/submit_depstor_params.sh %s %s configs/base_config.yml", batch_dir, fabric)
+    logger.info("For a single batch script: ./slurm_batch/submit_jobs.sh %s <batch_script.batch>", batch_dir)
+    logger.info("Per-parameter (incremental) recipes are in slurm_batch/RUNME.md Stage 4A.")
 
 
 if __name__ == "__main__":

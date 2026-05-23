@@ -1,28 +1,32 @@
 #!/bin/bash
-# Usage: ./submit_jobs.sh <batches_dir> <batch_script> [base_config] [merge_config] [fabric] [max_concurrent]
+# Usage: ./submit_jobs.sh <batches_dir> <batch_script> [base_config] [fabric] [max_concurrent]
 #
 # Reads the batch count from manifest.yml and submits the batch script
 # as a SLURM array job with the appropriate range.
 # The optional third argument sets BASE_CONFIG (default: configs/base_config.yml).
-# The optional fourth argument sets MERGE_CONFIG; if provided, a merge job is
-# submitted automatically as an afterok dependency of the array job.
-# The optional fifth argument sets FABRIC (default: gfv2). FABRIC propagates
+# The optional fourth argument sets FABRIC (default: gfv2). FABRIC propagates
 # to the batch via --export=ALL and selects the active fabric profile.
-# The optional sixth argument caps simultaneously-running tasks via SLURM's
+# The optional fifth argument caps simultaneously-running tasks via SLURM's
 # `--array=0-N%K` throttle, or env var SUBMIT_JOBS_MAX_CONCURRENT (default: 4).
 # This guards against a pixi/GDAL/PROJ import-storm hang when many tasks slam
 # the shared FS at startup — observed on VPU01 issue-#61 run, one of eight
 # tasks deadlocked in library init with zero open data files. Set to 0 or
 # "off" to disable the cap and run fully concurrent.
+#
+# For the chained-merge workflows (zonal + depstor params), use the
+# dedicated wrappers instead:
+#   slurm_batch/submit_zonal_params.sh   (loops every zonal param, chains
+#                                         array -> merge per param)
+#   slurm_batch/submit_depstor_params.sh (loops every depstor fraction,
+#                                         chains array -> merge -> ratios)
 
 set -euo pipefail
 
 if [ $# -lt 2 ]; then
-    echo "Usage: $0 <batches_dir> <batch_script> [base_config.yml] [merge_config.yml] [fabric] [max_concurrent]"
+    echo "Usage: $0 <batches_dir> <batch_script> [base_config.yml] [fabric] [max_concurrent]"
     echo "  batches_dir:    path to {fabric}/batches/ (contains manifest.yml)"
     echo "  batch_script:   SLURM batch file to submit"
     echo "  base_config:    optional path to base_config.yml (default: configs/base_config.yml)"
-    echo "  merge_config:   optional param config for auto-merge (e.g. configs/zonal/elev_param.yml)"
     echo "  fabric:         optional fabric name (default: gfv2)"
     echo "  max_concurrent: optional concurrency cap (default: 4; 0/off disables)"
     exit 1
@@ -31,9 +35,8 @@ fi
 FABRIC_DIR="$1"
 BATCH_SCRIPT="$2"
 BASE_CONFIG="${3:-configs/base_config.yml}"
-MERGE_CONFIG="${4:-}"
-FABRIC="${5:-gfv2}"
-MAX_CONCURRENT="${6:-${SUBMIT_JOBS_MAX_CONCURRENT:-4}}"
+FABRIC="${4:-gfv2}"
+MAX_CONCURRENT="${5:-${SUBMIT_JOBS_MAX_CONCURRENT:-4}}"
 MANIFEST="$FABRIC_DIR/manifest.yml"
 
 if [ ! -f "$MANIFEST" ]; then
@@ -67,10 +70,14 @@ ARRAY_JOB_ID=$(sbatch --array="$ARRAY_SPEC" \
                      --export=ALL,BASE_CONFIG="$BASE_CONFIG",FABRIC="$FABRIC" \
                      "$BATCH_SCRIPT" | awk '{print $NF}')
 echo "Array job ID: $ARRAY_JOB_ID"
-
-if [ -n "$MERGE_CONFIG" ]; then
-    echo "Submitting merge job (afterok:$ARRAY_JOB_ID) with MERGE_CONFIG=$MERGE_CONFIG"
-    sbatch --dependency=afterok:"$ARRAY_JOB_ID" \
-           --export=ALL,BASE_CONFIG="$BASE_CONFIG",MERGE_CONFIG="$MERGE_CONFIG",FABRIC="$FABRIC" \
-           slurm_batch/merge_params.batch
-fi
+echo ""
+echo "To chain a merge after the array completes, submit the matching merge"
+echo "worker. Note the env-var name differs between zonal and depstor:"
+echo "  # zonal param:"
+echo "  sbatch --dependency=afterok:$ARRAY_JOB_ID --export=ALL,FABRIC=$FABRIC,PARAM=<name> \\"
+echo "         slurm_batch/merge_zonal_param.batch"
+echo "  # depstor fraction:"
+echo "  sbatch --dependency=afterok:$ARRAY_JOB_ID --export=ALL,FABRIC=$FABRIC,FRACTION=<name> \\"
+echo "         slurm_batch/merge_depstor_fraction.batch"
+echo "Or use slurm_batch/submit_zonal_params.sh / submit_depstor_params.sh"
+echo "for the chained per-parameter workflow. See RUNME.md Stage 4A."
