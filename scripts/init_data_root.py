@@ -196,8 +196,25 @@ def init_data_root(data_root: Path, fabric: str, logger) -> None:
             logger.debug("  %s", d)
 
 
+def _shapefile_companions(shp_path: Path) -> list[Path]:
+    """Return the required ESRI sidecar paths for a shapefile.
+
+    Shapefiles cannot be opened without `.shx` (index) and `.dbf` (attribute
+    table); `.prj` (projection) is required for any CRS-aware read. All three
+    must be staged alongside the `.shp` or pyogrio/fiona reads fail with a
+    confusing error.
+    """
+    stem = shp_path.with_suffix("")
+    return [stem.with_suffix(ext) for ext in (".shx", ".dbf", ".prj")]
+
+
 def validate_inputs(data_root: Path, fabric: str, logger) -> None:
-    """Warn about missing staged inputs that cannot be auto-downloaded."""
+    """Warn about missing staged inputs that cannot be auto-downloaded.
+
+    For required `.shp` paths, also validates the `.shx` / `.dbf` / `.prj`
+    sidecars — each is reported separately so the user knows exactly what
+    to stage.
+    """
     required = [
         data_root / "input" / "soils_litho" / "TEXT_PRMS.tif",
         data_root / "input" / "soils_litho" / "AWC.tif",
@@ -208,7 +225,15 @@ def validate_inputs(data_root: Path, fabric: str, logger) -> None:
         # if missing.
         data_root / "input" / "twi" / "01a" / "twi.tif",
     ]
-    missing = [p for p in required if not p.exists()]
+    # Expand each .shp into the .shp itself + its 3 required sidecars so
+    # the user sees exactly which files are missing (not just "the shapefile").
+    to_check: list[Path] = []
+    for p in required:
+        to_check.append(p)
+        if p.suffix.lower() == ".shp":
+            to_check.extend(_shapefile_companions(p))
+
+    missing = [p for p in to_check if not p.exists()]
     if missing:
         logger.warning(
             "%d required input file(s) are not yet staged:", len(missing)
