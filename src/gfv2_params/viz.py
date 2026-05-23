@@ -553,3 +553,116 @@ def save_figure(fig, name, *, dpi: int = 150) -> None:
     target = base / FABRIC if FABRIC else base
     target.mkdir(parents=True, exist_ok=True)
     fig.savefig(target / f"{name}.png", dpi=dpi, bbox_inches="tight")
+
+
+# ----------------------------------------------------------------------------- #
+# Interactive folium overlays for the depstor "output-binary" rasters
+# ----------------------------------------------------------------------------- #
+
+# Curated list of depstor binaries that directly feed a PRMS ratio CSV (i.e.
+# appear as a numerator or denominator of one of the 6 ratios in
+# configs/depstor/depstor_params.yml). Intentionally excludes intermediates
+# (stream_buffer, wbody_binary, onstream_binary, drains_to_dprst) and the
+# non-ratio rasters (land_mask, wbody_regions, vpu_id). Each entry carries a
+# distinct hex color so layers stay visually distinguishable when stacked on
+# an interactive map. Maintained alongside _DEPSTOR_RASTERS above.
+_DEPSTOR_OUTPUT_BINARIES = [
+    # (file_stem, color, what it feeds)
+    ("perv_binary",          "#2ca02c", "denominator: carea_max, smidx_coef, sro_to_dprst_perv"),
+    ("imperv_binary",        "#d62728", "hru_percent_imperv (num); sro_to_dprst_imperv (denom)"),
+    ("dprst_binary",         "#1f77b4", "dprst_frac (numerator)"),
+    ("drains_perv_binary",   "#ff7f0e", "sro_to_dprst_perv (numerator)"),
+    ("drains_imperv_binary", "#9467bd", "sro_to_dprst_imperv (numerator)"),
+    ("carea_map_t8_binary",  "#e377c2", "carea_max (numerator)"),
+    ("carea_map_t156_binary","#17becf", "smidx_coef (numerator)"),
+]
+
+
+@dataclass(frozen=True)
+class OverlayEntry:
+    name: str
+    path: Path
+    color: str          # hex like "#2ca02c"; on-cells render as this color
+    feeds: str          # human-readable description of the output param it feeds
+
+
+def depstor_output_binary_inventory(cfg) -> list[OverlayEntry]:
+    """Curated depstor binaries that directly feed a PRMS output ratio.
+
+    Filters ``_DEPSTOR_OUTPUT_BINARIES`` against on-disk paths under
+    ``{data_root}/{fabric}/depstor_rasters/``; missing files are skipped with
+    a warning (mirrors the other inventory builders). Used by the interactive
+    folium-overlay notebook.
+    """
+    base = Path(cfg["data_root"]) / cfg["fabric"] / "depstor_rasters"
+    kept: list[OverlayEntry] = []
+    for name, color, feeds in _DEPSTOR_OUTPUT_BINARIES:
+        p = base / f"{name}.tif"
+        if p.exists():
+            kept.append(OverlayEntry(name=name, path=p, color=color, feeds=feeds))
+        else:
+            warnings.warn(f"Skipping overlay '{name}': path not found: {p}")
+    return kept
+
+
+def build_overlay_image(path, *, color: str, alpha: float = 0.55,
+                        target_px: int = 1000, threshold: float = 0.5):
+    """Reproject a binary-ish raster to EPSG:4326 and build an RGBA image.
+
+    Returns ``(rgba_uint8, (west, south, east, north))`` where ``rgba_uint8``
+    is an ``(H, W, 4)`` ``uint8`` ndarray. Cells where the raster value is
+    finite, not nodata, and strictly greater than ``threshold`` render as
+    ``color`` at ``alpha``; everything else is fully transparent.
+
+    Decimated so the long side is roughly ``target_px``. No folium dep — the
+    caller wraps this into ``folium.raster_layers.ImageOverlay``; see
+    ``raster_to_image_overlay`` for the wrapped version.
+    """
+    from rasterio.vrt import WarpedVRT
+
+    r, g, b = mcolors.to_rgb(color)
+    rgba = (int(r * 255), int(g * 255), int(b * 255), int(alpha * 255))
+
+    with rasterio.open(path) as src:
+        nd = src.nodata
+        with WarpedVRT(src, crs="EPSG:4326", resampling=Resampling.nearest) as vrt:
+            factor = max(1, max(vrt.width, vrt.height) // target_px)
+            oh = max(1, vrt.height // factor)
+            ow = max(1, vrt.width // factor)
+            data = vrt.read(1, out_shape=(oh, ow),
+                            resampling=Resampling.nearest).astype("float32")
+            bounds = vrt.bounds   # (left, bottom, right, top) in lat/lon
+
+    on = np.isfinite(data)
+    if nd is not None:
+        on &= (data != nd)
+    on &= (data > threshold)
+
+    img = np.zeros((data.shape[0], data.shape[1], 4), dtype="uint8")
+    img[on] = rgba
+    return img, (bounds.left, bounds.bottom, bounds.right, bounds.top)
+
+
+def raster_to_image_overlay(path, *, name: str, color: str,
+                            alpha: float = 0.55, target_px: int = 1000,
+                            threshold: float = 0.5):
+    """Build a folium ImageOverlay ready to ``.add_to(map)`` + LayerControl.
+
+    Thin wrapper around ``build_overlay_image`` that imports ``folium``
+    lazily (folium is only in the ``notebooks`` pixi env). ``mercator_project``
+    is enabled so the EPSG:4326 image is reprojected to Web Mercator
+    client-side instead of being stretched.
+    """
+    import folium  # noqa: PLC0415 — optional notebook dep
+
+    img, (w, s, e, n) = build_overlay_image(
+        path, color=color, alpha=alpha, target_px=target_px, threshold=threshold,
+    )
+    return folium.raster_layers.ImageOverlay(
+        image=img,
+        bounds=[[s, w], [n, e]],
+        opacity=1.0,            # alpha is baked into the RGBA
+        mercator_project=True,  # client-side warp to web mercator
+        name=name,
+        interactive=False,
+    )
