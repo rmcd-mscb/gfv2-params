@@ -382,7 +382,7 @@ For per-step debugging, invoke the orchestrator directly with
 
 ## Viewing fabric results
 
-Once a fabric is processed, the three Jupyter notebooks in
+Once a fabric is processed, the Jupyter notebooks in
 [notebooks/fabric_results/](notebooks/fabric_results/) give a complete picture of
 a fabric's parameterization — the inputs that fed it and the per-HRU results:
 
@@ -391,8 +391,9 @@ a fabric's parameterization — the inputs that fed it and the per-HRU results:
 | `01_input_rasters.ipynb` | Every shared/zonal source raster clipped to the fabric bounds, HRU outline overlaid. |
 | `02_depstor_rasters.ipynb` | The 14 per-fabric depression-storage binary/label rasters + coverage stats. |
 | `03_param_results.ipynb` | Choropleth + distribution of all 16 merged per-HRU params, plus a depstor-ratio summary. |
+| `04_depstor_overlay.ipynb` | Interactive folium map: the 7 depstor binaries that directly feed a PRMS ratio (`carea_max`, `smidx_coef`, `sro_to_dprst_perv/imperv`, `hru_percent_imperv`, `dprst_frac`), each as a toggleable color overlay on OpenStreetMap / CartoDB / Esri imagery basemaps. |
 
-All three are **parameterized by the `FABRIC` env var** (default `oregon`) and read
+All are **parameterized by the `FABRIC` env var** (default `oregon`) and read
 the active profile via `load_base_config`; they share the tested helpers in
 [src/gfv2_params/viz.py](src/gfv2_params/viz.py). Run them **inside JupyterHub on a
 compute node with enough `--mem`** — a full CONUS `gfv2` render loads ~361k HRU

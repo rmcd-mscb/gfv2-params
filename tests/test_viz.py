@@ -339,3 +339,71 @@ def test_save_figure_warns_without_fabric(tmp_path, monkeypatch):
     plt.close(fig)
     # un-namespaced: lands directly in the base dir, not a fabric subdir
     assert (tmp_path / "y.png").exists()
+
+
+# --------------------------------------------------------------------------- #
+# Interactive folium overlays (depstor "output-binary" rasters)
+# --------------------------------------------------------------------------- #
+
+def test_depstor_output_binary_inventory_filters_and_warns(tmp_path):
+    # Stage 2 of the 7 curated binaries; the other 5 should be skipped+warned.
+    base = tmp_path / "fab" / "depstor_rasters"
+    base.mkdir(parents=True)
+    (base / "perv_binary.tif").write_text("")
+    (base / "carea_map_t8_binary.tif").write_text("")
+    cfg = {"data_root": str(tmp_path), "fabric": "fab"}
+    with pytest.warns(UserWarning):
+        entries = viz.depstor_output_binary_inventory(cfg)
+    names = [e.name for e in entries]
+    assert names == ["perv_binary", "carea_map_t8_binary"]  # first-occurrence order
+    assert all(isinstance(e, viz.OverlayEntry) for e in entries)
+    assert all(e.color.startswith("#") for e in entries)
+    assert "carea_max" in entries[1].feeds  # human-readable provenance
+
+
+def test_build_overlay_image_reprojects_to_latlon_and_marks_on_cells(tmp_path):
+    # Synthetic binary raster in EPSG:5070 over a small Albers window. The
+    # function should reproject to EPSG:4326, return an (H,W,4) uint8 array,
+    # paint on-cells (value > threshold) in the requested color, and leave
+    # off-cells fully transparent.
+    arr = np.array([[0, 0, 1, 1], [0, 1, 1, 1]], dtype="uint8")  # 6 on-cells out of 8
+    transform = Affine(30, 0, 1_000_000.0, 0, -30, 2_000_000.0)  # arbitrary Albers
+    path = tmp_path / "binary.tif"
+    _write_tif(path, arr, nodata=255, transform=transform, crs="EPSG:5070")
+
+    rgba, bounds = viz.build_overlay_image(
+        path, color="#ff0000", alpha=0.5, target_px=8, threshold=0.5,
+    )
+    assert rgba.ndim == 3 and rgba.shape[-1] == 4
+    assert rgba.dtype == np.uint8
+
+    # On-cells: red @ 50% alpha = (255, 0, 0, 127)
+    on_mask = rgba[..., 3] > 0
+    assert on_mask.any()
+    on_rgba = rgba[on_mask]
+    assert (on_rgba[:, 0] == 255).all() and (on_rgba[:, 1] == 0).all() and (on_rgba[:, 2] == 0).all()
+    assert (on_rgba[:, 3] == 127).all()
+    # Off-cells fully transparent
+    assert (rgba[~on_mask, 3] == 0).all()
+
+    # Bounds are in lat/lon (CONUS Albers origin reprojects to roughly N hemisphere)
+    w, s, e, n = bounds
+    assert -180 <= w < e <= 180
+    assert -90 <= s < n <= 90
+
+
+def test_raster_to_image_overlay_returns_folium_overlay(tmp_path):
+    folium = pytest.importorskip("folium")  # only in notebooks env
+    arr = np.array([[0, 1], [1, 1]], dtype="uint8")
+    transform = Affine(30, 0, 1_000_000.0, 0, -30, 2_000_000.0)
+    path = tmp_path / "binary.tif"
+    _write_tif(path, arr, nodata=255, transform=transform, crs="EPSG:5070")
+
+    ov = viz.raster_to_image_overlay(path, name="perv", color="#00ff00", target_px=4)
+    assert isinstance(ov, folium.raster_layers.ImageOverlay)
+    assert ov.layer_name == "perv"
+    # bounds shape: [[south, west], [north, east]]
+    b = ov.bounds
+    assert len(b) == 2 and len(b[0]) == 2 and len(b[1]) == 2
+    assert b[0][0] < b[1][0]  # south < north
+    assert b[0][1] < b[1][1]  # west < east
