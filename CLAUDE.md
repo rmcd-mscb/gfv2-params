@@ -124,8 +124,10 @@ These are hard-won; violating them silently corrupts outputs.
 - **Atomic commits.** Split combined fixes into separate commits before pushing.
   If source changes exceed the original plan, lead the PR description with a
   scope-expansion callout.
-- `_gfv2_params_legacy/`, `_create_lulc_params_legacy.py`, and `*_legacy` paths
-  are retained for reference only — don't extend them.
+- `*_legacy` paths (if any reappear) are retained for reference only — don't
+  extend them. The two pre-PR-#37 stale working copies at the repo root
+  (`_gfv2_params_legacy/`, `_create_lulc_params_legacy.py`) were deleted in
+  PR closing #46.
 
 ### Code conventions
 
