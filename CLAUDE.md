@@ -67,6 +67,11 @@ These are hard-won; violating them silently corrupts outputs.
   as a land mask.
 - **WhiteboxTools cannot read LZW + `predictor=2` GeoTIFFs** — it silently
   corrupts them. Never pass `predictor=2` rasters to WBT subprocesses.
+- **`carea_max`/`smidx_coef` threshold mode.** The legacy `absolute` thresholds
+  (8.0/15.6) are only calibrated against VPU 01's ArcPy TWI distribution. For
+  any other fabric use `threshold_mode: percentile` in
+  `configs/depstor/depstor_rasters.yml` with `twi_raster` pointing at
+  `twi_hydrodem.vrt` and run the `twi_reference` shared-raster step first.
 
 ## Working in this repo
 

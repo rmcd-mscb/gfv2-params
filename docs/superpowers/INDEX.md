@@ -46,7 +46,7 @@ worked through in this order:
 | T2-E — promote depstor helpers (closes #64) | ✅ landed | [#107](https://github.com/rmcd-mscb/gfv2-params/pull/107) |
 | T2-B — archive scratch notebooks | ✅ landed | [#108](https://github.com/rmcd-mscb/gfv2-params/pull/108) |
 | T2-D — `docs/superpowers/INDEX.md` (this file) | in flight | (this PR) |
-| T2-C — `docs/ARCHITECTURE.md` + slim CLAUDE.md/README | open | — |
+| T2-C — `docs/ARCHITECTURE.md` + slim CLAUDE.md/README | in flight | (this branch) |
 | Tier 3 (discussion items) | open | — |
 
 ## Topical index (specs + plans)
