@@ -10,40 +10,15 @@ from __future__ import annotations
 import rasterio
 from rasterio.windows import Window
 
-from ..depstor import RasterInfo, intersect_binaries
+from ..depstor import (
+    RasterInfo,
+    assert_raster_aligned,
+    intersect_binaries,
+    uint8_binary_profile,
+)
 from .context import BuildContext
 
 STRIP_ROWS = 1024
-
-
-def _uint8_binary_profile(info: RasterInfo) -> dict:
-    return {
-        "driver": "GTiff",
-        "height": info.height,
-        "width": info.width,
-        "count": 1,
-        "dtype": "uint8",
-        "crs": info.crs,
-        "transform": info.transform,
-        "nodata": 255,
-        "compress": "LZW",
-        "tiled": True,
-        "blockxsize": 256,
-        "blockysize": 256,
-        "BIGTIFF": "YES",
-    }
-
-
-def _assert_aligned(src, info: RasterInfo, name: str) -> None:
-    if (src.width, src.height) != (info.width, info.height):
-        raise ValueError(
-            f"{name} shape ({src.width}x{src.height}) != template "
-            f"({info.width}x{info.height})"
-        )
-    if src.crs != info.crs:
-        raise ValueError(f"{name} CRS {src.crs} != template CRS {info.crs}")
-    if src.transform != info.transform:
-        raise ValueError(f"{name} transform mismatch with template")
 
 
 def build(step_cfg: dict, ctx: BuildContext, logger) -> dict:
@@ -68,13 +43,13 @@ def build(step_cfg: dict, ctx: BuildContext, logger) -> dict:
     info = RasterInfo.from_path(ctx.template_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     n_hit = 0
-    profile = _uint8_binary_profile(info)
+    profile = uint8_binary_profile(info)
 
     with rasterio.open(input_a_path) as a_src, \
          rasterio.open(input_b_path) as b_src, \
          rasterio.open(output_path, "w", **profile) as dst:
-        _assert_aligned(a_src, info, "input_a")
-        _assert_aligned(b_src, info, "input_b")
+        assert_raster_aligned(a_src, info, "input_a")
+        assert_raster_aligned(b_src, info, "input_b")
 
         for row_off in range(0, info.height, STRIP_ROWS):
             h = min(STRIP_ROWS, info.height - row_off)
