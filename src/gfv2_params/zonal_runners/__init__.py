@@ -74,6 +74,7 @@ from .weights import run_build_weights
 from .zonal import run_zonal_batch
 
 __all__ = [
+    "BATCH_RUNNERS",
     "run_build_weights",
     "run_lulc_batch",
     "run_merge",
@@ -81,3 +82,16 @@ __all__ = [
     "run_ssflux_batch",
     "run_zonal_batch",
 ]
+
+
+# Dispatch table: `script:` tag in configs/zonal/zonal_params.yml -> runner.
+# Used by scripts/derive_zonal_params.py to route a per-batch invocation to
+# the right submodule. Adding a new `script:` tag means (a) adding a new
+# submodule under zonal_runners/, (b) re-exporting its run_*_batch above,
+# and (c) adding an entry below — keep them in sync.
+BATCH_RUNNERS = {
+    "zonal":  run_zonal_batch,
+    "soils":  run_soils_batch,
+    "lulc":   run_lulc_batch,
+    "ssflux": run_ssflux_batch,
+}

@@ -24,27 +24,11 @@ Pattern mirrors scripts/derive_depstor_params.py (PR #72).
 
 import argparse
 import re
-import sys
 from pathlib import Path
 
 from gfv2_params.config import load_config, require_config_key
 from gfv2_params.log import configure_logging
-from gfv2_params.zonal_runners import (
-    run_build_weights,
-    run_lulc_batch,
-    run_merge,
-    run_soils_batch,
-    run_ssflux_batch,
-    run_zonal_batch,
-)
-
-# Dispatch table: `script:` tag in zonal_params.yml -> run_<script>_batch function
-_BATCH_RUNNERS = {
-    "zonal":  run_zonal_batch,
-    "soils":  run_soils_batch,
-    "lulc":   run_lulc_batch,
-    "ssflux": run_ssflux_batch,
-}
+from gfv2_params.zonal_runners import BATCH_RUNNERS, run_build_weights, run_merge
 
 
 def _resolve_nested(value, replacements: dict):
@@ -124,15 +108,15 @@ def run_zonal(args, logger) -> None:
     config = _load_resolved_config(args)
     entry = _find_param(config, args.param)
     script_tag = entry.get("script")
-    if script_tag not in _BATCH_RUNNERS:
+    if script_tag not in BATCH_RUNNERS:
         raise ValueError(
             f"Param '{args.param}' has unknown script tag '{script_tag}'. "
-            f"Available: {sorted(_BATCH_RUNNERS)}"
+            f"Available: {sorted(BATCH_RUNNERS)}"
         )
     param_cfg = _build_param_cfg(config, entry)
     logger.info("=== zonal: param=%s script=%s batch=%d ===",
                 args.param, script_tag, args.batch_id)
-    _BATCH_RUNNERS[script_tag](param_cfg, args.batch_id, logger)
+    BATCH_RUNNERS[script_tag](param_cfg, args.batch_id, logger)
 
 
 def run_merge_mode(args, logger) -> None:
