@@ -188,9 +188,6 @@ logs/
 # notebook copies in the .cache/ subdir are ignored.
 docs/figures/.cache/
 
-# abock's stray working copies, renamed out of the way so they don't shadow
-# imports from the repo root (canonical homes are scripts/ and src/)
-
 # WSL/Windows security sidecar files dropped next to downloaded artifacts
 *:Zone.Identifier
 *:sec.endpointdlp

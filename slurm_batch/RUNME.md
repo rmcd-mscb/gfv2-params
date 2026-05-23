@@ -676,14 +676,17 @@ already merged or comes as per-VPU gpkgs.
 > avoid rebuilding all of CONUS. Then run Stage 2d:
 > `FABRIC=oregon sbatch slurm_batch/build_depstor_rasters.batch`.
 >
-> **TWI source pairing (resolved by PR #95):** `twi.vrt` only carries ArcPy
-> TWI for VPU 01 and is paired with `threshold_mode: absolute` (legacy
-> 8.0/15.6 thresholds). For multi-VPU or non-VPU-01 fabrics like `oregon`,
-> use `threshold_mode: percentile` (the default in
+> **TWI source pairing (resolved by PR #95):** the legacy 8.0/15.6 absolute
+> thresholds were calibrated against VPU 01's ArcPy TWI distribution, so
+> `threshold_mode: absolute` is only meaningful when paired with `twi.vrt`
+> on VPU 01 (the `gfv2_vpu01` profile). For multi-VPU or non-VPU-01 fabrics
+> like `oregon`, use `threshold_mode: percentile` (the default in
 > `configs/depstor/depstor_rasters.yml`) with `twi_raster` pointing at the
 > CONUS-complete `twi_hydrodem.vrt`; the percentile cutoffs are sourced from
 > the `twi_reference` step (Stage 2a'). With this pairing Stage 2d produces
-> valid `carea_max`/`smidx_coef` everywhere.
+> valid `carea_max`/`smidx_coef` everywhere. `twi.vrt` itself is CONUS-wide
+> after PR #95's staging completion — what's VPU-01-specific is the threshold
+> calibration, not the data coverage.
 
 **Case B: VPU-based fabric** (per-VPU gpkgs that need merging — e.g., gfv2)
 
