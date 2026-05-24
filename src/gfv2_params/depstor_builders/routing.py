@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import os
-import subprocess
 
 import numpy as np
 import rasterio
@@ -11,27 +10,8 @@ import rioxarray  # noqa: F401  (registers .rio accessor)
 import xarray as xr
 
 from ..depstor import RasterInfo, read_land_mask, write_uint8_binary
+from ..wbt import find_whitebox_tools_binary, run_streamed
 from .context import BuildContext
-
-
-def _find_whitebox_tools_binary() -> str:
-    """Locate the WhiteboxTools executable inside the bundled `whitebox` package."""
-    import whitebox
-
-    pkg_dir = os.path.dirname(whitebox.__file__)
-    candidates = [
-        os.path.join(pkg_dir, "whitebox_tools.exe"),
-        os.path.join(pkg_dir, "whitebox_tools"),
-        os.path.join(pkg_dir, "bin", "whitebox_tools.exe"),
-        os.path.join(pkg_dir, "bin", "whitebox_tools"),
-    ]
-    runner = next((c for c in candidates if os.path.isfile(c)), None)
-    if runner is None:
-        raise FileNotFoundError(
-            "WhiteboxTools binary not found inside `whitebox` package. "
-            "Reinstall the `whitebox` pip package."
-        )
-    return runner
 
 
 def _reproject_fdr_with_rioxarray(fdr_path, dprst_path, out_path, logger) -> None:
@@ -74,7 +54,7 @@ def _prepare_pour_points(dprst_path, out_path, logger) -> None:
 
 
 def _run_whitebox_watershed(fdr_path, pour_pts_path, output_path, logger) -> None:
-    runner = _find_whitebox_tools_binary()
+    runner = find_whitebox_tools_binary()
     logger.info("  WhiteboxTools binary: %s", runner)
     cmd = [
         runner,
@@ -88,14 +68,7 @@ def _run_whitebox_watershed(fdr_path, pour_pts_path, output_path, logger) -> Non
         "-v",
     ]
     logger.info("  Running: %s", " ".join(cmd))
-    proc = subprocess.run(cmd, text=True, capture_output=True)
-    if proc.stdout:
-        logger.debug("WBT stdout:\n%s", proc.stdout)
-    if proc.returncode != 0:
-        logger.error("WBT stderr:\n%s", proc.stderr)
-        raise RuntimeError(
-            f"WhiteboxTools Watershed failed (exit code {proc.returncode}). See stderr above."
-        )
+    run_streamed(cmd, tool="Watershed", logger=logger)
 
 
 def _watershed_to_binary(watershed_path, landmask_path, info, out_path, logger) -> None:
