@@ -12,7 +12,6 @@ import logging
 import sys
 from pathlib import Path
 
-
 # scripts/init_data_root.py is not a package import; load it by path.
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 _INIT_DATA_ROOT_PATH = _REPO_ROOT / "scripts" / "init_data_root.py"
@@ -73,19 +72,23 @@ def test_missing_sidecars_reported_individually(tmp_path, caplog):
     assert not any(m.endswith(".shp") for m in missing_msgs)
 
 
-def test_missing_shp_does_not_duplicate_as_sidecars(tmp_path, caplog):
-    """When the .shp itself is missing, report it (don't also pretend sidecars are missing)."""
+def test_missing_shp_reports_shp_and_all_sidecars(tmp_path, caplog):
+    """When the .shp itself is absent, all 4 paths (.shp + .shx/.dbf/.prj) are reported.
+
+    The user needs the full list of files to stage; reporting only the .shp
+    would leave them guessing about the sidecars they still need to provide.
+    """
     _stage_all_non_shp(tmp_path, "gfv2")
     # Do NOT stage the shapefile at all
     caplog.set_level(logging.WARNING)
     logger = logging.getLogger("test_validate_inputs_missing_shp")
     init_data_root.validate_inputs(tmp_path, "gfv2", logger)
     missing_msgs = [r.message for r in caplog.records if "MISSING" in r.message]
-    # The .shp is reported as missing
+    # All 4 of the shapefile-related paths must appear
     assert any("Lithology_exp_Konly_Project.shp" in m for m in missing_msgs)
-    # Sidecars are also reported (they're missing too, since the .shp is missing)
-    # — this is correct + helpful: the user sees the full list of files to stage.
     assert any(".shx" in m for m in missing_msgs)
+    assert any(".dbf" in m for m in missing_msgs)
+    assert any(".prj" in m for m in missing_msgs)
 
 
 def test_non_shp_path_missing_still_reported(tmp_path, caplog):

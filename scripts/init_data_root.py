@@ -203,9 +203,17 @@ def _shapefile_companions(shp_path: Path) -> list[Path]:
     table); `.prj` (projection) is required for any CRS-aware read. All three
     must be staged alongside the `.shp` or pyogrio/fiona reads fail with a
     confusing error.
+
+    The sidecar extensions mirror the case of the input `.shp` extension so
+    the existence check works on case-sensitive filesystems regardless of
+    whether the shapefile was staged lowercase (`.shp`) or uppercase (`.SHP`).
     """
     stem = shp_path.with_suffix("")
-    return [stem.with_suffix(ext) for ext in (".shx", ".dbf", ".prj")]
+    # Mirror the case of the input extension. `.suffix` returns the original
+    # case (e.g. ".SHP" stays ".SHP"); the sidecars match that case.
+    upper = shp_path.suffix.isupper()
+    exts = (".SHX", ".DBF", ".PRJ") if upper else (".shx", ".dbf", ".prj")
+    return [stem.with_suffix(ext) for ext in exts]
 
 
 def validate_inputs(data_root: Path, fabric: str, logger) -> None:
