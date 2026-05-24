@@ -76,7 +76,6 @@ Outputs (per VPU, written to {data_root}/shared/per_vpu/<vpu>/):
 from __future__ import annotations
 
 import os
-import subprocess
 from pathlib import Path
 
 import numpy as np
@@ -85,6 +84,7 @@ import richdem as rd
 import rioxarray  # noqa: F401  (registers .rio accessor)
 
 from gfv2_params.depstor import read_land_mask
+from gfv2_params.wbt import find_whitebox_tools_binary, run_streamed
 
 from .context import SharedRastersContext
 
@@ -109,45 +109,10 @@ DEM_NODATA = -9999.0
 SLOPE_CAP_DEG = 60.0
 
 
-def _find_whitebox_tools_binary() -> str:
-    """Locate the WhiteboxTools executable inside the bundled `whitebox` package.
-
-    Mirrors the helper in gfv2_params.depstor_builders.routing. Instantiates
-    WhiteboxTools() first to trigger the auto-download of the rust binary on a
-    fresh env (idempotent on subsequent calls).
-    """
-    import whitebox  # local import — keep optional unless this step runs
-    from whitebox import WhiteboxTools
-
-    WhiteboxTools()  # auto-downloads the binary on first use
-
-    pkg_dir = os.path.dirname(whitebox.__file__)
-    candidates = [
-        os.path.join(pkg_dir, "whitebox_tools.exe"),
-        os.path.join(pkg_dir, "whitebox_tools"),
-        os.path.join(pkg_dir, "bin", "whitebox_tools.exe"),
-        os.path.join(pkg_dir, "bin", "whitebox_tools"),
-    ]
-    runner = next((c for c in candidates if os.path.isfile(c)), None)
-    if runner is None:
-        raise FileNotFoundError(
-            "WhiteboxTools binary not found inside `whitebox` package. "
-            "Reinstall the `whitebox` pip package."
-        )
-    return runner
-
-
 def _run_wbt(runner: str, tool: str, args: list[str], logger) -> None:
     cmd = [runner, f"--wd={os.getcwd()}", "--max_procs=-1", f"-r={tool}", *args, "-v"]
     logger.info("  Running: %s", " ".join(cmd))
-    proc = subprocess.run(cmd, text=True, capture_output=True)
-    if proc.stdout:
-        logger.debug("WBT stdout:\n%s", proc.stdout)
-    if proc.returncode != 0:
-        logger.error("WBT stderr:\n%s", proc.stderr)
-        raise RuntimeError(
-            f"WhiteboxTools {tool} failed (exit code {proc.returncode}). See stderr above."
-        )
+    run_streamed(cmd, tool=tool, logger=logger)
 
 
 def _fix_dem_nodata(dem_src: Path, dem_fixed: Path, logger) -> None:
@@ -428,7 +393,7 @@ def build(step_cfg: dict, ctx: SharedRastersContext, logger) -> dict:
         logger.warning("compute_dem_derivatives: ctx.vpus is empty, nothing to do")
         return {}
 
-    runner = _find_whitebox_tools_binary()
+    runner = find_whitebox_tools_binary()
     logger.info("WhiteboxTools binary: %s", runner)
 
     for vpu in ctx.vpus:
