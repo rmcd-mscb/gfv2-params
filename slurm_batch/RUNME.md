@@ -803,6 +803,5 @@ by hand, one parameter at a time (see Stage 4A); the wrappers just loop them.
 | `download_rpu_rasters.batch` | `base_config.yml` | `gfv2_params.download.rpu_rasters` |
 | `download_nalcms.batch` | `base_config.yml` | `gfv2_params.download.nalcms_lulc` |
 | `download_nhm_v11.batch` | `base_config.yml` | `gfv2_params.download.nhm_v11_lulc` |
-| `diagnose_slope_aspect.batch` | per-config | diagnostic tool |
 | `merge_default_output_params.batch` (Stage 8) | `base_config.yml` | `merge_default_params.py` |
 | `submit_jobs.sh` | (caller-provided) | generic per-VPU array dispatcher |
