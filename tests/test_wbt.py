@@ -71,3 +71,41 @@ def test_run_streamed_success_returns_none(caplog):
     cmd = _python_cmd("pass")
     result = run_streamed(cmd, tool="FakeTool", logger=logger)
     assert result is None
+
+
+def test_run_streamed_raises_when_nonzero_exit_with_no_output(caplog):
+    """Worst-UX path: subprocess exits non-zero having printed nothing.
+
+    Must still raise cleanly (no hang on the empty pipe, no spurious WBT log
+    records, no tail-ERROR record since the tail is empty).
+    """
+    caplog.set_level(logging.INFO)
+    logger = logging.getLogger("test_wbt_streaming_silent_fail")
+    cmd = _python_cmd("import sys; sys.exit(2)")
+    with pytest.raises(RuntimeError) as excinfo:
+        run_streamed(cmd, tool="FakeTool", logger=logger)
+    assert "FakeTool" in str(excinfo.value)
+    assert "exit code 2" in str(excinfo.value)
+    wbt_messages = [r.getMessage() for r in caplog.records if "WBT:" in r.getMessage()]
+    assert wbt_messages == [], wbt_messages
+    tail_errors = [r for r in caplog.records if r.levelno == logging.ERROR]
+    assert tail_errors == [], [r.getMessage() for r in tail_errors]
+
+
+def test_run_streamed_logs_tail_at_error_on_nonzero_exit(caplog):
+    """When output exists, the last lines are re-emitted at ERROR before the raise.
+
+    Pins #5 from the multi-agent review: a log handler configured above INFO
+    would otherwise see the RuntimeError with zero context.
+    """
+    caplog.set_level(logging.INFO)
+    logger = logging.getLogger("test_wbt_streaming_tail_error")
+    cmd = _python_cmd("print('progress-1'); print('progress-2'); import sys; sys.exit(3)")
+    with pytest.raises(RuntimeError):
+        run_streamed(cmd, tool="FakeTool", logger=logger)
+    tail_errors = [r for r in caplog.records if r.levelno == logging.ERROR]
+    assert len(tail_errors) == 1, [r.getMessage() for r in tail_errors]
+    err_msg = tail_errors[0].getMessage()
+    assert "progress-1" in err_msg
+    assert "progress-2" in err_msg
+    assert "FakeTool" in err_msg
