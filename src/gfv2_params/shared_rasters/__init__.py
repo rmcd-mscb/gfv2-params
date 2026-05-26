@@ -48,6 +48,31 @@ BUILDERS: dict = {
     "build_lulc_rasters":      build_lulc_rasters.build,
 }
 
+# What each step produces (consumable downstream via `ctx.require(<key>)` for
+# CONUS-scale outputs, or by re-templating off conventional per-VPU patterns).
+# Each builder's `build()` returns a dict that the orchestrator merges into
+# ctx.paths after the step runs (see scripts/build_shared_rasters.py).
+# Per-VPU steps return {} on purpose — their outputs are discovered by
+# globbing ctx.per_vpu_dir, not by key lookup.
+#
+#   step                     -> registered key(s)              on-disk artifact
+#   merge_rpu_by_vpu         -> (none; per-VPU)                shared/per_vpu/{vpu}/NEDSnapshot_merged_*.tif, Fdr_merged_*.tif, Twi_merged_*.tif
+#   compute_slope_aspect     -> (none; per-VPU)                shared/per_vpu/{vpu}/NEDSnapshot_merged_{fixed,slope,aspect}_*.tif
+#   build_border_dem         -> "border_elevation",            shared/conus/borders/border_elevation.tif
+#                               "border_slope",                shared/conus/borders/border_slope.tif
+#                               "border_aspect"                shared/conus/borders/border_aspect.tif
+#   build_vpu_landmask       -> (none; per-VPU)                shared/per_vpu/{vpu}/land_mask_{vpu}.tif
+#   compute_dem_derivatives  -> (none; per-VPU, optional)      shared/per_vpu/{vpu}/Twi_hydrodem_*.tif (open-source TWI)
+#   merge_rpu_by_vpu_twi     -> (none; per-VPU)                shared/per_vpu/{vpu}/Twi_*_{vpu}.tif (post-landmask invocation)
+#   build_vrt                -> "elevation_vrt", "slope_vrt",  shared/conus/vrt/{elevation,slope,aspect,fdr,twi,twi_hydrodem}.vrt
+#                               "aspect_vrt", "fdr_vrt",
+#                               "twi_vrt", "twi_hydrodem_vrt"
+#   twi_reference            -> "twi_reference_arcpy",         shared/conus/twi_reference_percentiles.arcpy.csv
+#                               "twi_reference_hydrodem"       shared/conus/twi_reference_percentiles.hydrodem.csv
+#   build_derived_rasters    -> "soil_moist_max"               shared/conus/derived/soil_moist_max.tif
+#   build_lulc_rasters       -> "cnpy_resampled_<source>",     shared/conus/derived/cnpy_resampled_<source>.tif,
+#                               "keep_resampled_<source>",     keep_resampled_<source>.tif,
+#                               "radtrn_<source>"              radtrn_<source>.tif (one set per LULC source)
 STEP_ORDER: list[str] = [
     "merge_rpu_by_vpu",
     "compute_slope_aspect",
