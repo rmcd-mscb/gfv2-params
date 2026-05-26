@@ -26,14 +26,14 @@ watch:
 theme:
   name: material
   features:
-    - navigation.instant # SPA-style transitions
-    - navigation.tracking # URL reflects active section
-    - navigation.sections # top-level groups expand by default
-    - navigation.indexes # section landing pages
-    - navigation.top # back-to-top button
-    - toc.follow # scroll-spy in the right rail
-    - content.code.copy # copy button on code blocks
-    - content.action.edit # "Edit this page" link
+    - navigation.instant
+    - navigation.tracking
+    - navigation.sections
+    - navigation.indexes
+    - navigation.top
+    - toc.follow
+    - content.code.copy
+    - content.action.edit
     - search.suggest
     - search.highlight
   palette:

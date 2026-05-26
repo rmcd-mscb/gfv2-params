@@ -4,6 +4,8 @@ PRMS/NHM parameter generation from watershed fabric polygons.
 
 Given a watershed fabric of polygons (HRUs), this pipeline computes parameters for the PRMS/National Hydrologic Model by performing zonal statistics against source rasters (DEM, soils, lithology, etc.).
 
+For a navigable local docs site (Setup + HPC workflow + Architecture + Adding a parameter + Python patterns + auto-API ref), run `pixi run -e docs docs-serve` and open <http://localhost:8000>.
+
 ## Setup
 
 Environment is managed by [pixi](https://pixi.sh). From the repo root:
