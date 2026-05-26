@@ -102,3 +102,6 @@ Repo-specific rules — uphold these when writing or reviewing code here:
   test gate (not the head node) — open the PR and let it run `pytest`.
 - **Add deps via `pyproject.toml`** (see its comment block for the conda-forge
   vs. pypi split), then `pixi install` — not the deprecated `environment.yml`.
+- **Unfamiliar Python idiom?** See [`docs/python-patterns.md`](docs/python-patterns.md)
+  for the 10 patterns this codebase uses repeatedly (future-annotations,
+  placeholder strings, `require_config_key`, the `BUILDERS` dispatch table, etc.).
