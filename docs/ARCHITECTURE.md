@@ -193,6 +193,11 @@ Do NOT add a new standalone script or a new YAML file. The
 orchestrator + builder + unified-config pattern is the only way new steps
 land.
 
+For a concrete trace of an existing parameter end-to-end, see
+[docs/ADDING_A_PARAMETER.md](ADDING_A_PARAMETER.md) — walks `--param elevation`
+through all 5 hops with file:line pointers and the shape of the `config`
+dict at each step.
+
 ## Related docs
 
 - [`README.md`](../README.md) — user-facing setup + usage
