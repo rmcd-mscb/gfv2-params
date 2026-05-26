@@ -88,7 +88,7 @@ def require_config_key(config: dict, key: str, script_name: str) -> object:
 ```
 
 See: `src/gfv2_params/config.py:86-100`. Call-site example:
-`scripts/derive_zonal_params.py:113`.
+`scripts/derive_zonal_params.py:101`.
 
 ---
 
