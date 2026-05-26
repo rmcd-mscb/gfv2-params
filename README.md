@@ -6,22 +6,31 @@ Given a watershed fabric of polygons (HRUs), this pipeline computes parameters f
 
 ## Setup
 
-This project uses [pixi](https://pixi.sh) for environment management. Install pixi
-once per user (see https://pixi.sh/latest/installation/) and ensure `~/.pixi/bin`
-is on your `PATH`. From the repo root:
+Environment is managed by [pixi](https://pixi.sh). From the repo root:
 
 ```bash
-pixi install
+pixi install                                          # materialise the env from pixi.lock
+pixi shell -e dev                                     # interactive shell (default + pytest, ruff, pre-commit)
+pixi run -e dev pytest tests/test_wbt.py -v           # example: run a small test
 ```
+
+Install pixi once per user (see https://pixi.sh/latest/installation/) and ensure
+`~/.pixi/bin` is on your `PATH`. For the full HPC workflow (downloads → shared
+rasters → fabric → zonal + depstor params), see
+[`slurm_batch/RUNME.md`](slurm_batch/RUNME.md).
+
+<details>
+<summary>Why <code>pixi run --as-is</code> and other SLURM gotchas</summary>
 
 `pixi install` materialises `.pixi/envs/default/` from `pixi.lock` (config lives
 in `pyproject.toml` under `[tool.pixi.*]`). SLURM batches invoke the env with
 `pixi run --as-is` (= `--no-install --frozen`): the already-installed env is used
 verbatim with no lock check or env mutation, so concurrent array tasks don't race
 on `.pixi/envs/.../conda-meta`. Re-run `pixi install` after `pyproject.toml` or
-`pixi.lock` change.
+`pixi.lock` change. Always `sbatch` from a shell where `~/.pixi/bin` is on
+`PATH` — SLURM inherits the submitting shell's environment.
 
-For interactive use:
+Other interactive shells are available for non-default workflows:
 
 ```bash
 pixi shell                       # default env
@@ -31,6 +40,8 @@ pixi shell -e dev                # default + pytest, ruff, pre-commit
 
 The legacy `environment.yml` / `geoenv` conda environment is retained as a
 deprecated fallback only — new work should use pixi.
+
+</details>
 
 ## Project Structure
 
