@@ -34,14 +34,18 @@ import time
 # Pre-import heartbeats so a future hang in the geo-library import chain
 # (rasterio/GDAL/PROJ/pyogrio init under shared-FS metadata contention,
 # observed once on VPU01 issue-#61 array run with zero stdout from one task)
-# can be localised. Printed unconditionally with flush=True so SLURM's
-# stdout/stderr line buffering doesn't swallow them.
-print(
-    f"[startup pid={os.getpid()} host={os.uname().nodename} "
-    f"task={os.environ.get('SLURM_ARRAY_TASK_ID', '-')}] "
-    f"python {sys.version.split()[0]} interpreter up, importing geo libs...",
-    flush=True,
-)
+# can be localised. Printed with flush=True so SLURM's stdout/stderr line
+# buffering doesn't swallow them. Gated on SLURM_ARRAY_TASK_ID so notebook /
+# interactive imports stay silent (a geoscientist importing run_zonal_batch
+# from Jupyter shouldn't see startup chatter and mistake it for an error).
+_in_slurm_array = os.environ.get("SLURM_ARRAY_TASK_ID") is not None
+if _in_slurm_array:
+    print(
+        f"[startup pid={os.getpid()} host={os.uname().nodename} "
+        f"task={os.environ['SLURM_ARRAY_TASK_ID']}] "
+        f"python {sys.version.split()[0]} interpreter up, importing geo libs...",
+        flush=True,
+    )
 _t_imports = time.time()
 
 import geopandas as gpd  # noqa: F401  (re-imported by submodules; cached)
@@ -51,7 +55,8 @@ import rioxarray  # noqa: F401
 from gdptools import UserTiffData, WeightGenP2P, ZonalGen  # noqa: F401
 from osgeo import gdal, osr
 
-print(f"[startup] geo-library imports complete in {time.time() - _t_imports:.1f}s", flush=True)
+if _in_slurm_array:
+    print(f"[startup] geo-library imports complete in {time.time() - _t_imports:.1f}s", flush=True)
 
 # Opt into the GDAL 4.0 default of raising Python exceptions instead of C-style
 # error codes. Silences the FutureWarning that osgeo emits when neither
