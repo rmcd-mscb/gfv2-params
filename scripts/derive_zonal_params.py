@@ -81,6 +81,23 @@ def _build_param_cfg(config: dict, entry: dict) -> dict:
     `source_type` is set from `entry["name"]` so per-batch CSV subdirs +
     file prefixes namespace cleanly when multiple LULC sources run in
     parallel.
+
+    Sources merged into the returned flat dict (later wins on conflict):
+      1. config["defaults"] — common settings from configs/zonal/zonal_params.yml
+         (batch_size, output_dir, batch_dir, ...).
+      2. entry — the per-param block from yaml `params:` (one of the dicts
+         returned by `_find_param`, e.g. the `elevation:` entry).
+      3. {"source_type": entry["name"]} — injected so runners namespace per-batch
+         CSV subdirs + file prefixes by param name.
+      4. config["fabric"] — active fabric name (from base_config.yml profile via
+         `_load_resolved_config`).
+      5. base_config.yml fabric profile fields: `expected_max_hru_id` (optional),
+         `id_feature` and `hru_gpkg` (required via `require_config_key`),
+         `hru_layer` (defaults to "nhru").
+
+    Note: `{data_root}`/`{fabric}`/`{vpu}` placeholder expansion happens
+    upstream in `_load_resolved_config` (via `_resolve_nested`), so values
+    arrive here already-resolved.
     """
     defaults = config.get("defaults", {})
     param_cfg = {**defaults, **entry}
