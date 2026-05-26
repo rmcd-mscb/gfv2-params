@@ -95,7 +95,10 @@ contract:
 - [`src/gfv2_params/zonal_runners/__init__.py`](../src/gfv2_params/zonal_runners/__init__.py) — Part 2b param runners (6 modules)
 
 Each `build(step_cfg, ctx, logger)` function produces named outputs that
-downstream steps can reach via the shared context.
+downstream steps can reach via the shared context. The orchestrator/builder
+pattern, the `BUILDERS` dispatch dict, and the `BuildContext` dataclass are
+explained for non-Python-fluent readers in
+[`docs/python-patterns.md`](python-patterns.md).
 
 ## Fabric profiles — the single source of truth
 
