@@ -43,7 +43,12 @@ def test_heartbeat_silent_without_slurm():
 
 
 def test_heartbeat_fires_under_slurm():
-    """With SLURM_ARRAY_TASK_ID set, the heartbeat prints and includes the task id."""
+    """With SLURM_ARRAY_TASK_ID set, both pre- and post-import heartbeats fire.
+
+    Pins the diagnostic contract: a hang between the two prints localises
+    *where* the geo-library import died. A future regression that silences only
+    one of the two prints would defeat that, so assert on both lines.
+    """
     env = {**os.environ, "SLURM_ARRAY_TASK_ID": "42"}
     result = _run_import(env)
     assert "[startup " in result.stdout, (
@@ -51,4 +56,10 @@ def test_heartbeat_fires_under_slurm():
     )
     assert "task=42" in result.stdout, (
         f"expected task=42 in heartbeat output, got:\n{result.stdout!r}"
+    )
+    assert "interpreter up" in result.stdout, (
+        f"expected pre-import heartbeat ('interpreter up') in stdout, got:\n{result.stdout!r}"
+    )
+    assert "geo-library imports complete" in result.stdout, (
+        f"expected post-import heartbeat ('geo-library imports complete') in stdout, got:\n{result.stdout!r}"
     )
