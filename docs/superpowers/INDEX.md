@@ -3,8 +3,8 @@
 A catalogue of the design artifacts under this directory: specifications,
 implementation plans, and repo reviews produced by the
 [superpowers](https://github.com/anthropic-experimental/claude-plugins) skills
-during collaborative work on this project. As of 2026-05-23 the tree contains
-**8 specs, 10 plans, and 1 review** spanning March → May 2026.
+during collaborative work on this project. As of 2026-05-26 the tree contains
+**8 specs, 10 plans, and 2 reviews** spanning March → May 2026.
 
 If you're a new contributor (human or agent) trying to understand what's been
 designed/built and why, **start here**.
@@ -33,11 +33,13 @@ the code becomes the source of truth. If a stale reference to (e.g.)
 `zonal_runners.py` shows up in an older spec, that's not a bug — it's the
 record of what the repo looked like then.
 
-## Current status (as of 2026-05-23)
+## Current status (as of 2026-05-26)
 
 The [2026-05-23 fresh-eyes review](reviews/2026-05-23-repo-fresh-eyes.md)
-is the most recent project-wide audit. Its 15-item action list has been
-worked through in this order:
+drove a 10-PR T1 + T2 sprint that landed over 2026-05-23 → 2026-05-24. A
+[follow-on 2026-05-26 geoscientist-readability audit](reviews/2026-05-26-geoscientist-readability.md)
+filed 6 issues to close out the last readability gaps for a hydrologist-with-Python
+persona.
 
 | Item | Status | PR |
 |---|---|---|
@@ -45,8 +47,12 @@ worked through in this order:
 | T2-A — split `zonal_runners.py` into a package | ✅ landed | [#106](https://github.com/rmcd-mscb/gfv2-params/pull/106) |
 | T2-E — promote depstor helpers (closes #64) | ✅ landed | [#107](https://github.com/rmcd-mscb/gfv2-params/pull/107) |
 | T2-B — archive scratch notebooks | ✅ landed | [#108](https://github.com/rmcd-mscb/gfv2-params/pull/108) |
-| T2-D — `docs/superpowers/INDEX.md` (this file) | in flight | (this PR) |
-| T2-C — `docs/ARCHITECTURE.md` + slim CLAUDE.md/README | in flight | (this branch) |
+| T2-D — `docs/superpowers/INDEX.md` (this file) | ✅ landed | [#109](https://github.com/rmcd-mscb/gfv2-params/pull/109) |
+| T2-C — `docs/ARCHITECTURE.md` + slim CLAUDE.md/README | ✅ landed | [#110](https://github.com/rmcd-mscb/gfv2-params/pull/110) |
+| #47 — shapefile sidecar validation in `init_data_root` | ✅ landed | [#111](https://github.com/rmcd-mscb/gfv2-params/pull/111) |
+| #48 — stream WhiteboxTools subprocess output | ✅ landed | [#112](https://github.com/rmcd-mscb/gfv2-params/pull/112) |
+| #44 — delete one-shot `diagnose_slope_aspect.batch` | ✅ landed | [#113](https://github.com/rmcd-mscb/gfv2-params/pull/113) |
+| Geoscientist-readability follow-ons (6 items, ~5 h total) | filed as issues | — |
 | Tier 3 (discussion items) | open | — |
 
 ## Topical index (specs + plans)
@@ -72,7 +78,8 @@ without specs (the brainstorming step pre-dates the convention) or vice versa.
 
 | Date | Topic | Doc | Drove |
 |---|---|---|---|
-| 2026-05-23 | **Fresh-eyes repo evaluation** — 5-iteration autonomous review covering clean structure / non-developer usability / long-term maintenance / plug-ability / docs / readability for geoscientists. Produced a 14-row signal table, ranked hotspots A–H + Z, and a 15-item action list across 3 tiers. | [review](reviews/2026-05-23-repo-fresh-eyes.md) | PRs #105–#108 (Tier 1 + T2-A/B/E) |
+| 2026-05-26 | **Geoscientist-readability audit** — targeted follow-on to the 2026-05-23 review, run after the T1 + T2 sprint landed. Lens: USGS hydrologist with 5 years of one-off Python but no SWE background. Produced 6 follow-up issues (3 HIGH, 2 MEDIUM, 1 synthesis-doc) covering the parameter-trace walkthrough, README slim, `config`-dict origin comment, startup-heartbeat gate, `ctx.paths` key inventory, and a new `docs/python-patterns.md` for the 5–10 non-obvious Python idioms. | [review](reviews/2026-05-26-geoscientist-readability.md) | 6 filed issues |
+| 2026-05-23 | **Fresh-eyes repo evaluation** — 5-iteration autonomous review covering clean structure / non-developer usability / long-term maintenance / plug-ability / docs / readability for geoscientists. Produced a 14-row signal table, ranked hotspots A–H + Z, and a 15-item action list across 3 tiers. | [review](reviews/2026-05-23-repo-fresh-eyes.md) | PRs #105–#108 + #110–#113 (Tier 1 + T2-A/B/C/D/E) |
 
 ## How to add a new spec / plan / review
 
