@@ -191,12 +191,12 @@ This audit produced 6 follow-up issues:
 
 | Lens-priority | Issue | Effort | Type |
 |---|---|---|---|
-| HIGH #1 | Add `docs/ADDING_A_PARAMETER.md` walkthrough tracing one param end-to-end | ~2 h | docs |
-| HIGH #2 | Rewrite `README.md` §Setup to 15 lines of action + collapsible rationale | ~1 h | docs |
-| HIGH #3 | Document the `config` dict's 5 origins in `_build_param_cfg` | 15 min | comment |
-| MEDIUM #6 | Gate `zonal_runners` startup heartbeat on `SLURM_ARRAY_TASK_ID` | 30 min + test | **code change** |
-| MEDIUM #5 | Document the `ctx.paths` key inventory next to `STEP_ORDER` | 30 min | comment |
-| (Synthesis) | Add `docs/python-patterns.md` explaining the 5–10 non-obvious idioms | ~3 h | docs |
+| HIGH #1 | [#115](https://github.com/rmcd-mscb/gfv2-params/issues/115) — Add `docs/ADDING_A_PARAMETER.md` walkthrough tracing one param end-to-end | ~2 h | docs |
+| HIGH #2 | [#116](https://github.com/rmcd-mscb/gfv2-params/issues/116) — Rewrite `README.md` §Setup to 15 lines of action + collapsible rationale | ~1 h | docs |
+| HIGH #3 | [#117](https://github.com/rmcd-mscb/gfv2-params/issues/117) — Document the `config` dict's 5 origins in `_build_param_cfg` | 15 min | comment |
+| MEDIUM #6 | [#118](https://github.com/rmcd-mscb/gfv2-params/issues/118) — Gate `zonal_runners` startup heartbeat on `SLURM_ARRAY_TASK_ID` | 30 min + test | **code change** |
+| MEDIUM #5 | [#119](https://github.com/rmcd-mscb/gfv2-params/issues/119) — Document the `ctx.paths` key inventory next to `STEP_ORDER` | 30 min | comment |
+| (Synthesis) | [#120](https://github.com/rmcd-mscb/gfv2-params/issues/120) — Add `docs/python-patterns.md` explaining the 5–10 non-obvious idioms | ~3 h | docs |
 
 (The "synthesis" item — a single page on `from __future__ import annotations`,
 the placeholder pattern, `require_config_key` vs `dict.get`, the orchestrator +
