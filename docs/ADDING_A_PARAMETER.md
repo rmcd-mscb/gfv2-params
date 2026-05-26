@@ -43,9 +43,9 @@ chained merge per param.
 
 ### Hop 2 — Orchestrator dispatch
 
-[`scripts/derive_zonal_params.py:178-203`](../scripts/derive_zonal_params.py#L178-L203)
+[`scripts/derive_zonal_params.py:162-186`](../scripts/derive_zonal_params.py#L162-L186)
 parses args and dispatches on `--mode`. For `--mode zonal` it calls
-[`run_zonal`](../scripts/derive_zonal_params.py#L123-L136):
+[`run_zonal`](../scripts/derive_zonal_params.py#L106-L119):
 
 ```python
 config = _load_resolved_config(args)
@@ -65,7 +65,7 @@ which selects `run_zonal_batch` from the dispatch table (see Hop 4).
 
 ### Hop 3 — Building `param_cfg`
 
-[`scripts/derive_zonal_params.py:74-120`](../scripts/derive_zonal_params.py#L74-L120)
+[`scripts/derive_zonal_params.py:74-103`](../scripts/derive_zonal_params.py#L74-L103)
 flattens five sources into the single dict the runner consumes
 (later wins on conflict):
 
