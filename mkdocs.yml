@@ -1,0 +1,107 @@
+site_name: gfv2-params
+site_description: PRMS/NHM hydrologic-model parameter generation
+site_url: https://rmcd-mscb.github.io/gfv2-params/ # placeholder; not deployed yet
+repo_url: https://github.com/rmcd-mscb/gfv2-params
+repo_name: rmcd-mscb/gfv2-params
+edit_uri: edit/main/
+
+docs_dir: docs
+site_dir: site
+
+# docs/superpowers/ holds dated specs/plans/reviews with intentionally-stale
+# cross-repo links to source files outside docs_dir; not part of the public
+# site. The catalog at docs/superpowers/INDEX.md stays accessible on GitHub
+# for Claude tooling.
+exclude_docs: |
+  superpowers/
+
+# Sources outside docs_dir that we pull in via include-markdown.
+# README.md, slurm_batch/RUNME.md, CLAUDE.md stay at their canonical paths.
+watch:
+  - README.md
+  - CLAUDE.md
+  - slurm_batch/RUNME.md
+  - src/gfv2_params
+
+theme:
+  name: material
+  features:
+    - navigation.instant # SPA-style transitions
+    - navigation.tracking # URL reflects active section
+    - navigation.sections # top-level groups expand by default
+    - navigation.indexes # section landing pages
+    - navigation.top # back-to-top button
+    - toc.follow # scroll-spy in the right rail
+    - content.code.copy # copy button on code blocks
+    - content.action.edit # "Edit this page" link
+    - search.suggest
+    - search.highlight
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: blue grey
+      accent: cyan
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: blue grey
+      accent: cyan
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+
+plugins:
+  - search
+  - include-markdown
+  - mkdocstrings:
+      handlers:
+        python:
+          paths: [src]
+          options:
+            docstring_style: google
+            show_source: true
+            show_root_heading: true
+            show_root_full_path: false
+            show_signature_annotations: true
+            separate_signature: true
+            merge_init_into_class: true
+            show_symbol_type_heading: true
+            show_symbol_type_toc: true
+            heading_level: 2
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - def_list
+  - footnotes
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.details
+  - pymdownx.highlight:
+      anchor_linenums: true
+      line_spans: __span
+      pygments_lang_class: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+
+nav:
+  - Home: index.md
+  - Getting started: getting-started.md
+  - HPC workflow: hpc-workflow.md
+  - Architecture:
+      - Canonical: ARCHITECTURE.md
+      - Adding a parameter: ADDING_A_PARAMETER.md
+      - Python patterns: python-patterns.md
+  - Pipeline reference:
+      - Depstor workflow: depstor_workflow.md
+      - Depstor port summary: depstor_port_summary.md
+      - VPU 01 validation: depstor_vpu01_validation_results.md
+  - API reference: api.md
+  - Project conventions: conventions.md

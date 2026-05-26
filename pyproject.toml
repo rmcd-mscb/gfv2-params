@@ -134,11 +134,32 @@ pytest = "*"
 pre-commit = "*"
 ruff = "*"
 
+[tool.pixi.feature.docs.dependencies]
+mkdocs = "*"
+mkdocs-material = "*"
+mkdocstrings = "*"
+mkdocstrings-python = "*"
+
+[tool.pixi.feature.docs.pypi-dependencies]
+# include-markdown plugin pulls README.md / RUNME.md / CLAUDE.md into the
+# site without duplicating sources; not on conda-forge as of 2026-05.
+mkdocs-include-markdown-plugin = "*"
+
+[tool.pixi.feature.docs.tasks]
+# Local dev tasks. Source markdown links to source files (../scripts/foo.py)
+# that GitHub renders fine but mkdocs flags as "not found in docs_dir" — those
+# warnings are expected and don't break the site. Use docs-build-strict before
+# wiring up CI for docs.
+"docs-serve" = "mkdocs serve"
+"docs-build" = "mkdocs build"
+"docs-build-strict" = "mkdocs build --strict"
+
 [tool.pixi.environments]
 default = { features = [], solve-group = "default" }
 notebooks = { features = ["notebooks"], solve-group = "default" }
 dev = { features = ["dev"], solve-group = "default" }
-all = { features = ["notebooks", "dev"], solve-group = "default" }
+docs = { features = ["docs"], solve-group = "default" }
+all = { features = ["notebooks", "dev", "docs"], solve-group = "default" }
 
 [tool.isort]
 profile = "black"

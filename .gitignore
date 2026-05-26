@@ -71,6 +71,9 @@ instance/
 # Sphinx documentation
 docs/_build/
 
+# MkDocs build output (pixi run docs-build → ./site/)
+site/
+
 # PyBuilder
 .pybuilder/
 target/
