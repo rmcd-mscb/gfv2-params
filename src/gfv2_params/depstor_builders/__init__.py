@@ -31,6 +31,27 @@ BUILDERS = {
     "carea_map":     carea_map.build,
 }
 
+# Outputs registered into ctx.paths by each builder (consumable downstream via
+# `ctx.require(<key>)`). Each builder's `build()` returns a dict that the
+# orchestrator merges into ctx.paths after the step runs (see
+# scripts/build_depstor_rasters.py). Keys are stable string handles — change
+# them only with a coordinated update of every downstream consumer.
+#
+#   step              -> registered key(s)        on-disk artifact (default name)
+#   landmask          -> "landmask"               land_mask.tif (uint8, 1=land)
+#   imperv            -> "imperv"                 imperv_binary.tif
+#   streambuffer      -> "stream_buffer"          stream_buffer.tif
+#   waterbody         -> "wbody_binary",          wbody_binary.tif,
+#                        "wbody_regions"          wbody_regions.tif
+#   dprst             -> "dprst",                 dprst_binary.tif,
+#                        "onstream"               onstream_binary.tif
+#   perv              -> "perv"                   perv_binary.tif
+#   routing           -> "drains_to_dprst"        drains_to_dprst.tif (WBT watershed)
+#   drains_perv       -> "drains_perv"            drains_perv_binary.tif (output_key from config)
+#   drains_imperv     -> "drains_imperv"          drains_imperv_binary.tif (output_key from config)
+#   vpu_id            -> "vpu_id"                 vpu_id.tif (per-cell VPU code, multi-VPU only)
+#   carea_map         -> "carea_max",             carea_max_*.tif,
+#                        "smidx"                  smidx_*.tif
 STEP_ORDER = [
     "landmask",
     "imperv",
