@@ -34,6 +34,10 @@ from a shell where `~/.pixi/bin` is on `PATH`.
 
 Lint/format runs via pre-commit: `pixi run -e dev pre-commit run --all-files`.
 
+Local docs preview: `pixi run -e docs docs-serve` (live-reload on
+`localhost:8000`); `pixi run -e docs docs-build` renders the static site
+to `./site/`. Configuration: [`mkdocs.yml`](mkdocs.yml).
+
 ### Testing on the HPC head node
 
 **Do not run `pytest` on the HPC login/head node.** Concurrent geo-library
