@@ -62,6 +62,24 @@ def _resolve_nested(value, replacements: dict):
 
 
 def _load_resolved_config(args) -> dict:
+    """Load + resolve the depstor config dict that every `run_*` mode reads.
+
+    Sources merged into the returned dict (later wins on conflict):
+      1. yaml at `args.config` — the depstor_params.yml top-level keys
+         (`defaults`, `fractions`, `ratios`, ...).
+      2. base_config.yml fabric profile — merged in by `load_config(...)`;
+         contributes `data_root`, `fabric`, `id_feature`, `hru_gpkg`,
+         `expected_max_hru_id`, etc. at the top level of `raw`.
+      3. `_resolve_nested` — expands `{data_root}`/`{fabric}`/`{vpu}` placeholders
+         in every string value (nested too) up front, so downstream code never
+         sees a `{...}` token.
+      4. `config["defaults"]["id_feature"]` — injected from the fabric profile,
+         because `defaults` is the dict every depstor `run_*` function actually
+         reads keys off (mirrors the zonal-side `_build_param_cfg` injection).
+
+    Unlike the zonal side, depstor does not flatten `defaults` + the per-fraction
+    `spec` into a single dict — each `run_*` function reads them separately.
+    """
     raw = load_config(
         Path(args.config),
         base_config_path=Path(args.base_config) if args.base_config else None,
