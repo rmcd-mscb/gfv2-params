@@ -45,6 +45,9 @@ steps:
   - name: perv
     output: perv_binary.tif
 
+  - name: vpu_id
+    output: vpu_id.tif
+
   - name: routing
     keep_intermediates: false
     output: drains_to_dprst.tif
@@ -58,9 +61,6 @@ steps:
     inputs: [drains_to_dprst, imperv]
     output_key: drains_imperv
     output: drains_imperv_binary.tif
-
-  - name: vpu_id
-    output: vpu_id.tif
 
   - name: carea_map
     # threshold_mode: absolute (legacy 8.0/15.6, ArcPy TWI) | percentile (#55).

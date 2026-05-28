@@ -59,10 +59,10 @@ STEP_ORDER = [
     "waterbody",
     "dprst",
     "perv",
+    "vpu_id",
     "routing",
     "drains_perv",
     "drains_imperv",
-    "vpu_id",
     "carea_map",
 ]
 
