@@ -168,6 +168,13 @@ These are hard-won; violating them silently corrupts outputs.
   nodata or FDR as a land mask.
 - **WhiteboxTools cannot read LZW + `predictor=2` GeoTIFFs** — it silently
   corrupts them. Never pass `predictor=2` rasters to WBT subprocesses.
+- **CONUS-scale memory: stream/window, never hold a full-grid array.** The
+  CONUS template is ~16.9 B cells (~17 GB uint8, ~68 GB int32, ~135 GB
+  float64); whole-grid ops OOM the 503 GB node ceiling. `routing` tiles WBT
+  Watershed per VPU (it runs after `vpu_id`, routes each VPU in isolation, and
+  mosaics); reproject with streaming `gdal.Warp`, not in-memory
+  `rioxarray.reproject_match`; window per `STRIP_ROWS` like `carea_map`. See
+  CLAUDE.md for the full gotcha.
 - **`carea_max`/`smidx_coef` threshold mode.** The legacy `absolute`
   thresholds (8.0/15.6) are only calibrated against VPU 01's ArcPy TWI
   distribution. For any other fabric, use `threshold_mode: percentile` (the
