@@ -345,3 +345,65 @@ def read_aligned_uint8(path: Path, info: RasterInfo) -> np.ndarray:
         if src.transform != info.transform:
             raise ValueError(f"Raster {path} transform mismatch with template")
         return src.read(1)
+
+
+def vpu_codes_present(vpu_id: np.ndarray, nodata: int = 0) -> list[int]:
+    """Sorted VPU codes present in a vpu_id raster, excluding `nodata`."""
+    return [int(c) for c in np.unique(vpu_id) if int(c) != nodata]
+
+
+def vpu_bbox(vpu_id: np.ndarray, code: int) -> tuple[int, int, int, int] | None:
+    """(row_start, row_stop, col_start, col_stop) bounding cells == `code`.
+
+    Stops are exclusive so the tuple is directly slice-ready. Returns None when
+    the code is absent.
+    """
+    rows = np.any(vpu_id == code, axis=1)
+    cols = np.any(vpu_id == code, axis=0)
+    if not rows.any():
+        return None
+    r = np.where(rows)[0]
+    c = np.where(cols)[0]
+    return int(r[0]), int(r[-1]) + 1, int(c[0]), int(c[-1]) + 1
+
+
+def mask_fdr_to_vpu(fdr_win: np.ndarray, vpu_win: np.ndarray, code: int,
+                    nodata: int = 255) -> np.ndarray:
+    """FDR restricted to one VPU: cells where vpu != code become `nodata`.
+
+    WBT Watershed treats nodata d8 cells as background, so masking confines the
+    routing to this VPU (no cross-boundary flow).
+    """
+    out = fdr_win.copy()
+    out[vpu_win != code] = nodata
+    return out
+
+
+def vpu_pour_points(dprst_win: np.ndarray, vpu_win: np.ndarray,
+                    code: int) -> np.ndarray:
+    """0/1 pour-points: 1 where this VPU has a depression cell, else 0.
+
+    WBT Watershed treats every non-zero cell as a pour-point and ignores the
+    nodata tag, so background must be 0 (matches the legacy pour-point encoding).
+    """
+    return ((dprst_win == 1) & (vpu_win == code)).astype(np.uint8)
+
+
+def assign_vpu_drains(drains: np.ndarray, vpu_id: np.ndarray, code: int,
+                      bbox: tuple[int, int, int, int],
+                      watershed_win: np.ndarray, ws_nodata) -> None:
+    """Mark drains==1 for this VPU's cells that the watershed labelled (in place).
+
+    Only cells where vpu_id == code are touched, so per-VPU windows may overlap
+    without cross-contamination. `drains[r0:r1, c0:c1]` is a basic-slice view, so
+    the masked assignment writes through to `drains`.
+    """
+    r0, r1, c0, c1 = bbox
+    if ws_nodata is None:
+        labelled = watershed_win > 0
+    elif isinstance(ws_nodata, float) and np.isnan(ws_nodata):
+        labelled = ~np.isnan(watershed_win)
+    else:
+        labelled = watershed_win != ws_nodata
+    sel = (vpu_id[r0:r1, c0:c1] == code) & labelled
+    drains[r0:r1, c0:c1][sel] = 1
