@@ -6,34 +6,55 @@ import os
 
 import numpy as np
 import rasterio
-import rioxarray  # noqa: F401  (registers .rio accessor)
-import xarray as xr
+from osgeo import gdal
 
 from ..depstor import RasterInfo, read_land_mask, write_uint8_binary
 from ..wbt import find_whitebox_tools_binary, run_streamed
 from .context import BuildContext
 
 
-def _reproject_fdr_with_rioxarray(fdr_path, dprst_path, out_path, logger) -> None:
-    logger.info("  Reprojecting FDR to match dprst grid (rioxarray.reproject_match)...")
-    fdr_da = xr.open_dataarray(fdr_path, engine="rasterio").squeeze("band", drop=True)
-    dprst_da = xr.open_dataarray(dprst_path, engine="rasterio").squeeze("band", drop=True)
-    fdr_aligned = fdr_da.rio.reproject_match(dprst_da)
-    fdr_aligned = fdr_aligned.rio.write_nodata(np.uint8(255))
-    # xarray >= 2023 refuses to encode if _FillValue is in both attrs and
-    # encoding. reproject_match preserves it in attrs from the source raster.
-    fdr_aligned.attrs.pop("_FillValue", None)
-    fdr_aligned.rio.to_raster(
-        out_path,
-        driver="GTiff",
-        compress="LZW",
-        tiled=True,
-        blockxsize=256,
-        blockysize=256,
-        dtype="uint8",
-        nodata=np.uint8(255),
-        BIGTIFF="YES",
+def _align_fdr_to_dprst_grid(fdr_path, dprst_path, out_path, logger) -> None:
+    """Materialise the FDR onto the dprst grid as a WBT-readable GeoTIFF.
+
+    Streams via gdal.Warp (block-by-block, bounded RAM) rather than an in-memory
+    rioxarray.reproject_match: the latter materialised the full 16.9-billion-cell
+    CONUS array plus float intermediates and OOM-killed the step at ~400 GB on a
+    uint8 source that is only ~17 GB. The FDR clip already shares the dprst grid,
+    so this is a near-identity nearest-neighbour resample that just realises the
+    VRT into a concrete raster WBT can read.
+    """
+    logger.info("  Aligning FDR to dprst grid (gdal.Warp, streaming)...")
+    gdal.UseExceptions()
+    with rasterio.open(dprst_path) as d:
+        b = d.bounds
+        width, height, dst_srs = d.width, d.height, d.crs.to_wkt()
+    with rasterio.open(fdr_path) as f:
+        src_nodata = f.nodata
+    if out_path.exists():
+        out_path.unlink()  # clear any stale/0-byte file from a prior crash
+    ds = gdal.Warp(
+        str(out_path),
+        str(fdr_path),
+        options=gdal.WarpOptions(
+            format="GTiff",
+            outputBounds=[b.left, b.bottom, b.right, b.top],
+            width=width,
+            height=height,
+            dstSRS=dst_srs,
+            resampleAlg="near",  # D8 codes are categorical — never interpolate
+            outputType=gdal.GDT_Byte,
+            srcNodata=src_nodata,
+            dstNodata=255,
+            multithread=True,
+            warpMemoryLimit=2_000_000_000,  # 2 GB warp buffer caps peak RAM
+            # NOTE: no PREDICTOR — WBT silently corrupts LZW+predictor=2 inputs
+            # (see CLAUDE.md / whitebox_predictor2 gotcha).
+            creationOptions=["COMPRESS=LZW", "TILED=YES", "BLOCKXSIZE=256", "BLOCKYSIZE=256", "BIGTIFF=YES"],
+        ),
     )
+    if ds is None:
+        raise RuntimeError(f"gdal.Warp produced no dataset for {out_path} — FDR alignment failed.")
+    ds = None  # flush/close
 
 
 def _prepare_pour_points(dprst_path, out_path, logger) -> None:
@@ -125,7 +146,7 @@ def build(step_cfg: dict, ctx: BuildContext, logger) -> dict:
     watershed_raw = output_path.parent / "hru_to_dprst_labels.tif"
 
     try:
-        _reproject_fdr_with_rioxarray(ctx.fdr_raster, dprst_path, fdr_aligned, logger)
+        _align_fdr_to_dprst_grid(ctx.fdr_raster, dprst_path, fdr_aligned, logger)
         _prepare_pour_points(dprst_path, pour_pts, logger)
         _run_whitebox_watershed(fdr_aligned, pour_pts, watershed_raw, logger)
         _watershed_to_binary(watershed_raw, landmask_path, info, output_path, logger)
