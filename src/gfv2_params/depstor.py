@@ -223,7 +223,11 @@ def clump_regions(binary_arr: np.ndarray) -> np.ndarray:
     foreground = (binary_arr == 1)
     structure = np.ones((3, 3), dtype=bool)  # 8-connectivity
     labels, _ = ndimage.label(foreground, structure=structure)
-    return labels.astype(np.int32)
+    del foreground  # free the CONUS-sized bool mask before returning
+    # ndimage.label already returns int32; copy=False avoids duplicating the
+    # label array, which is ~4 bytes/cell (a full CONUS grid copy is ~68 GB and
+    # was the difference between fitting and OOM-killing the waterbody step).
+    return labels.astype(np.int32, copy=False)
 
 
 def regions_touching_mask(regions: np.ndarray, mask: np.ndarray) -> set[int]:
