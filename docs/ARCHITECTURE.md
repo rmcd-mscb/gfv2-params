@@ -132,7 +132,7 @@ whether the depstor pipeline will be run for the fabric:
 | `template_raster` | — | ✓ | Fabric-bounds clip of `fdr.vrt`; produced by `clip_shared_to_fabric.py` |
 | `fdr_raster` | — | ✓ | Same fabric-bounds clip (typically points at the same file as `template_raster`) |
 | `twi_raster` | — | ✓ | CONUS `twi.vrt` (ArcPy, calibrated) or `twi_hydrodem.vrt` (open-source, CONUS-complete) |
-| `segments_gpkg` | — | ✓ | Stream segments for the depstor routing step; for a single-file fabric can point at `hru_gpkg` |
+| `segments_gpkg` | — | ✓ | Stream segments for the depstor `streambuffer` step. A pre-merged fabric can point at `hru_gpkg`; a VPU-based fabric (gfv2) merges the per-VPU `nsegment` layers into one CONUS gpkg via `scripts/merge_vpu_segments.py` |
 | `segments_layer` | — | ✓ | Layer name inside `segments_gpkg` (typically `nsegment`) |
 | `waterbody_gpkg` | — | ✓ | NHDPlus waterbodies; depstor's `waterbody` step **raises** if unset |
 | `waterbody_layer` | — | ✓ | Layer name inside `waterbody_gpkg` |

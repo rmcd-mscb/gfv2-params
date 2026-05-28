@@ -30,9 +30,17 @@ fabrics:
     # runs in percentile mode; per-VPU thresholds are keyed by the per-HRU `vpu`
     # attribute on this fabric (no profile `vpu` scalar — gfv2 is multi-VPU).
     twi_raster: "{data_root}/shared/conus/vrt/twi_hydrodem.vrt"
-    segments_gpkg: "{data_root}/input/depstor/{fabric}_segments_wbodies.gpkg"
-    waterbody_gpkg: "{data_root}/input/depstor/{fabric}_segments_wbodies.gpkg"
-    waterbody_layer: v2_wb
+    # Stream segments: one CONUS nsegment layer assembled by
+    # scripts/merge_vpu_segments.py from the input/fabric/NHM_<vpu>_draft.gpkg
+    # drafts (the fabric-merge notebook merges only nhru, so segments are merged
+    # separately). streambuffer buffers geometry only — no id reconciliation.
+    # Run: pixi run --as-is python scripts/merge_vpu_segments.py --fabric gfv2
+    segments_gpkg: "{data_root}/{fabric}/fabric/{fabric}_nsegment_merged.gpkg"
+    segments_layer: nsegment
+    # Waterbodies: shared CONUS NHDPlusV2 polygons (same source as oregon). The
+    # waterbody builder reprojects to the template grid and clips to land_mask.
+    waterbody_gpkg: "{data_root}/input/nhd/conus_waterbodies.gpkg"
+    waterbody_layer: waterbodies
     # HRU polygon fabric — authoritative land/domain mask for the depstor
     # builders. gfv2_params.depstor_builders.landmask rasterises this to
     # land_mask.tif (driven by scripts/build_depstor_rasters.py).

@@ -104,7 +104,7 @@ The following externally-provided files must be placed in the scaffolded directo
 | `input/soils_litho/` | `TEXT_PRMS.tif`, `AWC.tif`, `Lithology_exp_Konly_Project.shp` (+ sidecar files: `.dbf`, `.prj`, `.shx`) |
 | `input/lulc_veg/` | `RootDepth.tif`, `CNPY.tif`, `Imperv.tif` |
 | `input/nhm_default/` | NHM default parameter files (input to final merge step) |
-| `input/depstor/` | Per-fabric: `<fabric>_segments_wbodies.gpkg` (layers `nsegment`, `v2_wb`). The D8 flow-direction raster is no longer expected here — the gfv2 profile now consumes `shared/conus/vrt/fdr.vrt` produced by the shared raster pipeline. |
+| `input/nhd/` | `conus_waterbodies.gpkg` (layer `waterbodies`) — shared CONUS NHDPlusV2 depression-storage polygons, used by every depstor fabric. Stream segments are not staged here: a VPU-based fabric (gfv2) merges them from the per-VPU `nsegment` layers via `scripts/merge_vpu_segments.py`; the D8 flow-direction raster comes from the shared `shared/conus/vrt/fdr.vrt`. |
 | `input/twi/<rpu>/` | Per-RPU `twi.tif` (+ `.tfw`, `.aux.xml`, `.ovr`, `.xml` sidecars). Stage with `bash scripts/stage_twi.sh` (or `sbatch slurm_batch/stage_twi.batch` for an unattended run). |
 
 > **Upgrading an existing `data_root` from the legacy `work/` layout?** Run
