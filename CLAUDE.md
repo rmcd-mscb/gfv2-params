@@ -79,8 +79,9 @@ These are hard-won; violating them silently corrupts outputs.
   streaming `gdal.Warp`, never in-memory `rioxarray.reproject_match` (it blew a
   17 GB uint8 FDR to ~400 GB and OOM-killed routing); use
   `astype(np.int32, copy=False)` so label arrays aren't duplicated. The
-  remaining full-grid steps (`waterbody` clump, `dprst` regions,
-  `routing._watershed_to_binary`) fit at `--mem=384G` but are the memory ceiling.
+  remaining full-grid steps (`waterbody` clump, `dprst` regions) fit at
+  `--mem=384G` but are the memory ceiling; `routing` is now per-VPU tiled
+  (~50–100 GB/VPU), so it's no longer one of them.
 - **`carea_max`/`smidx_coef` threshold mode.** The legacy `absolute` thresholds
   (8.0/15.6) are only calibrated against VPU 01's ArcPy TWI distribution. For
   any other fabric use `threshold_mode: percentile` in

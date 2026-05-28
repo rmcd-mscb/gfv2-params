@@ -19,8 +19,8 @@
 >   plotting.
 > - **`build_depstor_routing.py` sanity assertion (follow-up item 2 at
 >   line 115):** still pending. The 50%-coverage warning is now in
->   `src/gfv2_params/depstor_builders/routing.py:_watershed_to_binary`
->   (carried forward from the pre-consolidation script) but does not abort.
+>   `src/gfv2_params/depstor_builders/routing.py` (in `build`, after the per-VPU
+>   mosaic; carried forward from the pre-consolidation script) but does not abort.
 
 Branch: `feat/depstor-validation-issue-38`
 Run 1: 2026-05-11 15:39–15:45 UTC (initial submission, 8/9 jobs COMPLETED — routing failed)
