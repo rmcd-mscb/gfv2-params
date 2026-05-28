@@ -9,6 +9,8 @@ results — see docs/superpowers/specs/2026-05-28-depstor-per-vpu-routing-design
 
 from __future__ import annotations
 
+import os
+
 import numpy as np
 import rasterio
 from osgeo import gdal
@@ -72,8 +74,6 @@ def _align_fdr_to_dprst_grid(fdr_path, dprst_path, out_path, logger) -> None:
 
 
 def _run_whitebox_watershed(fdr_path, pour_pts_path, output_path, logger) -> None:
-    import os
-
     runner = find_whitebox_tools_binary()
     cmd = [
         runner,
@@ -136,40 +136,42 @@ def build(step_cfg: dict, ctx: BuildContext, logger) -> dict:
 
     drains = np.full((info.height, info.width), np.uint8(255), dtype=np.uint8)
 
-    with rasterio.open(fdr_aligned) as fdr_src, rasterio.open(dprst_path) as dprst_src:
-        for code in codes:
-            bbox = vpu_bbox(vpu_id, code)
-            r0, r1, c0, c1 = bbox
-            window = Window(c0, r0, c1 - c0, r1 - r0)
-            vpu_win = vpu_id[r0:r1, c0:c1]
-            fdr_win = fdr_src.read(1, window=window)
-            dprst_win = dprst_src.read(1, window=window)
+    try:
+        with rasterio.open(fdr_aligned) as fdr_src, rasterio.open(dprst_path) as dprst_src:
+            for code in codes:
+                bbox = vpu_bbox(vpu_id, code)
+                r0, r1, c0, c1 = bbox
+                window = Window(c0, r0, c1 - c0, r1 - r0)
+                vpu_win = vpu_id[r0:r1, c0:c1]
+                fdr_win = fdr_src.read(1, window=window)
+                dprst_win = dprst_src.read(1, window=window)
 
-            fdr_masked = mask_fdr_to_vpu(fdr_win, vpu_win, code, nodata=255)
-            pour = vpu_pour_points(dprst_win, vpu_win, code)
+                fdr_masked = mask_fdr_to_vpu(fdr_win, vpu_win, code, nodata=255)
+                pour = vpu_pour_points(dprst_win, vpu_win, code)
 
-            tile_fdr = output_path.parent / f"_fdr_vpu{code}.tif"
-            tile_pour = output_path.parent / f"_pour_vpu{code}.tif"
-            tile_ws = output_path.parent / f"_ws_vpu{code}.tif"
-            try:
-                _write_window_tif(fdr_masked, window, info, tile_fdr, nodata=255)
-                _write_window_tif(pour, window, info, tile_pour, nodata=0)
-                _run_whitebox_watershed(tile_fdr, tile_pour, tile_ws, logger)
-                with rasterio.open(tile_ws) as ws_src:
-                    ws_win = ws_src.read(1)
-                    ws_nodata = ws_src.nodata
-                assign_vpu_drains(drains, vpu_id, code, bbox, ws_win, ws_nodata)
-                n_vpu = int((drains[r0:r1, c0:c1][vpu_win == code] == 1).sum())
-                logger.info("  VPU %d: %d cells drain to dprst", code, n_vpu)
-            finally:
-                if not keep_intermediates:
-                    for p in (tile_fdr, tile_pour, tile_ws):
-                        if p.exists():
-                            p.unlink()
+                tile_fdr = output_path.parent / f"_fdr_vpu{code}.tif"
+                tile_pour = output_path.parent / f"_pour_vpu{code}.tif"
+                tile_ws = output_path.parent / f"_ws_vpu{code}.tif"
+                try:
+                    _write_window_tif(fdr_masked, window, info, tile_fdr, nodata=255)
+                    _write_window_tif(pour, window, info, tile_pour, nodata=0)
+                    _run_whitebox_watershed(tile_fdr, tile_pour, tile_ws, logger)
+                    with rasterio.open(tile_ws) as ws_src:
+                        ws_win = ws_src.read(1)
+                        ws_nodata = ws_src.nodata
+                    assign_vpu_drains(drains, vpu_id, code, bbox, ws_win, ws_nodata)
+                    n_vpu = int((drains[r0:r1, c0:c1][vpu_win == code] == 1).sum())
+                    logger.info("  VPU %d: %d cells drain to dprst", code, n_vpu)
+                finally:
+                    if not keep_intermediates:
+                        for p in (tile_fdr, tile_pour, tile_ws):
+                            if p.exists():
+                                p.unlink()
+    finally:
+        if not keep_intermediates and fdr_aligned.exists():
+            fdr_aligned.unlink()
 
     del vpu_id  # free the CONUS uint8 partition before the final mask
-    if not keep_intermediates and fdr_aligned.exists():
-        fdr_aligned.unlink()
 
     drains[~read_land_mask(landmask_path)] = 255  # drop off-land (ocean) cells
     n_in = int((drains == 1).sum())

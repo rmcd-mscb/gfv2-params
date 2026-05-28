@@ -67,3 +67,13 @@ def test_assign_vpu_drains_unlabelled_cells_stay_nodata():
     ws = np.array([[5, 0]], dtype=np.int32)
     assign_vpu_drains(drains, vpu, 1, (0, 1, 0, 2), ws, ws_nodata=0)
     assert drains.tolist() == [[1, 255]]
+
+
+def test_assign_vpu_drains_all_nodata_marks_nothing():
+    # A VPU with no pour-points -> WBT fills the output with its nodata sentinel
+    # -> nothing should be marked as draining (the zero-pour-points edge case).
+    vpu = np.array([[1, 1], [1, 1]], dtype=np.uint8)
+    drains = np.full((2, 2), np.uint8(255), dtype=np.uint8)
+    ws = np.full((2, 2), -32768, dtype=np.int32)
+    assign_vpu_drains(drains, vpu, 1, (0, 2, 0, 2), ws, ws_nodata=-32768)
+    assert (drains == 255).all()
