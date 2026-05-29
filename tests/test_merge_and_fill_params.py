@@ -237,6 +237,19 @@ class TestFillMissingValuesKnn:
         # id=4 at (9,0): nearest valid is id=2 (10,0) → 200.0
         assert result.loc[result["nat_hru_id"] == 4, "my_param"].iloc[0] == 200.0
 
+    def test_raises_when_column_has_no_valid_source(self):
+        import logging
+        logger = logging.getLogger("test")
+        merged_gdf = gpd.GeoDataFrame(
+            {"nat_hru_id": [1, 2]},
+            geometry=[Point(0, 0), Point(1, 0)],
+            crs="EPSG:5070",
+        )
+        # both rows NaN for the column -> no valid fit source
+        param_df = pd.DataFrame({"nat_hru_id": [1, 2], "my_param": [np.nan, np.nan]})
+        with pytest.raises(ValueError, match="no valid"):
+            fill_missing_values_knn(param_df, [], merged_gdf, "my_param", 1, "nat_hru_id", logger)
+
     def test_nan_valued_row_not_used_as_fill_source(self):
         """NaN-valued rows must not be included in the KNN fit set (they can't donate values)."""
         import logging

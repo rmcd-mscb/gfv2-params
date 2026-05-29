@@ -56,6 +56,11 @@ def fill_missing_values_knn(param_df, missing_ids, merged_gdf, param_columns, k,
         logger.info("No missing values to fill!")
         return param_df
 
+    # Capture NaN count from the *original* frame before absent rows are appended
+    # so the log line reflects only genuinely missing parameter cells, not the
+    # all-NaN rows we are about to synthesise for absent ids.
+    n_input_nan = param_df[param_columns].isna().to_numpy().sum() if param_columns else 0
+
     # Compute centroids once (avoid mutating caller's GDF).
     merged_gdf = merged_gdf.copy()
     merged_gdf["centroid"] = merged_gdf["geometry"].centroid
@@ -97,6 +102,12 @@ def fill_missing_values_knn(param_df, missing_ids, merged_gdf, param_columns, k,
         if not fill_mask.any():
             continue
 
+        if not fit_mask.any():
+            raise ValueError(
+                f"Column '{param_column}' has no valid (non-NaN) values to fit from; "
+                "cannot KNN-fill with an empty training set."
+            )
+
         fit_coords = np.column_stack([x_vals[fit_mask], y_vals[fit_mask]])
         fit_values = col_vals[fit_mask]
         fill_coords = np.column_stack([x_vals[fill_mask], y_vals[fill_mask]])
@@ -109,14 +120,13 @@ def fill_missing_values_knn(param_df, missing_ids, merged_gdf, param_columns, k,
         full_df.loc[fill_mask, param_column] = filled_values
 
     # Step 4: drop helper columns, sort, reset index.
-    full_df = full_df.drop(columns=["x", "y", "centroid"], errors="ignore")
+    full_df = full_df.drop(columns=["x", "y"], errors="ignore")
     full_df = full_df.sort_values(id_feature).reset_index(drop=True)
 
     n_absent = len(missing_ids)
-    total_nan_cells = param_df[param_columns].isna().to_numpy().sum() if has_nan_cells else 0
     logger.info(
         "Filled %d absent id(s) and %d NaN cell(s) across %d column(s)",
-        n_absent, total_nan_cells, len(param_columns),
+        n_absent, n_input_nan, len(param_columns),
     )
     return full_df
 
