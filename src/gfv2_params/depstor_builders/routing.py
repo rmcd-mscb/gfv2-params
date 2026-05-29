@@ -26,6 +26,7 @@ from ..depstor import (
     RasterInfo,
     assign_vpu_drains,
     mask_fdr_to_vpu,
+    read_aligned_uint8,
     read_land_mask,
     vpu_bbox,
     vpu_codes_present,
@@ -33,6 +34,10 @@ from ..depstor import (
     write_uint8_binary,
 )
 from .context import BuildContext
+
+# ESRI-D8 flow codes plus the nodata/sink value (255). Any other value in the
+# FDR is unexpected and is silently treated as a sink by the kernel — surface it.
+_VALID_FDR_VALUES = frozenset({1, 2, 4, 8, 16, 32, 64, 128, 255})
 
 
 def _align_fdr_to_dprst_grid(fdr_path, dprst_path, out_path, logger) -> None:
@@ -105,8 +110,9 @@ def build(step_cfg: dict, ctx: BuildContext, logger) -> dict:
     try:
         _align_fdr_to_dprst_grid(ctx.fdr_raster, dprst_path, fdr_aligned, logger)
 
-        with rasterio.open(vpu_id_path) as src:
-            vpu_id = src.read(1)
+        # read_aligned_uint8 asserts vpu_id is on the exact template grid;
+        # a mismatch would silently mosaic into the wrong CONUS region.
+        vpu_id = read_aligned_uint8(vpu_id_path, info)
         codes = vpu_codes_present(vpu_id)
         logger.info("  Tiling routing over %d VPU(s): %s", len(codes), codes)
 
@@ -124,13 +130,31 @@ def build(step_cfg: dict, ctx: BuildContext, logger) -> dict:
                 fdr_masked = mask_fdr_to_vpu(fdr_win, vpu_win, code, nodata=255)
                 pour = vpu_pour_points(dprst_win, vpu_win, code)
 
+                unexpected = set(np.unique(fdr_masked).tolist()) - _VALID_FDR_VALUES
+                if unexpected:
+                    logger.warning(
+                        "  VPU %d: FDR window has unexpected code(s) %s — treated "
+                        "as sinks; check FDR encoding / nodata.", code, sorted(unexpected),
+                    )
+
                 # In-process D8 traversal (replaces WBT Watershed). Output is
                 # 1 where the cell drains to a pour-point, else 0, so
                 # assign_vpu_drains treats 0 as nodata.
-                ws_win = drains_to_dprst_kernel(fdr_masked, pour, fdr_nodata=255)
+                ws_win, n_cycles = drains_to_dprst_kernel(fdr_masked, pour, fdr_nodata=255)
+                if n_cycles:
+                    logger.warning(
+                        "  VPU %d: %d flow cycle(s) in FDR — those cells marked "
+                        "non-draining (hydro-conditioned-DEM defect).", code, n_cycles,
+                    )
                 assign_vpu_drains(drains, vpu_id, code, bbox, ws_win, ws_nodata=0)
                 n_vpu = int((drains[r0:r1, c0:c1][vpu_win == code] == 1).sum())
-                logger.info("  VPU %d: %d cells drain to dprst", code, n_vpu)
+                if n_vpu == 0:
+                    logger.warning(
+                        "  VPU %d: 0 cells drain to dprst — expected for a VPU with "
+                        "no depressions, else check dprst/vpu_id alignment.", code,
+                    )
+                else:
+                    logger.info("  VPU %d: %d cells drain to dprst", code, n_vpu)
     finally:
         if not keep_intermediates and fdr_aligned.exists():
             fdr_aligned.unlink()
@@ -140,10 +164,17 @@ def build(step_cfg: dict, ctx: BuildContext, logger) -> dict:
     drains[~read_land_mask(landmask_path)] = 255  # drop off-land (ocean) cells
     n_in = int((drains == 1).sum())
     pct = 100 * n_in / drains.size
+    if n_in == 0:
+        raise RuntimeError(
+            f"drains_to_dprst is all-nodata after routing {len(codes)} VPU(s) — "
+            "an all-empty mask is never a valid product. Check that dprst, vpu_id, "
+            "and the FDR are aligned to the same template grid."
+        )
     if pct > 50:
         logger.warning(
             "Drains-to-dprst coverage is %.2f%% of the grid — unusually high. "
-            "Check pour-points (nodata=0) and FDR/vpu_id alignment.", pct,
+            "Check the pour-point mask (kernel background=0), FDR, and vpu_id "
+            "alignment.", pct,
         )
     write_uint8_binary(drains, info, output_path)
     logger.info(
