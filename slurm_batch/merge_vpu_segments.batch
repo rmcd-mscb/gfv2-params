@@ -13,6 +13,7 @@
 # depstor `streambuffer` step (VPU-based fabrics only). Concatenates 21 VPU
 # geometry layers in memory, so it runs as a SLURM job rather than on the login
 # node.  FABRIC=gfv2 sbatch slurm_batch/merge_vpu_segments.batch
+# --mem/--time are starting points; right-size from `sacct -j <id> -o MaxRSS`.
 cd "$SLURM_SUBMIT_DIR"
 BASE_CONFIG=${BASE_CONFIG:-configs/base_config.yml}
 FABRIC=${FABRIC:-gfv2}

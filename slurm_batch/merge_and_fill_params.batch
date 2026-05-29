@@ -11,12 +11,14 @@
 #
 # KNN gap-fill of missing parameter values against the fabric (Stage 7). Fits
 # sklearn NearestNeighbors over every HRU and fills all param columns, so it
-# runs as a SLURM job rather than on the login node. The fabric is read from
-# base_config's default_fabric (the script takes no --fabric).
+# runs as a SLURM job rather than on the login node.
+#   FABRIC=oregon sbatch slurm_batch/merge_and_fill_params.batch
 # --mem/--time are starting points; right-size from `sacct -j <id> -o MaxRSS`.
 cd "$SLURM_SUBMIT_DIR"
 BASE_CONFIG=${BASE_CONFIG:-configs/base_config.yml}
+FABRIC=${FABRIC:-gfv2}
 
 pixi run --as-is python scripts/merge_and_fill_params.py \
+    --fabric "$FABRIC" \
     --base_config "$BASE_CONFIG" \
     "$@"
