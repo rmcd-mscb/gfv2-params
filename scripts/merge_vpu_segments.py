@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import warnings
 from pathlib import Path
 
 import geopandas as gpd
@@ -43,7 +44,16 @@ def concat_segments(gdfs: list[gpd.GeoDataFrame], target_crs=None) -> gpd.GeoDat
     cleaned = []
     for gdf in gdfs:
         gdf = gdf[gdf.geometry.notna() & ~gdf.geometry.is_empty]
-        if target_crs is not None and gdf.crs is not None and gdf.crs != target_crs:
+        if gdf.crs is None and target_crs is not None:
+            # A CRS-less frame gets target_crs stamped below without reprojection;
+            # if its coordinates aren't actually in target_crs the geometry is
+            # silently wrong. Surface it rather than swallow it.
+            warnings.warn(
+                f"Segment frame has no CRS; assuming it already matches "
+                f"{target_crs} (coordinates not reprojected). Verify the source.",
+                stacklevel=2,
+            )
+        elif target_crs is not None and gdf.crs is not None and gdf.crs != target_crs:
             gdf = gdf.to_crs(target_crs)
         cleaned.append(gdf)
 
@@ -52,11 +62,15 @@ def concat_segments(gdfs: list[gpd.GeoDataFrame], target_crs=None) -> gpd.GeoDat
 
 
 def _read_layer(path: Path, layer: str, logger) -> gpd.GeoDataFrame:
+    # Tighten the try-scope to the pyarrow import only, so a genuine read error
+    # (corrupt file, missing layer) propagates instead of being mistaken for a
+    # pyarrow-absence fallback.
     try:
-        return gpd.read_file(path, layer=layer, use_arrow=True)
+        import pyarrow  # noqa: F401
     except ImportError:
         logger.warning("PyArrow unavailable; falling back to fiona for %s", path.name)
         return gpd.read_file(path, layer=layer)
+    return gpd.read_file(path, layer=layer, use_arrow=True)
 
 
 def main() -> int:
