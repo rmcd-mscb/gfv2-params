@@ -101,17 +101,77 @@ stack (through `carea_map_t8/t156_binary.tif`).
 
 ### 4 · Generate parameters
 
+Each parameter is **two batch jobs**: an array job over every HRU batch, then a
+merge that runs after it (`afterok`). Submit them **in order, waiting for each
+merge before the next** — `slope` must merge before `ssflux`. First set the
+shared variables:
+
 ```bash
 BATCHES=$(pixi run --as-is python -c \
   "import yaml;print(yaml.safe_load(open('configs/base_config.yml'))['data_root'])")/gfv2/batches
-slurm_batch/submit_zonal_params.sh   "$BATCHES" gfv2 configs/base_config.yml
-slurm_batch/submit_depstor_params.sh "$BATCHES" gfv2 configs/base_config.yml
+FABRIC=gfv2
+BASE_CONFIG=configs/base_config.yml
+N=$(grep '^n_batches:' "$BATCHES/manifest.yml" | awk '{print $2}')   # array size
+THROTTLE=4                                                            # concurrent array tasks
 ```
 
-**What it does:** fans out the zonal + depstor param array jobs and chains
-their merges (+ ratios / ssflux weights) via `afterok`.
+**Zonal parameters** — run this pair for each `P`, in order: `elevation`,
+`slope`, `aspect`, `soils`, `soil_moist_max`, `lulc_nhm_v11`, `lulc_nalcms`,
+`lulc_nlcd`, `lulc_foresce`:
 
-**Wait for:** all array + merge (+ ratios) jobs `COMPLETED` in `squeue`.
+```bash
+P=elevation     # change P and re-run for each parameter above, in order
+AID=$(sbatch --parsable --array=0-$((N-1))%$THROTTLE \
+      --export=ALL,BASE_CONFIG=$BASE_CONFIG,FABRIC=$FABRIC,PARAM=$P \
+      slurm_batch/derive_zonal_params.batch)
+sbatch --dependency=afterok:$AID \
+      --export=ALL,BASE_CONFIG=$BASE_CONFIG,FABRIC=$FABRIC,PARAM=$P \
+      slurm_batch/merge_zonal_param.batch
+```
+
+**ssflux** needs the CONUS P2P weight matrix and the merged `slope` CSV first.
+Build the weights, then run the pair above with `P=ssflux`:
+
+```bash
+sbatch --export=ALL,BASE_CONFIG=$BASE_CONFIG,FABRIC=$FABRIC slurm_batch/build_zonal_weights.batch
+# after weights + slope merge finish, submit ssflux's array + merge with P=ssflux
+```
+
+**Depstor fractions** — same pair per `F` (any order): `perv_frac`,
+`imperv_frac`, `dprst_frac`, `drains_perv_frac`, `drains_imperv_frac`,
+`onstream_storage_frac`, `drains_to_dprst_frac`, `carea_t8_frac`,
+`carea_t156_frac`, `hru_total`:
+
+```bash
+F=perv_frac     # change F and re-run for each fraction above
+AID=$(sbatch --parsable --array=0-$((N-1))%$THROTTLE \
+      --export=ALL,BASE_CONFIG=$BASE_CONFIG,FABRIC=$FABRIC,FRACTION=$F \
+      slurm_batch/create_depstor_zonal.batch)
+sbatch --dependency=afterok:$AID \
+      --export=ALL,BASE_CONFIG=$BASE_CONFIG,FABRIC=$FABRIC,FRACTION=$F \
+      slurm_batch/merge_depstor_fraction.batch
+```
+
+**Depstor ratios** — after **all 10** fraction merges have `COMPLETED`, derive
+the 6 PRMS ratios:
+
+```bash
+sbatch --export=ALL,BASE_CONFIG=$BASE_CONFIG,FABRIC=$FABRIC slurm_batch/derive_depstor_ratios.batch
+```
+
+**What it does:** computes every per-HRU zonal parameter and the 6 depstor ratios.
+
+**Wait for:** all array + merge jobs `COMPLETED` (`squeue -u "$USER"`), then the
+ratios job `COMPLETED`.
+
+> **Convenience — run wholesale.** The two wrappers below submit exactly the
+> batch jobs above for you, chained with `afterok` (and they handle the
+> `slope`→`ssflux` dependency and the weights prereq automatically):
+>
+> ```bash
+> slurm_batch/submit_zonal_params.sh   "$BATCHES" gfv2 configs/base_config.yml
+> slurm_batch/submit_depstor_params.sh "$BATCHES" gfv2 configs/base_config.yml
+> ```
 
 ---
 

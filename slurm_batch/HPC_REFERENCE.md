@@ -391,6 +391,8 @@ FABRIC=<name> sbatch slurm_batch/prepare_fabric.batch
 
 ## Stage 4A — Incremental per-parameter runs
 
+> The runbook ([RUNME.md](RUNME.md) Step 4) now walks this per-parameter batch sequence explicitly; this section keeps the finer points — the array throttle, single-parameter reruns, and the ssflux→slope dependency mechanics.
+
 Each parameter is a two-step unit: an array job over every HRU batch, then a
 merge that runs `afterok` it.
 
