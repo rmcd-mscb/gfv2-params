@@ -276,7 +276,7 @@ sources: nhm_v11, nalcms, nlcd, foresce).
 
 ---
 
-## Stage 2d depstor detail
+### Stage 2d depstor detail
 
 Build the full depression-storage raster stack on a fabric-bounds template grid.
 Outputs go to `{fabric}/depstor_rasters/` and feed the Stage 4 depstor
@@ -486,7 +486,7 @@ single ratios job on every fraction's merge.
 Env knobs (both wrappers):
 
 - `FABRIC=gfv2_vpu01` — non-default fabric (or pass as the 2nd positional arg)
-- `SUBMIT_JOBS_MAX_CONCURRENT=4` — array concurrency cap (or the 4th positional arg)
+- `SUBMIT_JOBS_MAX_CONCURRENT=4` — array concurrency cap (or the 4th positional arg to `submit_zonal_params.sh` / `submit_depstor_params.sh`)
 - `FORCE=1` — rebuild the ssflux weight matrix
 
 **Depstor outputs** land in two subdirectories under `{fabric}/params/merged/`:
