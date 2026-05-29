@@ -102,16 +102,16 @@ def build(step_cfg: dict, ctx: BuildContext, logger) -> dict:
     output_path.parent.mkdir(parents=True, exist_ok=True)
     fdr_aligned = output_path.parent / "fdr_aligned.tif"
 
-    _align_fdr_to_dprst_grid(ctx.fdr_raster, dprst_path, fdr_aligned, logger)
-
-    with rasterio.open(vpu_id_path) as src:
-        vpu_id = src.read(1)
-    codes = vpu_codes_present(vpu_id)
-    logger.info("  Tiling routing over %d VPU(s): %s", len(codes), codes)
-
-    drains = np.full((info.height, info.width), np.uint8(255), dtype=np.uint8)
-
     try:
+        _align_fdr_to_dprst_grid(ctx.fdr_raster, dprst_path, fdr_aligned, logger)
+
+        with rasterio.open(vpu_id_path) as src:
+            vpu_id = src.read(1)
+        codes = vpu_codes_present(vpu_id)
+        logger.info("  Tiling routing over %d VPU(s): %s", len(codes), codes)
+
+        drains = np.full((info.height, info.width), np.uint8(255), dtype=np.uint8)
+
         with rasterio.open(fdr_aligned) as fdr_src, rasterio.open(dprst_path) as dprst_src:
             for code in codes:
                 bbox = vpu_bbox(vpu_id, code)
