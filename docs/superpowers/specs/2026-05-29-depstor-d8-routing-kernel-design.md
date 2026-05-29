@@ -206,10 +206,15 @@ New `tests/test_drains_kernel.py` (pure kernel, no WBT, no IO):
 2. **Chain draining away** from the only pour point → `0`.
 3. **2-cell cycle** (two cells pointing at each other) with no reachable pour
    point → terminates, marks `0`. *Explicit regression for the WBT hang.*
-4. **3-cell cycle** likewise terminates and marks `0`.
+4. **4-cell rotational cycle** likewise terminates and marks `0`.
 5. **Cell upstream of a cycle** with no pour downstream → `0`.
-6. **nodata / off-window** termination → `0`.
-7. **Pour point itself** → `1`; cell whose immediate downstream is a pour → `1`.
+6. **Cycle containing a pour point** → drains (seeding breaks the cycle).
+7. **nodata / off-window** termination → `0`.
+8. **Pour point itself** → `1`; cell whose immediate downstream is a pour → `1`.
+9. **All eight ESRI directions** decoding into a central pour → all `1`.
+
+The kernel also returns a per-window flow-cycle count, which `routing.build`
+logs as a warning (a cycle is a hydro-conditioned-DEM defect worth surfacing).
 
 **Regression anchor:** rerun routing on the `oregon` fabric (single VPU,
 acyclic FDR) and diff `drains_to_dprst.tif` against its existing WBT-produced

@@ -120,6 +120,11 @@ decoder currently only supports PACKBITS, LZW, and DEFLATE compression`.
 (`gfv2_params/depstor.py:write_uint8_binary` and `write_int32_regions`).
 Size impact is negligible — these rasters are mostly nodata.
 
+**Update (2026-05-29):** `routing` no longer feeds any depstor binary to a WBT
+subprocess (it uses the in-process D8 kernel). LZW is retained in
+`write_uint8_binary`/`write_int32_regions` as a precautionary default and
+because `compute_dem_derivatives` still runs WBT on its own intermediates.
+
 ### 4. WhiteboxTools `Watershed` silently treats nodata as pour points
 
 The subtlest of the bunch. WBT `Watershed` reads the raw pour-points raster

@@ -80,8 +80,10 @@ These are hard-won; violating them silently corrupts outputs.
   17 GB uint8 FDR to ~400 GB and OOM-killed routing); use
   `astype(np.int32, copy=False)` so label arrays aren't duplicated. The
   remaining full-grid steps (`waterbody` clump, `dprst` regions) fit at
-  `--mem=384G` but are the memory ceiling; `routing` is now per-VPU tiled
-  (~50–100 GB/VPU), so it's no longer one of them.
+  `--mem=384G` but are the memory ceiling; `routing` is now per-VPU tiled with
+  an in-process D8 kernel (~40 GB peak total for CONUS — the whole-CONUS
+  `vpu_id` + `drains` arrays plus the largest VPU window), so it's no longer one
+  of them.
 - **`carea_max`/`smidx_coef` threshold mode.** The legacy `absolute` thresholds
   (8.0/15.6) are only calibrated against VPU 01's ArcPy TWI distribution. For
   any other fabric use `threshold_mode: percentile` in

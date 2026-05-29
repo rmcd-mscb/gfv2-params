@@ -371,8 +371,9 @@ def mask_fdr_to_vpu(fdr_win: np.ndarray, vpu_win: np.ndarray, code: int,
                     nodata: int = 255) -> np.ndarray:
     """FDR restricted to one VPU: cells where vpu != code become `nodata`.
 
-    WBT Watershed treats nodata d8 cells as background, so masking confines the
-    routing to this VPU (no cross-boundary flow).
+    The D8 routing kernel treats `nodata` d8 cells as sinks/termini, so masking
+    confines each VPU's traversal to within its drainage divide (no cross-VPU
+    flow).
     """
     out = fdr_win.copy()
     out[vpu_win != code] = nodata
@@ -383,8 +384,8 @@ def vpu_pour_points(dprst_win: np.ndarray, vpu_win: np.ndarray,
                     code: int) -> np.ndarray:
     """0/1 pour-points: 1 where this VPU has a depression cell, else 0.
 
-    WBT Watershed treats every non-zero cell as a pour-point and ignores the
-    nodata tag, so background must be 0 (matches the legacy pour-point encoding).
+    The D8 routing kernel seeds cells where the mask == 1, so background is 0
+    (also matches the legacy pour-point encoding).
     """
     return ((dprst_win == 1) & (vpu_win == code)).astype(np.uint8)
 

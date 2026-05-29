@@ -359,9 +359,9 @@ in `src/gfv2_params/depstor_builders/__init__.py`; selective re-runs are
 supported via `--step <name>` or `--from <name>` passed through to the python
 script. `routing` runs **after** `vpu_id` because it tiles the in-process D8
 routing pass per VPU — each VPU is routed in isolation (FDR masked to the VPU)
-and the results are mosaicked. That keeps CONUS memory bounded (~50–100 GB/VPU
-vs ~405 GB whole-grid) and is correct because VPU boundaries follow drainage
-divides.
+and the results are mosaicked. That keeps CONUS memory bounded (~40 GB peak
+total vs ~405 GB for a whole-CONUS WBT float64 load) and is correct because VPU
+boundaries follow drainage divides.
 
 **`vpu_id` step:** rasterises the HRU fabric's `vpu` attribute onto the
 template grid. Required by `carea_map` when `threshold_mode: percentile` and
