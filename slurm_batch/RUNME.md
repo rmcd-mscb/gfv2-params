@@ -117,7 +117,8 @@ THROTTLE=4                                                            # concurre
 
 **Zonal parameters** — run this pair for each `P`, in order: `elevation`,
 `slope`, `aspect`, `soils`, `soil_moist_max`, `lulc_nhm_v11`, `lulc_nalcms`,
-`lulc_nlcd`, `lulc_foresce`:
+`lulc_nlcd`, `lulc_foresce`, and `ssflux` (`ssflux` last — it has an extra
+prereq, see below):
 
 ```bash
 P=elevation     # change P and re-run for each parameter above, in order
