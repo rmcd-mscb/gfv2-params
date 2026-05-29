@@ -1,825 +1,186 @@
-# GFv2 Pipeline: HPC Workflow
+# GFv2 Pipeline — Runbook (CONUS `gfv2`)
 
-## Prerequisites
-
-This pipeline uses [pixi](https://pixi.sh) for environment management. Install
-pixi once per user (see https://pixi.sh/latest/installation/) and ensure
-`~/.pixi/bin` is on your `PATH`. From the repo root:
-
-```bash
-pixi install
-```
-
-This materialises `.pixi/envs/default/` from `pixi.lock` (config lives in
-`pyproject.toml` under `[tool.pixi.*]`). The slurm batches invoke the env with
-`pixi run --as-is` (= `--no-install --frozen`): the already-installed env is used
-verbatim — no lock check, no env mutation, no PyPI/conda sync — so concurrent
-array tasks never race on `.pixi/envs/default/conda-meta/`. (An earlier approach
-that ran `pixi shell-hook --locked` per task did race there: a fraction of array
-tasks failed with "File was modified during parsing" before reaching python.
-`--as-is` removes that surface entirely.)
-
-**Re-run `pixi install`** any time `pyproject.toml` or `pixi.lock` change.
-
-> Because the slurm batches invoke `pixi run --as-is`, the `pixi` binary must be
-> on `PATH` on the compute node. SLURM jobs inherit the submitting shell's
-> environment, so always submit (`sbatch ...`, `submit_*.sh`) from a shell where
-> `~/.pixi/bin` is on your `PATH` (e.g. after the install step above). If a
-> batch fails immediately with `pixi: command not found`, that PATH was missing
-> at submit time.
-
-For interactive use:
-
-```bash
-pixi shell                       # default env
-pixi shell -e notebooks          # default + marimo, plotly, hvplot, ...
-pixi shell -e dev                # default + pytest, ruff, pre-commit
-```
-
-Run a one-off command in the env without an interactive shell:
-
-```bash
-pixi run python scripts/build_shared_rasters.py --config configs/shared_rasters/shared_rasters.yml --step build_vrt
-```
-
-> **Migrating from `geoenv`?** The legacy `environment.yml` is retained as a
-> deprecated fallback only. New work should use pixi.
-
-## Data Directory Layout
-
-All data lives under `data_root` (set in `configs/base_config.yml`):
-
-```
-gfv2_param/
-├── input/                  # External data (manually staged or downloaded)
-│   ├── fabric/             # Per-VPU watershed fabric gpkgs
-│   ├── soils_litho/        # TEXT_PRMS.tif, AWC.tif, Lithology_exp_Konly_Project.*
-│   ├── lulc_veg/           # RootDepth.tif, CNPY.tif, Imperv.tif
-│   │   └── nhm_v11/        # NHM v1.1 pre-derived LULC rasters (downloadable)
-│   ├── lulc/
-│   │   ├── nlcd_annual_imperv/   # NLCD fractional imperviousness (downloadable)
-│   │   └── nalcms_2020/    # NALCMS 2020 land cover (downloadable)
-│   ├── nhd/                # conus_waterbodies.gpkg (shared NHDPlusV2 waterbodies, layer waterbodies)
-│   ├── twi/<rpu>/          # Per-RPU TWI (twi.tif + sidecars; staged via stage_twi.sh)
-│   ├── nhm_default/        # NHM default parameter files
-│   └── nhd_downloads/      # Raw NHDPlus zip archives (downloadable)
-├── shared/                 # Fabric-independent intermediates (reused by every fabric)
-│   ├── source/             # Unzipped per-RPU NHDPlus rasters
-│   ├── per_vpu/<vpu>/      # Per-VPU merged GeoTIFFs (NED/Hydrodem/Fdr/Fac/Twi/slope/aspect/landmask)
-│   └── conus/
-│       ├── vrt/            # CONUS-wide GDAL virtual rasters (elevation/slope/aspect/fdr/twi)
-│       ├── derived/        # soil_moist_max.tif, radtrn, resampled CNPY/keep
-│       ├── borders/        # Copernicus border-DEM fill (Canada/Mexico)
-│       └── weights/        # P2P polygon weights for ssflux
-└── {fabric}/               # Per-fabric outputs (e.g., gfv2/, gfv2_vpu01/, oregon/)
-    ├── fabric/             # Merged fabric gpkg
-    ├── batches/            # Per-batch gpkgs + manifest
-    ├── depstor_rasters/    # Depression-storage intermediate rasters (per fabric)
-    └── params/             # Parameter outputs + merged + filled
-```
-
-> **Upgrading an existing `data_root` from the legacy `work/` layout?** Run
-> `pixi run python scripts/migrate_to_shared_layout.py --data-root <path> --dry-run`
-> to preview the 27 directory renames, then `--execute` to apply them.
-> Atomic `os.rename` on the same filesystem (metadata-only, near-instant);
-> regenerates CONUS VRTs at the end since they encode absolute source paths.
-> Idempotent — re-running after success is a no-op.
-
-## Selecting a fabric
-
-Fabric identities and **all shared, required per-fabric inputs** live as profiles
-in a single `configs/base_config.yml` under a `fabrics:` mapping — nothing
-required lives only on a CLI arg or is inferred from a naming convention. Every
-profile carries `hru_gpkg`/`hru_layer` (the fabric geopackage + layer),
-`id_feature`, `expected_max_hru_id`, and `batch_size`; depstor fabrics add
-`template_raster`, `fdr_raster`, `twi_raster`, `segments_gpkg`/`segments_layer`,
-and the required `waterbody_gpkg`/`waterbody_layer`. The active profile is
-selected via:
-
-1. `--fabric <name>` CLI flag on any script, OR
-2. `FABRIC` env var passed through sbatch, OR
-3. `default_fabric` in `configs/base_config.yml` (currently `gfv2`).
-
-Slurm batches default to `gfv2`. To run the same batch against a different
-fabric, set `FABRIC` and (optionally) override resource asks at submission:
-
-```bash
-# CONUS gfv2 — default
-sbatch slurm_batch/build_depstor_rasters.batch
-
-# VPU01 validation overlay — smaller; override resources
-FABRIC=gfv2_vpu01 sbatch --time=02:00:00 --mem=48G slurm_batch/build_depstor_rasters.batch
-```
-
-`submit_jobs.sh` accepts fabric as its 4th positional argument and forwards it
-via `--export=ALL,FABRIC=...` to the array job. (The legacy 4th-position
-`merge_config` argument was dropped — for chained merges, use
-`submit_zonal_params.sh` / `submit_depstor_params.sh`.)
-
-It also accepts an optional 5th argument (or `SUBMIT_JOBS_MAX_CONCURRENT` env
-var) capping how many array tasks run at once — defaults to 4. The cap exists
-because concurrent geo-library imports (rasterio / GDAL / PROJ / pyogrio) can
-deadlock under shared-FS metadata contention when many tasks start
-simultaneously; one of eight VPU01 array tasks hung indefinitely during the
-issue-#61 smoke test. Set to `0` (or `off`) to disable the cap. For CONUS the
-default of 4 trades ~1 wave of wall-clock time for reliability.
-
-## Pipeline Stages
-
-All commands below assume the repo root as your working directory, e.g.:
-```bash
-cd /caldera/hovenweep/projects/usgs/water/impd/nhgf/gfv2-params
-```
+The commands to take a fresh data root to finished parameters, in order.
+Running a different fabric, re-running one piece, internals, and recovery are
+in [HPC_REFERENCE.md](HPC_REFERENCE.md).
 
 ---
 
-## Part 1: Fabric-Independent Tasks
+## Before you start
 
-These stages do not require a watershed fabric and can be run while fabric preparation proceeds in parallel. Complete all Part 1 stages before moving to Part 2.
+- Run `pixi install` once from the repo root; ensure `~/.pixi/bin` is on `PATH`.
+- Always run `sbatch` / `submit_*.sh` from a shell where `~/.pixi/bin` is on
+  `PATH` (SLURM inherits it — a missing PATH causes immediate `pixi: command not found`).
+- Run everything from the repo root (`cd <repo>`).
 
-### Recommended: run Part 1 via the unified shared-rasters orchestrator
+---
 
-After Stage 0 completes and the downloads in Stages 1/1b have finished, every
-remaining raster prep step can be driven from one sbatch:
+## Pipeline at a glance
+
+1. **Step 0** — Initialize data root, download public rasters, stage TWI.
+2. **Step 1** — Build shared (CONUS) rasters (one orchestrator batch).
+3. **Step 2** — Prepare the fabric: merge nhru/nsegment, spatial batching.
+4. **Step 3** — Clip fabric-bounds FDR template; build depstor raster stack.
+5. **Step 4** — Fan out zonal + depstor parameter array jobs.
+6. **Step 5** — KNN gap-fill missing parameter values.
+7. **Step 6** — (optional) Merge NHM default parameter tables.
+8. **Step 7** — Render results figures headlessly.
+
+---
+
+## Run it (CONUS gfv2)
+
+### 0 · Initialize + stage inputs
+
+```bash
+pixi run init-data-root
+sbatch slurm_batch/download_rpu_rasters.batch
+sbatch slurm_batch/download_nalcms.batch
+sbatch slurm_batch/download_nhm_v11.batch
+sbatch slurm_batch/stage_twi.batch
+pixi run init-data-root --check     # after downloads + manual inputs are in place
+```
+
+**What it does:** scaffolds `data_root`, downloads the public rasters (~112 GB
+NHDPlus RPU, ~2 GB NALCMS, NHM v1.1 LULC), stages per-RPU TWI; `--check`
+verifies manually-staged inputs. (Manual-input table + provenance →
+HPC_REFERENCE "Stage 0".)
+
+**Wait for:** the four download/stage jobs `COMPLETED` in `squeue`, and
+`init-data-root --check` reporting all inputs present.
+
+---
+
+### 1 · Build shared (CONUS) rasters
 
 ```bash
 sbatch slurm_batch/build_shared_rasters.batch
 ```
 
-This walks the full DAG (merge_rpu_by_vpu → compute_slope_aspect →
-build_border_dem → build_vpu_landmask → merge_rpu_by_vpu_twi → build_vrt →
-build_derived_rasters → build_lulc_rasters) in dependency order, replacing
-the per-stage sbatch invocations below. Per-VPU steps iterate the `vpus`
-list inside `configs/shared_rasters/shared_rasters.yml` rather than launching one sbatch
-per VPU. Env knobs the batch honours:
+**What it does:** walks the whole shared-raster DAG (per-VPU merge →
+slope/aspect → border DEM → land mask → TWI merge → VRTs → derived + LULC
+rasters).
 
-- `FORCE=1` — pass `--force` to rebuild outputs that already exist
-- `VPUS=01,02` — pass `--vpus 01,02` to restrict per-VPU steps to a subset
-
-For interactive use (or finer-grained flags like `--step <name>` or
-`--from <name>`), invoke the orchestrator directly:
-
-```bash
-pixi run python scripts/build_shared_rasters.py --config configs/shared_rasters/shared_rasters.yml
-```
-
-The individual `slurm_batch/*.batch` files and per-script CLIs documented in
-Stages 1 through 2c below are preserved as thin shells around the same
-library builders. Use them when you want per-step granularity or per-VPU
-parallelism via SLURM arrays; use the orchestrator batch when you want one
-job that walks the whole DAG.
-
-### Stage 0: Initialize data root and stage inputs
-
-Scaffold the full directory tree under your `data_root`:
-
-```bash
-pixi run init-data-root
-```
-
-Verify that staged inputs are present:
-
-```bash
-pixi run init-data-root --check
-```
-
-The following externally-provided files must be placed in the scaffolded directories before running `--check`:
-
-| Destination | Required files |
-|---|---|
-| `input/fabric/` | `NHM_<VPU>_draft.gpkg` for each of the 21 VPUs: `01 02 03N 03S 03W 04 05 06 07 08 09 10L 10U 11 12 13 14 15 16 17 18` |
-| `input/soils_litho/` | `TEXT_PRMS.tif`, `AWC.tif`, `Lithology_exp_Konly_Project.shp` (+ sidecar files: `.dbf`, `.prj`, `.shx`) |
-| `input/lulc_veg/` | `RootDepth.tif`, `CNPY.tif`, `Imperv.tif` |
-| `input/nhm_default/` | NHM default parameter files (input to final merge step) |
-| `input/nhd/` | `conus_waterbodies.gpkg` (layer `waterbodies`) — shared CONUS NHDPlusV2 depression-storage polygons, used by every depstor fabric. Stream segments are **not** staged here: for a VPU-based fabric (gfv2) they are merged from the per-VPU `nsegment` layers by `scripts/merge_vpu_segments.py` (→ `{fabric}/fabric/{fabric}_nsegment_merged.gpkg`); a pre-merged fabric (oregon) reads `nsegment` from its own model gpkg. The D8 flow-direction raster comes from the shared `shared/conus/vrt/fdr.vrt`, not a per-fabric FDR. |
-| `input/twi/<rpu>/` | Per-RPU TWI raster `twi.tif` (+ `.tfw`, `.aux.xml`, `.ovr`, `.xml` sidecars). Stage with `bash scripts/stage_twi.sh` (see below). |
-
-The NALCMS 2020 land cover raster can be downloaded automatically (see below).
-
-**Download NHDPlus RPU rasters** from S3 (network-bound, ~112 GB, submit as a SLURM job):
-
-```bash
-mkdir -p logs
-sbatch slurm_batch/download_rpu_rasters.batch
-```
-
-**Download NALCMS 2020 land cover raster** from CEC (~2 GB zip, submit as a SLURM job):
-
-```bash
-sbatch slurm_batch/download_nalcms.batch
-```
-
-**Download NHM v1.1 LULC rasters** from ScienceBase item `5ebb182b82ce25b5136181cf`
-(`LULC.zip`, `keep.zip`, `CNPY.zip` — network-bound; submit as a SLURM job):
-
-```bash
-sbatch slurm_batch/download_nhm_v11.batch
-```
-
-All download scripts are idempotent — already-downloaded files are skipped on resubmission.
-
-**Stage per-RPU TWI rasters** — provenance is USGS ScienceBase item
-`5f5154ba82ce4c3d12386a02`
-(<https://www.sciencebase.gov/catalog/item/5f5154ba82ce4c3d12386a02> — **not a
-public link**; access is gated). For impd-group users, an operational mirror
-lives on the shared cluster filesystem; the staging script reads from it by
-default and copies into `input/twi/<rpu>/twi.tif`:
-
-```bash
-bash scripts/stage_twi.sh
-# or pass an alternate source:
-bash scripts/stage_twi.sh /alt/path/to/data_bins
-```
-
-This is a ~30 GB single-threaded `cp` against the shared filesystem. Running it
-on a login node is borderline (busy login nodes don't love sustained I/O) — the
-recommended path for an unattended run is the slurm wrapper:
-
-```bash
-sbatch slurm_batch/stage_twi.batch
-# or with an alternate source:
-SRC=/alt/path/to/data_bins sbatch slurm_batch/stage_twi.batch
-```
-
-The script handles HRU06a's uppercase `TWI.*` source filenames by normalizing
-to lowercase in the destination so the merge config can reference all 18 VPUs
-without per-RPU casing exceptions. Idempotent — re-running skips files already
-present and newer than the source.
-
-Note: `--check` only validates manually-staged inputs (soils, litho, lulc_veg, twi). Verify downloads completed successfully by checking the job logs before proceeding.
-
-### Stages 1, 1b, 1c1, 1c2, 2a, 2b, 2c — Shared raster prep (one orchestrator)
-
-**All of these are now driven by `sbatch slurm_batch/build_shared_rasters.batch`** (or the
-`pixi run python scripts/build_shared_rasters.py --config configs/shared_rasters/shared_rasters.yml`
-interactive equivalent). The orchestrator walks the canonical 9-step DAG in
-dependency order — there is no longer a per-step batch surface; all the
-per-step CLIs/sbatches were retired now that the orchestrator covers them.
-
-For a single-step rebuild, pass `--step <name>` to the orchestrator (e.g.
-`--step build_border_dem` or `--step build_vrt`). Use `--from <name>` to
-resume mid-DAG. Step names match the keys in
-[configs/shared_rasters/shared_rasters.yml](../configs/shared_rasters/shared_rasters.yml).
-
-The narrative below describes what each step does and what it depends on;
-the bash invocation is always the same orchestrator.
-
-**Stage 1 — `merge_rpu_by_vpu` + `compute_slope_aspect`:** Merge per-RPU
-NHDPlus rasters into per-VPU GeoTIFFs (NED, Hydrodem, FDR, FAC), then derive
-slope/aspect on the fixed-nodata NEDSnapshot.
-
-**Stage 1b — `build_border_dem`:** Download Copernicus GLO-30 tiles and
-build elevation/slope/aspect fill rasters for HRUs that extend into Canada or
-Mexico beyond NHDPlus coverage. Creates fill rasters in `shared/conus/borders/`;
-the subsequent `build_vrt` step composites these behind NHDPlus so NHDPlus
-takes priority where it has valid data and Copernicus fills the border gaps.
-Depends on Stage 1 — needs the NHDPlus `_fixed_` elevation tiles to build a
-seamless composite for slope/aspect computation.
-
-**Stage 1c1 — `build_vpu_landmask`:** Build the per-VPU HRU-fabric land mask
-consumed by both TWI pipelines. Produces `shared/per_vpu/<vpu>/land_mask_<vpu>.tif`
-— a uint8 1/255 raster where 1 = inside an HRU whose `vpu` attribute matches
-this VPU, 255 = outside. The mask is rasterised onto the per-VPU
-`Hydrodem_merged_<vpu>.tif` grid, so TWI products downstream get a strict match
-to their VPU's HRU coverage rather than the CONUS-wide depstor `land_mask.tif`
-(which leaves cells unmasked wherever adjacent-VPU HRUs drape into a VPU's
-Hydrodem footprint). Depends only on Stage 1; independent of Stage 2d.
-
-**Stage 1c2 — `merge_rpu_by_vpu_twi`:** Merge the per-RPU TWI rasters staged
-in Stage 0 into per-VPU GeoTIFFs (`Twi_merged_<vpu>.tif`). The merge clips its
-output to the per-VPU HRU mask from Stage 1c1 so the per-RPU TWI bulges
-(coast on the east, adjacent-VPU/border drape on the west/north) never reach
-downstream zonal aggregation. Depends on Stage 1c1.
-
-**Stage 2a — `build_vrt`:** Combine per-VPU rasters and optional Copernicus
-fill into CONUS-wide GDAL virtual rasters (elevation/slope/aspect/fdr/twi).
-Also builds `twi_hydrodem.vrt` (open-source WhiteboxTools TWI, CONUS-complete)
-if `Twi_hydrodem_*.tif` tiles are present in `per_vpu/`. The historical
-staging gap where `Twi_merged_<vpu>.tif` was only populated for VPU 01 was
-resolved by PR #95; if you ever need to re-finish the ArcPy TWI tiles + both
-VRTs in one shot, the recovery wrapper is:
-
-```bash
-bash slurm_batch/submit_twi_completion.sh
-```
-
-This submits three chained jobs: `merge_rpu_by_vpu_twi --force` (rebuilds all
-18 VPUs idempotently) → `build_vrt --force` (writes `twi.vrt` and
-`twi_hydrodem.vrt`) → `twi_reference --force` (writes the per-VPU percentile
-CSVs used by `carea_map threshold_mode: percentile`). Verify afterwards with
-`gdalinfo` on both VRTs.
-
-**Stage 2a' — `twi_reference`:** Compute valid-land TWI percentile cutoffs
-per VPU (and CONUS) for each TWI source (`arcpy`, `hydrodem`). Outputs
-`shared/conus/twi_reference_percentiles.arcpy.csv` and
-`shared/conus/twi_reference_percentiles.hydrodem.csv`. These tables are the
-input to `carea_map threshold_mode: percentile` (Stage 2d). The default
-percentiles are derived by inverting the legacy 8.0/15.6 thresholds through
-VPU 01's ArcPy TWI CDF. Runs automatically after `build_vrt` in the
-orchestrator DAG; run on its own with:
-
-```bash
-pixi run python scripts/build_shared_rasters.py \
-    --config configs/shared_rasters/shared_rasters.yml --step twi_reference
-```
-
-**Stage 2b — `build_derived_rasters`:** Pre-compute `rd_250_raw.tif` and
-`soil_moist_max.tif`.
-
-**Stage 2c — `build_lulc_rasters`:** Pre-compute canopy-resampled + keep-resampled
-+ radiation-transmission rasters for every LULC source listed in
-[configs/shared_rasters/shared_rasters.yml](../configs/shared_rasters/shared_rasters.yml)'s
-`sources:` block (currently 4 sources: nhm_v11, nalcms, nlcd, foresce).
-
-**Per-fabric overrides:** All of the above are fabric-independent (CONUS).
-For depstor-only fabric overrides (Stage 2d), use `FABRIC=...` env in the
-sbatch command.
-
-### Stage 2d: Build depstor rasters (per fabric)
-
-Build the full depression-storage raster stack on a fabric-bounds template
-grid. Outputs go to `{fabric}/depstor_rasters/` and feed the Stage 4 depstor
-zonal-stats orchestrator below.
-
-Inputs (per fabric, from `base_config.yml`):
-- `template_raster` **and** `fdr_raster`: a fabric-bounds clip of the CONUS FDR,
-  staged with `pixi run --as-is python scripts/clip_shared_to_fabric.py --fabric <name>`
-  (writes `{data_root}/<name>/shared/<name>_fdr.vrt`). The template grid sizes
-  every builder's arrays, so this scopes compute to the fabric; the clip is on
-  the hydrology lattice `carea_map` requires the template to share with `twi.vrt`.
-- `twi_raster` (CONUS `shared/conus/vrt/twi.vrt`; warp-windowed onto the template).
-- `hru_gpkg`, `segments_gpkg`/`segments_layer`, `waterbody_gpkg`/`waterbody_layer`.
-- The NLCD fractional-impervious raster (`imperv_source` in
-  `configs/depstor/depstor_rasters.yml`).
-
-One sbatch builds the entire stack in dependency order
-(landmask → imperv/streambuffer/waterbody → dprst → perv → vpu_id → routing →
-drains_perv/drains_imperv → carea_map). The 11-step DAG is encoded
-in `src/gfv2_params/depstor_builders/__init__.py`; selective re-runs are
-supported via `--step <name>` or `--from <name>` passed through to the python
-script. `routing` runs **after** `vpu_id` because it tiles the in-process D8
-routing pass per VPU — each VPU is routed in isolation (FDR masked to the VPU)
-and the results are mosaicked. That keeps CONUS memory bounded (~80 GB peak
-measured — run at `--mem=96G` — vs ~405 GB for a whole-CONUS WBT float64 load)
-and is correct because VPU boundaries follow drainage divides.
-
-**`vpu_id` step:** rasterises the HRU fabric's `vpu` attribute onto the
-template grid. Required by `carea_map` when `threshold_mode: percentile` and
-the fabric spans multiple VPUs (multi-VPU fabrics look up each cell's VPU in
-the reference table; single-VPU fabrics set `vpu: "17"` in their profile and
-skip this step).
-
-**`carea_map` threshold modes:** configured in `configs/depstor/depstor_rasters.yml`.
-- `threshold_mode: absolute` — legacy 8.0/15.6 thresholds. Requires ArcPy
-  `twi.vrt` as `twi_raster`; the builder warns if paired with a non-ArcPy
-  (hydrodem) source.
-- `threshold_mode: percentile` — derives the TWI cutoff from the data by
-  reading the per-VPU reference table produced by Stage 2a'. Source-agnostic:
-  use with `twi.vrt` (ArcPy) or `twi_hydrodem.vrt` (open-source). The
-  `reference_table` key (here in `depstor_rasters.yml`) and the profile's
-  `twi_raster` must be set to the same source together — there is no
-  auto-selection or guard for the pairing.
-
-```bash
-sbatch slurm_batch/build_depstor_rasters.batch
-
-# VPU01 validation overlay — smaller; override resources:
-FABRIC=gfv2_vpu01 sbatch --time=02:00:00 --mem=48G \
-    slurm_batch/build_depstor_rasters.batch
-
-# Resume from a specific step (e.g. after a routing crash):
-sbatch slurm_batch/build_depstor_rasters.batch --from routing --force
-```
-
-Default resources size the job for the long pole (`routing` — per-VPU D8
-routing pass). Because `routing` tiles per VPU, whole-CONUS FDR is never held
-in memory, so the default `--mem` can be right-sized down once a clean CONUS
-run reports its peak. For VPU01 / smaller fabrics, override `--time` and
-`--mem` at submission as shown above.
-
-Note: Stage 2d depends on the Part 1 FDR VRT (`shared/conus/vrt/fdr.vrt`, the
-source the per-fabric clip is cut from) but is otherwise fabric-independent of
-the rest of Part 1. Stage the clip (`clip_shared_to_fabric.py`) first; it can
-run in parallel with Part 2's fabric prep.
+**Wait for:** the job `COMPLETED`; `shared/conus/vrt/` holds the VRTs (esp.
+`fdr.vrt`, `twi.vrt`, `twi_hydrodem.vrt`).
 
 ---
 
-## Part 2: Fabric-Dependent Tasks
-
-These stages require the merged fabric geopackage and the per-batch gpkgs produced by `prepare_fabric.py`. Complete Part 1 before proceeding.
-
-### Stage 3: Prepare fabric (one-time per fabric)
-
-Merge per-VPU fabric geopackages into a single CONUS fabric:
+### 2 · Prepare the fabric
 
 ```bash
-pixi run -e notebooks marimo run notebooks/merge_vpu_targets.py
+# merge_vpu_targets is an interactive marimo notebook — run it on a COMPUTE
+# node (JupyterHub or `salloc`), never the login node. See HPC_REFERENCE.
+pixi run -e notebooks marimo run notebooks/merge_vpu_targets.py   # nhru merge (compute node)
+sbatch slurm_batch/merge_vpu_segments.batch                        # nsegment merge (depstor)
+sbatch slurm_batch/prepare_fabric.batch                            # spatial batching + manifest
 ```
 
-If you will run the depstor pipeline for this fabric, also merge the per-VPU
-`nsegment` layers into the single CONUS stream-network gpkg that the depstor
-`streambuffer` step needs (the notebook above merges only `nhru`):
+**What it does:** merges per-VPU `nhru`/`nsegment` into the CONUS fabric, then
+batches it into per-batch geopackages.
+
+**Wait for:** `{fabric}/fabric/` has the merged nhru + nsegment gpkgs and
+`{fabric}/batches/manifest.yml` exists.
+
+---
+
+### 3 · Build depstor rasters
 
 ```bash
-pixi run --as-is python scripts/merge_vpu_segments.py --fabric gfv2
-# → {data_root}/gfv2/fabric/gfv2_nsegment_merged.gpkg (layer nsegment),
-#   the profile's segments_gpkg. Idempotent; pass --force to rebuild.
+pixi run --as-is python scripts/clip_shared_to_fabric.py --fabric gfv2   # tiny VRT (login OK)
+sbatch slurm_batch/build_depstor_rasters.batch
 ```
 
-Then spatially batch the merged fabric into per-batch geopackages. The fabric
-gpkg + layer and `batch_size` are read from the active profile in
-`base_config.yml` (`hru_gpkg`/`hru_layer`), so no `--fabric_gpkg` is needed:
+**What it does:** clips the fabric-bounds FDR template, then builds the full
+depression-storage raster stack.
+
+**Wait for:** the job `COMPLETED`; `{fabric}/depstor_rasters/` holds the full
+stack (through `carea_map_t8/t156_binary.tif`).
+
+---
+
+### 4 · Generate parameters
 
 ```bash
-pixi run python scripts/prepare_fabric.py \
-    --fabric gfv2 \
-    --base_config configs/base_config.yml
+BATCHES=$(pixi run --as-is python -c \
+  "import yaml;print(yaml.safe_load(open('configs/base_config.yml'))['data_root'])")/gfv2/batches
+slurm_batch/submit_zonal_params.sh   "$BATCHES" gfv2 configs/base_config.yml
+slurm_batch/submit_depstor_params.sh "$BATCHES" gfv2 configs/base_config.yml
 ```
 
-`--fabric_gpkg`/`--layer` remain as optional overrides for one-off runs.
+**What it does:** fans out the zonal + depstor param array jobs and chains
+their merges (+ ratios / ssflux weights) via `afterok`.
 
-### Stage 4: Generate parameters (SLURM array jobs)
+**Wait for:** all array + merge (+ ratios) jobs `COMPLETED` in `squeue`.
 
-There are two equivalent ways to run Part 2, and they produce identical
-outputs. Use **4A (run by parameter)** to follow the workflow one parameter at
-a time, inspect each output, or re-run a single one; use **4B (run wholesale)**
-to submit everything in one command. 4B is just a loop over the 4A steps.
+---
 
-Common preamble for both (after Stage 3 — fabric merged + batched):
+### 5 · Gap-fill missing values
 
 ```bash
-BATCHES=/path/to/gfv2/batches            # from scripts/prepare_fabric.py; holds manifest.yml
-FABRIC=gfv2
-BASE_CONFIG=configs/base_config.yml
-N=$(grep '^n_batches:' "$BATCHES/manifest.yml" | awk '{print $2}')   # SLURM array size
-THROTTLE=4                               # %N array concurrency cap (avoids shared-FS import storms)
+sbatch slurm_batch/merge_and_fill_params.batch
 ```
 
-#### Stage 4A: Run by parameter (incremental)
+**What it does:** KNN-fills any missing per-HRU parameter values.
 
-**Zonal params.** Each parameter is a two-step unit: an array job over every
-HRU batch, then a merge that runs `afterok` it. Run them in this order — `slope`
-must be merged before `ssflux`:
+**Wait for:** the job `COMPLETED`.
 
-| # | parameter | | # | parameter |
-|--|--|--|--|--|
-| 1 | elevation | | 6 | lulc_nhm_v11 |
-| 2 | slope | | 7 | lulc_nalcms |
-| 3 | aspect | | 8 | lulc_nlcd |
-| 4 | soils | | 9 | lulc_foresce |
-| 5 | soil_moist_max | | 10 | ssflux *(special — see below)* |
+---
+
+### 6 · (optional) Merge NHM defaults
 
 ```bash
-P=elevation                              # repeat for each parameter in the table
-AID=$(sbatch --parsable --array=0-$((N-1))%$THROTTLE \
-      --export=ALL,BASE_CONFIG=$BASE_CONFIG,FABRIC=$FABRIC,PARAM=$P \
-      slurm_batch/derive_zonal_params.batch)
-sbatch --dependency=afterok:$AID \
-      --export=ALL,BASE_CONFIG=$BASE_CONFIG,FABRIC=$FABRIC,PARAM=$P \
-      slurm_batch/merge_zonal_param.batch
+sbatch slurm_batch/merge_default_output_params.batch
 ```
 
-`ssflux` needs the CONUS-wide P2P weight matrix and the merged `slope` CSV
-first. If you ran the table in order, slope is already merged — just build the
-weights, then submit ssflux like any other parameter (`P=ssflux`):
+**What it does:** merges the NHM default parameter tables into the per-HRU
+outputs.
+
+**Wait for:** the job `COMPLETED`.
+
+---
+
+### 7 · View results
 
 ```bash
-sbatch --export=ALL,BASE_CONFIG=$BASE_CONFIG,FABRIC=$FABRIC slurm_batch/build_zonal_weights.batch
-# after weights finish, submit ssflux's array + merge as above with P=ssflux
+sbatch slurm_batch/render_figures.batch     # PNGs -> docs/figures/gfv2/
 ```
 
-The weight matrix is CONUS-once per fabric and idempotent; export `FORCE=1` to
-rebuild it.
+**What it does:** renders the fabric_results figure set headlessly.
+(Interactive viewing via JupyterHub → HPC_REFERENCE "Stage 9".)
 
-**Depstor params.** Same two-step unit per fraction, then one ratios job after
-**all** fractions have merged. Fractions (`hru_total` is the denominator for two
-of the ratios):
+**Wait for:** the job `COMPLETED`; PNGs in `docs/figures/gfv2/`.
 
-`perv_frac`, `imperv_frac`, `dprst_frac`, `drains_perv_frac`,
-`drains_imperv_frac`, `onstream_storage_frac`, `drains_to_dprst_frac`,
-`carea_t8_frac`, `carea_t156_frac`, `hru_total`
-
-```bash
-F=perv_frac                              # repeat for each fraction
-AID=$(sbatch --parsable --array=0-$((N-1))%$THROTTLE \
-      --export=ALL,BASE_CONFIG=$BASE_CONFIG,FABRIC=$FABRIC,FRACTION=$F \
-      slurm_batch/create_depstor_zonal.batch)
-sbatch --dependency=afterok:$AID \
-      --export=ALL,BASE_CONFIG=$BASE_CONFIG,FABRIC=$FABRIC,FRACTION=$F \
-      slurm_batch/merge_depstor_fraction.batch
-
-# once all 10 fraction merge jobs have COMPLETED (check `squeue -u $USER` — not
-# just submitted; the by-parameter path has no afterok on the ratios job),
-# derive the 6 PRMS ratios:
-sbatch --export=ALL,BASE_CONFIG=$BASE_CONFIG,FABRIC=$FABRIC \
-      slurm_batch/derive_depstor_ratios.batch
-```
-
-(The wholesale path 4B instead chains this ratios job `afterok` on every merge,
-so it can be submitted up front.)
-
-For a quick single-batch sanity check without SLURM, invoke an orchestrator
-directly:
-
-```bash
-pixi run python scripts/derive_zonal_params.py --mode zonal --param elevation --batch_id 42 \
-    --config configs/zonal/zonal_params.yml --base_config configs/base_config.yml
-```
-
-`--mode merge --param <name>` runs just one merge; `--mode build_weights` builds
-the ssflux prereq.
-
-#### Stage 4B: Run wholesale (one command per stage)
-
-Each wrapper loops the per-parameter steps from 4A — the same array + merge
-(+ ratios) jobs, chained via `afterok`:
-
-```bash
-slurm_batch/submit_zonal_params.sh   $BATCHES $FABRIC $BASE_CONFIG   # all 10 zonal params
-slurm_batch/submit_depstor_params.sh $BATCHES $FABRIC $BASE_CONFIG   # 10 fractions + ratios
-```
-
-`submit_zonal_params.sh` auto-detects ssflux's `depends_on: build_weights`:
-it submits `build_zonal_weights.batch` first and chains the ssflux array on its
-`afterok` (and on the merged slope CSV). `submit_depstor_params.sh` chains the
-single ratios job on every fraction's merge. Env knobs (both wrappers):
-
-- `FABRIC=gfv2_vpu01` — non-default fabric (or pass as the 2nd positional arg)
-- `SUBMIT_JOBS_MAX_CONCURRENT=4` — array concurrency cap (or the 4th positional arg)
-- `FORCE=1` — rebuild the ssflux weight matrix
-
-#### Depstor outputs (either path)
-
-Depstor results land in two subdirectories under `{fabric}/params/merged/`:
-
-- `{fabric}/params/merged/` — **6 final PRMS-ready ratio CSVs**, all
-  dimensionless and bounded in [0, 1]:
-  `sro_to_dprst_perv`, `sro_to_dprst_imperv`, `carea_max`, `smidx_coef`,
-  `hru_percent_imperv`, `dprst_frac`.
-- `{fabric}/params/merged/_intermediates/` — **10 per-fraction count CSVs**
-  (`nhm_<name>_frac_params.csv` and `nhm_hru_total_count_params.csv`).
-  Each row's `count` column is the partial-pixel-weighted sum of `1`-valued
-  cells per HRU — **NOT** a [0, 1] fraction. Inputs to the ratio derivation;
-  not direct PRMS parameters. To get a true area fraction divide by the HRU
-  pixel count (e.g. `areasqkm * 1e6 / 900` for the 30 m template grid; the
-  `hru_total` fraction aggregates `land_mask.tif` to give exactly that
-  denominator).
-
-### Stage 5: Merge and validate
-
-Merging is part of Stage 4, not a separate stage: the by-parameter path (4A)
-submits each merge as the second command of every unit, and the wholesale
-wrappers (4B) chain it automatically via `afterok`. Either way, to re-run a
-single param's merge on its own (e.g., after manually fixing a batch CSV):
-
-```bash
-pixi run python scripts/derive_zonal_params.py --mode merge --param elevation \
-    --config configs/zonal/zonal_params.yml --base_config configs/base_config.yml
-```
-
-### Stage 6: SSFlux (depends on merged slope)
-
-Handled automatically by `submit_zonal_params.sh` — the dispatcher sees
-`depends_on: build_weights` on the ssflux entry in
-`configs/zonal/zonal_params.yml`, submits `build_zonal_weights.batch`
-first, and chains the ssflux array + merge on its `afterok`. ssflux also
-chains on the merged slope CSV. (To run ssflux by hand, see Stage 4A.)
-
-To build the CONUS-once weight matrix on its own (idempotent — skips if
-the matrix already exists, pass `FORCE=1` to overwrite):
-
-```bash
-sbatch slurm_batch/build_zonal_weights.batch
-```
-
-### Stage 7: KNN gap-fill
-
-```bash
-pixi run python scripts/merge_and_fill_params.py --base_config configs/base_config.yml
-```
-
-### Stage 8: Merge NHM defaults (optional)
-
-```bash
-pixi run python scripts/merge_default_params.py --base_config configs/base_config.yml
-```
-
-### Stage 9: View results (notebooks)
-
-The three notebooks in `notebooks/fabric_results/` view a fabric's full
-parameterization — input rasters (clipped to the fabric), depstor rasters, and
-per-HRU param maps. They are parameterized by the `FABRIC` env var. **Run them in
-JupyterHub on a compute node with enough `--mem`** (not the login node — a full
-CONUS `gfv2` render loads ~361k HRU polygons). See
-`notebooks/<fabric>/README.md` for the launch recipe. To regenerate the figure
-set for a report headlessly:
-
-```bash
-pixi run -e notebooks python scripts/render_figures.py --fabric <name>
-# -> docs/figures/<name>/{input_raster_*,depstor_*,param_*}.png  (committed)
-```
-
-## Adding a new fabric (e.g., Oregon)
-
-A new fabric is added by appending a profile to `configs/base_config.yml` —
-one file edit, no new YAMLs. Two cases depending on whether the fabric is
-already merged or comes as per-VPU gpkgs.
-
-**Case A: Pre-merged fabric** (single gpkg covering the full domain — e.g., Oregon)
-
-1. Register the fabric and scaffold its output directories in one step:
-   ```bash
-   pixi run init-data-root --add-fabric oregon
-   ```
-   This appends a profile stub under `fabrics:` in `configs/base_config.yml`
-   (preserving comments) and creates the fabric's dirs. Then fill the stub's
-   TODO placeholders. **All shared, required fabric inputs live in the
-   profile.** Every fabric needs `expected_max_hru_id`, `batch_size`,
-   `id_feature` (the HRU id column present in the fabric — e.g. `nat_hru_id`
-   for gfv2, `hru_id` for oregon — which flows through to the merged parameter
-   CSVs), and `hru_gpkg`/`hru_layer` (the fabric geopackage + layer,
-   authoritative for `prepare_fabric`, the ssflux `build_weights` step, and
-   gap-fill). If the depstor pipeline will be run for this fabric, also set
-   `template_raster`, `fdr_raster`, `twi_raster`, `segments_gpkg`/`segments_layer`,
-   and `waterbody_gpkg`/`waterbody_layer` (waterbody is **required** for depstor —
-   the step raises if unset). Stage the `template_raster`/`fdr_raster` clip with
-   `pixi run --as-is python scripts/clip_shared_to_fabric.py --fabric <name>`
-   (writes `{data_root}/<name>/shared/<name>_fdr.vrt`, a fabric-bounds clip of
-   the CONUS FDR) and point both keys at it — this scopes depstor compute to the
-   fabric extent and stays VPU-agnostic (see the boxed note below). `twi_raster`
-   uses the CONUS `twi.vrt`. For a single-file fabric like `oregon`,
-   `segments_gpkg` can point at the same gpkg as `hru_gpkg` with
-   `segments_layer: nsegment`. The `oregon` profile has the depstor keys
-   **active** (issue #90) — the FDR clip for template/fdr, CONUS `twi.vrt`,
-   `segments_gpkg` at the model gpkg, and the CONUS NHDPlusV2 waterbodies at
-   `input/nhd/conus_waterbodies.gpkg` (layer `waterbodies`). To get valid
-   `carea_max`/`smidx_coef` outside VPU 01, set `threshold_mode: percentile`
-   in `configs/depstor/depstor_rasters.yml` (the new default after PR #95)
-   and point `twi_raster` at the CONUS-complete `twi_hydrodem.vrt`; the
-   percentile cutoffs come from the `twi_reference` step (Stage 2a'). (Prefer
-   hand-editing? Just add the profile block directly — the stub is a convenience.)
-2. Place the fabric gpkg at the `hru_gpkg` path you set, under
-   `{data_root}/oregon/fabric/` (NOT in `input/fabric/`)
-3. Prepare batches (the fabric gpkg + layer come from the profile's
-   `hru_gpkg`/`hru_layer` — no `--fabric_gpkg` needed):
-   ```bash
-   pixi run python scripts/prepare_fabric.py --fabric oregon
-   ```
-4. Submit parameter jobs. Easiest is the unified Part 2 dispatcher (one
-   invocation walks every param + chained merges + ssflux's weights prereq):
-   ```bash
-   BATCHES={data_root}/oregon/batches
-   slurm_batch/submit_zonal_params.sh $BATCHES oregon configs/base_config.yml
-   ```
-   For per-param granularity, invoke the orchestrator directly with
-   `--mode zonal --param <name> --batch_id <N>` (see "Single-batch run"
-   in README.md or Stage 4 above).
-
-> **Scoping depstor to a fabric (e.g. Oregon):** every depstor builder sizes its
-> arrays to the `template_raster` grid, so the template controls compute extent.
-> A CONUS template would force CONUS-scale memory/time; a per-VPU tile is cheap
-> but breaks for fabrics that straddle VPU boundaries. Instead, clip the CONUS
-> FDR to the fabric bounds with
-> `pixi run --as-is python scripts/clip_shared_to_fabric.py --fabric oregon`
-> (a tiny zero-copy VRT) and use it for `template_raster`/`fdr_raster`. Oregon's
-> clip is ~0.56B cells vs ~15B CONUS. The clip comes from `fdr.vrt` because
-> `carea_map` requires the template to share the hydrology lattice with
-> `twi.vrt`; `elevation.vrt` is on the offset DEM lattice and is rejected. The
-> `fdr.vrt` source also lets `routing` read only the fabric window. `twi_raster`
-> and `imperv` stay CONUS (their builders warp-window them onto the template);
-> the waterbody source is the CONUS NHDPlusV2 gpkg. Part 1 itself can still be
-> scoped per-VPU (`VPUS=17 sbatch slurm_batch/build_shared_rasters.batch`) to
-> avoid rebuilding all of CONUS. Then run Stage 2d:
-> `FABRIC=oregon sbatch slurm_batch/build_depstor_rasters.batch`.
->
-> **TWI source pairing (resolved by PR #95):** the legacy 8.0/15.6 absolute
-> thresholds were calibrated against VPU 01's ArcPy TWI distribution, so
-> `threshold_mode: absolute` is only meaningful when paired with `twi.vrt`
-> on VPU 01 (the `gfv2_vpu01` profile). For multi-VPU or non-VPU-01 fabrics
-> like `oregon`, use `threshold_mode: percentile` (the default in
-> `configs/depstor/depstor_rasters.yml`) with `twi_raster` pointing at the
-> CONUS-complete `twi_hydrodem.vrt`; the percentile cutoffs are sourced from
-> the `twi_reference` step (Stage 2a'). With this pairing Stage 2d produces
-> valid `carea_max`/`smidx_coef` everywhere. `twi.vrt` itself is CONUS-wide
-> after PR #95's staging completion — what's VPU-01-specific is the threshold
-> calibration, not the data coverage.
-
-**Case B: VPU-based fabric** (per-VPU gpkgs that need merging — e.g., gfv2)
-
-1. Register the fabric + scaffold dirs: `pixi run init-data-root --add-fabric <name>`
-   (or hand-edit `fabrics:` in `configs/base_config.yml`), then fill the stub's
-   TODO placeholders.
-2. Place per-VPU gpkgs in `input/fabric/`
-3. Merge `nhru` (and, for depstor, `nsegment`):
-   ```bash
-   pixi run -e notebooks marimo run notebooks/merge_vpu_targets.py
-   pixi run --as-is python scripts/merge_vpu_segments.py --fabric <name>   # depstor only
-   ```
-4. Continue from Stage 3 above, passing `--fabric <name>` (or `FABRIC=<name>` env)
-
-## Partial Reruns
-
-To rerun a single failed batch within one of the orchestrator's array
-jobs, submit a one-task array against the generic per-batch worker with
-`$PARAM` set:
-
-```bash
-sbatch --array=37 --export=ALL,PARAM=elevation,FABRIC=gfv2,BASE_CONFIG=configs/base_config.yml \
-    slurm_batch/derive_zonal_params.batch
-```
-
-(For Part 1 raster prep, re-run the single step via the orchestrator's
-`--step` flag: `pixi run python scripts/build_shared_rasters.py
---config configs/shared_rasters/shared_rasters.yml --step <name>`.)
-
-### Recovery: refill a VPU after a merge-manifest / source fix
-
-When a per-VPU source gap is fixed (e.g. an RPU added to a VPU's merge entry in
-`configs/shared_rasters/merge_rpu_by_vpu.yml`, or a stale merge that predates a
-staged RPU), re-merge **just that VPU** and rebuild the products that depend on
-it, then re-run the affected fabric's depstor stage. Run the steps in order,
-waiting for each to finish (they aren't auto-chained). Example for **VPU 17**
-(the W Oregon 17d FDR gap); the per-VPU merge is memory-heavy, so bump `--mem`:
-
-```bash
-V=17
-# 1. re-merge NED / Hydrodem / Fdr / Fac for the VPU (now incl. the added RPU)
-VPUS=$V FORCE=1 sbatch --mem=384G slurm_batch/build_shared_rasters.batch --step merge_rpu_by_vpu
-# 2. regenerate the open-source hydrology derivatives (Fdr_hydrodem, Twi_hydrodem)
-#    from the refreshed Hydrodem — NOT in the default DAG, so name it explicitly
-VPUS=$V FORCE=1 sbatch --mem=192G slurm_batch/build_shared_rasters.batch --step compute_dem_derivatives
-# 3. re-merge the ArcPy TWI (masked) for the VPU
-VPUS=$V FORCE=1 sbatch --mem=384G slurm_batch/build_shared_rasters.batch --step merge_rpu_by_vpu_twi
-# 4. rebuild the CONUS VRTs (fdr.vrt, twi.vrt, twi_hydrodem.vrt, elevation/slope/aspect)
-FORCE=1 sbatch slurm_batch/build_shared_rasters.batch --step build_vrt
-# 5. recompute the TWI percentile reference tables
-FORCE=1 sbatch slurm_batch/build_shared_rasters.batch --step twi_reference
-```
-
-Then refresh the affected fabric and re-run **only its depstor stage** (the
-zonal params — elevation/slope/aspect/soils/LULC/ssflux — are on the gap-free
-DEM lattice and do not need re-running):
-
-```bash
-# resolve data_root from the base config (the submit script needs a real path,
-# not the {data_root} placeholder)
-DR=$(grep '^data_root:' configs/base_config.yml | awk '{print $2}' | tr -d '"')
-
-# re-clip the fabric template/fdr from the rebuilt fdr.vrt
-pixi run python scripts/clip_shared_to_fabric.py --fabric oregon
-# re-derive depstor rasters (routing + carea_map) and params
-FABRIC=oregon sbatch slurm_batch/build_depstor_rasters.batch --force
-slurm_batch/submit_depstor_params.sh "$DR/oregon/batches" oregon configs/base_config.yml
-```
-
-Verify with `notebooks/fabric_results/01_input_rasters.ipynb` (the `fdr` /
-`twi_hydrodem` panels should no longer have a nodata void inside the fabric).
+---
 
 ## Monitoring
 
 ```bash
 squeue -u "$USER"
-tail -n 200 logs/job_*.out
 sacct -j <JOBID> -o JobID,State,Elapsed,MaxRSS
+tail -n 200 logs/job_<JOBID>.err
 ```
 
-## Script -> Config -> Entry Point Mapping
+---
 
-Every production workflow is driven by an orchestrator (Part 1 / depstor
-rasters) or a Part-2 submission wrapper. The old per-step *Python* CLIs were
-retired — the library code they delegated to lives under `src/gfv2_params/` —
-but the Part-2 worker `.batch` files remain a supported surface you can drive
-by hand, one parameter at a time (see Stage 4A); the wrappers just loop them.
+## Where outputs land
 
-### Orchestrators (the primary surface)
+- `{data_root}/gfv2/params/merged/` — final parameter CSVs, including the 6
+  depstor ratios (`sro_to_dprst_perv`, `sro_to_dprst_imperv`, `carea_max`,
+  `smidx_coef`, `hru_percent_imperv`, `dprst_frac`).
+- `{data_root}/gfv2/params/merged/_intermediates/` — 10 per-fraction count
+  CSVs (inputs to ratio derivation; `count` is NOT a [0, 1] fraction).
+- `docs/figures/gfv2/` — rendered PNG figures.
 
-| Batch / shell | Config | Script |
-|---|---|---|
-| `build_shared_rasters.batch` | `shared_rasters/shared_rasters.yml` | `build_shared_rasters.py` |
-| `build_depstor_rasters.batch` | `depstor/depstor_rasters.yml` | `build_depstor_rasters.py` |
-| `submit_depstor_params.sh` | `depstor/depstor_params.yml` | `derive_depstor_params.py` (dispatches 10 fractions × zonal+merge, then ratios via afterok) |
-| `submit_zonal_params.sh` | `zonal/zonal_params.yml` | `derive_zonal_params.py` (dispatches 10 params × zonal+merge, with ssflux's `build_weights` prereq chained automatically) |
+---
 
-### Part-2 workers (looped by the wrappers; also runnable by hand per Stage 4A)
+## Need more?
 
-| Batch | Used by | Config | Script |
-|---|---|---|---|
-| `derive_zonal_params.batch` | `submit_zonal_params.sh` | `zonal/zonal_params.yml` | `derive_zonal_params.py --mode zonal --param $PARAM` |
-| `merge_zonal_param.batch` | `submit_zonal_params.sh` | `zonal/zonal_params.yml` | `derive_zonal_params.py --mode merge --param $PARAM` |
-| `build_zonal_weights.batch` | `submit_zonal_params.sh` (for ssflux prereq) | `zonal/zonal_params.yml` | `derive_zonal_params.py --mode build_weights` |
-| `create_depstor_zonal.batch` | `submit_depstor_params.sh` | `depstor/depstor_params.yml` | `derive_depstor_params.py --mode zonal --fraction $FRACTION` |
-| `merge_depstor_fraction.batch` | `submit_depstor_params.sh` | `depstor/depstor_params.yml` | `derive_depstor_params.py --mode merge --fraction $FRACTION` |
-| `derive_depstor_ratios.batch` | `submit_depstor_params.sh` | `depstor/depstor_params.yml` | `derive_depstor_params.py --mode ratios` |
+See [HPC_REFERENCE.md](HPC_REFERENCE.md) for:
 
-### Standalone (one-off / setup / post-processing)
-
-| Batch / shell | Config | Script |
-|---|---|---|
-| (run directly) | `base_config.yml` | `scripts/merge_vpu_segments.py --fabric <name>` (merges per-VPU `nsegment` → `{fabric}/fabric/{fabric}_nsegment_merged.gpkg` for depstor `streambuffer`; VPU-based fabrics only) |
-| `stage_twi.batch` | `base_config.yml` (indirectly) | `scripts/stage_twi.sh` |
-| `submit_twi_completion.sh` | `shared_rasters/shared_rasters.yml` | `build_shared_rasters.py --step merge_rpu_by_vpu_twi --force` → `--step build_vrt --force` → `--step twi_reference --force` (three chained jobs: finishes `twi.vrt` + `twi_hydrodem.vrt` + writes percentile CSVs) |
-| `download_rpu_rasters.batch` | `base_config.yml` | `gfv2_params.download.rpu_rasters` |
-| `download_nalcms.batch` | `base_config.yml` | `gfv2_params.download.nalcms_lulc` |
-| `download_nhm_v11.batch` | `base_config.yml` | `gfv2_params.download.nhm_v11_lulc` |
-| `merge_default_output_params.batch` (Stage 8) | `base_config.yml` | `merge_default_params.py` |
-| `submit_jobs.sh` | (caller-provided) | generic per-VPU array dispatcher |
+- Running other fabrics (VPU01 validation, Oregon, new fabric registration).
+- Running one parameter at a time (Stage 4A incremental path).
+- Single-step raster rebuilds (`--step <name>`, `--from <name>`).
+- Recovery / partial reruns (single-batch array resubmit, VPU source refill).
+- Environment internals and array concurrency throttle.
+- The script → config → entry-point map.
