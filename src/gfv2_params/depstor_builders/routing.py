@@ -1,22 +1,27 @@
-"""WhiteboxTools Watershed from dprst pour-points, tiled per VPU.
+"""Upslope-of-depression routing, tiled per VPU.
 
-Routing the full-CONUS FDR + pour-points through WBT Watershed OOMs (WBT loads
-every raster as f64; ~3 x 135 GB > the 503 GB node ceiling). NHDPlus VPU
-boundaries follow drainage divides, so each VPU's contributing area is local: we
-route each VPU in isolation (FDR masked to the VPU) and mosaic the per-VPU
-results — see docs/superpowers/specs/2026-05-28-depstor-per-vpu-routing-design.md.
+For each cell, marks whether its ESRI-D8 flow path reaches a depression
+pour-point (`drains_to_dprst.tif`). The per-tile computation is the in-process
+`d8_routing.drains_to_dprst_kernel` — a cycle-safe O(N) traversal that replaced
+WhiteboxTools `Watershed`, which hung on CONUS VPU 2 (a flow-cycle /
+pathological-trace stall, not OOM). See
+docs/superpowers/specs/2026-05-29-depstor-d8-routing-kernel-design.md.
+
+NHDPlus VPU boundaries follow drainage divides, so each VPU's contributing area
+is local: we route each VPU in isolation (FDR masked to the VPU via vpu_id) and
+mosaic the per-VPU results into the CONUS grid. Memory note: this keeps the
+whole-CONUS `vpu_id` + `drains` arrays in RAM (~34 GB); the file-based
+~6-9 GB workstation variant is tracked in issue #129.
 """
 
 from __future__ import annotations
-
-import os
 
 import numpy as np
 import rasterio
 from osgeo import gdal
 from rasterio.windows import Window
-from rasterio.windows import transform as window_transform
 
+from ..d8_routing import drains_to_dprst_kernel
 from ..depstor import (
     RasterInfo,
     assign_vpu_drains,
@@ -27,7 +32,6 @@ from ..depstor import (
     vpu_pour_points,
     write_uint8_binary,
 )
-from ..wbt import find_whitebox_tools_binary, run_streamed
 from .context import BuildContext
 
 
@@ -71,35 +75,6 @@ def _align_fdr_to_dprst_grid(fdr_path, dprst_path, out_path, logger) -> None:
     if ds is None:
         raise RuntimeError(f"gdal.Warp produced no dataset for {out_path} — FDR alignment failed.")
     ds = None  # flush/close
-
-
-def _run_whitebox_watershed(fdr_path, pour_pts_path, output_path, logger) -> None:
-    runner = find_whitebox_tools_binary()
-    cmd = [
-        runner,
-        f"--wd={os.getcwd()}",
-        "--max_procs=-1",
-        "-r=Watershed",
-        f"--d8_pntr={fdr_path}",
-        f"--pour_pts={pour_pts_path}",
-        f"--output={output_path}",
-        "--esri_pntr",
-        "-v",
-    ]
-    run_streamed(cmd, tool="Watershed", logger=logger)
-
-
-def _write_window_tif(arr, window, info, out_path, nodata) -> None:
-    """Write a windowed uint8 raster carrying the window's geotransform."""
-    profile = {
-        "driver": "GTiff", "height": arr.shape[0], "width": arr.shape[1], "count": 1,
-        "dtype": "uint8", "crs": info.crs,
-        "transform": window_transform(window, info.transform),
-        "nodata": nodata, "compress": "LZW", "tiled": True,
-        "blockxsize": 256, "blockysize": 256, "BIGTIFF": "YES",
-    }
-    with rasterio.open(out_path, "w", **profile) as dst:
-        dst.write(arr, 1)
 
 
 def build(step_cfg: dict, ctx: BuildContext, logger) -> dict:
@@ -149,24 +124,13 @@ def build(step_cfg: dict, ctx: BuildContext, logger) -> dict:
                 fdr_masked = mask_fdr_to_vpu(fdr_win, vpu_win, code, nodata=255)
                 pour = vpu_pour_points(dprst_win, vpu_win, code)
 
-                tile_fdr = output_path.parent / f"_fdr_vpu{code}.tif"
-                tile_pour = output_path.parent / f"_pour_vpu{code}.tif"
-                tile_ws = output_path.parent / f"_ws_vpu{code}.tif"
-                try:
-                    _write_window_tif(fdr_masked, window, info, tile_fdr, nodata=255)
-                    _write_window_tif(pour, window, info, tile_pour, nodata=0)
-                    _run_whitebox_watershed(tile_fdr, tile_pour, tile_ws, logger)
-                    with rasterio.open(tile_ws) as ws_src:
-                        ws_win = ws_src.read(1)
-                        ws_nodata = ws_src.nodata
-                    assign_vpu_drains(drains, vpu_id, code, bbox, ws_win, ws_nodata)
-                    n_vpu = int((drains[r0:r1, c0:c1][vpu_win == code] == 1).sum())
-                    logger.info("  VPU %d: %d cells drain to dprst", code, n_vpu)
-                finally:
-                    if not keep_intermediates:
-                        for p in (tile_fdr, tile_pour, tile_ws):
-                            if p.exists():
-                                p.unlink()
+                # In-process D8 traversal (replaces WBT Watershed). Output is
+                # 1 where the cell drains to a pour-point, else 0, so
+                # assign_vpu_drains treats 0 as nodata.
+                ws_win = drains_to_dprst_kernel(fdr_masked, pour, fdr_nodata=255)
+                assign_vpu_drains(drains, vpu_id, code, bbox, ws_win, ws_nodata=0)
+                n_vpu = int((drains[r0:r1, c0:c1][vpu_win == code] == 1).sum())
+                logger.info("  VPU %d: %d cells drain to dprst", code, n_vpu)
     finally:
         if not keep_intermediates and fdr_aligned.exists():
             fdr_aligned.unlink()
