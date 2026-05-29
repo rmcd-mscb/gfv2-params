@@ -96,7 +96,18 @@ A hydrologist reads top-to-bottom and copy-pastes. Sections:
    - 2 · prepare fabric (`merge_vpu_targets` on a compute node; `sbatch
      merge_vpu_segments.batch`; `sbatch prepare_fabric.batch`)
    - 3 · build depstor rasters (`sbatch build_depstor_rasters.batch`)
-   - 4 · generate params (`submit_zonal_params.sh`; `submit_depstor_params.sh`)
+   - 4 · generate params — **fully explicit** (addendum 2026-05-29): the runbook
+     spells out the per-parameter batch jobs to run in order
+     (`derive_zonal_params.batch` + `merge_zonal_param.batch` per zonal param,
+     `build_zonal_weights.batch` for ssflux, `create_depstor_zonal.batch` +
+     `merge_depstor_fraction.batch` per fraction, then `derive_depstor_ratios.batch`),
+     naming every parameter/fraction and the `slope`→`ssflux` order. The
+     `submit_zonal_params.sh` / `submit_depstor_params.sh` wrappers are presented
+     **only as the wholesale convenience** that runs exactly that sequence
+     (afterok-chained). Rationale: the shell wrappers are opaque to a
+     non-HPC reader; the batch scripts and their order must be visible.
+     HPC_REFERENCE's Stage 4A keeps the finer detail (throttle, single-param
+     rerun) and points back to the runbook for the sequence.
    - 5 · gap-fill (`sbatch merge_and_fill_params.batch`)
    - 6 · (optional) NHM defaults (`sbatch merge_default_output_params.batch`)
    - 7 · view results (`sbatch render_figures.batch`)
