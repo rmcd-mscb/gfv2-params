@@ -1,0 +1,24 @@
+#!/bin/bash
+#SBATCH -p cpu
+#SBATCH -A impd
+#SBATCH --job-name=prepare_fabric
+#SBATCH --output=logs/job_%j.out
+#SBATCH --error=logs/job_%j.err
+#SBATCH --time=02:00:00
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=4
+#SBATCH --mem=64G
+#
+# Spatially batch a merged fabric into per-batch geopackages (KD-tree recursive
+# bisection) + a manifest. Loads the whole CONUS fabric into memory, so it runs
+# as a SLURM job rather than on the login node. Override FABRIC for other
+# fabrics:  FABRIC=oregon sbatch slurm_batch/prepare_fabric.batch
+# --mem/--time are starting points; right-size from `sacct -j <id> -o MaxRSS`.
+cd "$SLURM_SUBMIT_DIR"
+BASE_CONFIG=${BASE_CONFIG:-configs/base_config.yml}
+FABRIC=${FABRIC:-gfv2}
+
+pixi run --as-is python scripts/prepare_fabric.py \
+    --fabric "$FABRIC" \
+    --base_config "$BASE_CONFIG" \
+    "$@"

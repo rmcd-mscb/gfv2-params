@@ -1,0 +1,23 @@
+#!/bin/bash
+#SBATCH -p cpu
+#SBATCH -A impd
+#SBATCH --job-name=merge_vpu_segments
+#SBATCH --output=logs/job_%j.out
+#SBATCH --error=logs/job_%j.err
+#SBATCH --time=01:00:00
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=4
+#SBATCH --mem=32G
+#
+# Merge the per-VPU `nsegment` layers into one CONUS stream-segments gpkg for the
+# depstor `streambuffer` step (VPU-based fabrics only). Concatenates 21 VPU
+# geometry layers in memory, so it runs as a SLURM job rather than on the login
+# node.  FABRIC=gfv2 sbatch slurm_batch/merge_vpu_segments.batch
+cd "$SLURM_SUBMIT_DIR"
+BASE_CONFIG=${BASE_CONFIG:-configs/base_config.yml}
+FABRIC=${FABRIC:-gfv2}
+
+pixi run --as-is python scripts/merge_vpu_segments.py \
+    --fabric "$FABRIC" \
+    --base_config "$BASE_CONFIG" \
+    "$@"

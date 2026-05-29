@@ -1,0 +1,22 @@
+#!/bin/bash
+#SBATCH -p cpu
+#SBATCH -A impd
+#SBATCH --job-name=merge_and_fill_params
+#SBATCH --output=logs/job_%j.out
+#SBATCH --error=logs/job_%j.err
+#SBATCH --time=02:00:00
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=8
+#SBATCH --mem=64G
+#
+# KNN gap-fill of missing parameter values against the fabric (Stage 7). Fits
+# sklearn NearestNeighbors over every HRU and fills all param columns, so it
+# runs as a SLURM job rather than on the login node. The fabric is read from
+# base_config's default_fabric (the script takes no --fabric).
+# --mem/--time are starting points; right-size from `sacct -j <id> -o MaxRSS`.
+cd "$SLURM_SUBMIT_DIR"
+BASE_CONFIG=${BASE_CONFIG:-configs/base_config.yml}
+
+pixi run --as-is python scripts/merge_and_fill_params.py \
+    --base_config "$BASE_CONFIG" \
+    "$@"
