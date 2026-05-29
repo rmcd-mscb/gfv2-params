@@ -1,0 +1,41 @@
+#!/bin/bash
+#SBATCH -p cpu
+#SBATCH -A impd
+#SBATCH --job-name=route_gfv2_conus
+#SBATCH --output=logs/job_%j.out
+#SBATCH --error=logs/job_%j.err
+#SBATCH --time=06:00:00
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=16
+#SBATCH --mem=96G
+#
+# CONUS gfv2 depstor `routing` smoke run — rebuild ONLY drains_to_dprst.tif
+# with the in-process D8 kernel (PR #130) and confirm the step that previously
+# hung in WBT Watershed (VPU 2) now completes for all 18 VPUs.
+#
+# Per-VPU tiled, full-array mosaic: ~80 GB peak measured (MaxRSS 77 GiB, ~23 min)
+# = whole-CONUS vpu_id + drains arrays + the largest VPU window's working copies.
+# Keep --mem=96G; 64G is NOT enough. The ~6-9 GB file-based-mosaic variant that
+# would run on a workstation is tracked in issue #129.
+#
+# Watch progress:  tail -f logs/job_<id>.err
+# Expect one line per VPU:  "VPU <n>: <count> cells drain to dprst"
+# (VPU 2 is the one that used to hang.)
+#
+# Submit from a shell with ~/.pixi/bin on PATH (SLURM inherits it):
+#   sbatch slurm_batch/route_gfv2_conus.batch
+#
+# --force overwrites the existing drains_to_dprst.tif. Extra args are
+# forwarded to python via "$@" (e.g. pass --keep_intermediates to retain
+# fdr_aligned.tif for inspection).
+
+cd "$SLURM_SUBMIT_DIR"
+BASE_CONFIG=${BASE_CONFIG:-configs/base_config.yml}
+
+pixi run --as-is python scripts/build_depstor_rasters.py \
+    --config configs/depstor/depstor_rasters.yml \
+    --base_config "$BASE_CONFIG" \
+    --fabric gfv2 \
+    --step routing \
+    --force \
+    "$@"

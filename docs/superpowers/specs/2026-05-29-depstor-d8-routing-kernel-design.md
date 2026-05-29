@@ -181,10 +181,14 @@ and the params need no changes.
 ## Memory
 
 Full-array mosaic peak ≈ `vpu_id` (16.9 GB) + `drains` (16.9 GB) + the largest
-single tile's working arrays. Largest tile is VPU 10 (Missouri), 3.12 B-cell
-bbox → FDR + state ≈ 6.2 GB held transiently. Total peak ≈ **~40 GB**; size the
-batch `--mem` accordingly (64 GB is comfortable). This is the same order as the
-existing full-grid steps (`waterbody` clump, `dprst` regions).
+single tile's working arrays (VPU 10 / Missouri, 3.12 B-cell bbox: the kernel's
+`st`+`out` plus the caller's `fdr_win`/`dprst_win`/`fdr_masked`/`pour` are each
+bbox-sized, so ~6 uint8 copies ≈ 18 GB transient). **Measured peak on CONUS:
+~80 GB** (MaxRSS 77 GiB, job 24158434, 23 min) — higher than the naive
+33.8 GB-of-CONUS-arrays estimate because of those per-VPU copies. Size the batch
+at `--mem=96G`; **64 GB is not enough**. Still well under the 503 GB node ceiling
+and the same order as the existing full-grid steps (`waterbody` clump, `dprst`
+regions).
 
 Per-VPU bbox sizes (decimated 1/32 scan of `vpu_id.tif`, 2026-05-29):
 
