@@ -71,6 +71,19 @@ These are hard-won; violating them silently corrupts outputs.
   as a land mask.
 - **WhiteboxTools cannot read LZW + `predictor=2` GeoTIFFs** — it silently
   corrupts them. Never pass `predictor=2` rasters to WBT subprocesses.
+- **CONUS-scale memory: stream/window, never hold a full-grid array.** The CONUS
+  template is 153830×109901 ≈ 16.9 B cells — ~17 GB as uint8, ~68 GB as int32,
+  ~135 GB as float64. Oregon (~0.56 B cells) hides this; CONUS OOMs any depstor
+  builder that materializes a full-grid array (or a redundant copy of one).
+  Follow `carea_map`'s windowed-strip pattern (`STRIP_ROWS`); reproject with
+  streaming `gdal.Warp`, never in-memory `rioxarray.reproject_match` (it blew a
+  17 GB uint8 FDR to ~400 GB and OOM-killed routing); use
+  `astype(np.int32, copy=False)` so label arrays aren't duplicated. The
+  remaining full-grid steps (`waterbody` clump, `dprst` regions) fit at
+  `--mem=384G` but are the memory ceiling; `routing` is now per-VPU tiled with
+  an in-process D8 kernel (~80 GB peak measured for CONUS — the whole-CONUS
+  `vpu_id` + `drains` arrays plus the largest VPU window's working set; run at
+  `--mem=96G`, not 64G), so it's no longer one of them.
 - **`carea_max`/`smidx_coef` threshold mode.** The legacy `absolute` thresholds
   (8.0/15.6) are only calibrated against VPU 01's ArcPy TWI distribution. For
   any other fabric use `threshold_mode: percentile` in

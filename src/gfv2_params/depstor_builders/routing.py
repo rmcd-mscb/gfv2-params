@@ -1,102 +1,85 @@
-"""WhiteboxTools Watershed from dprst pour-points on the staged FDR."""
+"""Upslope-of-depression routing, tiled per VPU.
+
+For each cell, marks whether its ESRI-D8 flow path reaches a depression
+pour-point (`drains_to_dprst.tif`). The per-tile computation is the in-process
+`d8_routing.drains_to_dprst_kernel` — a cycle-safe O(N) traversal that replaced
+WhiteboxTools `Watershed`, which hung on CONUS VPU 2 (a flow-cycle /
+pathological-trace stall, not OOM). See
+docs/superpowers/specs/2026-05-29-depstor-d8-routing-kernel-design.md.
+
+NHDPlus VPU boundaries follow drainage divides, so each VPU's contributing area
+is local: we route each VPU in isolation (FDR masked to the VPU via vpu_id) and
+mosaic the per-VPU results into the CONUS grid. Memory note: this keeps the
+whole-CONUS `vpu_id` + `drains` arrays in RAM (~34 GB); the file-based
+~6-9 GB workstation variant is tracked in issue #129.
+"""
 
 from __future__ import annotations
 
-import os
-
 import numpy as np
 import rasterio
-import rioxarray  # noqa: F401  (registers .rio accessor)
-import xarray as xr
+from osgeo import gdal
+from rasterio.windows import Window
 
-from ..depstor import RasterInfo, read_land_mask, write_uint8_binary
-from ..wbt import find_whitebox_tools_binary, run_streamed
+from ..d8_routing import drains_to_dprst_kernel
+from ..depstor import (
+    RasterInfo,
+    assign_vpu_drains,
+    mask_fdr_to_vpu,
+    read_aligned_uint8,
+    read_land_mask,
+    vpu_bbox,
+    vpu_codes_present,
+    vpu_pour_points,
+    write_uint8_binary,
+)
 from .context import BuildContext
 
-
-def _reproject_fdr_with_rioxarray(fdr_path, dprst_path, out_path, logger) -> None:
-    logger.info("  Reprojecting FDR to match dprst grid (rioxarray.reproject_match)...")
-    fdr_da = xr.open_dataarray(fdr_path, engine="rasterio").squeeze("band", drop=True)
-    dprst_da = xr.open_dataarray(dprst_path, engine="rasterio").squeeze("band", drop=True)
-    fdr_aligned = fdr_da.rio.reproject_match(dprst_da)
-    fdr_aligned = fdr_aligned.rio.write_nodata(np.uint8(255))
-    # xarray >= 2023 refuses to encode if _FillValue is in both attrs and
-    # encoding. reproject_match preserves it in attrs from the source raster.
-    fdr_aligned.attrs.pop("_FillValue", None)
-    fdr_aligned.rio.to_raster(
-        out_path,
-        driver="GTiff",
-        compress="LZW",
-        tiled=True,
-        blockxsize=256,
-        blockysize=256,
-        dtype="uint8",
-        nodata=np.uint8(255),
-        BIGTIFF="YES",
-    )
+# ESRI-D8 flow codes plus the nodata/sink value (255). Any other value in the
+# FDR is unexpected and is silently treated as a sink by the kernel — surface it.
+_VALID_FDR_VALUES = frozenset({1, 2, 4, 8, 16, 32, 64, 128, 255})
 
 
-def _prepare_pour_points(dprst_path, out_path, logger) -> None:
-    """Convert dprst_binary.tif (1=pour, 255=nodata) into 0/1 (nodata=0).
+def _align_fdr_to_dprst_grid(fdr_path, dprst_path, out_path, logger) -> None:
+    """Materialise the FDR onto the dprst grid as a concrete GeoTIFF.
 
-    WBT's Watershed reads the raw values and treats every non-zero value as a
-    pour-point — it ignores the GeoTIFF nodata tag. The 255 cells therefore
-    leak in unless we re-encode.
+    Streams via gdal.Warp (block-by-block, bounded RAM) rather than an in-memory
+    rioxarray.reproject_match: the latter materialised the full 16.9-billion-cell
+    CONUS array plus float intermediates and OOM-killed the step at ~400 GB on a
+    uint8 source that is only ~17 GB. The FDR clip already shares the dprst grid,
+    so this is a near-identity nearest-neighbour resample that just realises the
+    VRT into a concrete raster for fast per-VPU windowed reads.
     """
-    logger.info("  Converting dprst_binary.tif (1/255) -> 0/1 pour-points (nodata=0)...")
-    with rasterio.open(dprst_path) as src:
-        data = src.read(1)
-        profile = src.profile.copy()
-    pour = np.where(data == 1, np.uint8(1), np.uint8(0))
-    profile.update(nodata=0, compress="LZW")
-    with rasterio.open(out_path, "w", **profile) as dst:
-        dst.write(pour, 1)
-
-
-def _run_whitebox_watershed(fdr_path, pour_pts_path, output_path, logger) -> None:
-    runner = find_whitebox_tools_binary()
-    logger.info("  WhiteboxTools binary: %s", runner)
-    cmd = [
-        runner,
-        f"--wd={os.getcwd()}",
-        "--max_procs=-1",
-        "-r=Watershed",
-        f"--d8_pntr={fdr_path}",
-        f"--pour_pts={pour_pts_path}",
-        f"--output={output_path}",
-        "--esri_pntr",
-        "-v",
-    ]
-    logger.info("  Running: %s", " ".join(cmd))
-    run_streamed(cmd, tool="Watershed", logger=logger)
-
-
-def _watershed_to_binary(watershed_path, landmask_path, info, out_path, logger) -> None:
-    with rasterio.open(watershed_path) as src:
-        data = src.read(1)
-        src_nodata = src.nodata
-    if src_nodata is None:
-        valid = data > 0
-    elif isinstance(src_nodata, float) and np.isnan(src_nodata):
-        valid = ~np.isnan(data)
-    else:
-        valid = data != src_nodata
-    binary = np.where(valid, np.uint8(1), np.uint8(255))
-    binary[~read_land_mask(landmask_path)] = 255  # drop off-land (ocean) cells
-    n_in = int((binary == 1).sum())
-    pct = 100 * n_in / binary.size
-    # >50% coverage almost certainly means the pour-points nodata bug — PR #56.
-    if pct > 50:
-        logger.warning(
-            "Drains-to-dprst coverage is %.2f%% of the grid — unusually high. "
-            "Check pour-points nodata=0 (not 255) and FDR alignment.",
-            pct,
-        )
-    write_uint8_binary(binary, info, out_path)
-    logger.info(
-        "  Drains-to-dprst mask written: %s (%d cells, %.4f%% of grid)",
-        out_path, n_in, pct,
+    logger.info("  Aligning FDR to dprst grid (gdal.Warp, streaming)...")
+    gdal.UseExceptions()
+    with rasterio.open(dprst_path) as d:
+        b = d.bounds
+        width, height, dst_srs = d.width, d.height, d.crs.to_wkt()
+    with rasterio.open(fdr_path) as f:
+        src_nodata = f.nodata
+    if out_path.exists():
+        out_path.unlink()
+    ds = gdal.Warp(
+        str(out_path),
+        str(fdr_path),
+        options=gdal.WarpOptions(
+            format="GTiff",
+            outputBounds=[b.left, b.bottom, b.right, b.top],
+            width=width,
+            height=height,
+            dstSRS=dst_srs,
+            resampleAlg="near",
+            outputType=gdal.GDT_Byte,
+            srcNodata=src_nodata,
+            dstNodata=255,
+            multithread=True,
+            warpMemoryLimit=2_000_000_000,
+            creationOptions=["COMPRESS=LZW", "TILED=YES", "BLOCKXSIZE=256", "BLOCKYSIZE=256", "BIGTIFF=YES"],
+        ),
     )
+    if ds is None:
+        raise RuntimeError(f"gdal.Warp produced no dataset for {out_path} — FDR alignment failed.")
+    ds = None  # flush/close
 
 
 def build(step_cfg: dict, ctx: BuildContext, logger) -> dict:
@@ -105,13 +88,15 @@ def build(step_cfg: dict, ctx: BuildContext, logger) -> dict:
     output_path = ctx.resolve_output(step_cfg["output"])
     landmask_path = ctx.require("landmask")
     dprst_path = ctx.require("dprst")
+    vpu_id_path = ctx.require("vpu_id")
     keep_intermediates = bool(step_cfg.get("keep_intermediates", False))
 
     if not ctx.fdr_raster.exists():
         raise FileNotFoundError(f"FDR raster not found: {ctx.fdr_raster}")
 
-    logger.info("--- routing ---")
+    logger.info("--- routing (per-VPU tiled) ---")
     logger.info("  FDR    : %s", ctx.fdr_raster)
+    logger.info("  vpu_id : %s", vpu_id_path)
     logger.info("  Output : %s", output_path)
 
     if output_path.exists() and not ctx.force:
@@ -121,18 +106,79 @@ def build(step_cfg: dict, ctx: BuildContext, logger) -> dict:
     info = RasterInfo.from_path(ctx.template_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     fdr_aligned = output_path.parent / "fdr_aligned.tif"
-    pour_pts = output_path.parent / "dprst_pourpts.tif"
-    watershed_raw = output_path.parent / "hru_to_dprst_labels.tif"
 
     try:
-        _reproject_fdr_with_rioxarray(ctx.fdr_raster, dprst_path, fdr_aligned, logger)
-        _prepare_pour_points(dprst_path, pour_pts, logger)
-        _run_whitebox_watershed(fdr_aligned, pour_pts, watershed_raw, logger)
-        _watershed_to_binary(watershed_raw, landmask_path, info, output_path, logger)
-    finally:
-        if not keep_intermediates:
-            for p in (fdr_aligned, pour_pts, watershed_raw):
-                if p.exists():
-                    p.unlink()
+        _align_fdr_to_dprst_grid(ctx.fdr_raster, dprst_path, fdr_aligned, logger)
 
+        # read_aligned_uint8 asserts vpu_id is on the exact template grid;
+        # a mismatch would silently mosaic into the wrong CONUS region.
+        vpu_id = read_aligned_uint8(vpu_id_path, info)
+        codes = vpu_codes_present(vpu_id)
+        logger.info("  Tiling routing over %d VPU(s): %s", len(codes), codes)
+
+        drains = np.full((info.height, info.width), np.uint8(255), dtype=np.uint8)
+
+        with rasterio.open(fdr_aligned) as fdr_src, rasterio.open(dprst_path) as dprst_src:
+            for code in codes:
+                bbox = vpu_bbox(vpu_id, code)
+                r0, r1, c0, c1 = bbox
+                window = Window(c0, r0, c1 - c0, r1 - r0)
+                vpu_win = vpu_id[r0:r1, c0:c1]
+                fdr_win = fdr_src.read(1, window=window)
+                dprst_win = dprst_src.read(1, window=window)
+
+                fdr_masked = mask_fdr_to_vpu(fdr_win, vpu_win, code, nodata=255)
+                pour = vpu_pour_points(dprst_win, vpu_win, code)
+
+                unexpected = set(np.unique(fdr_masked).tolist()) - _VALID_FDR_VALUES
+                if unexpected:
+                    logger.warning(
+                        "  VPU %d: FDR window has unexpected code(s) %s — treated "
+                        "as sinks; check FDR encoding / nodata.", code, sorted(unexpected),
+                    )
+
+                # In-process D8 traversal (replaces WBT Watershed). Output is
+                # 1 where the cell drains to a pour-point, else 0, so
+                # assign_vpu_drains treats 0 as nodata.
+                ws_win, n_cycles = drains_to_dprst_kernel(fdr_masked, pour, fdr_nodata=255)
+                if n_cycles:
+                    logger.warning(
+                        "  VPU %d: %d flow cycle(s) in FDR — those cells marked "
+                        "non-draining (hydro-conditioned-DEM defect).", code, n_cycles,
+                    )
+                assign_vpu_drains(drains, vpu_id, code, bbox, ws_win, ws_nodata=0)
+                n_vpu = int((drains[r0:r1, c0:c1][vpu_win == code] == 1).sum())
+                if n_vpu == 0:
+                    logger.warning(
+                        "  VPU %d: 0 cells drain to dprst — expected for a VPU with "
+                        "no depressions, else check dprst/vpu_id alignment.", code,
+                    )
+                else:
+                    logger.info("  VPU %d: %d cells drain to dprst", code, n_vpu)
+    finally:
+        if not keep_intermediates and fdr_aligned.exists():
+            fdr_aligned.unlink()
+
+    del vpu_id  # free the CONUS uint8 partition before the final mask
+
+    drains[~read_land_mask(landmask_path)] = 255  # drop off-land (ocean) cells
+    n_in = int((drains == 1).sum())
+    pct = 100 * n_in / drains.size
+    if n_in == 0:
+        raise RuntimeError(
+            f"drains_to_dprst is all-nodata after routing {len(codes)} VPU(s) — "
+            "an all-empty mask is never a valid product. Check that dprst, vpu_id, "
+            "and the FDR are aligned to the same template grid."
+        )
+    if pct > 50:
+        logger.warning(
+            "Drains-to-dprst coverage is %.2f%% of the grid — unusually high. "
+            "Check the pour-point mask (kernel background=0), FDR, and vpu_id "
+            "alignment.", pct,
+        )
+    write_uint8_binary(drains, info, output_path)
+    logger.info(
+        "  Drains-to-dprst mask written: %s (%d cells, %.4f%% of grid)",
+        output_path, n_in, pct,
+    )
     return {"drains_to_dprst": output_path}

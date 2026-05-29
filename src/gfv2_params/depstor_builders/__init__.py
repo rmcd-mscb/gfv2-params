@@ -46,7 +46,7 @@ BUILDERS = {
 #   dprst             -> "dprst",                 dprst_binary.tif,
 #                        "onstream"               onstream_binary.tif
 #   perv              -> "perv"                   perv_binary.tif
-#   routing           -> "drains_to_dprst"        drains_to_dprst.tif (WBT watershed)
+#   routing           -> "drains_to_dprst"        drains_to_dprst.tif (in-process D8 kernel)
 #   drains_perv       -> "drains_perv"            drains_perv_binary.tif (output_key from config)
 #   drains_imperv     -> "drains_imperv"          drains_imperv_binary.tif (output_key from config)
 #   vpu_id            -> "vpu_id"                 vpu_id.tif (per-cell VPU code, multi-VPU only)
@@ -59,10 +59,10 @@ STEP_ORDER = [
     "waterbody",
     "dprst",
     "perv",
+    "vpu_id",
     "routing",
     "drains_perv",
     "drains_imperv",
-    "vpu_id",
     "carea_map",
 ]
 

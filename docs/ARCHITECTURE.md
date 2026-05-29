@@ -132,7 +132,7 @@ whether the depstor pipeline will be run for the fabric:
 | `template_raster` | — | ✓ | Fabric-bounds clip of `fdr.vrt`; produced by `clip_shared_to_fabric.py` |
 | `fdr_raster` | — | ✓ | Same fabric-bounds clip (typically points at the same file as `template_raster`) |
 | `twi_raster` | — | ✓ | CONUS `twi.vrt` (ArcPy, calibrated) or `twi_hydrodem.vrt` (open-source, CONUS-complete) |
-| `segments_gpkg` | — | ✓ | Stream segments for the depstor routing step; for a single-file fabric can point at `hru_gpkg` |
+| `segments_gpkg` | — | ✓ | Stream segments for the depstor `streambuffer` step. A pre-merged fabric can point at `hru_gpkg`; a VPU-based fabric (gfv2) merges the per-VPU `nsegment` layers into one CONUS gpkg via `scripts/merge_vpu_segments.py` |
 | `segments_layer` | — | ✓ | Layer name inside `segments_gpkg` (typically `nsegment`) |
 | `waterbody_gpkg` | — | ✓ | NHDPlus waterbodies; depstor's `waterbody` step **raises** if unset |
 | `waterbody_layer` | — | ✓ | Layer name inside `waterbody_gpkg` |
@@ -168,6 +168,13 @@ These are hard-won; violating them silently corrupts outputs.
   nodata or FDR as a land mask.
 - **WhiteboxTools cannot read LZW + `predictor=2` GeoTIFFs** — it silently
   corrupts them. Never pass `predictor=2` rasters to WBT subprocesses.
+- **CONUS-scale memory: stream/window, never hold a full-grid array.** The
+  CONUS template is ~16.9 B cells (~17 GB uint8, ~68 GB int32, ~135 GB
+  float64); whole-grid ops OOM the 503 GB node ceiling. `routing` tiles the
+  in-process D8 routing pass per VPU (it runs after `vpu_id`, routes each VPU in
+  isolation, and mosaics); reproject with streaming `gdal.Warp`, not in-memory
+  `rioxarray.reproject_match`; window per `STRIP_ROWS` like `carea_map`. See
+  CLAUDE.md for the full gotcha.
 - **`carea_max`/`smidx_coef` threshold mode.** The legacy `absolute`
   thresholds (8.0/15.6) are only calibrated against VPU 01's ArcPy TWI
   distribution. For any other fabric, use `threshold_mode: percentile` (the

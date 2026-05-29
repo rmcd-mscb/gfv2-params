@@ -59,7 +59,7 @@ gfv2_param/
 │   ├── lulc/
 │   │   ├── nlcd_annual_imperv/   # NLCD fractional imperviousness (downloadable)
 │   │   └── nalcms_2020/    # NALCMS 2020 land cover (downloadable)
-│   ├── depstor/            # Per-fabric depression-storage inputs (<fabric>_segments_wbodies.gpkg)
+│   ├── nhd/                # conus_waterbodies.gpkg (shared NHDPlusV2 waterbodies, layer waterbodies)
 │   ├── twi/<rpu>/          # Per-RPU TWI (twi.tif + sidecars; staged via stage_twi.sh)
 │   ├── nhm_default/        # NHM default parameter files
 │   └── nhd_downloads/      # Raw NHDPlus zip archives (downloadable)
@@ -191,7 +191,7 @@ The following externally-provided files must be placed in the scaffolded directo
 | `input/soils_litho/` | `TEXT_PRMS.tif`, `AWC.tif`, `Lithology_exp_Konly_Project.shp` (+ sidecar files: `.dbf`, `.prj`, `.shx`) |
 | `input/lulc_veg/` | `RootDepth.tif`, `CNPY.tif`, `Imperv.tif` |
 | `input/nhm_default/` | NHM default parameter files (input to final merge step) |
-| `input/depstor/` | Per-fabric: `<fabric>_segments_wbodies.gpkg` (layers `nsegment`, `v2_wb`). The D8 flow-direction raster is sourced from the shared `shared/conus/vrt/fdr.vrt` produced by Part 1 — no fabric-specific FDR is required here. |
+| `input/nhd/` | `conus_waterbodies.gpkg` (layer `waterbodies`) — shared CONUS NHDPlusV2 depression-storage polygons, used by every depstor fabric. Stream segments are **not** staged here: for a VPU-based fabric (gfv2) they are merged from the per-VPU `nsegment` layers by `scripts/merge_vpu_segments.py` (→ `{fabric}/fabric/{fabric}_nsegment_merged.gpkg`); a pre-merged fabric (oregon) reads `nsegment` from its own model gpkg. The D8 flow-direction raster comes from the shared `shared/conus/vrt/fdr.vrt`, not a per-fabric FDR. |
 | `input/twi/<rpu>/` | Per-RPU TWI raster `twi.tif` (+ `.tfw`, `.aux.xml`, `.ovr`, `.xml` sidecars). Stage with `bash scripts/stage_twi.sh` (see below). |
 
 The NALCMS 2020 land cover raster can be downloaded automatically (see below).
@@ -353,11 +353,15 @@ Inputs (per fabric, from `base_config.yml`):
   `configs/depstor/depstor_rasters.yml`).
 
 One sbatch builds the entire stack in dependency order
-(landmask → imperv/streambuffer/waterbody → dprst → perv/routing →
-drains_perv/drains_imperv → vpu_id → carea_map). The 11-step DAG is encoded
+(landmask → imperv/streambuffer/waterbody → dprst → perv → vpu_id → routing →
+drains_perv/drains_imperv → carea_map). The 11-step DAG is encoded
 in `src/gfv2_params/depstor_builders/__init__.py`; selective re-runs are
 supported via `--step <name>` or `--from <name>` passed through to the python
-script.
+script. `routing` runs **after** `vpu_id` because it tiles the in-process D8
+routing pass per VPU — each VPU is routed in isolation (FDR masked to the VPU)
+and the results are mosaicked. That keeps CONUS memory bounded (~80 GB peak
+measured — run at `--mem=96G` — vs ~405 GB for a whole-CONUS WBT float64 load)
+and is correct because VPU boundaries follow drainage divides.
 
 **`vpu_id` step:** rasterises the HRU fabric's `vpu` attribute onto the
 template grid. Required by `carea_map` when `threshold_mode: percentile` and
@@ -387,8 +391,10 @@ FABRIC=gfv2_vpu01 sbatch --time=02:00:00 --mem=48G \
 sbatch slurm_batch/build_depstor_rasters.batch --from routing --force
 ```
 
-Default resources size the job for the long pole (`routing` — WhiteboxTools
-Watershed on CONUS). For VPU01 / smaller fabrics, override `--time` and
+Default resources size the job for the long pole (`routing` — per-VPU D8
+routing pass). Because `routing` tiles per VPU, whole-CONUS FDR is never held
+in memory, so the default `--mem` can be right-sized down once a clean CONUS
+run reports its peak. For VPU01 / smaller fabrics, override `--time` and
 `--mem` at submission as shown above.
 
 Note: Stage 2d depends on the Part 1 FDR VRT (`shared/conus/vrt/fdr.vrt`, the
@@ -408,6 +414,16 @@ Merge per-VPU fabric geopackages into a single CONUS fabric:
 
 ```bash
 pixi run -e notebooks marimo run notebooks/merge_vpu_targets.py
+```
+
+If you will run the depstor pipeline for this fabric, also merge the per-VPU
+`nsegment` layers into the single CONUS stream-network gpkg that the depstor
+`streambuffer` step needs (the notebook above merges only `nhru`):
+
+```bash
+pixi run --as-is python scripts/merge_vpu_segments.py --fabric gfv2
+# → {data_root}/gfv2/fabric/gfv2_nsegment_merged.gpkg (layer nsegment),
+#   the profile's segments_gpkg. Idempotent; pass --force to rebuild.
 ```
 
 Then spatially batch the merged fabric into per-batch geopackages. The fabric
@@ -694,9 +710,10 @@ already merged or comes as per-VPU gpkgs.
    (or hand-edit `fabrics:` in `configs/base_config.yml`), then fill the stub's
    TODO placeholders.
 2. Place per-VPU gpkgs in `input/fabric/`
-3. Merge:
+3. Merge `nhru` (and, for depstor, `nsegment`):
    ```bash
    pixi run -e notebooks marimo run notebooks/merge_vpu_targets.py
+   pixi run --as-is python scripts/merge_vpu_segments.py --fabric <name>   # depstor only
    ```
 4. Continue from Stage 3 above, passing `--fabric <name>` (or `FABRIC=<name>` env)
 
@@ -798,6 +815,7 @@ by hand, one parameter at a time (see Stage 4A); the wrappers just loop them.
 
 | Batch / shell | Config | Script |
 |---|---|---|
+| (run directly) | `base_config.yml` | `scripts/merge_vpu_segments.py --fabric <name>` (merges per-VPU `nsegment` → `{fabric}/fabric/{fabric}_nsegment_merged.gpkg` for depstor `streambuffer`; VPU-based fabrics only) |
 | `stage_twi.batch` | `base_config.yml` (indirectly) | `scripts/stage_twi.sh` |
 | `submit_twi_completion.sh` | `shared_rasters/shared_rasters.yml` | `build_shared_rasters.py --step merge_rpu_by_vpu_twi --force` → `--step build_vrt --force` → `--step twi_reference --force` (three chained jobs: finishes `twi.vrt` + `twi_hydrodem.vrt` + writes percentile CSVs) |
 | `download_rpu_rasters.batch` | `base_config.yml` | `gfv2_params.download.rpu_rasters` |
