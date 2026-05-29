@@ -117,7 +117,7 @@ The following externally-provided files must be placed in the scaffolded directo
 
 ### 3. Run fabric-independent tasks
 
-These stages do not require a watershed fabric and can run while fabric preparation proceeds in parallel. This includes downloading and merging NHD rasters, building VRTs, and computing derived rasters. See `slurm_batch/HPC_REFERENCE.md` **Part 1** for the full sequence.
+These stages do not require a watershed fabric and can run while fabric preparation proceeds in parallel. This includes downloading and merging NHD rasters, building VRTs, and computing derived rasters. See `slurm_batch/HPC_REFERENCE.md` **Part 1 stage detail** for the full sequence.
 
 **Download NHDPlus RPU rasters** from S3 (~112 GB):
 
@@ -176,7 +176,7 @@ ways to run Part 2 (they produce identical outputs):
   ```
 
 See [Zonal-pass parameter pipeline](#zonal-pass-parameter-pipeline) below
-for the design notes, and `slurm_batch/HPC_REFERENCE.md` **Part 2 / Stage 4** for the
+for the design notes, and `slurm_batch/HPC_REFERENCE.md` **Stage 4A/4B** for the
 full sequence (both paths) including the depstor pipeline and gap-fill.
 
 ### Single-batch run (debugging one param + batch)

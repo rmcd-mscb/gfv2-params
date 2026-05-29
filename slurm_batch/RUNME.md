@@ -72,7 +72,7 @@ rasters).
 # merge_vpu_targets is an interactive marimo notebook — run it on a COMPUTE
 # node (JupyterHub or `salloc`), never the login node. See HPC_REFERENCE.
 pixi run -e notebooks marimo run notebooks/merge_vpu_targets.py   # nhru merge (compute node)
-sbatch slurm_batch/merge_vpu_segments.batch                        # nsegment merge (depstor)
+sbatch slurm_batch/merge_vpu_segments.batch                        # nsegment merge (for depstor streambuffer)
 sbatch slurm_batch/prepare_fabric.batch                            # spatial batching + manifest
 ```
 

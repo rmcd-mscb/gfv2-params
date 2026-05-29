@@ -679,7 +679,7 @@ Then re-clip and re-run depstor for the affected fabric:
 
 ```bash
 # re-clip the fabric template/fdr from the rebuilt fdr.vrt
-pixi run python scripts/clip_shared_to_fabric.py --fabric oregon
+pixi run --as-is python scripts/clip_shared_to_fabric.py --fabric oregon
 # re-derive depstor rasters and params
 FABRIC=oregon sbatch slurm_batch/build_depstor_rasters.batch --force
 DR=$(grep '^data_root:' configs/base_config.yml | awk '{print $2}' | tr -d '"')
