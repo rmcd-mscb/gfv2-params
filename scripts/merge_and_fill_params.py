@@ -32,12 +32,17 @@ def find_missing_ids(param_file, expected_max, id_feature, logger):
 
 
 def fill_missing_values_knn(param_df, missing_ids, merged_gdf, param_columns, k, id_feature, logger):
-    """KNN-interpolate every missing HRU across all `param_columns` at once.
+    """KNN-interpolate absent HRU rows AND present-but-NaN parameter cells.
 
-    Builds a single block of filled rows (one row per missing id, every column
-    populated) and appends it to `param_df` exactly once. Filling per column
-    and re-appending would duplicate each missing id once per column, leaving
-    most cells NaN — see the multi-column regression test.
+    For absent ids: appends a new all-NaN row so every expected id exists in
+    the frame before per-column filling begins.
+
+    For NaN cells: per column, the fit set is rows where that column has a
+    valid (non-NaN) value AND valid coordinates; the fill set is rows where
+    that column is NaN AND coords are valid. NaN-valued rows are excluded from
+    the fit set so they cannot be chosen as a fill source.
+
+    Exactly one row per id is guaranteed in the output; no duplicate ids.
     """
     logger.info("Filling missing values using KNN interpolation (k=%d)...", k)
 
@@ -45,57 +50,85 @@ def fill_missing_values_knn(param_df, missing_ids, merged_gdf, param_columns, k,
     if isinstance(param_columns, str):
         param_columns = [param_columns]
 
-    if not missing_ids:
+    # Check whether there is anything to do before loading centroids.
+    has_nan_cells = param_df[param_columns].isna().to_numpy().any() if param_columns else False
+    if not missing_ids and not has_nan_cells:
         logger.info("No missing values to fill!")
         return param_df
 
+    # Capture NaN count from the *original* frame before absent rows are appended
+    # so the log line reflects only genuinely missing parameter cells, not the
+    # all-NaN rows we are about to synthesise for absent ids.
+    n_input_nan = param_df[param_columns].isna().to_numpy().sum() if param_columns else 0
+
+    # Compute centroids once (avoid mutating caller's GDF).
+    merged_gdf = merged_gdf.copy()
     merged_gdf["centroid"] = merged_gdf["geometry"].centroid
     merged_gdf["x"] = merged_gdf["centroid"].x
     merged_gdf["y"] = merged_gdf["centroid"].y
+    coords_df = merged_gdf[[id_feature, "x", "y"]].copy()
 
-    existing_df = param_df.merge(merged_gdf[[id_feature, "x", "y"]], on=id_feature, how="left")
-    missing_df = merged_gdf[merged_gdf[id_feature].isin(missing_ids)][[id_feature, "x", "y"]]
+    # Step 1: append all-NaN rows for absent ids so every expected id is present.
+    if missing_ids:
+        absent_rows = pd.DataFrame({id_feature: missing_ids})
+        # gfv2 CSVs carry a secondary local hru_id; populate it for appended rows.
+        # When id_feature is already hru_id (e.g. oregon) this is a harmless self-assignment.
+        absent_rows["hru_id"] = absent_rows[id_feature]
+        param_df = pd.concat([param_df, absent_rows], ignore_index=True)
 
-    existing_coords = existing_df[["x", "y"]].values
-    missing_coords = missing_df[["x", "y"]].values
+    # Step 2: attach centroid x,y to every row (left join preserves all ids).
+    full_df = param_df.merge(coords_df, on=id_feature, how="left")
 
-    # Coordinates are column-independent, so the NaN-coordinate mask and the
-    # null-geometry guard are computed once for the whole block.
-    nan_mask = np.isnan(existing_coords).any(axis=1)
-    if nan_mask.any():
-        logger.warning(
-            "%d features have NaN coordinates (null/invalid geometry). "
-            "Excluding from KNN fitting.", nan_mask.sum()
-        )
-
-    nan_missing = np.isnan(missing_coords).any(axis=1)
-    if nan_missing.any():
-        raise ValueError(
-            f"{nan_missing.sum()} missing features have null geometry "
-            "and cannot be filled via KNN interpolation."
-        )
-
-    fit_coords = existing_coords[~nan_mask]
-    knn = NearestNeighbors(n_neighbors=k)
-    knn.fit(fit_coords)
-    distances, indices = knn.kneighbors(missing_coords)
-
-    # One filled row per missing id, with every parameter column populated.
-    missing_filled = pd.DataFrame({id_feature: missing_df[id_feature].values})
+    # Step 3: per-column KNN fill.
     for param_column in tqdm(param_columns, desc="Filling param columns"):
-        existing_values = existing_df[param_column].values[~nan_mask]
-        missing_filled[param_column] = [
-            np.mean(existing_values[neighbor_indices]) for neighbor_indices in indices
-        ]
-    # gfv2's merged CSVs carry a secondary local `hru_id` alongside the
-    # national nat_hru_id key; populate it for filled rows. When id_feature
-    # is already `hru_id` (e.g. oregon) this is a harmless self-assignment.
-    missing_filled["hru_id"] = missing_filled[id_feature]
+        col_vals = full_df[param_column].values
+        x_vals = full_df["x"].values
+        y_vals = full_df["y"].values
 
-    complete_df = pd.concat([param_df, missing_filled], ignore_index=True)
-    complete_df = complete_df.sort_values(id_feature).reset_index(drop=True)
-    logger.info("Filled %d missing values across %d column(s)", len(missing_ids), len(param_columns))
-    return complete_df
+        has_valid_coord = ~(np.isnan(x_vals) | np.isnan(y_vals))
+        has_valid_value = ~np.isnan(col_vals)
+
+        fill_mask = (~has_valid_value) & has_valid_coord
+        fit_mask = has_valid_value & has_valid_coord
+
+        # Null-geometry guard: any fill row with NaN coords cannot be KNN-filled.
+        null_geom_fill = (~has_valid_value) & (~has_valid_coord)
+        if null_geom_fill.any():
+            raise ValueError(
+                f"{null_geom_fill.sum()} features needing fill for '{param_column}' "
+                "have null geometry and cannot be filled via KNN interpolation."
+            )
+
+        if not fill_mask.any():
+            continue
+
+        if not fit_mask.any():
+            raise ValueError(
+                f"Column '{param_column}' has no valid (non-NaN) values to fit from; "
+                "cannot KNN-fill with an empty training set."
+            )
+
+        fit_coords = np.column_stack([x_vals[fit_mask], y_vals[fit_mask]])
+        fit_values = col_vals[fit_mask]
+        fill_coords = np.column_stack([x_vals[fill_mask], y_vals[fill_mask]])
+
+        knn = NearestNeighbors(n_neighbors=k)
+        knn.fit(fit_coords)
+        _, indices = knn.kneighbors(fill_coords)
+
+        filled_values = np.array([np.mean(fit_values[neighbor_idx]) for neighbor_idx in indices])
+        full_df.loc[fill_mask, param_column] = filled_values
+
+    # Step 4: drop helper columns, sort, reset index.
+    full_df = full_df.drop(columns=["x", "y"], errors="ignore")
+    full_df = full_df.sort_values(id_feature).reset_index(drop=True)
+
+    n_absent = len(missing_ids)
+    logger.info(
+        "Filled %d absent id(s) and %d NaN cell(s) across %d column(s)",
+        n_absent, n_input_nan, len(param_columns),
+    )
+    return full_df
 
 
 def main():
@@ -163,11 +196,13 @@ def main():
 
     param_df, missing_ids = find_missing_ids(param_file, expected_max, id_feature, logger)
 
-    if missing_ids:
-        param_columns = [col for col in param_df.columns if col not in {id_feature, "hru_id", "nat_hru_id", "vpu"}]
-        if not param_columns:
-            raise ValueError("No parameter columns found in the data")
+    param_columns = [col for col in param_df.columns if col not in {id_feature, "hru_id", "nat_hru_id", "vpu"}]
+    if not param_columns:
+        raise ValueError("No parameter columns found in the data")
 
+    needs_fill = bool(missing_ids) or param_df[param_columns].isna().to_numpy().any()
+
+    if needs_fill:
         logger.info("Filling parameter columns: %s", param_columns)
 
         complete_df = fill_missing_values_knn(
