@@ -186,3 +186,77 @@ class TestFillMissingValuesKnn:
         assert 3 in result["hru_id"].values
         filled_val = result.loc[result["hru_id"] == 3, "my_param"].iloc[0]
         assert filled_val in [100.0, 200.0]
+
+    def test_knn_fills_nan_value_in_present_row(self):
+        """A row present in param_df but with NaN value is filled by KNN."""
+        import logging
+        logger = logging.getLogger("test")
+
+        # id=3 at Point(1,0) — nearest to id=1 at (0,0), distance 1 vs id=2 at (10,0), distance 9
+        merged_gdf = gpd.GeoDataFrame(
+            {"nat_hru_id": [1, 2, 3]},
+            geometry=[Point(0, 0), Point(10, 0), Point(1, 0)],
+            crs="EPSG:5070",
+        )
+        param_df = pd.DataFrame({
+            "nat_hru_id": [1, 2, 3],
+            "hru_id": [1, 2, 3],
+            "my_param": [100.0, 200.0, np.nan],
+        })
+
+        result = fill_missing_values_knn(param_df, [], merged_gdf, "my_param", 1, "nat_hru_id", logger)
+        assert len(result) == 3
+        assert not result["my_param"].isna().any()
+        filled_val = result.loc[result["nat_hru_id"] == 3, "my_param"].iloc[0]
+        # id=1 (0,0) is distance 1; id=2 (10,0) is distance 9 — nearest is unambiguously id=1
+        assert filled_val == 100.0
+
+    def test_knn_fills_absent_and_nan_together(self):
+        """Absent rows AND present-but-NaN cells are both filled in one pass."""
+        import logging
+        logger = logging.getLogger("test")
+
+        merged_gdf = gpd.GeoDataFrame(
+            {"nat_hru_id": [1, 2, 3, 4]},
+            geometry=[Point(0, 0), Point(10, 0), Point(1, 0), Point(9, 0)],
+            crs="EPSG:5070",
+        )
+        # id=3 present but NaN; id=4 absent
+        param_df = pd.DataFrame({
+            "nat_hru_id": [1, 2, 3],
+            "hru_id": [1, 2, 3],
+            "my_param": [100.0, 200.0, np.nan],
+        })
+
+        result = fill_missing_values_knn(param_df, [4], merged_gdf, "my_param", 1, "nat_hru_id", logger)
+        assert len(result) == 4
+        assert not result["my_param"].isna().any()
+        assert result["nat_hru_id"].duplicated().sum() == 0
+        # id=3 at (1,0): nearest valid is id=1 (0,0) → 100.0
+        assert result.loc[result["nat_hru_id"] == 3, "my_param"].iloc[0] == 100.0
+        # id=4 at (9,0): nearest valid is id=2 (10,0) → 200.0
+        assert result.loc[result["nat_hru_id"] == 4, "my_param"].iloc[0] == 200.0
+
+    def test_nan_valued_row_not_used_as_fill_source(self):
+        """NaN-valued rows must not be included in the KNN fit set (they can't donate values)."""
+        import logging
+        logger = logging.getLogger("test")
+
+        # id=1 NaN at (0,0); id=2 val=5.0 at (1,0); id=3 NaN at (100,0)
+        merged_gdf = gpd.GeoDataFrame(
+            {"nat_hru_id": [1, 2, 3]},
+            geometry=[Point(0, 0), Point(1, 0), Point(100, 0)],
+            crs="EPSG:5070",
+        )
+        param_df = pd.DataFrame({
+            "nat_hru_id": [1, 2, 3],
+            "hru_id": [1, 2, 3],
+            "my_param": [np.nan, 5.0, np.nan],
+        })
+
+        result = fill_missing_values_knn(param_df, [], merged_gdf, "my_param", 1, "nat_hru_id", logger)
+        assert len(result) == 3
+        assert not result["my_param"].isna().any()
+        # Only id=2 (val=5.0) is in the fit set — both NaN rows must get 5.0
+        assert result.loc[result["nat_hru_id"] == 1, "my_param"].iloc[0] == 5.0
+        assert result.loc[result["nat_hru_id"] == 3, "my_param"].iloc[0] == 5.0
