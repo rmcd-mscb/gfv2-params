@@ -2,6 +2,12 @@
 
 **Status:** Design — 2026-05-28
 
+> **Superseded in part (2026-05-29):** the WhiteboxTools-memory framing below is
+> obsolete — the real CONUS blocker was a WBT `Watershed` *hang*, not OOM. The
+> per-VPU tiling this spec introduced is retained; the per-tile WBT subprocess
+> is replaced by an in-process D8 kernel. See
+> `2026-05-29-depstor-d8-routing-kernel-design.md`.
+
 ## Problem
 
 The depstor `routing` step runs WhiteboxTools (WBT) `Watershed` on the full-CONUS

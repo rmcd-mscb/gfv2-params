@@ -207,6 +207,12 @@ Runs as **RUNME Stage 1c1**, before the TWI merge.
      - Identify depressions based on `featureid` negative values for catchments
      - Identify waterbodies off of segments that are incorporated into the
        network topology, delineate upstream
+   - **gfv2-params**: the open-source port computes the upslope-of-depression
+     mask in-process via `src/gfv2_params/d8_routing.py`
+     (`drains_to_dprst_kernel`), a cycle-safe O(N) ESRI-D8 traversal. It
+     replaced WhiteboxTools `Watershed`, which hung on CONUS VPU 2. The
+     per-VPU tiling and `drains_to_dprst.tif` output schema are unchanged. See
+     `docs/superpowers/specs/2026-05-29-depstor-d8-routing-kernel-design.md`.
 
 8. ~~**getDprst_frac**~~
    - Possibly Deprecated / not used

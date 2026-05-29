@@ -36,14 +36,14 @@ from .context import BuildContext
 
 
 def _align_fdr_to_dprst_grid(fdr_path, dprst_path, out_path, logger) -> None:
-    """Materialise the FDR onto the dprst grid as a WBT-readable GeoTIFF.
+    """Materialise the FDR onto the dprst grid as a concrete GeoTIFF.
 
     Streams via gdal.Warp (block-by-block, bounded RAM) rather than an in-memory
     rioxarray.reproject_match: the latter materialised the full 16.9-billion-cell
     CONUS array plus float intermediates and OOM-killed the step at ~400 GB on a
     uint8 source that is only ~17 GB. The FDR clip already shares the dprst grid,
     so this is a near-identity nearest-neighbour resample that just realises the
-    VRT into a concrete raster WBT can read.
+    VRT into a concrete raster for fast per-VPU windowed reads.
     """
     logger.info("  Aligning FDR to dprst grid (gdal.Warp, streaming)...")
     gdal.UseExceptions()

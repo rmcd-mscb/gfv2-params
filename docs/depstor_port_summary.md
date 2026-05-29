@@ -37,12 +37,12 @@ that walks them in dependency order is
 | depstor function (`DepStor.py` line range) | `gfv2-params` artefact | What it does |
 |---|---|---|
 | `RasterPipeline.{rasterize, raster_create, vector_raster_mask, raster_raster_mask, open_raster, set_template}` (42-410) | [`src/gfv2_params/depstor.py`](../src/gfv2_params/depstor.py) — `RasterInfo`, `rasterize_binary`, `threshold_above`, `clump_regions`, `regions_touching_mask`, `regions_to_binary`, `write_uint8_binary`, `write_int32_regions`, `read_aligned_uint8`, `read_land_mask_for_grid` | Raster I/O + binary/region helpers |
-| `whitebox_run` (412-449) | [`src/gfv2_params/depstor_builders/routing.py`](../src/gfv2_params/depstor_builders/routing.py) | Subprocess wrapper around WhiteboxTools `Watershed` |
+| `whitebox_run` (412-449) | [`src/gfv2_params/depstor_builders/routing.py`](../src/gfv2_params/depstor_builders/routing.py) | In-process cycle-safe D8 upslope traversal (`d8_routing.drains_to_dprst_kernel`); replaced WBT `Watershed` (spec 2026-05-29) |
 | `getHruImperv` (452-518) | [`src/gfv2_params/depstor_builders/imperv.py`](../src/gfv2_params/depstor_builders/imperv.py) | Threshold the impervious raster to a binary mask |
 | `getSegBuff` (521-577) | [`src/gfv2_params/depstor_builders/streambuffer.py`](../src/gfv2_params/depstor_builders/streambuffer.py) | Buffer NHD segments and rasterize |
 | `getWBinHRUs` (580-663) | [`src/gfv2_params/depstor_builders/waterbody.py`](../src/gfv2_params/depstor_builders/waterbody.py) | Filter wbody polys by area, rasterize, then label connected components |
 | `getDprst` (666-701) | [`src/gfv2_params/depstor_builders/dprst.py`](../src/gfv2_params/depstor_builders/dprst.py) | Region-level intersection logic (depression = wbody region with zero stream/imperv overlap) |
-| `getHruSro_to_dprst` (704-739) | [`src/gfv2_params/depstor_builders/routing.py`](../src/gfv2_params/depstor_builders/routing.py) | Run WBT `Watershed` against FDR + dprst pour points |
+| `getHruSro_to_dprst` (704-739) | [`src/gfv2_params/depstor_builders/routing.py`](../src/gfv2_params/depstor_builders/routing.py) | In-process cycle-safe D8 upslope traversal (`d8_routing.drains_to_dprst_kernel`); replaced WBT `Watershed` (spec 2026-05-29) |
 | `GetPervAreaTotal` (741-765) | [`src/gfv2_params/depstor_builders/perv.py`](../src/gfv2_params/depstor_builders/perv.py) | Cell-wise `NOT imperv AND NOT dprst` (re-implemented; see bug #2 below) |
 | `onStreamStor` (768-791) | folded into [`depstor_builders/dprst.py`](../src/gfv2_params/depstor_builders/dprst.py) | Wbody cells outside dprst — collapsed to a 2-line boolean |
 | `getCarea_map` | [`src/gfv2_params/depstor_builders/carea_map.py`](../src/gfv2_params/depstor_builders/carea_map.py) | Build the two PRMS TWI-threshold binary rasters in one pass |
@@ -137,6 +137,12 @@ added a `_prepare_pour_points` helper that rewrites the input as
 rather than a depstor bug per se, but depstor's binary convention triggers
 it.
 
+**Update (2026-05-29):** moot for this step — `routing` no longer uses WBT
+`Watershed`. It now runs the in-process `d8_routing.drains_to_dprst_kernel`,
+which takes a 1/0 pour mask directly and has no nodata-as-pour-point pitfall.
+The WBT hang that prompted the switch is documented in
+`docs/superpowers/specs/2026-05-29-depstor-d8-routing-kernel-design.md`.
+
 ### 5. xarray `_FillValue` collision in `rioxarray.to_raster`
 
 After `reproject_match`, the source raster's `_FillValue` is in `attrs`;
@@ -219,7 +225,7 @@ drains_perv / drains_imperv → carea_map), wires outputs through a
 `BuildContext`, supports `--step <name>` / `--from <name>` for selective
 re-runs, and runs under a single sbatch
 ([`slurm_batch/build_depstor_rasters.batch`](../slurm_batch/build_depstor_rasters.batch))
-sized for the WhiteboxTools `routing` long-pole.
+sized for the per-VPU D8 `routing` long-pole.
 
 ### Aggregation side
 
