@@ -1,15 +1,13 @@
 """Tests for scripts/merge_and_fill_params.py"""
 
-import tempfile
+import importlib.util
 from pathlib import Path
 
 import geopandas as gpd
 import numpy as np
 import pandas as pd
 import pytest
-from shapely.geometry import Point, box
-
-import importlib.util
+from shapely.geometry import Point
 
 _spec = importlib.util.spec_from_file_location(
     "merge_and_fill_params",
