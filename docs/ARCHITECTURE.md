@@ -212,6 +212,7 @@ dict at each step.
 
 - [`README.md`](../README.md) — user-facing setup + usage
 - [`CLAUDE.md`](../CLAUDE.md) — project rules for Claude (atomic commits, doc audit, etc.)
-- [`slurm_batch/RUNME.md`](../slurm_batch/RUNME.md) — authoritative HPC workflow walkthrough
+- [`slurm_batch/RUNME.md`](../slurm_batch/RUNME.md) — the step-by-step runbook (CONUS-gfv2 happy path)
+- [`slurm_batch/HPC_REFERENCE.md`](../slurm_batch/HPC_REFERENCE.md) — per-stage detail, alternate paths, recovery, script→config map
 - [`docs/superpowers/INDEX.md`](superpowers/INDEX.md) — index of design specs, implementation plans, and reviews
 - [`docs/depstor_workflow.md`](depstor_workflow.md), [`docs/depstor_port_summary.md`](depstor_port_summary.md), [`docs/depstor_vpu01_validation_results.md`](depstor_vpu01_validation_results.md) — depstor pipeline reference (historical and current)
