@@ -19,7 +19,8 @@ pixi run -e dev pytest tests/test_wbt.py -v           # example: run a small tes
 Install pixi once per user (see https://pixi.sh/latest/installation/) and ensure
 `~/.pixi/bin` is on your `PATH`. For the full HPC workflow (downloads → shared
 rasters → fabric → zonal + depstor params), see
-[`slurm_batch/RUNME.md`](slurm_batch/RUNME.md).
+[`slurm_batch/RUNME.md`](slurm_batch/RUNME.md) (runbook) and
+[`slurm_batch/HPC_REFERENCE.md`](slurm_batch/HPC_REFERENCE.md) (per-stage detail).
 
 <details>
 <summary>Why <code>pixi run --as-is</code> and other SLURM gotchas</summary>
@@ -63,7 +64,7 @@ gfv2-params/
 │   └── download/             # Data download utilities
 ├── scripts/                  # CLI orchestrators + standalone helpers
 ├── configs/                  # Per-stage YAML configs (base + shared_rasters/ + depstor/ + zonal/)
-├── slurm_batch/              # HPC SLURM batch scripts (RUNME.md is the workflow walkthrough)
+├── slurm_batch/              # HPC SLURM batch scripts (RUNME.md = runbook; HPC_REFERENCE.md = detail)
 ├── docs/                     # ARCHITECTURE.md, depstor docs, superpowers/ design tree
 ├── notebooks/                # Interactive notebooks (fabric_results/, oregon/, _archive/)
 ├── tests/                    # Unit tests
@@ -116,7 +117,7 @@ The following externally-provided files must be placed in the scaffolded directo
 
 ### 3. Run fabric-independent tasks
 
-These stages do not require a watershed fabric and can run while fabric preparation proceeds in parallel. This includes downloading and merging NHD rasters, building VRTs, and computing derived rasters. See `slurm_batch/RUNME.md` **Part 1** for the full sequence.
+These stages do not require a watershed fabric and can run while fabric preparation proceeds in parallel. This includes downloading and merging NHD rasters, building VRTs, and computing derived rasters. See `slurm_batch/HPC_REFERENCE.md` **Part 1 stage detail** for the full sequence.
 
 **Download NHDPlus RPU rasters** from S3 (~112 GB):
 
@@ -163,7 +164,7 @@ ways to run Part 2 (they produce identical outputs):
 
 - **Run by parameter** — submit each param/fraction as a small array + merge
   unit, in sequence, so you can follow the workflow and inspect one parameter
-  at a time. See `slurm_batch/RUNME.md` **Stage 4A** for the per-parameter
+  at a time. See `slurm_batch/HPC_REFERENCE.md` **Stage 4A** for the per-parameter
   commands and order.
 - **Run wholesale** — one command per stage; each wrapper just loops the
   by-parameter steps and chains them via `afterok`:
@@ -175,7 +176,7 @@ ways to run Part 2 (they produce identical outputs):
   ```
 
 See [Zonal-pass parameter pipeline](#zonal-pass-parameter-pipeline) below
-for the design notes, and `slurm_batch/RUNME.md` **Part 2 / Stage 4** for the
+for the design notes, and `slurm_batch/HPC_REFERENCE.md` **Stage 4A/4B** for the
 full sequence (both paths) including the depstor pipeline and gap-fill.
 
 ### Single-batch run (debugging one param + batch)
@@ -213,7 +214,7 @@ via (highest precedence first):
    For non-VPU-01 fabrics with depstor, use `threshold_mode: percentile` in
    `configs/depstor/depstor_rasters.yml` with `twi_raster` pointing at
    `twi_hydrodem.vrt`, and run the `twi_reference` step first (Stage 2a' in
-   `slurm_batch/RUNME.md`).
+   `slurm_batch/HPC_REFERENCE.md`).
 2. Place the fabric gpkg at the `hru_gpkg` path you set, under
    `{data_root}/oregon/fabric/` (NOT in `input/fabric/`)
 3. Run `prepare_fabric.py --fabric oregon` (reads `hru_gpkg` from the profile —
@@ -238,7 +239,7 @@ via (highest precedence first):
 2. Merge with `pixi run -e notebooks marimo run notebooks/merge_vpu_targets.py`, then run
    `prepare_fabric.py` and all stages with `--fabric <name>` (or `FABRIC=<name>`).
 
-See `slurm_batch/RUNME.md` for the full step-by-step workflow.
+See `slurm_batch/RUNME.md` for the runbook; `slurm_batch/HPC_REFERENCE.md` for per-stage detail.
 
 ## Shared rasters pipeline
 
@@ -276,7 +277,7 @@ unified configs:
 
 See [`docs/depstor_workflow.md`](docs/depstor_workflow.md) and
 [`docs/depstor_port_summary.md`](docs/depstor_port_summary.md) for the
-historical port reference. Stage 2d in `slurm_batch/RUNME.md` lists the
+historical port reference. Stage 2d in `slurm_batch/HPC_REFERENCE.md` lists the
 build order.
 
 ## Zonal-pass parameter pipeline

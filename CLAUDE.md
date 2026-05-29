@@ -54,7 +54,7 @@ Part 2 split, the **orchestrator + builder + unified-config pattern** for the
 4 pipeline stages, fabric profiles as the single source of truth (with the
 per-key required-field table), and how to add a new pipeline step.
 
-`slurm_batch/RUNME.md` is the authoritative step-by-step HPC workflow;
+`slurm_batch/RUNME.md` is the step-by-step runbook (the CONUS-gfv2 happy path); `slurm_batch/HPC_REFERENCE.md` holds the per-stage detail, alternate paths, and recovery;
 `README.md` covers user-facing setup and usage.
 
 ## Non-obvious conventions & gotchas
@@ -93,7 +93,7 @@ These are hard-won; violating them silently corrupts outputs.
 ## Working in this repo
 
 - **Every code change needs a docs check.** Audit `docs/`, `README.md`, and
-  `slurm_batch/RUNME.md`; update them on the same branch and surface findings
+  `slurm_batch/RUNME.md` (and `HPC_REFERENCE.md`); update them on the same branch and surface findings
   before merge.
 - **Atomic commits.** Split combined fixes into separate commits before pushing.
   If source changes exceed the original plan, lead the PR description with a

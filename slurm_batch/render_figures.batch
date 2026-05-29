@@ -1,0 +1,23 @@
+#!/bin/bash
+#SBATCH -p cpu
+#SBATCH -A impd
+#SBATCH --job-name=render_figures
+#SBATCH --output=logs/job_%j.out
+#SBATCH --error=logs/job_%j.err
+#SBATCH --time=02:00:00
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=4
+#SBATCH --mem=96G
+#
+# Headlessly (re)generate the fabric_results figures (nbconvert --execute). Loads
+# the full HRU fabric (~361k polygons for CONUS gfv2), so it runs as a SLURM job
+# rather than on the login node. Uses the `notebooks` pixi env (jupyter/nbconvert);
+# the script already forces MPLBACKEND=Agg.
+#   FABRIC=oregon sbatch slurm_batch/render_figures.batch
+# --mem/--time are starting points; right-size from `sacct -j <id> -o MaxRSS`.
+cd "$SLURM_SUBMIT_DIR"
+FABRIC=${FABRIC:-gfv2}
+
+pixi run --as-is -e notebooks python scripts/render_figures.py \
+    --fabric "$FABRIC" \
+    "$@"

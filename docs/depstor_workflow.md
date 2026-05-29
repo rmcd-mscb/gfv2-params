@@ -119,7 +119,7 @@ consumes this per-VPU mask via
 `Twi_merged_<vpu>.tif` and `Twi_hydrodem_<vpu>.tif` to the per-VPU HRU
 boundary. Without it, per-RPU TWI bulges (coastal ocean, adjacent-VPU
 drape on per-RPU Hydrodem tiles) leak into downstream zonal aggregation.
-Runs as **RUNME Stage 1c1**, before the TWI merge.
+Runs as **Stage 1c1** (see `slurm_batch/HPC_REFERENCE.md`), before the TWI merge.
 
 ---
 

@@ -236,7 +236,7 @@ For `elevation` that is
 - [`docs/ARCHITECTURE.md`](ARCHITECTURE.md) — the high-level
   orchestrator + builder + unified-config pattern this walkthrough
   illustrates, plus the "How to add a new pipeline step" recipe.
-- [`slurm_batch/RUNME.md`](../slurm_batch/RUNME.md) — Stage 4A walks the
+- [`slurm_batch/HPC_REFERENCE.md`](../slurm_batch/HPC_REFERENCE.md) — Stage 4A walks the
   per-parameter submit + inspect path manually.
 - Issue history: [#115](https://github.com/rmcd-mscb/gfv2-params/issues/115)
   — request for this walkthrough, from the 2026-05-26
