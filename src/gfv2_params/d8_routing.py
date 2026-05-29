@@ -48,6 +48,8 @@ def _resolve(fdr, pour, fdr_nodata):
     stack_r = np.empty(cap, dtype=np.int64)
     stack_c = np.empty(cap, dtype=np.int64)
 
+    n_cycles = 0  # flow cycles encountered (each marks its path non-draining)
+
     for sr in range(ny):
         for sc in range(nx):
             if st[sr, sc] != _UNKNOWN:
@@ -67,6 +69,7 @@ def _resolve(fdr, pour, fdr_nodata):
                 if s == _ACTIVE:
                     # Re-entered the active path => cycle. It never reached a
                     # pour point, so the whole path does not drain.
+                    n_cycles += 1
                     result = _NOT
                     break
 
@@ -135,7 +138,7 @@ def _resolve(fdr, pour, fdr_nodata):
         for c in range(nx):
             if st[r, c] == _DRAINS:
                 out[r, c] = 1
-    return out
+    return out, n_cycles
 
 
 def drains_to_dprst_kernel(fdr_win, pour_win, fdr_nodata=255):
@@ -153,9 +156,14 @@ def drains_to_dprst_kernel(fdr_win, pour_win, fdr_nodata=255):
 
     Returns
     -------
-    ndarray[uint8]
+    out : ndarray[uint8]
         1 where the cell drains to a pour-point (including the pour-points
         themselves), else 0.
+    n_cycles : int
+        Number of flow cycles encountered during the traversal. A cycle is a
+        data defect in a hydro-conditioned FDR (it is what hung WBT Watershed);
+        its cells are resolved as non-draining. A non-zero count is worth a
+        warning at the call site.
     """
     fdr = np.ascontiguousarray(fdr_win, dtype=np.uint8)
     pour = np.ascontiguousarray(pour_win, dtype=np.uint8)
