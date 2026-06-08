@@ -490,6 +490,10 @@ Env knobs (both wrappers):
 - `FABRIC=gfv2_vpu01` — non-default fabric (or pass as the 2nd positional arg)
 - `SUBMIT_JOBS_MAX_CONCURRENT=4` — array concurrency cap (or the 4th positional arg to `submit_zonal_params.sh` / `submit_depstor_params.sh`)
 - `FORCE=1` — rebuild the ssflux weight matrix
+- `ZONAL_PARAMS="elevation slope ..."` (submit_zonal_params.sh only) — run just
+  the listed subset instead of all 10, for fabrics whose inputs are unstaged
+  (e.g. omit `lulc_nlcd`/`lulc_foresce` when their CONUS rasters aren't present).
+  Keep `slope` before `ssflux` in the list.
 
 **Depstor outputs** land in two subdirectories under `{fabric}/params/merged/`:
 
