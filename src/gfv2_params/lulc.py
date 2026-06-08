@@ -351,3 +351,32 @@ def compute_rad_trncf(density):
     element-wise.
     """
     return np.exp(-_RAD_TRNCF_K * density / 100.0) * _RAD_TRNCF_SCALE
+
+
+def covden_win_from_loss(covden_sum, loss_pct):
+    """Winter canopy density from summer density and leaf-loss percent.
+
+    Ports the NHM v1.1 ArcPy ``3_coverDen.py`` ``covden_win()``:
+
+        covden_win = covden_sum * (1 - loss / 100)
+
+    where ``loss_pct`` is the per-HRU zonal mean of ``loss.tif`` (leaf-loss
+    percent, 0-100). NB: this uses leaf-LOSS, not leaf-keep. In the Viger &
+    Leavesley (2007) table ``loss`` and ``keep`` are NOT complements (e.g.
+    grass loss=100/keep=80), so deriving winter retention from ``keep`` (as the
+    crosswalk path's ``nhm_covden_win`` column does) overstates it for
+    grass/shrub/deciduous. The raster-based ``lulc_prederived`` path uses this
+    function with ``loss.tif`` to match NHM v1.1 exactly.
+
+    Parameters
+    ----------
+    covden_sum : pandas.Series or numpy.ndarray
+        Per-HRU summer canopy density (0-1).
+    loss_pct : pandas.Series or numpy.ndarray
+        Per-HRU zonal mean of leaf-loss percent (0-100).
+
+    Returns
+    -------
+    Same type as ``covden_sum`` with the winter retention applied.
+    """
+    return covden_sum * (1.0 - loss_pct / 100.0)

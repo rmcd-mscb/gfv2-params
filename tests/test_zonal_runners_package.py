@@ -12,6 +12,7 @@ from gfv2_params.zonal_runners import (
     BATCH_RUNNERS,
     run_build_weights,
     run_lulc_batch,
+    run_lulc_prederived_batch,
     run_merge,
     run_soils_batch,
     run_ssflux_batch,
@@ -20,10 +21,11 @@ from gfv2_params.zonal_runners import (
 
 
 def test_public_reexports_resolve():
-    """All 6 public re-exports + BATCH_RUNNERS must be callable / dict."""
+    """All 7 public re-exports + BATCH_RUNNERS must be callable / dict."""
     assert callable(run_zonal_batch)
     assert callable(run_soils_batch)
     assert callable(run_lulc_batch)
+    assert callable(run_lulc_prederived_batch)
     assert callable(run_ssflux_batch)
     assert callable(run_build_weights)
     assert callable(run_merge)
@@ -31,16 +33,17 @@ def test_public_reexports_resolve():
 
 
 def test_batch_runners_keys_and_identity():
-    """BATCH_RUNNERS dispatch must match the 4 script: tags and the re-exports.
+    """BATCH_RUNNERS dispatch must match the 5 script: tags and the re-exports.
 
     Function identity (not just name) — guarantees the orchestrator's
     BATCH_RUNNERS[tag](...) call reaches the same function the test suite
     can import directly.
     """
-    assert sorted(BATCH_RUNNERS) == ["lulc", "soils", "ssflux", "zonal"]
+    assert sorted(BATCH_RUNNERS) == ["lulc", "lulc_prederived", "soils", "ssflux", "zonal"]
     assert BATCH_RUNNERS["zonal"] is run_zonal_batch
     assert BATCH_RUNNERS["soils"] is run_soils_batch
     assert BATCH_RUNNERS["lulc"] is run_lulc_batch
+    assert BATCH_RUNNERS["lulc_prederived"] is run_lulc_prederived_batch
     assert BATCH_RUNNERS["ssflux"] is run_ssflux_batch
 
 

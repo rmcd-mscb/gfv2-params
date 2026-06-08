@@ -13,6 +13,7 @@ from gfv2_params.lulc import (
     compute_interception,
     compute_rad_trncf,
     compute_retention,
+    covden_win_from_loss,
     load_crosswalk,
 )
 
@@ -365,3 +366,28 @@ def test_compute_rad_trncf_preserves_index():
     density = pd.Series([0.0, 50.0], index=[101, 202])
     result = compute_rad_trncf(density)
     assert list(result.index) == [101, 202]
+
+
+# --- covden_win_from_loss ---
+# Faithful NHM v1.1 (3_coverDen.py): covden_win = covden_sum * (1 - loss/100),
+# where `loss` is the per-HRU zonal mean of loss.tif (leaf-loss percent, 0-100).
+# NB: this uses leaf-LOSS, not leaf-keep — they are NOT complements in the
+# Viger & Leavesley table (grass loss=100/keep=80).
+
+
+def test_covden_win_from_loss_grass_full_loss():
+    """Grass (loss 100%) -> no winter canopy: covden_win = 0."""
+    result = covden_win_from_loss(pd.Series([0.5]), pd.Series([100.0]))
+    assert result.iloc[0] == pytest.approx(0.0)
+
+
+def test_covden_win_from_loss_evergreen_no_loss():
+    """Evergreen (loss 0%) retains all summer canopy: covden_win = covden_sum."""
+    result = covden_win_from_loss(pd.Series([0.5]), pd.Series([0.0]))
+    assert result.iloc[0] == pytest.approx(0.5)
+
+
+def test_covden_win_from_loss_deciduous():
+    """Deciduous (loss 60%) -> covden_win = covden_sum * 0.4."""
+    result = covden_win_from_loss(pd.Series([0.5]), pd.Series([60.0]))
+    assert result.iloc[0] == pytest.approx(0.2)

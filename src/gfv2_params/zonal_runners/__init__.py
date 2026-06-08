@@ -72,6 +72,7 @@ osr.UseExceptions()
 # tests/test_merge_params.py) import these names from gfv2_params.zonal_runners
 # directly.
 from .lulc import run_lulc_batch
+from .lulc_prederived import run_lulc_prederived_batch
 from .merge import run_merge
 from .soils import run_soils_batch
 from .ssflux import run_ssflux_batch
@@ -82,6 +83,7 @@ __all__ = [
     "BATCH_RUNNERS",
     "run_build_weights",
     "run_lulc_batch",
+    "run_lulc_prederived_batch",
     "run_merge",
     "run_soils_batch",
     "run_ssflux_batch",
@@ -95,8 +97,9 @@ __all__ = [
 # submodule under zonal_runners/, (b) re-exporting its run_*_batch above,
 # and (c) adding an entry below — keep them in sync.
 BATCH_RUNNERS = {
-    "zonal":  run_zonal_batch,
-    "soils":  run_soils_batch,
-    "lulc":   run_lulc_batch,
+    "zonal": run_zonal_batch,
+    "soils": run_soils_batch,
+    "lulc": run_lulc_batch,
+    "lulc_prederived": run_lulc_prederived_batch,
     "ssflux": run_ssflux_batch,
 }

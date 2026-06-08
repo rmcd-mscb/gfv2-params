@@ -55,14 +55,19 @@ Key facts established:
       the new column. Docs: ARCHITECTURE + RUNME/HPC_REFERENCE param table.
 
 ### B. Faithful nhm_v11 (pre-derived raster source mode)
-- [ ] Download step: stage `Snow/SRain/WRain/loss` from P971JAGF (keep, CNPY,
-      LULC already on disk) into `input/lulc_veg/nhm_v11/`.
-- [ ] "Pre-derived raster" mode in the lulc runner (or a sibling runner): each
-      param = direct zonal mean (snow/wrain/srain = raster/100; covden_sum from
+- [x] Stage `Snow/SRain/WRain/loss` from P971JAGF (keep, CNPY, LULC already on
+      disk) into `input/lulc_veg/nhm_v11/` — all co-registered to the 30 m LULC
+      grid; Snow/SRain/WRain Byte (nodata 15), loss/keep Int8 (0-100).
+- [x] New `lulc_prederived` runner (`zonal_runners/lulc_prederived.py`): each
+      param = direct zonal stat (snow/wrain/srain = raster/100; covden_sum from
       CNPY/100 zeroed on bare; covden_win = covden_sum*(1-loss/100); cov_type
-      from 5-class TabulateArea decision tree; rad_trncf from radtrn). Ports
-      `3_coverDen.py`. Supersedes the nhm_v11 crosswalk path.
-- [ ] Test + config + docs. Re-run CONUS nhm_v11.
+      from 5-class decision tree; rad_trncf from radtrn). Ports `3_coverDen.py`;
+      outputs rad_trncf, not retention. Registered in BATCH_RUNNERS.
+- [x] `covden_win_from_loss` helper + tests (the keep-vs-loss correction);
+      dispatch-registration test; config switched to `script: lulc_prederived`
+      with per-param raster keys; docs (ADDING_A_PARAMETER).
+- [ ] Re-run CONUS nhm_v11 (supersedes the on-disk CSV, which has the keep-based
+      covden_win error). radtrn_nhm_v11.tif prerequisite confirmed present.
 
 ### C. Corrected NALCMS
 - [ ] Regenerate `crosswalks/nalcms_nhm.csv` from the authoritative table (exact
