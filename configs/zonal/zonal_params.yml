@@ -80,6 +80,9 @@ params:
     source_raster:  "{data_root}/input/lulc_veg/nhm_v11/LULC.tif"
     canopy_raster:  "{data_root}/input/lulc_veg/nhm_v11/CNPY.tif"
     keep_raster:    "{data_root}/input/lulc_veg/nhm_v11/keep.tif"
+    # radtrn raster (cnpy*keep/100 over trees) built by the shared-rasters
+    # build_lulc_rasters step -> zonal-meaned + Beer's-law -> rad_trncf column.
+    radtrn_raster:  "{data_root}/shared/conus/derived/radtrn_nhm_v11.tif"
     crosswalk_file: crosswalks/nhm_v11_nhm.csv
     categorical:    true
     merged_file:    nhm_lulc_nhm_v11_params.csv
