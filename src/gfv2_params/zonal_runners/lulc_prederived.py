@@ -32,9 +32,9 @@ from gdptools import UserTiffData, ZonalGen
 from ..lulc import (
     assign_cov_type,
     class_percentages_from_histogram,
-    compute_rad_trncf,
     covden_win_from_loss,
     load_crosswalk,
+    rad_trncf_from_density,
 )
 
 
@@ -174,8 +174,10 @@ def run_lulc_prederived_batch(config: dict, batch_id: int, logger) -> None:
     logger.info("interception parameters computed")
 
     # --- rad_trncf: Beer's-law transform of the radtrn zonal mean ---
+    # rad_trncf_from_density handles the no-tree (NaN -> density 0 -> ~0.9917)
+    # case, shared with the run_lulc_batch runner so the policy can't drift.
     rad_trncf_df = _zonal_mean_col(config["radtrn_raster"], nhru_gdf, id_feature, output_dir, prefix, "rad_trncf")
-    rad_trncf_df["rad_trncf"] = compute_rad_trncf(rad_trncf_df["rad_trncf"])
+    rad_trncf_df["rad_trncf"] = rad_trncf_from_density(rad_trncf_df["rad_trncf"])
     logger.info("rad_trncf computed")
 
     # --- merge + write ---

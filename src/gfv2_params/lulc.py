@@ -353,6 +353,29 @@ def compute_rad_trncf(density):
     return np.exp(-_RAD_TRNCF_K * density / 100.0) * _RAD_TRNCF_SCALE
 
 
+def rad_trncf_from_density(density):
+    """rad_trncf from a per-HRU radtrn zonal-mean density, no-canopy aware.
+
+    Wraps :func:`compute_rad_trncf`, treating a NaN density as density 0. An
+    HRU whose radtrn footprint is entirely nodata (no tree pixels — urban,
+    open water) gets a NaN zonal mean; that is "no winter canopy", which the
+    Beer's-law transform maps to ~0.9917 (near-full transmission) — the
+    NHM-faithful value, not a missing cell. Both LULC runners route their
+    radtrn zonal mean through here so the no-canopy policy lives in one place.
+
+    Parameters
+    ----------
+    density : pandas.Series
+        Per-HRU winter-canopy density in percent (0-100); NaN for no-overlap.
+
+    Returns
+    -------
+    pandas.Series
+        Transmission coefficient per HRU, with no-canopy HRUs at ~0.9917.
+    """
+    return compute_rad_trncf(density.fillna(0.0))
+
+
 def covden_win_from_loss(covden_sum, loss_pct):
     """Winter canopy density from summer density and leaf-loss percent.
 

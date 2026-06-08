@@ -26,9 +26,9 @@ from ..lulc import (
     class_percentages_from_histogram,
     compute_covden,
     compute_interception,
-    compute_rad_trncf,
     compute_retention,
     load_crosswalk,
+    rad_trncf_from_density,
 )
 
 
@@ -233,9 +233,11 @@ def run_lulc_batch(config: dict, batch_id: int, logger) -> None:
         if temp_csv.exists():
             temp_csv.unlink()
 
-        # radtrn zonal mean is the per-HRU winter-canopy density (0-100).
+        # radtrn zonal mean is the per-HRU winter-canopy density (0-100);
+        # rad_trncf_from_density handles the no-tree (NaN -> density 0 -> ~0.9917)
+        # case so the policy stays shared with the lulc_prederived runner.
         rad_trncf_df = radtrn_stats[["mean"]].rename(columns={"mean": "rad_trncf"})
-        rad_trncf_df["rad_trncf"] = compute_rad_trncf(rad_trncf_df["rad_trncf"])
+        rad_trncf_df["rad_trncf"] = rad_trncf_from_density(rad_trncf_df["rad_trncf"])
         rad_trncf_df.index.name = id_feature
         rad_trncf_df = rad_trncf_df.reset_index()
         logger.info("rad_trncf computed from radtrn raster (Beer's-law transform)")

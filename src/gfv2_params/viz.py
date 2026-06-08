@@ -505,7 +505,12 @@ _PARAM_ENTRIES = [
     ParamEntry(name="cov_type", csv_name="nhm_lulc_nhm_v11_params.csv", column="cov_type", kind="categorical"),
     ParamEntry(name="covden_sum", csv_name="nhm_lulc_nhm_v11_params.csv", column="covden_sum", kind="continuous", units="fraction", cmap="Greens"),
     ParamEntry(name="covden_win", csv_name="nhm_lulc_nhm_v11_params.csv", column="covden_win", kind="continuous", units="fraction", cmap="YlGn"),
+    # nhm_v11 LULC winter-canopy term: the crosswalk path (run_lulc_batch)
+    # emits `retention`; the faithful lulc_prederived path (PR #135) emits
+    # `rad_trncf` instead. Both are listed — only one column is present in any
+    # given merged CSV, and the render loop skips whichever column is absent.
     ParamEntry(name="retention", csv_name="nhm_lulc_nhm_v11_params.csv", column="retention", kind="continuous", units="fraction", cmap="PuBuGn"),
+    ParamEntry(name="rad_trncf", csv_name="nhm_lulc_nhm_v11_params.csv", column="rad_trncf", kind="continuous", units="fraction", cmap="cividis"),
     ParamEntry(name="snow_intcp", csv_name="nhm_lulc_nhm_v11_params.csv", column="snow_intcp", kind="continuous", units="in", cmap="PuBu"),
     ParamEntry(name="srain_intcp", csv_name="nhm_lulc_nhm_v11_params.csv", column="srain_intcp", kind="continuous", units="in", cmap="PuBu"),
     ParamEntry(name="wrain_intcp", csv_name="nhm_lulc_nhm_v11_params.csv", column="wrain_intcp", kind="continuous", units="in", cmap="PuBu"),

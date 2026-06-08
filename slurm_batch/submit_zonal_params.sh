@@ -78,6 +78,16 @@ PARAMS=(
     ssflux                  # depends_on: build_weights (resolved per-entry below)
 )
 
+# Optional override: export ZONAL_PARAMS="elevation slope ..." to run only a
+# subset of the params above (space-separated, must be `name:` entries in
+# configs/zonal/zonal_params.yml). Use when some sources are unstaged — e.g.
+# lulc_nlcd/lulc_foresce on fabrics without those CONUS rasters. Keep slope
+# before ssflux in the list, since ssflux reads the merged slope CSV.
+if [ -n "${ZONAL_PARAMS:-}" ]; then
+    read -ra PARAMS <<< "$ZONAL_PARAMS"
+    echo "ZONAL_PARAMS override: running ${#PARAMS[@]} params -> ${PARAMS[*]}"
+fi
+
 # Entries that need the CONUS weight matrix as a prereq. The submit loop
 # special-cases these to submit build_zonal_weights.batch first + chain
 # the array zonal + merge on its afterok.
