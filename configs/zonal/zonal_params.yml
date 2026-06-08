@@ -72,15 +72,26 @@ params:
     categorical:   false
     merged_file:   nhm_soil_moist_max_params.csv
 
-  # --- LULC sources (each derives cov_type / covden / interception / retention) ---
-  # NHM v1.1: keep raster present -> raster-based retention.
+  # --- LULC sources (each derives cov_type / covden / interception + rad_trncf
+  #     or retention) ---
+  # NHM v1.1: faithful pre-derived-raster path (script: lulc_prederived) — each
+  # param is a direct zonal stat of a ScienceBase P971JAGF raster, reproducing
+  # the legacy 3_coverDen.py exactly (no crosswalk collapse; covden_win from
+  # loss not keep). Outputs rad_trncf, not retention. The crosswalk supplies
+  # only the lu_code -> nhm_cov_type mapping for the cov_type decision tree.
 
   - name: lulc_nhm_v11
-    script: lulc
-    source_raster:  "{data_root}/input/lulc_veg/nhm_v11/LULC.tif"
-    canopy_raster:  "{data_root}/input/lulc_veg/nhm_v11/CNPY.tif"
-    keep_raster:    "{data_root}/input/lulc_veg/nhm_v11/keep.tif"
-    crosswalk_file: crosswalks/nhm_v11_nhm.csv
+    script: lulc_prederived
+    source_raster:  "{data_root}/input/lulc_veg/nhm_v11/LULC.tif"   # cov_type (5-class)
+    canopy_raster:  "{data_root}/input/lulc_veg/nhm_v11/CNPY.tif"   # covden_sum (MODIS VCF)
+    loss_raster:    "{data_root}/input/lulc_veg/nhm_v11/loss.tif"   # covden_win = covden_sum*(1-loss/100)
+    snow_raster:    "{data_root}/input/lulc_veg/nhm_v11/Snow.tif"   # snow_intcp  (/100 -> inch)
+    srain_raster:   "{data_root}/input/lulc_veg/nhm_v11/SRain.tif"  # srain_intcp (/100 -> inch)
+    wrain_raster:   "{data_root}/input/lulc_veg/nhm_v11/WRain.tif"  # wrain_intcp (/100 -> inch)
+    # radtrn raster (cnpy*keep/100 over trees) built by the shared-rasters
+    # build_lulc_rasters step -> zonal-meaned + Beer's-law -> rad_trncf.
+    radtrn_raster:  "{data_root}/shared/conus/derived/radtrn_nhm_v11.tif"
+    crosswalk_file: crosswalks/nhm_v11_nhm.csv  # cov_type mapping only
     categorical:    true
     merged_file:    nhm_lulc_nhm_v11_params.csv
 

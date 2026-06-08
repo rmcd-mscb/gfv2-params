@@ -3,9 +3,16 @@
 import logging
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 
 logger = logging.getLogger(__name__)
+
+# Beer's-law constants for the winter-canopy radiation transmission coefficient,
+# lifted verbatim from the NHM v1.1 ArcPy 3_coverDen.py rad_trncf() (Wieczorek &
+# Bock, 2021): rad_trncf = exp(-2.7557 * density/100) * 0.9917.
+_RAD_TRNCF_K = 2.7557
+_RAD_TRNCF_SCALE = 0.9917
 
 REQUIRED_CROSSWALK_COLUMNS = {
     "lu_code",
@@ -124,7 +131,10 @@ def assign_cov_type(class_perc_df: pd.DataFrame, crosswalk: pd.DataFrame, id_col
 
     # Merge class percentages with cover types; drop unmatched codes
     merged = class_perc_df.merge(
-        crosswalk[["nhm_cov_type"]], left_on="lu_code", right_index=True, how="left",
+        crosswalk[["nhm_cov_type"]],
+        left_on="lu_code",
+        right_index=True,
+        how="left",
     )
     merged = merged.dropna(subset=["nhm_cov_type"])
     merged["nhm_cov_type"] = merged["nhm_cov_type"].astype(int)
@@ -156,9 +166,7 @@ def assign_cov_type(class_perc_df: pd.DataFrame, crosswalk: pd.DataFrame, id_col
         else:
             assigned[hru_id] = int(hru.idxmax())
 
-    result = pd.DataFrame(
-        {id_col: list(assigned.keys()), "cov_type": list(assigned.values())}
-    )
+    result = pd.DataFrame({id_col: list(assigned.keys()), "cov_type": list(assigned.values())})
     return result
 
 
@@ -316,3 +324,61 @@ def compute_retention(
 
     result = merged.groupby(id_col)[["retention"]].sum().reset_index()
     return result
+
+
+def compute_rad_trncf(density):
+    """Winter-canopy radiation transmission coefficient per HRU.
+
+    Ports the NHM v1.1 ArcPy ``3_coverDen.py`` ``rad_trncf()`` (Wieczorek &
+    Bock, 2021):
+
+        rad_trncf = exp(-2.7557 * density / 100) * 0.9917
+
+    where ``density`` is the per-HRU zonal mean (0-100) of the ``radtrn``
+    raster (``cnpy * keep / 100`` over tree pixels, ``lulc >= 3``). Density 0
+    (no winter canopy) gives ~0.9917 (near-full transmission); density 100
+    (dense evergreen) gives ~0.063.
+
+    Parameters
+    ----------
+    density : pandas.Series or numpy.ndarray
+        Per-HRU winter-canopy density in percent (0-100). A Series input
+        preserves its HRU index so the result merges by HRU id.
+
+    Returns
+    -------
+    Same type as ``density`` with the transmission coefficient applied
+    element-wise.
+    """
+    return np.exp(-_RAD_TRNCF_K * density / 100.0) * _RAD_TRNCF_SCALE
+
+
+def covden_win_from_loss(covden_sum, loss_pct):
+    """Winter canopy density from summer density and leaf-loss percent.
+
+    Ports the NHM v1.1 ArcPy ``3_coverDen.py`` ``covden_win()``:
+
+        covden_win = covden_sum * (1 - loss / 100)
+
+    where ``loss_pct`` is the per-HRU zonal mean of ``loss.tif`` (leaf-loss
+    percent, 0-100). NB: this uses leaf-LOSS, not leaf-keep. In the upstream
+    Viger & Leavesley (2007) source table (the ``Loss``/``Keep`` columns that
+    built ``loss.tif``/``keep.tif`` — not columns in this repo's crosswalk CSVs)
+    ``loss`` and ``keep`` are NOT complements (e.g. grass Loss=100/Keep=80), so
+    deriving winter retention from keep — as the crosswalk path's
+    ``nhm_covden_win`` column does (it equals keep/100) — overstates it for
+    grass/shrub/deciduous. The raster-based ``lulc_prederived`` path uses this
+    function with ``loss.tif`` to match NHM v1.1 exactly.
+
+    Parameters
+    ----------
+    covden_sum : pandas.Series or numpy.ndarray
+        Per-HRU summer canopy density (0-1).
+    loss_pct : pandas.Series or numpy.ndarray
+        Per-HRU zonal mean of leaf-loss percent (0-100).
+
+    Returns
+    -------
+    Same type as ``covden_sum`` with the winter retention applied.
+    """
+    return covden_sum * (1.0 - loss_pct / 100.0)

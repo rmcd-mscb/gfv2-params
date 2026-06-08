@@ -125,7 +125,7 @@ For `--param elevation --fabric gfv2_vpu01`, `param_cfg` ends up roughly:
 
 ### Hop 4 — Dispatch table
 
-[`src/gfv2_params/zonal_runners/__init__.py:92-97`](../src/gfv2_params/zonal_runners/__init__.py#L92-L97)
+[`src/gfv2_params/zonal_runners/__init__.py:99-105`](../src/gfv2_params/zonal_runners/__init__.py#L99-L105)
 maps each `script:` tag to the runner that handles it:
 
 ```python
@@ -133,6 +133,7 @@ BATCH_RUNNERS = {
     "zonal":  run_zonal_batch,    # continuous-zonal stats from one raster
     "soils":  run_soils_batch,
     "lulc":   run_lulc_batch,
+    "lulc_prederived": run_lulc_prederived_batch,
     "ssflux": run_ssflux_batch,
 }
 ```
@@ -210,10 +211,13 @@ For `elevation` that is
 2. **Confirm the source raster exists on disk.** Resolve any
    `{data_root}` placeholders by hand and `ls` the path.
 3. **Choose the `script:` tag** — `zonal` (continuous raster),
-   `soils` (categorical/continuous from soils/litho), `lulc` (cov_type /
-   covden / interception / retention bundle), or `ssflux` (litho-weighted
+   `soils` (categorical/continuous from soils/litho), `lulc` (crosswalk-driven
+   cov_type / covden / interception / retention / rad_trncf bundle — rad_trncf
+   only when a `radtrn_raster` is configured), `lulc_prederived` (faithful
+   NHM v1.1 path: each param a direct zonal stat of a pre-derived ScienceBase
+   raster; outputs rad_trncf, not retention), or `ssflux` (litho-weighted
    PRMS flux params). The dispatch table is
-   [`src/gfv2_params/zonal_runners/__init__.py:92-97`](../src/gfv2_params/zonal_runners/__init__.py#L92-L97).
+   [`src/gfv2_params/zonal_runners/__init__.py:99-105`](../src/gfv2_params/zonal_runners/__init__.py#L99-L105).
    If your param doesn't fit any existing `script:` family you're adding
    a new runner, not a new param — see "How to add a new pipeline step"
    in [ARCHITECTURE.md](ARCHITECTURE.md#how-to-add-a-new-pipeline-step).
