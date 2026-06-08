@@ -113,3 +113,39 @@ fabrics:
     # reprojects to the template grid and clips to the Oregon land mask.
     waterbody_gpkg: "{data_root}/input/nhd/conus_waterbodies.gpkg"
     waterbody_layer: waterbodies
+
+  tjc:
+    # Small regional fabric inside VPU 12 (Texas-Gulf); pre-merged single gpkg
+    # (oregon-style). 1584 HRUs / 807 nsegment. CRS EPSG:5070 (the gpkg's WKT
+    # is the "USGS_version" Albers but resolves to 5070 exactly).
+    expected_max_hru_id: 1584
+    batch_size: 10000
+    # model_hru_idx is the contiguous 1..1584 local index — use it, NOT nhm_id
+    # (the national NHM id 73262..76110, which is unique but has 1265 gaps and
+    # would make gap-fill see ~74k phantom missing rows).
+    id_feature: model_hru_idx
+    # Single-file fabric: one gpkg holds nhru/nsegment/domain. hru_gpkg is
+    # authoritative for prepare_fabric, the ssflux build_weights step, and
+    # gap-fill; segments_gpkg points at the same file.
+    hru_gpkg: "{data_root}/{fabric}/fabric/tjc.gpkg"
+    hru_layer: nhru
+    # --- depstor inputs ---
+    # template_raster + fdr_raster: fabric-bounds clip of the CONUS fdr.vrt,
+    # staged by scripts/clip_shared_to_fabric.py (sizes depstor compute to the
+    # fabric extent and shares the hydrology lattice carea_map requires vs twi).
+    #   pixi run --as-is python scripts/clip_shared_to_fabric.py --fabric tjc
+    template_raster: "{data_root}/{fabric}/shared/{fabric}_fdr.vrt"
+    fdr_raster: "{data_root}/{fabric}/shared/{fabric}_fdr.vrt"
+    # Open-source Twi_hydrodem; carea_map runs in percentile mode (the default
+    # in depstor_rasters.yml). VPU 12 thresholds are in
+    # twi_reference_percentiles.hydrodem.csv (t_carea~9.93, t_smidx~16.11).
+    twi_raster: "{data_root}/shared/conus/vrt/twi_hydrodem.vrt"
+    # Single-VPU fabric: declare the VPU so vpu_id is a constant fill and the
+    # per-VPU reference threshold resolves to VPU 12.
+    vpu: "12"
+    segments_gpkg: "{data_root}/{fabric}/fabric/tjc.gpkg"
+    segments_layer: nsegment
+    # Shared CONUS NHDPlusV2 waterbodies; the waterbody builder reprojects to
+    # the template grid and clips to the tjc land mask.
+    waterbody_gpkg: "{data_root}/input/nhd/conus_waterbodies.gpkg"
+    waterbody_layer: waterbodies
