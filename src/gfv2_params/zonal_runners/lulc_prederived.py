@@ -48,6 +48,11 @@ def _zonal(raster_path, nhru_gdf, id_feature, output_dir, prefix, var, *, catego
     raster_path = Path(raster_path)
     if not raster_path.exists():
         raise FileNotFoundError(f"{var} raster not found: {raster_path}")
+    # NB on nodata: masked=True relies on each GeoTIFF's declared nodata tag.
+    # The staged interception/loss rasters carry one (Snow/SRain/WRain=15,
+    # loss/keep Int8=-128), so sentinels are masked. The derived radtrn raster
+    # legitimately has no nodata tag — its non-tree 0s are valid data that must
+    # count in the mean — so we must NOT blanket-require a nodata tag here.
     da = rioxarray.open_rasterio(raster_path, masked=True)
     data = UserTiffData(
         var=var,
@@ -137,9 +142,21 @@ def run_lulc_prederived_batch(config: dict, batch_id: int, logger) -> None:
     covden_sum_df = covden_sum_df[[id_feature, "covden_sum"]]
 
     # --- covden_win: covden_sum * (1 - loss/100) ---
+    # NB: do NOT zero-fill a missing loss mean. Unlike interception (where the
+    # legacy sets missing -> 0), loss=0 means "no leaf loss" -> covden_win =
+    # covden_sum, i.e. FULL winter canopy — the max-impact wrong value. A NaN
+    # loss mean signals an HRU with no loss-raster overlap (CRS/extent bug, or
+    # an edge HRU), so leave covden_win NaN and let the downstream KNN gap-fill
+    # (PR #134) handle it, matching the legacy null -> CL_HRU fill.
     loss_df = _zonal_mean_col(config["loss_raster"], nhru_gdf, id_feature, output_dir, prefix, "loss")
     covden_win_df = covden_sum_df.merge(loss_df, on=id_feature, how="left")
-    covden_win_df["covden_win"] = covden_win_from_loss(covden_win_df["covden_sum"], covden_win_df["loss"].fillna(0.0))
+    no_loss = covden_win_df["loss"].isna() & (covden_win_df["covden_sum"] > 0)
+    if no_loss.any():
+        logger.warning(
+            "%d HRUs have canopy but no loss-raster overlap; covden_win left NaN for gap-fill",
+            int(no_loss.sum()),
+        )
+    covden_win_df["covden_win"] = covden_win_from_loss(covden_win_df["covden_sum"], covden_win_df["loss"])
     covden_win_df = covden_win_df[[id_feature, "covden_win"]]
     logger.info("covden_sum / covden_win computed")
 
@@ -162,16 +179,25 @@ def run_lulc_prederived_batch(config: dict, batch_id: int, logger) -> None:
     logger.info("rad_trncf computed")
 
     # --- merge + write ---
-    expected_hrus = len(cov_type_df)
     result = cov_type_df.merge(covden_sum_df, on=id_feature).merge(covden_win_df, on=id_feature)
     for df in intcp_dfs:
         result = result.merge(df, on=id_feature)
     result = result.merge(rad_trncf_df, on=id_feature)
-    if len(result) != expected_hrus:
+
+    # Diagnose dropped HRUs against the batch geometry (the true baseline), not
+    # cov_type_df: an HRU with no LULC pixels is absent from cov_type_df and
+    # would silently vanish from the param table. The inner merges can also drop
+    # an HRU missing from any per-param frame. Report ids so a CRS/extent bug is
+    # visible rather than swallowed (the downstream gap-fill backfills absent
+    # rows, but only if we know they were dropped here vs. genuinely missing).
+    dropped = set(nhru_gdf[id_feature]) - set(result[id_feature])
+    if dropped:
         logger.warning(
-            "Row count mismatch after merge: expected %d HRUs, got %d.",
-            expected_hrus,
-            len(result),
+            "%d/%d HRUs absent from LULC output (no LULC pixels or merge loss): %s%s",
+            len(dropped),
+            len(nhru_gdf),
+            sorted(dropped)[:20],
+            " ..." if len(dropped) > 20 else "",
         )
     result = result.sort_values(id_feature).set_index(id_feature)
 

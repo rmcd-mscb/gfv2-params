@@ -391,3 +391,26 @@ def test_covden_win_from_loss_deciduous():
     """Deciduous (loss 60%) -> covden_win = covden_sum * 0.4."""
     result = covden_win_from_loss(pd.Series([0.5]), pd.Series([60.0]))
     assert result.iloc[0] == pytest.approx(0.2)
+
+
+# --- pure-helper edge cases (contract the lulc_prederived runner relies on) ---
+
+
+def test_compute_rad_trncf_nan_density_propagates():
+    """No radtrn overlap -> NaN density -> NaN rad_trncf (left for gap-fill)."""
+    result = compute_rad_trncf(pd.Series([np.nan, 0.0]))
+    assert np.isnan(result.iloc[0])
+    assert result.iloc[1] == pytest.approx(0.9917, abs=1e-6)
+
+
+def test_compute_rad_trncf_empty_series():
+    """Zero-HRU batch returns an empty Series, not an error."""
+    result = compute_rad_trncf(pd.Series([], dtype=float))
+    assert len(result) == 0
+
+
+def test_covden_win_from_loss_nan_loss_propagates():
+    """Missing loss mean -> NaN covden_win (runner leaves it for gap-fill,
+    rather than fabricating full winter canopy via a 0 fill)."""
+    result = covden_win_from_loss(pd.Series([0.5]), pd.Series([np.nan]))
+    assert np.isnan(result.iloc[0])

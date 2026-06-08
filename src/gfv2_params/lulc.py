@@ -361,10 +361,12 @@ def covden_win_from_loss(covden_sum, loss_pct):
         covden_win = covden_sum * (1 - loss / 100)
 
     where ``loss_pct`` is the per-HRU zonal mean of ``loss.tif`` (leaf-loss
-    percent, 0-100). NB: this uses leaf-LOSS, not leaf-keep. In the Viger &
-    Leavesley (2007) table ``loss`` and ``keep`` are NOT complements (e.g.
-    grass loss=100/keep=80), so deriving winter retention from ``keep`` (as the
-    crosswalk path's ``nhm_covden_win`` column does) overstates it for
+    percent, 0-100). NB: this uses leaf-LOSS, not leaf-keep. In the upstream
+    Viger & Leavesley (2007) source table (the ``Loss``/``Keep`` columns that
+    built ``loss.tif``/``keep.tif`` — not columns in this repo's crosswalk CSVs)
+    ``loss`` and ``keep`` are NOT complements (e.g. grass Loss=100/Keep=80), so
+    deriving winter retention from keep — as the crosswalk path's
+    ``nhm_covden_win`` column does (it equals keep/100) — overstates it for
     grass/shrub/deciduous. The raster-based ``lulc_prederived`` path uses this
     function with ``loss.tif`` to match NHM v1.1 exactly.
 

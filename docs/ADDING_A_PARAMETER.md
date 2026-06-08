@@ -125,7 +125,7 @@ For `--param elevation --fabric gfv2_vpu01`, `param_cfg` ends up roughly:
 
 ### Hop 4 — Dispatch table
 
-[`src/gfv2_params/zonal_runners/__init__.py:92-97`](../src/gfv2_params/zonal_runners/__init__.py#L92-L97)
+[`src/gfv2_params/zonal_runners/__init__.py:99-105`](../src/gfv2_params/zonal_runners/__init__.py#L99-L105)
 maps each `script:` tag to the runner that handles it:
 
 ```python
@@ -133,6 +133,7 @@ BATCH_RUNNERS = {
     "zonal":  run_zonal_batch,    # continuous-zonal stats from one raster
     "soils":  run_soils_batch,
     "lulc":   run_lulc_batch,
+    "lulc_prederived": run_lulc_prederived_batch,
     "ssflux": run_ssflux_batch,
 }
 ```

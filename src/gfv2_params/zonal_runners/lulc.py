@@ -3,8 +3,9 @@
 Not to be confused with ``gfv2_params.lulc`` (the crosswalk/computation helpers
 that this module imports from).
 
-One ``run_lulc_batch`` covers all four LULC source types (nhm_v11, nalcms,
-nlcd, foresce) — the orchestrator normalises ``source_type`` to ``lulc_<source>``
+One ``run_lulc_batch`` covers the crosswalk-driven LULC source types (nalcms,
+nlcd, foresce); nhm_v11 uses the faithful ``lulc_prederived`` runner instead.
+The orchestrator normalises ``source_type`` to ``lulc_<source>``
 so each source writes per-batch CSVs to its own subdir. Pipeline: categorical
 zonal stats on the LULC raster, continuous zonal stats on the canopy raster,
 optional zonal stats on a ``keep`` raster, optional zonal stats on a ``radtrn``
