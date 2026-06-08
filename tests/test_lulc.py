@@ -1,5 +1,3 @@
-import tempfile
-from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -15,6 +13,7 @@ from gfv2_params.lulc import (
     compute_retention,
     covden_win_from_loss,
     load_crosswalk,
+    rad_trncf_from_density,
 )
 
 
@@ -397,10 +396,24 @@ def test_covden_win_from_loss_deciduous():
 
 
 def test_compute_rad_trncf_nan_density_propagates():
-    """No radtrn overlap -> NaN density -> NaN rad_trncf (left for gap-fill)."""
+    """The pure transform propagates NaN; density 0 -> 0.9917.
+
+    No-canopy handling lives in rad_trncf_from_density (see below), which both
+    LULC runners use; the bare math function itself stays NaN-propagating.
+    """
     result = compute_rad_trncf(pd.Series([np.nan, 0.0]))
     assert np.isnan(result.iloc[0])
     assert result.iloc[1] == pytest.approx(0.9917, abs=1e-6)
+
+
+def test_rad_trncf_from_density_no_canopy_to_full_transmission():
+    """NaN density (no tree pixels: urban/water) -> ~0.9917, not NaN."""
+    result = rad_trncf_from_density(pd.Series([np.nan, 0.0, 100.0]))
+    assert result.iloc[0] == pytest.approx(0.9917, abs=1e-6)  # no canopy
+    assert result.iloc[1] == pytest.approx(0.9917, abs=1e-6)  # density 0
+    # vegetated HRUs are unchanged vs the bare transform
+    assert result.iloc[2] == pytest.approx(compute_rad_trncf(pd.Series([100.0])).iloc[0], abs=1e-9)
+    assert not result.isna().any()
 
 
 def test_compute_rad_trncf_empty_series():
