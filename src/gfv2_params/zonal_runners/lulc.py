@@ -5,10 +5,11 @@ that this module imports from).
 
 One ``run_lulc_batch`` covers all four LULC source types (nhm_v11, nalcms,
 nlcd, foresce) — the orchestrator normalises ``source_type`` to ``lulc_<source>``
-so each source writes per-batch CSVs to its own subdir. Five-step pipeline:
-categorical zonal stats on the LULC raster, continuous zonal stats on the
-canopy raster, optional zonal stats on a ``keep`` raster, crosswalk lookup +
-cov_type assignment, interception/covden/retention computation.
+so each source writes per-batch CSVs to its own subdir. Pipeline: categorical
+zonal stats on the LULC raster, continuous zonal stats on the canopy raster,
+optional zonal stats on a ``keep`` raster, optional zonal stats on a ``radtrn``
+raster (-> rad_trncf), crosswalk lookup + cov_type assignment,
+interception/covden/retention computation.
 """
 
 from __future__ import annotations
@@ -34,11 +35,13 @@ def run_lulc_batch(config: dict, batch_id: int, logger) -> None:
     """One HRU batch of LULC parameter derivation.
 
     Originally extracted from the now-retired scripts/create_lulc_params.py
-    (see PR #85). Five steps:
+    (see PR #85). Steps:
       1. categorical zonal stats on LULC raster -> class percentages
       2. continuous zonal stats on canopy raster -> canopy_mean per HRU
       3. retention: either zonal mean from keep raster (FORE-SCE / NHM v1.1)
          or crosswalk evergreen_retention (NLCD / NALCMS)
+      3b. rad_trncf: when a radtrn_raster is configured, zonal-mean it and
+         apply the Beer's-law transform (compute_rad_trncf)
       4. compute cov_type / interception / covden via gfv2_params.lulc helpers
       5. merge + write CSV
     """

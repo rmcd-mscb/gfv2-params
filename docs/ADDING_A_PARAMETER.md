@@ -211,7 +211,8 @@ For `elevation` that is
    `{data_root}` placeholders by hand and `ls` the path.
 3. **Choose the `script:` tag** — `zonal` (continuous raster),
    `soils` (categorical/continuous from soils/litho), `lulc` (cov_type /
-   covden / interception / retention bundle), or `ssflux` (litho-weighted
+   covden / interception / retention / rad_trncf bundle — rad_trncf only
+   when a `radtrn_raster` is configured), or `ssflux` (litho-weighted
    PRMS flux params). The dispatch table is
    [`src/gfv2_params/zonal_runners/__init__.py:92-97`](../src/gfv2_params/zonal_runners/__init__.py#L92-L97).
    If your param doesn't fit any existing `script:` family you're adding
