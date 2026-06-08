@@ -167,7 +167,7 @@ def test_load_param_left_join_preserves_all_hrus(tmp_path):
 
 def test_param_inventory_kinds():
     entries = viz.param_inventory()
-    assert len(entries) == 25
+    assert len(entries) == 26
     assert all(isinstance(e, viz.ParamEntry) for e in entries)
     by_name = {e.name: e for e in entries}
     assert by_name["soils"].kind == "categorical"
@@ -176,6 +176,10 @@ def test_param_inventory_kinds():
     assert by_name["elevation"].kind == "continuous"
     assert by_name["srain_intcp"].csv_name == "nhm_lulc_nhm_v11_params.csv"
     assert by_name["wrain_intcp"].csv_name == "nhm_lulc_nhm_v11_params.csv"
+    # nhm_v11 winter-canopy term has both schema variants (crosswalk: retention,
+    # faithful lulc_prederived: rad_trncf); the render loop skips the absent one.
+    assert by_name["rad_trncf"].csv_name == "nhm_lulc_nhm_v11_params.csv"
+    assert by_name["rad_trncf"].kind == "continuous"
     # ssflux PRMS params read from the gap-filled Stage 7 CSV
     for n in ("soil2gw_max", "ssr2gw_rate", "fastcoef_lin", "slowcoef_lin",
               "gwflow_coef", "dprst_seep_rate_open", "dprst_flow_coef"):
