@@ -127,7 +127,10 @@ def test_lulc_entries_use_per_source_names():
     """Each LULC source must have its own `name` (lulc_<source>) to avoid
     per-batch output collisions when multiple LULC sources run in parallel."""
     config = _load_config_raw()
-    lulc_names = {e["name"] for e in config["params"] if e.get("script") == "lulc"}
+    # Both the crosswalk-driven (lulc) and faithful pre-derived (lulc_prederived)
+    # runners are LULC sources and need per-source names.
+    lulc_scripts = {"lulc", "lulc_prederived"}
+    lulc_names = {e["name"] for e in config["params"] if e.get("script") in lulc_scripts}
     assert lulc_names >= {"lulc_nhm_v11", "lulc_nalcms", "lulc_nlcd", "lulc_foresce"}
     # No bare "lulc" entry (would collide with the legacy CLI's source_type).
     assert "lulc" not in lulc_names
