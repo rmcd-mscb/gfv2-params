@@ -1,0 +1,11 @@
+# Snakemake v8 workflow profile for the tjc Stage-4 spike.
+# Selects the SLURM executor and sets cluster-wide defaults. Per-rule mem_mb /
+# runtime / cpus_per_task come from each rule's `resources:` in the Snakefile.
+executor: slurm
+jobs: 8                      # max concurrent SLURM jobs (tjc is tiny)
+printshellcmds: True
+default-resources:
+  slurm_account: impd
+  slurm_partition: cpu
+  mem_mb: 8000
+  runtime: 60               # minutes
