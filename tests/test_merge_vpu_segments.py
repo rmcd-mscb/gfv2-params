@@ -1,7 +1,8 @@
 """Unit tests for the pure merge contract in scripts/merge_vpu_segments.py.
 
-``streambuffer`` buffers whatever geometry it gets, so the only thing the merge
-must guarantee is: every valid per-VPU segment survives, null/empty geometries
+A downstream geometry consumer only needs the merged lines themselves, so the
+only thing the merge must guarantee is: every valid per-VPU segment survives,
+null/empty geometries
 are dropped, and mismatched CRSs are reprojected to one common CRS before the
 concat (a silent CRS mix would put a VPU's segments in the wrong place). Those
 invariants are pinned here at CI speed with synthetic line layers — no staged
