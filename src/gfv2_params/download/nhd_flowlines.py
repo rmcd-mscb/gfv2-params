@@ -64,10 +64,14 @@ def write_connected_comids(comids: set[int], out_path: Path) -> None:
 
 
 def read_flowline_attrs(flowline_path: Path) -> pd.DataFrame:
-    """Read COMID/FTYPE/WBAREACOMI from an NHDFlowline source (no geometry)."""
+    """Read COMID/WBAREACOMI from an NHDFlowline source (no geometry).
+
+    Connectivity is keyed purely off non-zero WBAREACOMI (which NHD populates
+    only on artificial paths), so FTYPE is not read.
+    """
     return pyogrio.read_dataframe(
         flowline_path,
-        columns=["COMID", "FTYPE", "WBAREACOMI"],
+        columns=["COMID", "WBAREACOMI"],
         read_geometry=False,
     )
 
@@ -91,15 +95,35 @@ def download_snapshot(dd: str, vpu: str, download_dir: Path, extract_dir: Path) 
             local_path = candidate
             break
         logger.info(f"Checking: {url}")
-        if requests.head(url, timeout=60).status_code == 200:
-            logger.info(f"Downloading {filename} ...")
-            with requests.get(url, stream=True, timeout=120) as r:
-                r.raise_for_status()
-                with open(candidate, "wb") as f:
-                    for chunk in r.iter_content(chunk_size=8192):
-                        f.write(chunk)
-            local_path = candidate
-            break
+        status = requests.head(url, timeout=60, allow_redirects=True).status_code
+        if status != 200:
+            # Distinguish "archive absent" (404) from a transient/redirect issue
+            # that a GET might still satisfy — the latter shouldn't be read as
+            # "this version doesn't exist" without a trace.
+            if status != 404:
+                logger.warning(
+                    "HEAD %s returned %d (not 200/404) — treating as absent", url, status
+                )
+            continue
+        logger.info(f"Downloading {filename} ...")
+        # Download to a .part sidecar and atomically rename only after a
+        # size-verified, complete write, so an interrupted download (node
+        # preemption, walltime) can't leave a truncated archive that the next
+        # run silently reuses via the candidate.exists() short-circuit above.
+        tmp = candidate.with_suffix(candidate.suffix + ".part")
+        with requests.get(url, stream=True, timeout=120) as r:
+            r.raise_for_status()
+            expected = int(r.headers.get("Content-Length", 0))
+            with open(tmp, "wb") as f:
+                for chunk in r.iter_content(chunk_size=8192):
+                    f.write(chunk)
+        got = tmp.stat().st_size
+        if expected and got != expected:
+            tmp.unlink(missing_ok=True)
+            raise OSError(f"{filename}: downloaded {got} bytes, expected {expected}")
+        tmp.rename(candidate)
+        local_path = candidate
+        break
 
     if local_path is None:
         logger.error(f"NHDSnapshot not found for VPU {vpu}")

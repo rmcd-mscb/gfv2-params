@@ -43,6 +43,20 @@ def test_load_connected_comids(tmp_path):
     assert load_connected_comids(p) == {5, 7, 9}
 
 
+def test_select_connected_missing_join_columns_raises():
+    import pytest
+
+    # A waterbody layer without COMID/member_comid can't be joined; the error
+    # must name the missing column rather than surface a bare pandas KeyError.
+    gdf = gpd.GeoDataFrame(
+        {"GNIS_NAME": ["a"]},
+        geometry=[Polygon([(0, 0), (1, 0), (1, 1), (0, 1)])],
+        crs="EPSG:5070",
+    )
+    with pytest.raises(KeyError, match="member_comid"):
+        select_connected_waterbodies(gdf, {1})
+
+
 # ---------------------------------------------------------------------------
 # Builder tests
 # ---------------------------------------------------------------------------

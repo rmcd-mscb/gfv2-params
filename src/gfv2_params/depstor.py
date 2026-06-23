@@ -261,6 +261,13 @@ def load_connected_comids(path: Path) -> set[int]:
 
 def select_connected_waterbodies(wb_gdf, connected: set[int]):
     """Subset waterbodies whose COMID or member_comid is in `connected`."""
+    missing = {"COMID", "member_comid"} - set(wb_gdf.columns)
+    if missing:
+        raise KeyError(
+            f"waterbody layer is missing connectivity join column(s) "
+            f"{sorted(missing)}; wbody_connectivity needs both COMID and "
+            f"member_comid to join against the connected-COMID set."
+        )
     comid = pd.to_numeric(wb_gdf["COMID"], errors="coerce")
     member = pd.to_numeric(wb_gdf["member_comid"], errors="coerce")
     mask = comid.isin(connected) | member.isin(connected)

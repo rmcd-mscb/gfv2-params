@@ -4,9 +4,20 @@ import pandas as pd
 import pytest
 
 from gfv2_params.download.nhd_flowlines import (
+    _base_url,
     connected_comids_from_flowlines,
     write_connected_comids,
 )
+
+
+def test_base_url_nested_vs_flat():
+    # VPUs whose code contains a "nested" drainage code get the extra
+    # /NHDPlus{vpu} path segment; others sit directly under /NHDPlus{dd}.
+    root = "https://dmap-data-commons-ow.s3.amazonaws.com/NHDPlusV21/Data"
+    assert _base_url("MS", "05") == f"{root}/NHDPlusMS/NHDPlus05"   # nested
+    assert _base_url("SA", "03N") == f"{root}/NHDPlusSA/NHDPlus03N"  # nested
+    assert _base_url("NE", "01") == f"{root}/NHDPlusNE"             # flat
+    assert _base_url("GL", "04") == f"{root}/NHDPlusGL"             # flat
 
 
 def test_connected_comids_distinct_nonzero():
