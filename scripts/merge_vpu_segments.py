@@ -1,6 +1,11 @@
 """Merge the per-VPU `nsegment` layers into one CONUS stream-segments GeoPackage.
 
-The depstor `streambuffer` step needs a single stream-network layer covering the
+NOTE: the depstor `streambuffer` step (the original consumer of this merged layer)
+was retired when waterbody connectivity moved to NHD WBAREACOMI topology. Segments
+no longer feed any depstor step; this merge is retained for other tooling. The
+historical rationale follows.
+
+The depstor `streambuffer` step needed a single stream-network layer covering the
 whole fabric, but a VPU-based fabric like ``gfv2`` only ships per-VPU draft
 geopackages (``input/fabric/NHM_<vpu>_draft.gpkg``). The fabric-merge notebook
 (``notebooks/merge_vpu_targets.py``) merges only the ``nhru`` layer, so the
