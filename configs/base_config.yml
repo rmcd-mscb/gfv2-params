@@ -72,6 +72,10 @@ fabrics:
     segments_gpkg: "{data_root}/input/fabric/NHM_01_draft.gpkg"
     waterbody_gpkg: "{data_root}/input/fabric/NHM_01_draft.gpkg"
     waterbody_layer: wbs
+    # No `connected_comids_table`: the `wbs` layer has no COMID/member_comid
+    # column, so the WBAREACOMI join cannot run. The depstor
+    # `wbody_connectivity`/`dprst` steps therefore fail-fast on this profile —
+    # use the `gfv2` profile for depstor validation.
     hru_gpkg: "{data_root}/{fabric}/fabric/gfv2_vpu01_nhru.gpkg"
     hru_layer: nhru
     id_feature: nat_hru_id

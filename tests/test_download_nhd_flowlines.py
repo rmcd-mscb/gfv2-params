@@ -1,6 +1,7 @@
 """Unit tests for the NHD flowline -> connected-waterbody-COMID distillation."""
 
 import pandas as pd
+import pytest
 
 from gfv2_params.download.nhd_flowlines import (
     connected_comids_from_flowlines,
@@ -24,6 +25,22 @@ def test_connected_comids_distinct_nonzero():
 def test_connected_comids_empty_when_all_zero():
     df = pd.DataFrame({"WBAREACOMI": [0, 0, 0]})
     assert connected_comids_from_flowlines(df) == set()
+
+
+def test_connected_comids_numeric_strings_ok():
+    # NHD shapefiles can deliver WBAREACOMI as a string field; numeric strings
+    # must still parse so a VPU isn't silently dropped to the empty set.
+    df = pd.DataFrame({"WBAREACOMI": ["100", "0", "200"]})
+    assert connected_comids_from_flowlines(df) == {100, 200}
+
+
+def test_connected_comids_raises_on_coercion_loss():
+    # A populated-but-unparseable WBAREACOMI (column-format drift) would coerce
+    # to NaN and silently contribute zero connected COMIDs for that VPU. That is
+    # the catastrophic silent-failure path, so it must fail loud.
+    df = pd.DataFrame({"WBAREACOMI": ["100", "bogus", "200"]})
+    with pytest.raises(ValueError, match="failed numeric parse"):
+        connected_comids_from_flowlines(df)
 
 
 def test_write_connected_comids_roundtrip(tmp_path):

@@ -134,7 +134,7 @@ whether the depstor pipeline will be run for the fabric:
 | `twi_raster` | — | ✓ | CONUS `twi.vrt` (ArcPy, calibrated) or `twi_hydrodem.vrt` (open-source, CONUS-complete) |
 | `segments_gpkg` | — | ✓ | Stream-segment gpkg (no longer feeds any depstor step — the `streambuffer` step is retired). A VPU-based fabric (gfv2) merges per-VPU `nsegment` layers via `scripts/merge_vpu_segments.py` for other potential uses. |
 | `segments_layer` | — | ✓ | Layer name inside `segments_gpkg` (typically `nsegment`) |
-| `connected_comids_table` | — | ✓ | Path to `input/nhd/connected_waterbody_comids.parquet` — the set of NHDPlusV2 waterbody COMIDs that an NHD artificial path flows through (i.e. on-stream). Produced by `download/nhd_flowlines.py`; consumed by the depstor `wbody_connectivity` builder. |
+| `connected_comids_table` | — | ✓ | Path to `input/nhd/connected_waterbody_comids.parquet` — the set of NHDPlusV2 waterbody COMIDs that an NHD artificial path flows through (i.e. on-stream). Produced by `download/nhd_flowlines.py`; consumed by the depstor `wbody_connectivity` builder. Required only for fabrics whose waterbody layer is COMID-keyed (`gfv2`, `oregon`, `tjc`); the `gfv2_vpu01` profile omits it (its `wbs` layer has no COMID), so `wbody_connectivity`/`dprst` fail-fast there — use `gfv2` for depstor validation. |
 | `waterbody_gpkg` | — | ✓ | NHDPlus waterbodies; depstor's `waterbody` step **raises** if unset |
 | `waterbody_layer` | — | ✓ | Layer name inside `waterbody_gpkg` |
 

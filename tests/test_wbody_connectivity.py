@@ -125,3 +125,87 @@ def test_wbody_connectivity_requires_table(tmp_path):
     )
     with pytest.raises(KeyError):
         wbody_connectivity.build({"output": "connected_wbody.tif"}, ctx, logging.getLogger("test"))
+
+
+def test_wbody_connectivity_zero_match_raises(tmp_path):
+    """Zero waterbodies matched would misclassify everything as dprst -> fail loud."""
+    import pytest
+    from shapely.geometry import box
+
+    from gfv2_params.depstor_builders import wbody_connectivity
+    from gfv2_params.depstor_builders.context import BuildContext
+
+    template = tmp_path / "template.tif"
+    landmask = tmp_path / "land_mask.tif"
+    wb_gpkg = tmp_path / "wb.gpkg"
+    table = tmp_path / "connected.parquet"
+    _write_template(template)
+    _write_landmask(landmask)
+
+    gpd.GeoDataFrame(
+        {"COMID": [10, 20], "member_comid": ["10", "20"]},
+        geometry=[box(0, 270, 60, 300), box(240, 0, 300, 30)],
+        crs="EPSG:5070",
+    ).to_file(wb_gpkg, layer="waterbodies", driver="GPKG")
+    # Connected set shares no COMID with the waterbodies -> 0 matches.
+    pd.DataFrame({"comid": [999]}).to_parquet(table, index=False)
+
+    ctx = BuildContext(
+        fabric="t", template_path=template, output_dir=tmp_path,
+        hru_gpkg=wb_gpkg, hru_layer="waterbodies",
+        waterbody_gpkg=wb_gpkg, waterbody_layer="waterbodies",
+        connected_comids_table=table,
+    )
+    ctx.paths["landmask"] = landmask
+
+    with pytest.raises(ValueError, match="matched 0 of"):
+        wbody_connectivity.build({"output": "connected_wbody.tif"}, ctx, logging.getLogger("test"))
+
+
+def test_wbody_connectivity_drops_non_land_cells(tmp_path):
+    """A connected polygon over a non-land cell must still be masked to nodata."""
+    from shapely.geometry import box
+
+    from gfv2_params.depstor_builders import wbody_connectivity
+    from gfv2_params.depstor_builders.context import BuildContext
+
+    template = tmp_path / "template.tif"
+    landmask = tmp_path / "land_mask.tif"
+    wb_gpkg = tmp_path / "wb.gpkg"
+    table = tmp_path / "connected.parquet"
+    _write_template(template)
+
+    # Land mask: all land EXCEPT the top-left cell [0, 0] (ocean), which the
+    # connected polygon below covers. Land=1, off-land=255 (nodata).
+    transform = from_origin(0, 10 * 30, 30, 30)
+    mask = np.ones((10, 10), dtype=np.uint8)
+    mask[0, 0] = 255
+    with rasterio.open(
+        landmask, "w", driver="GTiff", height=10, width=10, count=1, dtype="uint8",
+        crs="EPSG:5070", transform=transform, nodata=255,
+    ) as dst:
+        dst.write(mask, 1)
+
+    # Connected polygon covers the top-left 2x2 block (cells [0,0],[0,1],[1,0],[1,1]).
+    gpd.GeoDataFrame(
+        {"COMID": [10], "member_comid": ["10"]},
+        geometry=[box(0, 240, 60, 300)],
+        crs="EPSG:5070",
+    ).to_file(wb_gpkg, layer="waterbodies", driver="GPKG")
+    pd.DataFrame({"comid": [10]}).to_parquet(table, index=False)
+
+    ctx = BuildContext(
+        fabric="t", template_path=template, output_dir=tmp_path,
+        hru_gpkg=wb_gpkg, hru_layer="waterbodies",
+        waterbody_gpkg=wb_gpkg, waterbody_layer="waterbodies",
+        connected_comids_table=table,
+    )
+    ctx.paths["landmask"] = landmask
+
+    produced = wbody_connectivity.build(
+        {"output": "connected_wbody.tif"}, ctx, logging.getLogger("test")
+    )
+    with rasterio.open(produced["connected_wbody"]) as src:
+        arr = src.read(1)
+    assert arr[0, 0] == 255   # ocean cell dropped despite connected polygon
+    assert arr[0, 1] == 1     # adjacent land cell under the polygon still burned

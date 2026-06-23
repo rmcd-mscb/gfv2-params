@@ -37,8 +37,21 @@ _VERSION_CANDIDATES = ["05", "04", "03", "02", "01"]
 
 
 def connected_comids_from_flowlines(df: pd.DataFrame) -> set[int]:
-    """Distinct non-zero, non-null WBAREACOMI values as a set of ints."""
-    col = pd.to_numeric(df["WBAREACOMI"], errors="coerce")
+    """Distinct non-zero, non-null WBAREACOMI values as a set of ints.
+
+    Raises ValueError if any non-null WBAREACOMI fails to parse as a number.
+    WBAREACOMI is a numeric COMID field, so a parse failure means a column-format
+    change in the snapshot; silently coercing those to NaN would drop a VPU to an
+    empty connected set and misclassify its waterbodies as depression storage.
+    """
+    raw = df["WBAREACOMI"]
+    col = pd.to_numeric(raw, errors="coerce")
+    n_lost = int(raw.notna().sum() - col.notna().sum())
+    if n_lost:
+        raise ValueError(
+            f"{n_lost} non-null WBAREACOMI value(s) failed numeric parse — "
+            "likely a column-format change in this NHDFlowline snapshot."
+        )
     vals = col[(col.notna()) & (col != _NO_WATERBODY)]
     return {int(v) for v in vals.unique()}
 

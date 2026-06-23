@@ -68,6 +68,17 @@ def build(step_cfg: dict, ctx: BuildContext, logger) -> dict:
         "  %d connected COMIDs; %d of %d waterbody polygons flagged connected",
         len(connected), len(sel), len(wb_gdf),
     )
+    if len(sel) == 0:
+        # An empty connected mask makes dprst classify every waterbody as
+        # depression storage, silently inflating dprst_frac domain-wide. Fail
+        # loud instead of writing an all-nodata raster the orchestrator accepts.
+        raise ValueError(
+            f"wbody_connectivity matched 0 of {len(wb_gdf)} waterbodies against "
+            f"{len(connected)} connected COMIDs — this would misclassify every "
+            f"waterbody as depression storage. Check that "
+            f"{ctx.connected_comids_table} is complete and that the "
+            f"COMID/member_comid join keys align with the waterbody layer."
+        )
 
     binary = rasterize_binary(sel, info, all_touched=False)
     binary[~read_land_mask(landmask_path)] = 255  # drop off-land (ocean) cells
