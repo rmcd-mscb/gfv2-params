@@ -98,7 +98,8 @@ Fabric identities and all shared, required per-fabric inputs live as profiles in
 `configs/base_config.yml` under a `fabrics:` mapping. Every profile carries
 `hru_gpkg`/`hru_layer`, `id_feature`, `expected_max_hru_id`, and `batch_size`;
 depstor fabrics add `template_raster`, `fdr_raster`, `twi_raster`,
-`segments_gpkg`/`segments_layer`, and `waterbody_gpkg`/`waterbody_layer`. The
+`connected_comids_table`, `segments_gpkg`/`segments_layer`, and
+`waterbody_gpkg`/`waterbody_layer`. The
 active profile is selected via:
 
 1. `--fabric <name>` CLI flag on any script, OR
@@ -169,7 +170,7 @@ Manually-staged files required before `--check`:
 | `input/soils_litho/` | `TEXT_PRMS.tif`, `AWC.tif`, `Lithology_exp_Konly_Project.shp` (+ `.dbf`, `.prj`, `.shx`) |
 | `input/lulc_veg/` | `RootDepth.tif`, `CNPY.tif`, `Imperv.tif` |
 | `input/nhm_default/` | NHM default parameter files |
-| `input/nhd/` | `conus_waterbodies.gpkg` (layer `waterbodies`) |
+| `input/nhd/` | `conus_waterbodies.gpkg` (layer `waterbodies`); `connected_waterbody_comids.parquet` (produced by `download_nhd_flowlines.batch`) |
 | `input/twi/<rpu>/` | Per-RPU `twi.tif` + sidecars (staged via `stage_twi.sh`) |
 
 Download jobs (idempotent — already-downloaded files are skipped):
@@ -179,6 +180,7 @@ mkdir -p logs
 sbatch slurm_batch/download_rpu_rasters.batch    # NHDPlus RPU rasters (~112 GB)
 sbatch slurm_batch/download_nalcms.batch         # NALCMS 2020 land cover (~2 GB)
 sbatch slurm_batch/download_nhm_v11.batch        # NHM v1.1 LULC rasters
+sbatch slurm_batch/download_nhd_flowlines.batch  # NHD-connected waterbody COMIDs (one-time, CONUS)
 ```
 
 Stage per-RPU TWI rasters (reads from the impd-group mirror by default):
@@ -300,7 +302,7 @@ rejected; never substitute it.
 - `hru_gpkg`, `segments_gpkg`/`segments_layer`, `waterbody_gpkg`/`waterbody_layer` (waterbody is required; the step raises if unset).
 - `imperv_source` in `configs/depstor/depstor_rasters.yml` — NLCD fractional-impervious raster.
 
-**DAG order:** landmask → imperv / streambuffer / waterbody → dprst → perv →
+**DAG order:** landmask → imperv / wbody_connectivity / waterbody → dprst → perv →
 vpu_id → routing → drains_perv / drains_imperv → carea_map. Selective re-runs
 via `--step <name>` or `--from <name>` passed through to the Python script.
 
@@ -357,7 +359,7 @@ pixi run -e notebooks marimo run notebooks/merge_vpu_targets.py
 ### Stage 3b — `merge_vpu_segments`
 
 Merge the per-VPU `nsegment` layers into a single CONUS stream-segments gpkg
-for the depstor `streambuffer` step (VPU-based fabrics only). Outputs
+(VPU-based fabrics only). Outputs
 `{data_root}/gfv2/fabric/gfv2_nsegment_merged.gpkg` (layer `nsegment`). Submit
 via the batch:
 
@@ -367,9 +369,11 @@ sbatch slurm_batch/merge_vpu_segments.batch
 FABRIC=<name> sbatch slurm_batch/merge_vpu_segments.batch
 ```
 
-Idempotent; pass `--force` to rebuild. The `segments_gpkg` is consumed only by
-the depstor `streambuffer` step; routing connectivity comes from the FDR raster,
-so merged-segment graph topology is not required here.
+Idempotent; pass `--force` to rebuild. The `segments_gpkg` is no longer consumed
+by any depstor step — the `streambuffer` step is retired; depstor connectivity
+is now NHD-WBAREACOMI-driven (see `wbody_connectivity` builder). Routing
+connectivity comes from the FDR raster, so merged-segment graph topology is not
+required here.
 
 ### Stage 3c — `prepare_fabric`
 
@@ -754,6 +758,7 @@ sacct -j <JOBID> -o JobID,State,Elapsed,MaxRSS
 | `slurm_batch/download_rpu_rasters.batch` | `configs/base_config.yml` | `gfv2_params.download.rpu_rasters` |
 | `slurm_batch/download_nalcms.batch` | `configs/base_config.yml` | `gfv2_params.download.nalcms_lulc` |
 | `slurm_batch/download_nhm_v11.batch` | `configs/base_config.yml` | `gfv2_params.download.nhm_v11_lulc` |
+| `slurm_batch/download_nhd_flowlines.batch` | `configs/base_config.yml` | `gfv2_params.download.nhd_flowlines` — downloads per-VPU NHDPlusV2 `NHDFlowline` attributes and distills distinct non-zero `WBAREACOMI` values to `input/nhd/connected_waterbody_comids.parquet` (one-time, CONUS) |
 | `slurm_batch/submit_jobs.sh` | (caller-provided) | generic per-VPU array dispatcher |
 | (run directly) | `configs/base_config.yml` | `scripts/migrate_to_shared_layout.py --data-root <path>` (legacy `work/` layout upgrade) |
 | (run directly) | `configs/base_config.yml` | `scripts/clip_shared_to_fabric.py --fabric <name>` (fabric-bounds FDR/template clip) |

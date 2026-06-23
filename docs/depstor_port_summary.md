@@ -39,7 +39,7 @@ that walks them in dependency order is
 | `RasterPipeline.{rasterize, raster_create, vector_raster_mask, raster_raster_mask, open_raster, set_template}` (42-410) | [`src/gfv2_params/depstor.py`](../src/gfv2_params/depstor.py) — `RasterInfo`, `rasterize_binary`, `threshold_above`, `clump_regions`, `regions_touching_mask`, `regions_to_binary`, `write_uint8_binary`, `write_int32_regions`, `read_aligned_uint8`, `read_land_mask_for_grid` | Raster I/O + binary/region helpers |
 | `whitebox_run` (412-449) | [`src/gfv2_params/depstor_builders/routing.py`](../src/gfv2_params/depstor_builders/routing.py) | In-process cycle-safe D8 upslope traversal (`d8_routing.drains_to_dprst_kernel`); replaced WBT `Watershed` (spec 2026-05-29) |
 | `getHruImperv` (452-518) | [`src/gfv2_params/depstor_builders/imperv.py`](../src/gfv2_params/depstor_builders/imperv.py) | Threshold the impervious raster to a binary mask |
-| `getSegBuff` (521-577) | [`src/gfv2_params/depstor_builders/streambuffer.py`](../src/gfv2_params/depstor_builders/streambuffer.py) | Buffer NHD segments and rasterize |
+| `getSegBuff` (521-577) | [`src/gfv2_params/depstor_builders/streambuffer.py`](../src/gfv2_params/depstor_builders/streambuffer.py) *(retired — kept on disk as reference; replaced by `wbody_connectivity`)* | Buffer NHD segments and rasterize — **superseded** by NHD WBAREACOMI connectivity: `download/nhd_flowlines.py` → `connected_waterbody_comids.parquet` → [`depstor_builders/wbody_connectivity.py`](../src/gfv2_params/depstor_builders/wbody_connectivity.py) → `connected_wbody.tif` |
 | `getWBinHRUs` (580-663) | [`src/gfv2_params/depstor_builders/waterbody.py`](../src/gfv2_params/depstor_builders/waterbody.py) | Filter wbody polys by area, rasterize, then label connected components |
 | `getDprst` (666-701) | [`src/gfv2_params/depstor_builders/dprst.py`](../src/gfv2_params/depstor_builders/dprst.py) | Region-level intersection logic (depression = wbody region with zero stream/imperv overlap) |
 | `getHruSro_to_dprst` (704-739) | [`src/gfv2_params/depstor_builders/routing.py`](../src/gfv2_params/depstor_builders/routing.py) | In-process cycle-safe D8 upslope traversal (`d8_routing.drains_to_dprst_kernel`); replaced WBT `Watershed` (spec 2026-05-29) |
@@ -225,7 +225,7 @@ build steps in dependency order. Each `name` maps to a module under
 that exposes `build(step_cfg, ctx, logger) -> {output_key: Path}`. The
 orchestrator [`scripts/build_depstor_rasters.py`](../scripts/build_depstor_rasters.py)
 walks the canonical `STEP_ORDER`
-(landmask → imperv / streambuffer / waterbody → dprst → perv / routing →
+(landmask → imperv / wbody_connectivity / waterbody → dprst → perv / routing →
 drains_perv / drains_imperv → carea_map), wires outputs through a
 `BuildContext`, supports `--step <name>` / `--from <name>` for selective
 re-runs, and runs under a single sbatch

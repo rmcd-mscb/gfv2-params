@@ -407,7 +407,7 @@ produce, per fabric:
 {fabric}/depstor_rasters/           # 13 generation outputs
 ├── land_mask.tif                   # (built first; every other raster masks against it)
 ├── imperv_binary.tif
-├── stream_buffer.tif
+├── connected_wbody.tif             # NHD-WBAREACOMI connected waterbodies (replaces stream_buffer.tif)
 ├── wbody_binary.tif    wbody_regions.tif
 ├── dprst_binary.tif    onstream_binary.tif
 ├── perv_binary.tif
