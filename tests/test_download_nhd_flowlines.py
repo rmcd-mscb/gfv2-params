@@ -5,10 +5,30 @@ import pytest
 
 from gfv2_params.download.nhd_flowlines import (
     _base_url,
+    _pick_snapshot_key,
     connected_comids_from_flowlines,
     read_flowline_attrs,
     write_connected_comids,
 )
+
+
+def test_pick_snapshot_key_highest_version_excludes_fgdb():
+    # NHD snapshot version numbers vary per VPU (observed 04-09); pick the
+    # highest NHDSnapshot_<NN>.7z and never the parallel NHDSnapshotFGDB archive
+    # or other components.
+    pre = "NHDPlusV21/Data/NHDPlusMS/NHDPlus11/NHDPlusV21_MS_11_"
+    keys = [
+        f"{pre}NHDSnapshotFGDB_06.7z",   # FGDB variant — must be ignored
+        f"{pre}NHDSnapshot_05.7z",
+        f"{pre}NHDSnapshot_06.7z",       # highest non-FGDB -> winner
+        f"{pre}FdrFac_01.7z",            # other component — must be ignored
+    ]
+    assert _pick_snapshot_key(keys, "11") == f"{pre}NHDSnapshot_06.7z"
+
+
+def test_pick_snapshot_key_none_when_absent():
+    assert _pick_snapshot_key([], "11") is None
+    assert _pick_snapshot_key(["x/NHDPlusV21_MS_10L_NHDSnapshot_06.7z"], "11") is None
 
 
 def test_read_flowline_attrs_normalises_nhd_field_casing(tmp_path):
