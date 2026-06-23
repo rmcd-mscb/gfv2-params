@@ -6,8 +6,30 @@ import pytest
 from gfv2_params.download.nhd_flowlines import (
     _base_url,
     connected_comids_from_flowlines,
+    read_flowline_attrs,
     write_connected_comids,
 )
+
+
+def test_read_flowline_attrs_normalises_nhd_field_casing(tmp_path):
+    import geopandas as gpd
+    from shapely.geometry import LineString
+
+    # NHD field-name casing varies across VPU snapshots: VPU 12 ships
+    # COMID/WBAREACOMI, VPU 13 ships ComID/WBAreaComI. read_flowline_attrs must
+    # resolve them case-insensitively and normalise to canonical names so the
+    # per-VPU loop doesn't crash on the lower-cased VPUs.
+    gdf = gpd.GeoDataFrame(
+        {"ComID": [1, 2], "WBAreaComI": [100, 0]},
+        geometry=[LineString([(0, 0), (1, 1)]), LineString([(1, 1), (2, 2)])],
+        crs="EPSG:4269",
+    )
+    src = tmp_path / "NHDFlowline.gpkg"
+    gdf.to_file(src, driver="GPKG")
+
+    df = read_flowline_attrs(src)
+    assert set(df.columns) == {"COMID", "WBAREACOMI"}
+    assert connected_comids_from_flowlines(df) == {100}
 
 
 def test_base_url_nested_vs_flat():

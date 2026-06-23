@@ -66,14 +66,30 @@ def write_connected_comids(comids: set[int], out_path: Path) -> None:
 def read_flowline_attrs(flowline_path: Path) -> pd.DataFrame:
     """Read COMID/WBAREACOMI from an NHDFlowline source (no geometry).
 
+    NHD field-name casing is inconsistent across VPU snapshots (e.g. VPU 12
+    ships COMID/WBAREACOMI, VPU 13 ships ComID/WBAreaComI), so the columns are
+    resolved case-insensitively and normalised to canonical upper-case names.
+    Requesting the exact upper-case names would make pyogrio silently drop the
+    mismatched-case column, leaving the connectivity distiller to KeyError.
+
     Connectivity is keyed purely off non-zero WBAREACOMI (which NHD populates
     only on artificial paths), so FTYPE is not read.
     """
-    return pyogrio.read_dataframe(
-        flowline_path,
-        columns=["COMID", "WBAREACOMI"],
-        read_geometry=False,
+    available = list(pyogrio.read_info(flowline_path)["fields"])
+    by_upper = {name.upper(): name for name in available}
+    rename = {}
+    for canon in ("COMID", "WBAREACOMI"):
+        actual = by_upper.get(canon)
+        if actual is None:
+            raise KeyError(
+                f"{flowline_path}: NHDFlowline has no '{canon}' field "
+                f"(case-insensitive). Available fields: {available}"
+            )
+        rename[actual] = canon
+    df = pyogrio.read_dataframe(
+        flowline_path, columns=list(rename), read_geometry=False
     )
+    return df.rename(columns=rename)
 
 
 def _base_url(dd: str, vpu: str) -> str:
