@@ -78,7 +78,7 @@ packages = ["src/gfv2_params"]
 # Run `pixi install` to materialise envs under `.pixi/envs/`.
 # ---------------------------------------------------------------------------
 [tool.pixi.workspace]
-channels = ["conda-forge"]
+channels = ["conda-forge", "bioconda"]
 platforms = ["linux-64"]
 
 [tool.pixi.tasks]
@@ -134,6 +134,14 @@ pytest = "*"
 pre-commit = "*"
 ruff = "*"
 
+[tool.pixi.feature.workflow.dependencies]
+# Snakemake spike controller (docs/superpowers/plans/2026-06-23-snakemake-spike-tjc-stage4.md).
+# Available on bioconda (now added to [tool.pixi.workspace] channels).
+# Kept in a feature (like dev/docs), NOT in [project.dependencies] —
+# this is orchestration tooling, not a runtime dep.
+snakemake = ">=8"
+snakemake-executor-plugin-slurm = "*"
+
 [tool.pixi.feature.docs.dependencies]
 mkdocs = "*"
 mkdocs-material = "*"
@@ -159,6 +167,7 @@ default = { features = [], solve-group = "default" }
 notebooks = { features = ["notebooks"], solve-group = "default" }
 dev = { features = ["dev"], solve-group = "default" }
 docs = { features = ["docs"], solve-group = "default" }
+workflow = { features = ["workflow"] }
 all = { features = ["notebooks", "dev", "docs"], solve-group = "default" }
 
 [tool.isort]
