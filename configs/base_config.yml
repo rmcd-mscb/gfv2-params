@@ -41,6 +41,9 @@ fabrics:
     # waterbody builder reprojects to the template grid and clips to land_mask.
     waterbody_gpkg: "{data_root}/input/nhd/conus_waterbodies.gpkg"
     waterbody_layer: waterbodies
+    # Connected-waterbody COMIDs distilled from NHD WBAREACOMI artificial paths
+    # (see gfv2_params.download.nhd_flowlines). Drives wbody_connectivity.
+    connected_comids_table: "{data_root}/input/nhd/connected_waterbody_comids.parquet"
     # HRU polygon fabric — authoritative land/domain mask for the depstor
     # builders. gfv2_params.depstor_builders.landmask rasterises this to
     # land_mask.tif (driven by scripts/build_depstor_rasters.py).
@@ -113,6 +116,9 @@ fabrics:
     # reprojects to the template grid and clips to the Oregon land mask.
     waterbody_gpkg: "{data_root}/input/nhd/conus_waterbodies.gpkg"
     waterbody_layer: waterbodies
+    # Connected-waterbody COMIDs distilled from NHD WBAREACOMI artificial paths
+    # (see gfv2_params.download.nhd_flowlines). Drives wbody_connectivity.
+    connected_comids_table: "{data_root}/input/nhd/connected_waterbody_comids.parquet"
 
   tjc:
     # Small regional fabric inside VPU 12 (Texas-Gulf); pre-merged single gpkg
@@ -149,3 +155,6 @@ fabrics:
     # the template grid and clips to the tjc land mask.
     waterbody_gpkg: "{data_root}/input/nhd/conus_waterbodies.gpkg"
     waterbody_layer: waterbodies
+    # Connected-waterbody COMIDs distilled from NHD WBAREACOMI artificial paths
+    # (see gfv2_params.download.nhd_flowlines). Drives wbody_connectivity.
+    connected_comids_table: "{data_root}/input/nhd/connected_waterbody_comids.parquet"
