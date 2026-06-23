@@ -1,4 +1,4 @@
-"""Combine wbody regions + stream-buffer + imperv into dprst + onstream."""
+"""Combine wbody regions + connected-wbody mask + imperv into dprst + onstream."""
 
 from __future__ import annotations
 
@@ -24,7 +24,7 @@ def build(step_cfg: dict, ctx: BuildContext, logger) -> dict:
     landmask_path = ctx.require("landmask")
     wbody_binary_path = ctx.require("wbody_binary")
     wbody_regions_path = ctx.require("wbody_regions")
-    stream_buffer_path = ctx.require("stream_buffer")
+    connected_path = ctx.require("connected_wbody")
     imperv_path = ctx.require("imperv")
 
     logger.info("--- dprst ---")
@@ -37,19 +37,19 @@ def build(step_cfg: dict, ctx: BuildContext, logger) -> dict:
 
     info = RasterInfo.from_path(ctx.template_path)
     wbody_binary = read_aligned_uint8(wbody_binary_path, info)
-    stream_binary = read_aligned_uint8(stream_buffer_path, info)
+    connected_binary = read_aligned_uint8(connected_path, info)
     imperv_binary = read_aligned_uint8(imperv_path, info)
     with rasterio.open(wbody_regions_path) as src:
         regions = src.read(1)
     land_valid = read_land_mask(landmask_path)
 
-    stream_regions = regions_touching_mask(regions, stream_binary)
+    onstream_regions = regions_touching_mask(regions, connected_binary)
     imperv_regions = regions_touching_mask(regions, imperv_binary)
-    excluded = stream_regions | imperv_regions
+    excluded = onstream_regions | imperv_regions
     n_total = int(regions.max())
     logger.info(
-        "  %d total wbody regions; %d touch stream, %d touch imperv, %d excluded",
-        n_total, len(stream_regions), len(imperv_regions), len(excluded),
+        "  %d total wbody regions; %d touch connected wbody, %d touch imperv, %d excluded",
+        n_total, len(onstream_regions), len(imperv_regions), len(excluded),
     )
 
     all_ids = set(int(v) for v in np.unique(regions) if v != 0)

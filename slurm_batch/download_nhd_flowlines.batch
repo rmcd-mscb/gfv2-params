@@ -1,0 +1,13 @@
+#!/bin/bash
+#SBATCH -p cpu
+#SBATCH -A impd
+#SBATCH --job-name=download_nhd_flow
+#SBATCH --output=logs/job_%j.out
+#SBATCH --error=logs/job_%j.err
+#SBATCH --time=12:00:00
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=1
+#SBATCH --mem=8G
+
+cd "$SLURM_SUBMIT_DIR"
+pixi run --as-is python -m gfv2_params.download.nhd_flowlines

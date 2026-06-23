@@ -465,7 +465,7 @@ _DEPSTOR_RASTERS = [
     "perv_binary.tif",
     "dprst_binary.tif",
     "onstream_binary.tif",
-    "stream_buffer.tif",
+    "connected_wbody.tif",
     "wbody_binary.tif",
     "wbody_regions.tif",
     "carea_map_t8_binary.tif",
@@ -482,6 +482,7 @@ def depstor_raster_inventory(cfg) -> list[RasterEntry]:
 
     All are discrete (binary masks / region or VPU labels), so kind is
     "categorical". Missing files are skipped with a warning.
+    ``connected_wbody.tif`` replaced the retired ``stream_buffer.tif``.
     """
     base = Path(cfg["data_root"]) / cfg["fabric"] / "depstor_rasters"
     entries = [
@@ -578,7 +579,7 @@ def save_figure(fig, name, *, dpi: int = 150) -> None:
 # Curated list of depstor binaries that directly feed a PRMS ratio CSV (i.e.
 # appear as a numerator or denominator of one of the 6 ratios in
 # configs/depstor/depstor_params.yml). Intentionally excludes intermediates
-# (stream_buffer, wbody_binary, onstream_binary, drains_to_dprst) and the
+# (connected_wbody, wbody_binary, onstream_binary, drains_to_dprst) and the
 # non-ratio rasters (land_mask, wbody_regions, vpu_id). Each entry carries a
 # distinct hex color so layers stay visually distinguishable when stacked on
 # an interactive map. Maintained alongside _DEPSTOR_RASTERS above.

@@ -140,6 +140,9 @@ Runs as **Stage 1c1** (see `slurm_batch/HPC_REFERENCE.md`), before the TWI merge
      - `hruImperv`: raster with impervious areas labeled with HRU IDs
 
 4. **getSegBuff**
+   - **gfv2-params:** Retired — replaced by the `wbody_connectivity` builder, which
+     derives on-stream waterbodies from NHD `WBAREACOMI` artificial-path topology
+     instead of a 60 m segment buffer. See `docs/depstor_port_summary.md`.
    - Buffers the stream segments, converts to grid, assigns HRU IDs within the
      buffer part of grid, NAs outside
    - **Inputs**
@@ -407,7 +410,7 @@ produce, per fabric:
 {fabric}/depstor_rasters/           # 13 generation outputs
 ├── land_mask.tif                   # (built first; every other raster masks against it)
 ├── imperv_binary.tif
-├── stream_buffer.tif
+├── connected_wbody.tif             # NHD-WBAREACOMI connected waterbodies (replaces stream_buffer.tif)
 ├── wbody_binary.tif    wbody_regions.tif
 ├── dprst_binary.tif    onstream_binary.tif
 ├── perv_binary.tif

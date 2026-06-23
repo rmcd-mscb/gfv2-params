@@ -142,8 +142,8 @@ def _fabric_tree(fabric: str) -> list:
                           prepare_fabric.py (used by zonal stats scripts)
               depstor_rasters/
                           Per-fabric depression-storage intermediate rasters
-                          produced by build_depstor_*.py
-                          (imperv_binary.tif, stream_buffer.tif,
+                          produced by build_depstor_rasters.py
+                          (imperv_binary.tif, connected_wbody.tif,
                            wbody_binary.tif, wbody_regions.tif,
                            dprst_binary.tif, onstream_binary.tif,
                            drains_to_dprst.tif)

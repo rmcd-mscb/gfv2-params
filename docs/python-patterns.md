@@ -106,9 +106,9 @@ up the function by name and calls it.
 ```python
 # src/gfv2_params/depstor_builders/__init__.py
 BUILDERS = {
-    "landmask":      landmask.build,
-    "imperv":        imperv.build,
-    "streambuffer":  streambuffer.build,
+    "landmask":          landmask.build,
+    "imperv":            imperv.build,
+    "wbody_connectivity": wbody_connectivity.build,
     # ... etc.
 }
 ```

@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Optional
 
 import numpy as np
+import pandas as pd
 import rasterio
 from rasterio.coords import BoundingBox
 from rasterio.crs import CRS
@@ -250,6 +251,27 @@ def regions_to_binary(regions: np.ndarray, keep_ids: set[int]) -> np.ndarray:
         return np.full(regions.shape, 255, dtype=np.uint8)
     keep = np.isin(regions, list(keep_ids))
     return np.where(keep, np.uint8(1), np.uint8(255))
+
+
+def load_connected_comids(path: Path) -> set[int]:
+    """Load the connected-waterbody COMID parquet into a set of ints."""
+    df = pd.read_parquet(path, columns=["comid"])
+    return {int(v) for v in df["comid"].to_numpy()}
+
+
+def select_connected_waterbodies(wb_gdf, connected: set[int]):
+    """Subset waterbodies whose COMID or member_comid is in `connected`."""
+    missing = {"COMID", "member_comid"} - set(wb_gdf.columns)
+    if missing:
+        raise KeyError(
+            f"waterbody layer is missing connectivity join column(s) "
+            f"{sorted(missing)}; wbody_connectivity needs both COMID and "
+            f"member_comid to join against the connected-COMID set."
+        )
+    comid = pd.to_numeric(wb_gdf["COMID"], errors="coerce")
+    member = pd.to_numeric(wb_gdf["member_comid"], errors="coerce")
+    mask = comid.isin(connected) | member.isin(connected)
+    return wb_gdf[mask].copy()
 
 
 def assert_raster_aligned(src, info: RasterInfo, name: str) -> None:

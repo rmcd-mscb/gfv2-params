@@ -10,7 +10,7 @@
 #SBATCH --mem=192G
 #
 # Build the entire depression-storage raster stack in dependency order
-# (landmask -> imperv/streambuffer/waterbody -> dprst -> perv/routing
+# (landmask -> imperv/wbody_connectivity/waterbody -> dprst -> perv/routing
 #  -> drains_perv/drains_imperv -> carea_map). Resources are sized for the
 # long pole (per-VPU D8 routing pass). For VPU01 / smaller fabrics,
 # override at submission:

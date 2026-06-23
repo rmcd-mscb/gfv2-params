@@ -81,6 +81,10 @@ def _build_context(config: dict, force: bool) -> BuildContext:
         segments_layer=config.get("segments_layer", "nsegment"),
         waterbody_gpkg=Path(config["waterbody_gpkg"]) if config.get("waterbody_gpkg") else None,
         waterbody_layer=config.get("waterbody_layer"),
+        connected_comids_table=(
+            Path(config["connected_comids_table"])
+            if config.get("connected_comids_table") else None
+        ),
         fdr_raster=Path(config["fdr_raster"]) if config.get("fdr_raster") else None,
         twi_raster=Path(config["twi_raster"]) if config.get("twi_raster") else None,
         vpu=config.get("vpu"),
@@ -116,11 +120,11 @@ def _expected_outputs(step: dict) -> dict:
             return {"drains_perv": step["output"]}
         if name == "drains_imperv":
             return {"drains_imperv": step["output"]}
-        # landmask, imperv, streambuffer, perv, routing each map to a single key.
+        # landmask, imperv, wbody_connectivity, perv, routing each map to a single key.
         single_key = {
             "landmask": "landmask",
             "imperv": "imperv",
-            "streambuffer": "stream_buffer",
+            "wbody_connectivity": "connected_wbody",
             "perv": "perv",
             "routing": "drains_to_dprst",
             "vpu_id": "vpu_id",
