@@ -10,6 +10,8 @@ writes a flat parquet of connected COMIDs consumed by the depstor
 
 from __future__ import annotations
 
+import re
+import xml.etree.ElementTree as ET
 from pathlib import Path
 
 import pandas as pd
@@ -33,7 +35,8 @@ vpu_index = {
     "13": "RG", "14": "CO", "15": "CO", "16": "GB", "17": "PN", "18": "CA",
 }
 
-_VERSION_CANDIDATES = ["05", "04", "03", "02", "01"]
+_S3_HOST = "https://dmap-data-commons-ow.s3.amazonaws.com"
+_S3_NS = "{http://s3.amazonaws.com/doc/2006-03-01/}"
 
 
 def connected_comids_from_flowlines(df: pd.DataFrame) -> set[int]:
@@ -66,45 +69,74 @@ def write_connected_comids(comids: set[int], out_path: Path) -> None:
 def read_flowline_attrs(flowline_path: Path) -> pd.DataFrame:
     """Read COMID/WBAREACOMI from an NHDFlowline source (no geometry).
 
+    NHD field-name casing is inconsistent across VPU snapshots (e.g. VPU 12
+    ships COMID/WBAREACOMI, VPU 13 ships ComID/WBAreaComI), so the columns are
+    resolved case-insensitively and normalised to canonical upper-case names.
+    Requesting the exact upper-case names would make pyogrio silently drop the
+    mismatched-case column, leaving the connectivity distiller to KeyError.
+
     Connectivity is keyed purely off non-zero WBAREACOMI (which NHD populates
     only on artificial paths), so FTYPE is not read.
     """
-    return pyogrio.read_dataframe(
-        flowline_path,
-        columns=["COMID", "WBAREACOMI"],
-        read_geometry=False,
+    available = list(pyogrio.read_info(flowline_path)["fields"])
+    by_upper = {name.upper(): name for name in available}
+    rename = {}
+    for canon in ("COMID", "WBAREACOMI"):
+        actual = by_upper.get(canon)
+        if actual is None:
+            raise KeyError(
+                f"{flowline_path}: NHDFlowline has no '{canon}' field "
+                f"(case-insensitive). Available fields: {available}"
+            )
+        rename[actual] = canon
+    df = pyogrio.read_dataframe(
+        flowline_path, columns=list(rename), read_geometry=False
     )
+    return df.rename(columns=rename)
 
 
 def _base_url(dd: str, vpu: str) -> str:
     nested = {"03", "10", "05", "06", "07", "08", "11", "14", "15"}
     if any(code in vpu for code in nested):
-        return f"https://dmap-data-commons-ow.s3.amazonaws.com/NHDPlusV21/Data/NHDPlus{dd}/NHDPlus{vpu}"
-    return f"https://dmap-data-commons-ow.s3.amazonaws.com/NHDPlusV21/Data/NHDPlus{dd}"
+        return f"{_S3_HOST}/NHDPlusV21/Data/NHDPlus{dd}/NHDPlus{vpu}"
+    return f"{_S3_HOST}/NHDPlusV21/Data/NHDPlus{dd}"
+
+
+def _pick_snapshot_key(keys: list[str], vpu: str) -> str | None:
+    """Highest-version NHDSnapshot (non-FGDB) S3 key for a VPU, or None.
+
+    NHDSnapshot version numbers are not uniform across VPUs (observed 04-09), so
+    the version is discovered from the bucket listing rather than probed from a
+    hardcoded list. The `NHDSnapshot_<digits>` shape excludes the parallel
+    `NHDSnapshotFGDB` archive and other components.
+    """
+    pat = re.compile(rf"_{re.escape(vpu)}_NHDSnapshot_(\d+)\.7z$")
+    matches = sorted((m.group(1), k) for k in keys for m in [pat.search(k)] if m)
+    return matches[-1][1] if matches else None
+
+
+def _snapshot_url(dd: str, vpu: str) -> str | None:
+    """Discover the NHDSnapshot archive URL for a VPU via the S3 listing."""
+    prefix = _base_url(dd, vpu).split(".amazonaws.com/", 1)[1]
+    r = requests.get(f"{_S3_HOST}/?list-type=2&prefix={prefix}/", timeout=60)
+    r.raise_for_status()
+    keys = [e.text for e in ET.fromstring(r.text).iter(f"{_S3_NS}Key")]
+    key = _pick_snapshot_key(keys, vpu)
+    return f"{_S3_HOST}/{key}" if key else None
 
 
 def download_snapshot(dd: str, vpu: str, download_dir: Path, extract_dir: Path) -> Path | None:
     """Download + extract a VPU's NHDSnapshot; return the NHDFlowline.shp path."""
-    base_url = _base_url(dd, vpu)
-    local_path = None
-    for version in _VERSION_CANDIDATES:
-        filename = f"NHDPlusV21_{dd}_{vpu}_NHDSnapshot_{version}.7z"
-        candidate = download_dir / filename
-        url = f"{base_url}/{filename}"
-        if candidate.exists():
-            local_path = candidate
-            break
-        logger.info(f"Checking: {url}")
-        status = requests.head(url, timeout=60, allow_redirects=True).status_code
-        if status != 200:
-            # Distinguish "archive absent" (404) from a transient/redirect issue
-            # that a GET might still satisfy — the latter shouldn't be read as
-            # "this version doesn't exist" without a trace.
-            if status != 404:
-                logger.warning(
-                    "HEAD %s returned %d (not 200/404) — treating as absent", url, status
-                )
-            continue
+    url = _snapshot_url(dd, vpu)
+    if url is None:
+        logger.error(f"NHDSnapshot not found in S3 listing for VPU {vpu}")
+        return None
+    filename = url.rsplit("/", 1)[1]
+    candidate = download_dir / filename
+
+    if candidate.exists():
+        logger.info(f"Already downloaded: {filename}")
+    else:
         logger.info(f"Downloading {filename} ...")
         # Download to a .part sidecar and atomically rename only after a
         # size-verified, complete write, so an interrupted download (node
@@ -122,16 +154,10 @@ def download_snapshot(dd: str, vpu: str, download_dir: Path, extract_dir: Path) 
             tmp.unlink(missing_ok=True)
             raise OSError(f"{filename}: downloaded {got} bytes, expected {expected}")
         tmp.rename(candidate)
-        local_path = candidate
-        break
-
-    if local_path is None:
-        logger.error(f"NHDSnapshot not found for VPU {vpu}")
-        return None
 
     out_dir = extract_dir / vpu / "NHDSnapshot"
     out_dir.mkdir(parents=True, exist_ok=True)
-    with py7zr.SevenZipFile(local_path, mode="r") as archive:
+    with py7zr.SevenZipFile(candidate, mode="r") as archive:
         archive.extractall(path=out_dir)
 
     shps = list(out_dir.glob("**/NHDFlowline.shp"))
