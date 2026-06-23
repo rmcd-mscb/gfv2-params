@@ -37,6 +37,9 @@ steps:
       binary: wbody_binary.tif
       regions: wbody_regions.tif
 
+  - name: wbody_connectivity
+    output: connected_wbody.tif
+
   - name: dprst
     outputs:
       dprst: dprst_binary.tif

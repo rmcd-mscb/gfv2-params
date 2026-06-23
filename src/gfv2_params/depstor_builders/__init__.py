@@ -14,21 +14,22 @@ These modules are thin orchestration wrappers around those helpers.
 
 from __future__ import annotations
 
-from . import carea_map, dprst, imperv, intersect, landmask, perv, routing, streambuffer, vpu_id, waterbody
+from . import carea_map, dprst, imperv, intersect, landmask, perv, routing, streambuffer, vpu_id, waterbody, wbody_connectivity
 from .context import BuildContext
 
 BUILDERS = {
-    "landmask":      landmask.build,
-    "imperv":        imperv.build,
-    "streambuffer":  streambuffer.build,
-    "waterbody":     waterbody.build,
-    "dprst":         dprst.build,
-    "perv":          perv.build,
-    "routing":       routing.build,
-    "drains_perv":   intersect.build,
-    "drains_imperv": intersect.build,
-    "vpu_id":        vpu_id.build,
-    "carea_map":     carea_map.build,
+    "landmask":          landmask.build,
+    "imperv":            imperv.build,
+    "streambuffer":      streambuffer.build,
+    "waterbody":         waterbody.build,
+    "wbody_connectivity": wbody_connectivity.build,
+    "dprst":             dprst.build,
+    "perv":              perv.build,
+    "routing":           routing.build,
+    "drains_perv":       intersect.build,
+    "drains_imperv":     intersect.build,
+    "vpu_id":            vpu_id.build,
+    "carea_map":         carea_map.build,
 }
 
 # Outputs registered into ctx.paths by each builder (consumable downstream via
@@ -37,26 +38,28 @@ BUILDERS = {
 # scripts/build_depstor_rasters.py). Keys are stable string handles — change
 # them only with a coordinated update of every downstream consumer.
 #
-#   step              -> registered key(s)        on-disk artifact (default name)
-#   landmask          -> "landmask"               land_mask.tif (uint8, 1=land)
-#   imperv            -> "imperv"                 imperv_binary.tif
-#   streambuffer      -> "stream_buffer"          stream_buffer.tif
-#   waterbody         -> "wbody_binary",          wbody_binary.tif,
-#                        "wbody_regions"          wbody_regions.tif
-#   dprst             -> "dprst",                 dprst_binary.tif,
-#                        "onstream"               onstream_binary.tif
-#   perv              -> "perv"                   perv_binary.tif
-#   routing           -> "drains_to_dprst"        drains_to_dprst.tif (in-process D8 kernel)
-#   drains_perv       -> "drains_perv"            drains_perv_binary.tif (output_key from config)
-#   drains_imperv     -> "drains_imperv"          drains_imperv_binary.tif (output_key from config)
-#   vpu_id            -> "vpu_id"                 vpu_id.tif (per-cell VPU code, multi-VPU only)
-#   carea_map         -> "carea_max",             carea_max_*.tif,
-#                        "smidx"                  smidx_*.tif
+#   step               -> registered key(s)        on-disk artifact (default name)
+#   landmask           -> "landmask"               land_mask.tif (uint8, 1=land)
+#   imperv             -> "imperv"                 imperv_binary.tif
+#   streambuffer       -> "stream_buffer"          stream_buffer.tif
+#   waterbody          -> "wbody_binary",          wbody_binary.tif,
+#                         "wbody_regions"          wbody_regions.tif
+#   wbody_connectivity -> "connected_wbody"        connected_wbody.tif (uint8, 1=connected)
+#   dprst              -> "dprst",                 dprst_binary.tif,
+#                         "onstream"               onstream_binary.tif
+#   perv               -> "perv"                   perv_binary.tif
+#   routing            -> "drains_to_dprst"        drains_to_dprst.tif (in-process D8 kernel)
+#   drains_perv        -> "drains_perv"            drains_perv_binary.tif (output_key from config)
+#   drains_imperv      -> "drains_imperv"          drains_imperv_binary.tif (output_key from config)
+#   vpu_id             -> "vpu_id"                 vpu_id.tif (per-cell VPU code, multi-VPU only)
+#   carea_map          -> "carea_max",             carea_max_*.tif,
+#                         "smidx"                  smidx_*.tif
 STEP_ORDER = [
     "landmask",
     "imperv",
     "streambuffer",
     "waterbody",
+    "wbody_connectivity",
     "dprst",
     "perv",
     "vpu_id",

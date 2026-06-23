@@ -125,6 +125,7 @@ def _expected_outputs(step: dict) -> dict:
             "landmask": "landmask",
             "imperv": "imperv",
             "streambuffer": "stream_buffer",
+            "wbody_connectivity": "connected_wbody",
             "perv": "perv",
             "routing": "drains_to_dprst",
             "vpu_id": "vpu_id",
