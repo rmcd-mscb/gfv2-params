@@ -120,11 +120,10 @@ def _expected_outputs(step: dict) -> dict:
             return {"drains_perv": step["output"]}
         if name == "drains_imperv":
             return {"drains_imperv": step["output"]}
-        # landmask, imperv, streambuffer, perv, routing each map to a single key.
+        # landmask, imperv, wbody_connectivity, perv, routing each map to a single key.
         single_key = {
             "landmask": "landmask",
             "imperv": "imperv",
-            "streambuffer": "stream_buffer",
             "wbody_connectivity": "connected_wbody",
             "perv": "perv",
             "routing": "drains_to_dprst",

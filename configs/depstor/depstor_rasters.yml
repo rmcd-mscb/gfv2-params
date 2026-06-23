@@ -27,10 +27,6 @@ steps:
     threshold: 50
     output: imperv_binary.tif
 
-  - name: streambuffer
-    buffer_distance: 60
-    output: stream_buffer.tif
-
   - name: waterbody
     min_area_threshold: 900.0
     outputs:
