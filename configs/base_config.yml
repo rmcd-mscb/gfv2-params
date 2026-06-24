@@ -60,6 +60,34 @@ fabrics:
     # per-VPU merge (notebooks/merge_vpu_targets.py).
     id_feature: nat_hru_id
 
+  # --- Developer / test fabric -------------------------------------------
+  # gfv2_dev mirrors the CONUS `gfv2` fabric so a developer can test code
+  # changes WITHOUT touching the canonical `gfv2/` products. It READS the shared
+  # gfv2 inputs (the two normally-{fabric}-templated input paths, segments_gpkg
+  # and hru_gpkg, are pinned to `gfv2` below); OUTPUT paths are keyed off
+  # {fabric} in the process configs, so every result lands in
+  # `{data_root}/gfv2_dev/` instead of `{data_root}/gfv2/`. Needs team
+  # read-write on the data_root (group ACL). For the zonal/param (Stage B)
+  # steps, first stage this fabric's batches:
+  #   pixi run --as-is python scripts/prepare_fabric.py --fabric gfv2_dev
+  # For more than one concurrent developer, copy this block to `gfv2_<name>`
+  # (or point `data_root` at a personal dir) so outputs don't collide.
+  gfv2_dev:
+    expected_max_hru_id: 361471
+    batch_size: 10000
+    template_raster: "{data_root}/gfv2/shared/gfv2_fdr.vrt"
+    fdr_raster: "{data_root}/gfv2/shared/gfv2_fdr.vrt"
+    twi_raster: "{data_root}/shared/conus/vrt/twi_hydrodem.vrt"
+    # Pinned to `gfv2` (not {fabric}) so gfv2_dev reads the shared gfv2 inputs:
+    segments_gpkg: "{data_root}/gfv2/fabric/gfv2_nsegment_merged.gpkg"
+    segments_layer: nsegment
+    waterbody_gpkg: "{data_root}/input/nhd/conus_waterbodies.gpkg"
+    waterbody_layer: waterbodies
+    connected_comids_table: "{data_root}/input/nhd/connected_waterbody_comids.parquet"
+    hru_gpkg: "{data_root}/gfv2/fabric/gfv2_nhru_merged.gpkg"
+    hru_layer: nhru
+    id_feature: nat_hru_id
+
   gfv2_vpu01:
     # VPU01 validation overlay (issue #38). Uses the per-VPU staged inputs
     # under shared/per_vpu/01/ and the NHM_01_draft fabric gpkg directly,
