@@ -24,8 +24,9 @@ from gfv2_params.log import configure_logging
 
 logger = configure_logging("download_nhd_flowlines")
 
-# WBAREACOMI == 0 (and null) means the flowline does not pass through a waterbody.
-_NO_WATERBODY = 0
+# A real waterbody COMID is a positive integer; non-positive WBAREACOMI (0, or
+# the -9999 nodata sentinel some VPUs use) means the flowline does not pass
+# through a waterbody.
 
 # VPU -> drainage-area code (DD). NHDSnapshot is per-VPU (no RPU split).
 vpu_index = {
@@ -40,7 +41,10 @@ _S3_NS = "{http://s3.amazonaws.com/doc/2006-03-01/}"
 
 
 def connected_comids_from_flowlines(df: pd.DataFrame) -> set[int]:
-    """Distinct non-zero, non-null WBAREACOMI values as a set of ints.
+    """Distinct positive WBAREACOMI values (connected waterbody COMIDs) as ints.
+
+    Only positive values are kept: 0 and the -9999 nodata sentinel both mean the
+    flowline does not pass through a waterbody.
 
     Raises ValueError if any non-null WBAREACOMI fails to parse as a number.
     WBAREACOMI is a numeric COMID field, so a parse failure means a column-format
@@ -55,7 +59,7 @@ def connected_comids_from_flowlines(df: pd.DataFrame) -> set[int]:
             f"{n_lost} non-null WBAREACOMI value(s) failed numeric parse — "
             "likely a column-format change in this NHDFlowline snapshot."
         )
-    vals = col[(col.notna()) & (col != _NO_WATERBODY)]
+    vals = col[col > 0]
     return {int(v) for v in vals.unique()}
 
 

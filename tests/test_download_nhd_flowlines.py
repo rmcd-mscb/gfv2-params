@@ -87,6 +87,14 @@ def test_connected_comids_numeric_strings_ok():
     assert connected_comids_from_flowlines(df) == {100, 200}
 
 
+def test_connected_comids_excludes_nodata_sentinels():
+    # Some VPUs use -9999 (not 0) as the WBAREACOMI nodata sentinel. A real
+    # waterbody COMID is always positive, so only positive values are kept.
+    # These are valid numbers (not a parse failure), so no ValueError is raised.
+    df = pd.DataFrame({"WBAREACOMI": [100, -9999, 200, -1, 0]})
+    assert connected_comids_from_flowlines(df) == {100, 200}
+
+
 def test_connected_comids_raises_on_coercion_loss():
     # A populated-but-unparseable WBAREACOMI (column-format drift) would coerce
     # to NaN and silently contribute zero connected COMIDs for that VPU. That is
