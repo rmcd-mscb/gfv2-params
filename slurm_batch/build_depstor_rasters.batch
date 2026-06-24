@@ -7,12 +7,15 @@
 #SBATCH --time=18:00:00
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=8
-#SBATCH --mem=192G
+#SBATCH --mem=384G
 #
 # Build the entire depression-storage raster stack in dependency order
 # (landmask -> imperv/wbody_connectivity/waterbody -> dprst -> perv/routing
-#  -> drains_perv/drains_imperv -> carea_map). Resources are sized for the
-# long pole (per-VPU D8 routing pass). For VPU01 / smaller fabrics,
+#  -> drains_perv/drains_imperv -> carea_map). --mem is sized for the CONUS
+# memory ceiling: the full-grid region ops in `waterbody` (8-connectivity clump)
+# and `dprst` (regions_to_binary over the whole grid) peak around 384G and will
+# OOM at 192G. Per-VPU D8 `routing` peaks ~80G, so a routing-only rerun can be
+# submitted lower, e.g. `--mem=96G --step routing`. For VPU01 / smaller fabrics,
 # override at submission:
 #
 #   FABRIC=gfv2_vpu01 sbatch --time=02:00:00 --mem=48G \

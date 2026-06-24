@@ -311,9 +311,18 @@ grid. Required by `carea_map` when `threshold_mode: percentile` and the fabric
 spans multiple VPUs. Single-VPU fabrics set `vpu: "<id>"` in their profile and
 skip this step.
 
+**Memory ceiling (`waterbody` + `dprst`).** These two full-grid region steps
+are the CONUS memory ceiling: `waterbody`'s 8-connectivity clump and `dprst`'s
+`regions_to_binary` over the whole 153830×109901 grid peak around **384 GB** and
+**OOM at 192 GB**. The `build_depstor_rasters.batch` default is therefore
+`--mem=384G`; do not lower it for a full-DAG CONUS build (a single `--step
+dprst`/`--step waterbody` rerun needs it too).
+
 **`routing` memory.** Tiles the in-process D8 routing pass per VPU — each VPU
 is routed in isolation (FDR masked to the VPU) and the results are mosaicked.
-Peak memory ~80 GB measured for CONUS. Run at `--mem=96G`, not 64G.
+Peak memory ~80 GB measured for CONUS. A routing-only rerun can drop to
+`--mem=96G` (`sbatch --mem=96G slurm_batch/build_depstor_rasters.batch --step
+routing`), but the full build stays at the 384 GB default above.
 
 **`carea_map` threshold modes** (configured in `configs/depstor/depstor_rasters.yml`):
 
