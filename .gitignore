@@ -197,3 +197,6 @@ docs/figures/.cache/
 
 # Prettier pre-commit hook stages its cache here
 node_modules/
+
+# Snakemake runtime state (spike + future workflow runs)
+.snakemake/
