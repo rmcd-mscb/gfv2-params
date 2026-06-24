@@ -3,16 +3,22 @@
 # geo work runs in the frozen default env (race-safe; CLAUDE.md constraint).
 # See docs/superpowers/plans/2026-06-23-snakemake-spike-tjc-stage4.md.
 import yaml
+from pathlib import Path
+
+workdir: str(Path(workflow.basedir).parent.parent)   # repo root, regardless of invocation CWD
 
 FABRIC = "tjc"
 BASE_CONFIG = "configs/base_config.yml"
 ZONAL_CONFIG = "workflow/spike/zonal_params.spike.yml"
 
-DATA_ROOT = yaml.safe_load(open(BASE_CONFIG))["data_root"]
-PARAMS = {p["name"]: p for p in yaml.safe_load(open(ZONAL_CONFIG))["params"]}
+with open(BASE_CONFIG) as f:
+    DATA_ROOT = yaml.safe_load(f)["data_root"]
+with open(ZONAL_CONFIG) as f:
+    PARAMS = {p["name"]: p for p in yaml.safe_load(f)["params"]}
 OUTDIR = f"{DATA_ROOT}/{FABRIC}/params_snakemake_spike"
 
-_manifest = yaml.safe_load(open(f"{DATA_ROOT}/{FABRIC}/batches/manifest.yml"))
+with open(f"{DATA_ROOT}/{FABRIC}/batches/manifest.yml") as f:
+    _manifest = yaml.safe_load(f)
 BATCHES = [f"{i:04d}" for i in range(_manifest["n_batches"])]
 
 # Shell prefix: frozen default env via pixi --as-is (NOT the workflow env).

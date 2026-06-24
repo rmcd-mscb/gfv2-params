@@ -15,7 +15,8 @@ import yaml
 ID = "model_hru_idx"  # tjc id_feature (configs/base_config.yml)
 PARAMS = ["nhm_elevation_params.csv", "nhm_slope_params.csv", "nhm_ssflux_params.csv"]
 
-_DATA_ROOT = Path(yaml.safe_load(open("configs/base_config.yml"))["data_root"])
+with open("configs/base_config.yml") as _f:
+    _DATA_ROOT = Path(yaml.safe_load(_f)["data_root"])
 GOLDEN = _DATA_ROOT / "tjc" / "params" / "merged"
 SPIKE = _DATA_ROOT / "tjc" / "params_snakemake_spike" / "merged"
 
