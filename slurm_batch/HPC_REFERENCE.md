@@ -306,6 +306,15 @@ rejected; never substitute it.
 vpu_id → routing → drains_perv / drains_imperv → carea_map. Selective re-runs
 via `--step <name>` or `--from <name>` passed through to the Python script.
 
+**dprst rebuild cascade.** Changing `dprst` membership (e.g. the per-cell
+impervious carve-out) invalidates everything downstream of it in the DAG:
+`perv`, `routing` → `drains_perv`/`drains_imperv`, and `carea_map` (it consumes
+`onstream` + `perv`). Rebuild with `--from dprst` and `FORCE=1`, then re-run the
+depstor zonal + merge for the affected fractions (`dprst_frac`, `perv_frac`,
+`drains_*_frac`, `onstream_storage_frac`, `carea_*`, `sro_to_dprst_*`).
+`waterbody`, `wbody_connectivity`, `vpu_id`, and `landmask` are upstream and
+unaffected.
+
 **`vpu_id` step.** Rasterises the HRU fabric's `vpu` attribute onto the template
 grid. Required by `carea_map` when `threshold_mode: percentile` and the fabric
 spans multiple VPUs. Single-VPU fabrics set `vpu: "<id>"` in their profile and

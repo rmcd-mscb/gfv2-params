@@ -69,6 +69,17 @@ These are hard-won; violating them silently corrupts outputs.
 - **Land masking.** Every depstor raster is masked against `land_mask.tif` (HRU
   fabric rasterised by the `landmask` step). Never use hydro-DEM nodata or FDR
   as a land mask.
+- **Impervious is carved from dprst per-cell, never whole-region.** A waterbody
+  clump is depression storage unless it is *on-stream* (touches the NHD-connected
+  mask); impervious cells are masked out of `dprst` cell-by-cell in
+  `depstor_builders/dprst.py` (restoring the ArcPy `getDprst` "outside of
+  impervious zones" behavior). Do NOT restore an imperv `regions_touching_mask`
+  exclusion — one impervious pixel would then drop a whole multi-km² waterbody
+  (a regression that falsely excluded ~16,800 km² CONUS-wide). The
+  imperv/dprst/perv cell partition must stay disjoint (no double-count). The
+  `imperv` 50% threshold (`VALUE > 50`) is a land-classification lever (which
+  NLCD cells are impervious), decoupled from dprst exclusion by the per-cell
+  carve — it is **not** a knob for limiting over-exclusion.
 - **WhiteboxTools cannot read LZW + `predictor=2` GeoTIFFs** — it silently
   corrupts them. Never pass `predictor=2` rasters to WBT subprocesses.
 - **CONUS-scale memory: stream/window, never hold a full-grid array.** The CONUS
