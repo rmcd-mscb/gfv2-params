@@ -1,4 +1,11 @@
-"""Combine wbody regions + connected-wbody mask + imperv into dprst + onstream."""
+"""Classify waterbody regions into dprst + onstream.
+
+A waterbody region is depression storage unless it is on-stream (touches the
+NHD-connected mask). Impervious is NOT a region-level exclusion: a single
+impervious cell must not remove a whole clump. Impervious cells are carved out
+of dprst per-cell so imperv/dprst/perv stay a disjoint partition (no cell is
+counted as both impervious and depression storage).
+"""
 
 from __future__ import annotations
 
@@ -44,26 +51,35 @@ def build(step_cfg: dict, ctx: BuildContext, logger) -> dict:
     land_valid = read_land_mask(landmask_path)
 
     onstream_regions = regions_touching_mask(regions, connected_binary)
+    excluded = onstream_regions
+    # Impervious is carved per-cell (below), NOT used to exclude whole regions:
+    # a single impervious pixel must not drop an entire waterbody clump from
+    # depression storage. regions_touching_mask is kept only for logging.
     imperv_regions = regions_touching_mask(regions, imperv_binary)
-    excluded = onstream_regions | imperv_regions
     n_total = int(regions.max())
     logger.info(
-        "  %d total wbody regions; %d touch connected wbody, %d touch imperv, %d excluded",
-        n_total, len(onstream_regions), len(imperv_regions), len(excluded),
+        "  %d total wbody regions; %d touch connected wbody (excluded), "
+        "%d touch imperv (kept; cells carved per-cell)",
+        n_total, len(onstream_regions), len(imperv_regions),
     )
 
     all_ids = set(int(v) for v in np.unique(regions) if v != 0)
     kept_ids = all_ids - excluded
     dprst_binary = regions_to_binary(regions, kept_ids)
+    n_carved = int(((dprst_binary == 1) & (imperv_binary == 1)).sum())
+    dprst_binary[imperv_binary == 1] = 255  # carve impervious cells (no imperv/dprst double-count)
     dprst_binary[~land_valid] = 255  # drop off-land (ocean) cells
     write_uint8_binary(dprst_binary, info, dprst_path)
     n_dprst = int((dprst_binary == 1).sum())
     logger.info(
-        "  %d regions kept; %d cells in dprst (%.4f%% of grid)",
-        len(kept_ids), n_dprst, 100 * n_dprst / dprst_binary.size,
+        "  %d regions kept; %d impervious cells carved; %d cells in dprst (%.4f%% of grid)",
+        len(kept_ids), n_carved, n_dprst, 100 * n_dprst / dprst_binary.size,
     )
 
-    onstream = np.where((wbody_binary == 1) & (dprst_binary != 1), np.uint8(1), np.uint8(255))
+    onstream = np.where(
+        (wbody_binary == 1) & (dprst_binary != 1) & (imperv_binary != 1),
+        np.uint8(1), np.uint8(255),
+    )
     onstream[~land_valid] = 255  # drop off-land (ocean) cells
     write_uint8_binary(onstream, info, onstream_path)
     n_on = int((onstream == 1).sum())
