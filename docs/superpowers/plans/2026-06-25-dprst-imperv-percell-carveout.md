@@ -203,10 +203,14 @@ In `CLAUDE.md`, under the depstor "Non-obvious conventions & gotchas" section, a
 - **Impervious is carved from dprst per-cell, never whole-region.** A waterbody
   clump is depression storage unless it is *on-stream* (touches the NHD-connected
   mask); impervious cells are masked out of `dprst` cell-by-cell in
-  `depstor_builders/dprst.py`. Do NOT restore an imperv `regions_touching_mask`
+  `depstor_builders/dprst.py` (restoring the ArcPy `getDprst` "outside of
+  impervious zones" behavior). Do NOT restore an imperv `regions_touching_mask`
   exclusion — one impervious pixel would then drop a whole multi-km² waterbody
   (a regression that falsely excluded ~16,800 km² CONUS-wide). The
-  imperv/dprst/perv cell partition must stay disjoint (no double-count).
+  imperv/dprst/perv cell partition must stay disjoint (no double-count). The
+  `imperv` 50% threshold (`VALUE > 50`) is a land-classification lever (which
+  NLCD cells are impervious), decoupled from dprst exclusion by the per-cell
+  carve — it is **not** a knob for limiting over-exclusion.
 ```
 
 - [ ] **Step 2: Note the rebuild cascade in HPC_REFERENCE.md**

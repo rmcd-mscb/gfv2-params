@@ -58,6 +58,29 @@ inside it are simply excised. This satisfies the double-counting intent exactly,
 keeps the imperv/dprst/perv partition disjoint, recovers ~16,800 km² of false
 exclusions, and needs no calibrated threshold.
 
+This is a restoration, not a new behavior: the ArcPy reference already carved
+impervious per-cell — `getDprst` defines depressions as "areas outside of
+impervious zones" and `getImpervBin` thresholds at `VALUE > 50`
+([docs/0b_TB_depr_stor.py](../../0b_TB_depr_stor.py)). The region-level any-touch
+exclusion was a regression introduced in the open-source port.
+
+### Impervious threshold (unchanged, kept at 50%)
+
+The `imperv` step thresholds NLCD fractional-impervious at **≥50%** to mark a
+cell impervious ([imperv.py](../../../src/gfv2_params/depstor_builders/imperv.py),
+[depstor_rasters.yml](../../../configs/depstor/depstor_rasters.yml) `threshold: 50`),
+matching the ArcPy `VALUE > 50`. This threshold is a **land-classification**
+lever (which NLCD cells count as impervious), not a dprst-exclusion control.
+Under the broken region-level any-touch rule the high threshold *incidentally*
+limited the blast radius (fewer impervious cells → fewer whole waterbodies
+nuked); the per-cell carve **decouples** the two, so the threshold reverts to its
+proper narrow role: it determines which cells are carved from `dprst` and counted
+in `hru_percent_imperv`, scaling dprst area smoothly and proportionally rather
+than all-or-nothing. Because `imperv_binary` is binary at 50%, there is no
+fractional double-count (a 40% cell is fully dprst/pervious; a 60% cell is fully
+impervious). **The value stays 50%** — changing it shifts `hru_percent_imperv`
+CONUS-wide and is a separate concern (see Deferred).
+
 ## Detailed change — `dprst.py` `build()`
 
 ```python
@@ -133,3 +156,8 @@ Update [test_build_depstor_dprst.py](../../../tests/test_build_depstor_dprst.py)
 dprst if it is >~50% impervious, to delete genuinely urban/concrete water
 features as a unit. Only warranted if the "urban-feature" intent (distinct from
 double-counting) becomes a goal. Recorded here for future revisit; not implemented.
+
+**Impervious threshold value** — the 50% cut (`VALUE > 50`) is kept as-is here.
+Revisiting it (e.g. 30/40/60%) is a separate land-classification decision that
+shifts `hru_percent_imperv` CONUS-wide; defer to its own change with a
+sensitivity scan if needed.
