@@ -90,7 +90,7 @@ batches it into per-batch geopackages.
 # Stage NHD-connected waterbody COMIDs (one-time, CONUS):
 sbatch slurm_batch/download_nhd_flowlines.batch
 # Stage geometric flow-through waterbody COMIDs (one-time, CONUS):
-pixi run --as-is python -m gfv2_params.download.nhd_flowthrough
+sbatch slurm_batch/stage_nhd_flowthrough.batch
 pixi run --as-is python scripts/clip_shared_to_fabric.py --fabric gfv2   # tiny VRT (login OK)
 sbatch slurm_batch/build_depstor_rasters.batch
 ```

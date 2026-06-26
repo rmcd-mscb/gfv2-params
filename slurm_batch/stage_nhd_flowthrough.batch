@@ -1,0 +1,20 @@
+#!/bin/bash
+#SBATCH -p cpu
+#SBATCH -A impd
+#SBATCH --job-name=stage_nhd_flowthrough
+#SBATCH --output=logs/job_%j.out
+#SBATCH --error=logs/job_%j.err
+#SBATCH --time=03:00:00
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=4
+#SBATCH --mem=48G
+#
+# Stage geometric flow-through waterbody COMIDs (one-time, CONUS). Reads the
+# per-VPU NHDSnapshot flowline/waterbody/area geometry already extracted by
+# nhd_flowlines and writes input/nhd/flowthrough_waterbody_comids.parquet, which
+# wbody_connectivity unions with connected_waterbody_comids.parquet. This is a
+# per-VPU vector spatial join (no CONUS-grid array), so it is far lighter than
+# the depstor raster build; 48G is generous headroom for the largest VPU.
+
+cd "$SLURM_SUBMIT_DIR"
+pixi run --as-is python -m gfv2_params.download.nhd_flowthrough
