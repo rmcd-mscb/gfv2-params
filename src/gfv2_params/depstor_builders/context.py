@@ -26,6 +26,7 @@ class BuildContext:
     waterbody_gpkg: Path | None = None
     waterbody_layer: str | None = None
     connected_comids_table: Path | None = None
+    flowthrough_comids_table: Path | None = None
     fdr_raster: Path | None = None
     twi_raster: Path | None = None
     vpu: str | None = None  # single-VPU fabric's VPU label (e.g. "17"); None = use fabric `vpu` attr

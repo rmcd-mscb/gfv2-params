@@ -46,6 +46,11 @@ fabrics:
     # Connected-waterbody COMIDs distilled from NHD WBAREACOMI artificial paths
     # (see gfv2_params.download.nhd_flowlines). Drives wbody_connectivity.
     connected_comids_table: "{data_root}/input/nhd/connected_waterbody_comids.parquet"
+    # Flow-through waterbody COMIDs from NHD stream/area topology (see
+    # gfv2_params.download.nhd_flowthrough). Unioned with connected_comids_table
+    # by wbody_connectivity to catch through-flow swamps NHD never tagged with
+    # WBAREACOMI. Optional: absent -> WBAREACOMI-only behaviour.
+    flowthrough_comids_table: "{data_root}/input/nhd/flowthrough_waterbody_comids.parquet"
     # HRU polygon fabric — authoritative land/domain mask for the depstor
     # builders. gfv2_params.depstor_builders.landmask rasterises this to
     # land_mask.tif (driven by scripts/build_depstor_rasters.py).
@@ -84,6 +89,11 @@ fabrics:
     waterbody_gpkg: "{data_root}/input/nhd/conus_waterbodies.gpkg"
     waterbody_layer: waterbodies
     connected_comids_table: "{data_root}/input/nhd/connected_waterbody_comids.parquet"
+    # Flow-through waterbody COMIDs from NHD stream/area topology (see
+    # gfv2_params.download.nhd_flowthrough). Unioned with connected_comids_table
+    # by wbody_connectivity to catch through-flow swamps NHD never tagged with
+    # WBAREACOMI. Optional: absent -> WBAREACOMI-only behaviour.
+    flowthrough_comids_table: "{data_root}/input/nhd/flowthrough_waterbody_comids.parquet"
     hru_gpkg: "{data_root}/gfv2/fabric/gfv2_nhru_merged.gpkg"
     hru_layer: nhru
     id_feature: nat_hru_id

@@ -85,6 +85,10 @@ def _build_context(config: dict, force: bool) -> BuildContext:
             Path(config["connected_comids_table"])
             if config.get("connected_comids_table") else None
         ),
+        flowthrough_comids_table=(
+            Path(config["flowthrough_comids_table"])
+            if config.get("flowthrough_comids_table") else None
+        ),
         fdr_raster=Path(config["fdr_raster"]) if config.get("fdr_raster") else None,
         twi_raster=Path(config["twi_raster"]) if config.get("twi_raster") else None,
         vpu=config.get("vpu"),
