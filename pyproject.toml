@@ -50,6 +50,9 @@ dev = [
 [tool.hatch.build.targets.wheel]
 packages = ["src/gfv2_params"]
 
+[tool.pytest.ini_options]
+pythonpath = ["."]
+
 # ---------------------------------------------------------------------------
 # Pixi — canonical environment management (issue #39).
 #
