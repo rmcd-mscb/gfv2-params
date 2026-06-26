@@ -52,6 +52,23 @@ def build(step_cfg: dict, ctx: BuildContext, logger) -> dict:
 
     info = RasterInfo.from_path(ctx.template_path)
     connected = load_connected_comids(ctx.connected_comids_table)
+    n_wbareacomi = len(connected)
+    n_flowthrough = 0
+    if ctx.flowthrough_comids_table is not None:
+        if not ctx.flowthrough_comids_table.exists():
+            raise FileNotFoundError(
+                f"Flow-through COMID table not found: "
+                f"{ctx.flowthrough_comids_table}. Run "
+                f"`python -m gfv2_params.download.nhd_flowthrough` first, or "
+                f"remove `flowthrough_comids_table` from the profile."
+            )
+        flowthrough = load_connected_comids(ctx.flowthrough_comids_table)
+        n_flowthrough = len(flowthrough - connected)
+        connected = connected | flowthrough
+    logger.info(
+        "  on-stream COMIDs: %d WBAREACOMI + %d new flow-through = %d total",
+        n_wbareacomi, n_flowthrough, len(connected),
+    )
     try:
         wb_gdf = gpd.read_file(ctx.waterbody_gpkg, layer=ctx.waterbody_layer, use_arrow=True)
     except ImportError:

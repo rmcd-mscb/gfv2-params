@@ -1,5 +1,7 @@
 """Tests for WBAREACOMI-driven waterbody connectivity (helper + builder)."""
 
+from __future__ import annotations
+
 import logging
 from pathlib import Path
 
@@ -11,6 +13,26 @@ from rasterio.transform import from_origin
 from shapely.geometry import Polygon
 
 from gfv2_params.depstor import load_connected_comids, select_connected_waterbodies
+
+
+def _sq(x):
+    return Polygon([(x, 0), (x + 1, 0), (x + 1, 1), (x, 1)])
+
+
+def test_union_promotes_flowthrough_only_waterbody():
+    # WB 200 is WBAREACOMI-connected; WB 201 is ONLY flow-through. The union
+    # must flag both; WBAREACOMI alone would miss 201.
+    wb = gpd.GeoDataFrame(
+        {"COMID": [200, 201, 202],
+         "member_comid": [200, 201, 202],
+         "geometry": [_sq(0), _sq(2), _sq(4)]},
+        crs="EPSG:4269",
+    )
+    connected = {200}
+    flowthrough = {201}
+    union = connected | flowthrough
+    sel = select_connected_waterbodies(wb, union)
+    assert set(sel["COMID"]) == {200, 201}
 
 
 def _wb_gdf():
