@@ -18,6 +18,7 @@ from pathlib import Path
 
 import geopandas as gpd
 import pyogrio
+import shapely
 from shapely.geometry import Point
 
 from gfv2_params.config import load_base_config
@@ -42,7 +43,12 @@ _DIGITIZED = "With Digitized"  # FLOWDIR value where geometry direction is trust
 
 
 def _endpoints(geom):
-    """(upstream_point, downstream_point) for a (Multi)LineString: first & last coord."""
+    """(upstream_point, downstream_point) for a (Multi)LineString: first & last coord.
+
+    Coordinates are sliced to X/Y: NHD geometry is measured 3D (XYZM), so a raw
+    `coords[i]` can carry 4 ordinates, which `Point()` rejects (it accepts only 2
+    or 3). Only planar position matters for the inflow/outflow test.
+    """
     if geom.geom_type == "MultiLineString":
         parts = list(geom.geoms)
         first = parts[0].coords[0]
@@ -50,7 +56,7 @@ def _endpoints(geom):
     else:
         first = geom.coords[0]
         last = geom.coords[-1]
-    return Point(first), Point(last)
+    return Point(first[:2]), Point(last[:2])
 
 
 def flowthrough_comids(
@@ -153,7 +159,12 @@ def read_layer(path: Path, columns: list[str]) -> gpd.GeoDataFrame:
             )
         rename[actual] = canon
     gdf = gpd.read_file(path, columns=list(rename), use_arrow=True)
-    return gdf.rename(columns=rename)[[*columns, "geometry"]]
+    gdf = gdf.rename(columns=rename)[[*columns, "geometry"]]
+    # NHD ships measured 3D (XYZM) geometry; force planar 2D so downstream
+    # shapely ops (Point construction, sjoin, boundary intersection) never see
+    # >2 ordinates. force_2d drops both Z and M.
+    gdf["geometry"] = shapely.force_2d(gdf.geometry.to_numpy())
+    return gdf
 
 
 def main() -> None:

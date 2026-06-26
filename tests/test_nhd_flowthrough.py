@@ -138,3 +138,44 @@ def test_read_layer_normalises_field_casing(tmp_path):
     out = read_layer(p, ["COMID", "FTYPE"])
     assert list(out.columns) == ["COMID", "FTYPE", "geometry"]
     assert out["FTYPE"].iloc[0] == "SwampMarsh"
+
+
+# --- Regression: real NHD geometry is measured 3D (XYZM); endpoints/coords carry
+# extra ordinates that shapely's Point() rejects (">2 or 3, got 4"). The classifier
+# must reduce geometry to 2D. (Synthetic 2D tests above never exercised this.) ---
+
+
+def test_endpoints_strips_higher_dimensions():
+    # A 3D LineString's coords are (x, y, z); _endpoints must not leak z into the
+    # returned points (and a 4-ordinate XYZM line would otherwise crash Point()).
+    from gfv2_params.download.nhd_flowthrough import _endpoints
+
+    line3d = LineString([(0, 0, 5), (1, 1, 7)])
+    up, down = _endpoints(line3d)
+    assert up.has_z is False
+    assert down.has_z is False
+    assert (up.x, up.y) == (0, 0)
+    assert (down.x, down.y) == (1, 1)
+
+
+def test_flowthrough_classifies_three_dimensional_throughflow():
+    # A conveyance line passing through the waterbody, given as 3D geometry,
+    # must still be detected (T1) without crashing.
+    wb = _wb([[401, "SwampMarsh", Polygon([(0, 0), (2, 0), (2, 2), (0, 2)])]])
+    fl = _fl([["StreamRiver", "With Digitized",
+               LineString([(-1, 1, 3), (3, 1, 3)])]])
+    assert flowthrough_comids(wb, fl) == {401}
+
+
+def test_read_layer_drops_z(tmp_path):
+    # read_layer must return planar 2D geometry even when the source carries Z
+    # (NHD ships measured 3D). Without force-2D, downstream Point() construction
+    # on 4-ordinate coords raises ValueError.
+    p = tmp_path / "lines3d.gpkg"
+    gpd.GeoDataFrame(
+        {"FTYPE": ["StreamRiver"], "FLOWDIR": ["With Digitized"],
+         "geometry": [LineString([(0, 0, 9), (1, 1, 9)])]},
+        crs=CRS,
+    ).to_file(p)
+    out = read_layer(p, ["FTYPE", "FLOWDIR"])
+    assert out.geometry.iloc[0].has_z is False
