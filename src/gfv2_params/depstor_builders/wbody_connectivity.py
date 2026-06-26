@@ -65,6 +65,12 @@ def build(step_cfg: dict, ctx: BuildContext, logger) -> dict:
                 f"remove `flowthrough_comids_table` from the profile."
             )
         flowthrough = load_connected_comids(ctx.flowthrough_comids_table)
+        if not flowthrough:
+            raise ValueError(
+                "configured flow-through table is empty → it would promote no "
+                "waterbodies and silently degrade to WBAREACOMI-only; re-run "
+                "nhd_flowthrough or remove the key"
+            )
         n_flowthrough = len(flowthrough - connected)
         connected = connected | flowthrough
     logger.info(

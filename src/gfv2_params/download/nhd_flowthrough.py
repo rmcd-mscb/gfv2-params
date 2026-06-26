@@ -180,12 +180,25 @@ def main() -> None:
         area_path = locate_layer(flowline, "NHDArea")
         areas = read_layer(area_path, ["FTYPE"]) if area_path else None
         vpu_set = flowthrough_comids(waterbodies, flowlines, areas)
+        if not vpu_set:
+            logger.warning(
+                "VPU %s: 0 flow-through COMIDs — check FTYPE/FLOWDIR domain values "
+                "in this snapshot (Playa/Ice Mass waterbodies are excluded by design).",
+                vpu,
+            )
         logger.info(f"VPU {vpu}: {len(vpu_set)} flow-through waterbody COMIDs")
         onstream |= vpu_set
 
     if failures:
         raise RuntimeError(
             f"NHDSnapshot flow-through staging failed for VPU(s): {failures}"
+        )
+
+    if not onstream:
+        raise ValueError(
+            "distilled 0 on-stream COMIDs across all VPUs → every swamp/marsh "
+            "would stay in depression storage; likely an NHD FTYPE/FLOWDIR "
+            "value-domain change or CRS/geometry problem"
         )
 
     out_path = data_root / "input/nhd/flowthrough_waterbody_comids.parquet"
