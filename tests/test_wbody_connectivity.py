@@ -20,19 +20,25 @@ def _sq(x):
 
 
 def test_union_promotes_flowthrough_only_waterbody():
-    # WB 200 is WBAREACOMI-connected; WB 201 is ONLY flow-through. The union
-    # must flag both; WBAREACOMI alone would miss 201.
+    # member_comid is a string in the real GPKG schema. The union must flag:
+    #   WB 200 — WBAREACOMI-connected (COMID branch),
+    #   WB 201 — ONLY flow-through, matched by COMID (WBAREACOMI alone misses it),
+    #   WB 300 — a merged waterbody whose top-level COMID (300) is in NEITHER set
+    #            but whose member_comid (777) IS in the flow-through set; this is
+    #            the production case where the merged COMID differs from the
+    #            original NHDWaterbody COMID the flow-through set is keyed by.
+    # WB 202 is in neither set and must stay unflagged.
     wb = gpd.GeoDataFrame(
-        {"COMID": [200, 201, 202],
-         "member_comid": [200, 201, 202],
-         "geometry": [_sq(0), _sq(2), _sq(4)]},
+        {"COMID": [200, 201, 202, 300],
+         "member_comid": ["200", "201", "202", "777"],
+         "geometry": [_sq(0), _sq(2), _sq(4), _sq(6)]},
         crs="EPSG:4269",
     )
     connected = {200}
-    flowthrough = {201}
+    flowthrough = {201, 777}
     union = connected | flowthrough
     sel = select_connected_waterbodies(wb, union)
-    assert set(sel["COMID"]) == {200, 201}
+    assert set(sel["COMID"]) == {200, 201, 300}
 
 
 def _wb_gdf():

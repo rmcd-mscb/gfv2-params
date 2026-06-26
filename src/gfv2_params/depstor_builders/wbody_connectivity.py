@@ -38,6 +38,8 @@ def build(step_cfg: dict, ctx: BuildContext, logger) -> dict:
     logger.info("--- wbody_connectivity ---")
     logger.info("  Waterbody gpkg : %s (layer=%s)", ctx.waterbody_gpkg, ctx.waterbody_layer)
     logger.info("  Connected table: %s", ctx.connected_comids_table)
+    if ctx.flowthrough_comids_table is not None:
+        logger.info("  Flow-through table: %s", ctx.flowthrough_comids_table)
     logger.info("  Output         : %s", output_path)
 
     if output_path.exists() and not ctx.force:
