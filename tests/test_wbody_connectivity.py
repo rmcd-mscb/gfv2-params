@@ -251,3 +251,169 @@ def test_wbody_connectivity_drops_non_land_cells(tmp_path):
         arr = src.read(1)
     assert arr[0, 0] == 255   # ocean cell dropped despite connected polygon
     assert arr[0, 1] == 1     # adjacent land cell under the polygon still burned
+
+
+# ---------------------------------------------------------------------------
+# Flow-through union and guard tests (Fix 3)
+# ---------------------------------------------------------------------------
+
+
+def test_wbody_connectivity_flowthrough_only_waterbody_burned(tmp_path):
+    """A flow-through-only waterbody (not in WBAREACOMI set) must be burned."""
+    from shapely.geometry import box
+
+    from gfv2_params.depstor_builders import wbody_connectivity
+    from gfv2_params.depstor_builders.context import BuildContext
+
+    template = tmp_path / "template.tif"
+    landmask = tmp_path / "land_mask.tif"
+    wb_gpkg = tmp_path / "wb.gpkg"
+    connected_table = tmp_path / "connected.parquet"
+    flowthrough_table = tmp_path / "flowthrough.parquet"
+    _write_template(template)
+    _write_landmask(landmask)
+
+    # 3 waterbodies:
+    #   WB 10 (COMID 10) — top-left block, WBAREACOMI-connected only
+    #   WB 20 (COMID 20) — middle block, flow-through only
+    #   WB 30 (COMID 30) — bottom-right block, in neither set
+    gdf = gpd.GeoDataFrame(
+        {"COMID": [10, 20, 30], "member_comid": ["10", "20", "30"]},
+        geometry=[
+            box(0, 270, 60, 300),    # top-left 2x2: cells [0,0],[0,1],[1,0],[1,1]
+            box(120, 150, 180, 180), # middle area: cells ~[4,4],[4,5],[5,4],[5,5]
+            box(240, 0, 300, 30),    # bottom-right 2x2: cells [8,8],[8,9],[9,8],[9,9]
+        ],
+        crs="EPSG:5070",
+    )
+    gdf.to_file(wb_gpkg, layer="waterbodies", driver="GPKG")
+
+    # WBAREACOMI set: only WB 10
+    pd.DataFrame({"comid": pd.array([10], dtype="int64")}).to_parquet(
+        connected_table, index=False
+    )
+    # Flow-through set: only WB 20
+    pd.DataFrame({"comid": pd.array([20], dtype="int64")}).to_parquet(
+        flowthrough_table, index=False
+    )
+
+    ctx = BuildContext(
+        fabric="t", template_path=template, output_dir=tmp_path,
+        hru_gpkg=wb_gpkg, hru_layer="waterbodies",
+        waterbody_gpkg=wb_gpkg, waterbody_layer="waterbodies",
+        connected_comids_table=connected_table,
+        flowthrough_comids_table=flowthrough_table,
+    )
+    ctx.paths["landmask"] = landmask
+
+    produced = wbody_connectivity.build(
+        {"output": "connected_wbody.tif"}, ctx, logging.getLogger("test")
+    )
+
+    with rasterio.open(produced["connected_wbody"]) as src:
+        arr = src.read(1)
+
+    assert arr[0, 0] == 1              # WB 10 burned (WBAREACOMI)
+    assert arr[4, 4:6].max() == 1     # WB 20 burned (flow-through only; box covers row 4, cols 4-5)
+    assert arr[9, 9] != 1             # WB 30 NOT burned (in neither set)
+
+
+def test_wbody_connectivity_flowthrough_missing_raises(tmp_path):
+    """Pointing flowthrough_comids_table at a nonexistent file must raise FileNotFoundError."""
+    import pytest
+
+    from gfv2_params.depstor_builders import wbody_connectivity
+    from gfv2_params.depstor_builders.context import BuildContext
+
+    template = tmp_path / "template.tif"
+    _write_template(template)
+
+    ctx = BuildContext(
+        fabric="t", template_path=template, output_dir=tmp_path,
+        hru_gpkg=tmp_path / "x.gpkg", hru_layer="waterbodies",
+        waterbody_gpkg=tmp_path / "x.gpkg", waterbody_layer="waterbodies",
+        connected_comids_table=tmp_path / "connected.parquet",
+        flowthrough_comids_table=tmp_path / "does_not_exist.parquet",
+    )
+    with pytest.raises(FileNotFoundError):
+        wbody_connectivity.build({"output": "connected_wbody.tif"}, ctx, logging.getLogger("test"))
+
+
+def test_wbody_connectivity_flowthrough_empty_raises(tmp_path):
+    """An empty flow-through parquet must raise ValueError with 'empty' in the message."""
+    import pytest
+    from shapely.geometry import box
+
+    from gfv2_params.depstor_builders import wbody_connectivity
+    from gfv2_params.depstor_builders.context import BuildContext
+
+    template = tmp_path / "template.tif"
+    landmask = tmp_path / "land_mask.tif"
+    wb_gpkg = tmp_path / "wb.gpkg"
+    connected_table = tmp_path / "connected.parquet"
+    flowthrough_table = tmp_path / "empty_flowthrough.parquet"
+    _write_template(template)
+    _write_landmask(landmask)
+
+    gpd.GeoDataFrame(
+        {"COMID": [10], "member_comid": ["10"]},
+        geometry=[box(0, 270, 60, 300)],
+        crs="EPSG:5070",
+    ).to_file(wb_gpkg, layer="waterbodies", driver="GPKG")
+    pd.DataFrame({"comid": pd.array([10], dtype="int64")}).to_parquet(
+        connected_table, index=False
+    )
+    # Empty flow-through table (0 rows)
+    pd.DataFrame({"comid": pd.array([], dtype="int64")}).to_parquet(
+        flowthrough_table, index=False
+    )
+
+    ctx = BuildContext(
+        fabric="t", template_path=template, output_dir=tmp_path,
+        hru_gpkg=wb_gpkg, hru_layer="waterbodies",
+        waterbody_gpkg=wb_gpkg, waterbody_layer="waterbodies",
+        connected_comids_table=connected_table,
+        flowthrough_comids_table=flowthrough_table,
+    )
+    ctx.paths["landmask"] = landmask
+
+    with pytest.raises(ValueError, match="empty"):
+        wbody_connectivity.build({"output": "connected_wbody.tif"}, ctx, logging.getLogger("test"))
+
+
+def test_wbody_connectivity_flowthrough_none_is_silent_noop(tmp_path):
+    """When flowthrough_comids_table is None, build() must succeed without error."""
+    from shapely.geometry import box
+
+    from gfv2_params.depstor_builders import wbody_connectivity
+    from gfv2_params.depstor_builders.context import BuildContext
+
+    template = tmp_path / "template.tif"
+    landmask = tmp_path / "land_mask.tif"
+    wb_gpkg = tmp_path / "wb.gpkg"
+    connected_table = tmp_path / "connected.parquet"
+    _write_template(template)
+    _write_landmask(landmask)
+
+    gpd.GeoDataFrame(
+        {"COMID": [10], "member_comid": ["10"]},
+        geometry=[box(0, 270, 60, 300)],
+        crs="EPSG:5070",
+    ).to_file(wb_gpkg, layer="waterbodies", driver="GPKG")
+    pd.DataFrame({"comid": pd.array([10], dtype="int64")}).to_parquet(
+        connected_table, index=False
+    )
+
+    ctx = BuildContext(
+        fabric="t", template_path=template, output_dir=tmp_path,
+        hru_gpkg=wb_gpkg, hru_layer="waterbodies",
+        waterbody_gpkg=wb_gpkg, waterbody_layer="waterbodies",
+        connected_comids_table=connected_table,
+        flowthrough_comids_table=None,
+    )
+    ctx.paths["landmask"] = landmask
+
+    produced = wbody_connectivity.build(
+        {"output": "connected_wbody.tif"}, ctx, logging.getLogger("test")
+    )
+    assert "connected_wbody" in produced
