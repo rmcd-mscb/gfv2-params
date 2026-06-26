@@ -5,7 +5,11 @@ from __future__ import annotations
 import geopandas as gpd
 from shapely.geometry import LineString, Polygon
 
-from gfv2_params.download.nhd_flowthrough import flowthrough_comids
+from gfv2_params.download.nhd_flowthrough import (
+    flowthrough_comids,
+    locate_layer,
+    read_layer,
+)
 
 CRS = "EPSG:4269"
 
@@ -111,3 +115,26 @@ def test_nhdarea_coincidence_is_onstream():
         columns=["FTYPE", "geometry"], crs=CRS,
     )
     assert flowthrough_comids(wb, fl, areas) == {111}
+
+
+def test_locate_layer_finds_sibling(tmp_path):
+    hydro = tmp_path / "NHDPlus17" / "NHDSnapshot" / "Hydrography"
+    hydro.mkdir(parents=True)
+    (hydro / "NHDFlowline.shp").write_bytes(b"")
+    (hydro / "NHDWaterbody.shp").write_bytes(b"")
+    flowline = hydro / "NHDFlowline.shp"
+    assert locate_layer(flowline, "NHDWaterbody") == hydro / "NHDWaterbody.shp"
+    assert locate_layer(flowline, "NHDArea") is None
+
+
+def test_read_layer_normalises_field_casing(tmp_path):
+    # Mixed-case fields (VPU 13 ships ComID/FType) must normalise to upper-case.
+    p = tmp_path / "wb.gpkg"
+    gpd.GeoDataFrame(
+        {"ComID": [9], "FType": ["SwampMarsh"],
+         "geometry": [Polygon([(0, 0), (1, 0), (1, 1)])]},
+        crs="EPSG:4269",
+    ).to_file(p)
+    out = read_layer(p, ["COMID", "FTYPE"])
+    assert list(out.columns) == ["COMID", "FTYPE", "geometry"]
+    assert out["FTYPE"].iloc[0] == "SwampMarsh"

@@ -1,4 +1,3 @@
-# src/gfv2_params/download/nhd_flowthrough.py  (module top + classifier; main() added in Task 2)
 """Distil flow-through (on-stream) waterbody COMIDs from NHD topology.
 
 WBAREACOMI (see nhd_flowlines) only flags waterbodies NHD drew an artificial
@@ -15,8 +14,21 @@ the depstor wbody_connectivity builder.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import geopandas as gpd
+import pyogrio
 from shapely.geometry import Point
+
+from gfv2_params.config import load_base_config
+from gfv2_params.download.nhd_flowlines import (
+    download_snapshot,
+    vpu_index,
+    write_connected_comids,
+)
+from gfv2_params.log import configure_logging
+
+logger = configure_logging("download_nhd_flowthrough")
 
 # A conveyance NHDFlowline carries channelised flow (vs. Pipeline, Coastline...).
 CONVEYANCE_FTYPES = {"StreamRiver", "ArtificialPath", "Connector", "CanalDitch"}
@@ -115,3 +127,71 @@ def flowthrough_comids(
             onstream |= {int(c) for c in hit["COMID"].unique()}
 
     return onstream
+
+
+def locate_layer(flowline_shp: Path, layer: str) -> Path | None:
+    """Find a sibling NHDSnapshot layer (e.g. NHDWaterbody) next to NHDFlowline."""
+    candidate = flowline_shp.with_name(f"{layer}.shp")
+    return candidate if candidate.exists() else None
+
+
+def read_layer(path: Path, columns: list[str]) -> gpd.GeoDataFrame:
+    """Read `columns` (case-insensitive) + geometry, normalised to upper-case.
+
+    NHD field casing is inconsistent across VPU snapshots; requesting exact
+    upper-case names would make pyogrio silently drop a mismatched-case column.
+    """
+    available = list(pyogrio.read_info(path)["fields"])
+    by_upper = {name.upper(): name for name in available}
+    rename = {}
+    for canon in columns:
+        actual = by_upper.get(canon)
+        if actual is None:
+            raise KeyError(
+                f"{path}: layer has no '{canon}' field (case-insensitive). "
+                f"Available: {available}"
+            )
+        rename[actual] = canon
+    gdf = gpd.read_file(path, columns=list(rename), use_arrow=True)
+    return gdf.rename(columns=rename)[[*columns, "geometry"]]
+
+
+def main() -> None:
+    base = load_base_config()
+    data_root = Path(base["data_root"])
+    download_dir = data_root / "input/nhd_downloads"
+    extract_dir = data_root / "shared/source"
+    download_dir.mkdir(parents=True, exist_ok=True)
+    extract_dir.mkdir(parents=True, exist_ok=True)
+
+    onstream: set[int] = set()
+    failures = []
+    for vpu, dd in vpu_index.items():
+        flowline = download_snapshot(dd, vpu, download_dir, extract_dir)
+        if flowline is None:
+            failures.append(vpu)
+            continue
+        wb_path = locate_layer(flowline, "NHDWaterbody")
+        if wb_path is None:
+            failures.append(vpu)
+            continue
+        waterbodies = read_layer(wb_path, ["COMID", "FTYPE"])
+        flowlines = read_layer(flowline, ["FTYPE", "FLOWDIR"])
+        area_path = locate_layer(flowline, "NHDArea")
+        areas = read_layer(area_path, ["FTYPE"]) if area_path else None
+        vpu_set = flowthrough_comids(waterbodies, flowlines, areas)
+        logger.info(f"VPU {vpu}: {len(vpu_set)} flow-through waterbody COMIDs")
+        onstream |= vpu_set
+
+    if failures:
+        raise RuntimeError(
+            f"NHDSnapshot flow-through staging failed for VPU(s): {failures}"
+        )
+
+    out_path = data_root / "input/nhd/flowthrough_waterbody_comids.parquet"
+    write_connected_comids(onstream, out_path)
+    logger.info(f"Wrote {len(onstream)} flow-through COMIDs -> {out_path}")
+
+
+if __name__ == "__main__":
+    main()
