@@ -61,6 +61,18 @@ per-key required-field table), and how to add a new pipeline step.
 
 These are hard-won; violating them silently corrupts outputs.
 
+- **The dprst/on-stream split is driven by the UNION of two COMID sources.**
+  `wbody_connectivity` unions `connected_waterbody_comids.parquet` (WBAREACOMI
+  artificial-path topology, from `nhd_flowlines`) with
+  `flowthrough_waterbody_comids.parquet` (geometric flow-through topology, from
+  `nhd_flowthrough`). A waterbody promoted by the flow-through test must have
+  both inflow and outflow — terminal sinks (inflow only), locally-spilling
+  potholes (outflow only), and isolated depressions stay dprst. Playa and Ice
+  Mass FTYPEs are a hard guardrail and are never promoted regardless. If
+  `drains_to_dprst` over-extends into humid open-drainage basins, fix the
+  **classifier** (which waterbodies are on-stream) — never add a cap or tuning
+  knob to routing. A cap cannot distinguish a legitimately large endorheic basin
+  from a spurious one and damages the correct cases.
 - **Depstor template/fdr come from a fabric-bounds clip** of `fdr.vrt`
   (`scripts/clip_shared_to_fabric.py`), not CONUS VRTs or per-VPU tiles. The
   clip must come from the hydrology lattice (`fdr.vrt`/`twi.vrt`); `elevation.vrt`

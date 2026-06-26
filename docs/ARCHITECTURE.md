@@ -134,7 +134,8 @@ whether the depstor pipeline will be run for the fabric:
 | `twi_raster` | — | ✓ | CONUS `twi.vrt` (ArcPy, calibrated) or `twi_hydrodem.vrt` (open-source, CONUS-complete) |
 | `segments_gpkg` | — | ✓ | Stream-segment gpkg (no longer feeds any depstor step — the `streambuffer` step is retired). A VPU-based fabric (gfv2) merges per-VPU `nsegment` layers via `scripts/merge_vpu_segments.py` for other potential uses. |
 | `segments_layer` | — | ✓ | Layer name inside `segments_gpkg` (typically `nsegment`) |
-| `connected_comids_table` | — | ✓ | Path to `input/nhd/connected_waterbody_comids.parquet` — the set of NHDPlusV2 waterbody COMIDs that an NHD artificial path flows through (i.e. on-stream). Produced by `download/nhd_flowlines.py`; consumed by the depstor `wbody_connectivity` builder. Required only for fabrics whose waterbody layer is COMID-keyed (`gfv2`, `oregon`, `tjc`); the `gfv2_vpu01` profile omits it (its `wbs` layer has no COMID), so `wbody_connectivity`/`dprst` fail-fast there — use `gfv2` for depstor validation. |
+| `connected_comids_table` | — | ✓ | Path to `input/nhd/connected_waterbody_comids.parquet` — the set of NHDPlusV2 waterbody COMIDs that an NHD artificial path flows through (i.e. on-stream via `WBAREACOMI`). Produced by `download/nhd_flowlines.py`; consumed by the depstor `wbody_connectivity` builder. Required only for fabrics whose waterbody layer is COMID-keyed (`gfv2`, `oregon`, `tjc`); the `gfv2_vpu01` profile omits it (its `wbs` layer has no COMID), so `wbody_connectivity`/`dprst` fail-fast there — use `gfv2` for depstor validation. |
+| `flowthrough_comids_table` | — | ✓ | Path to `input/nhd/flowthrough_waterbody_comids.parquet` — a second on-stream COMID set from geometric flow-through topology: waterbodies that a conveyance flowline demonstrably enters AND exits (T1/T2) or that overlap an NHDArea conveyance polygon (T3). Playa/Ice Mass waterbodies are never promoted. Produced by `download/nhd_flowthrough.py`; unioned with `connected_comids_table` by `wbody_connectivity` before rasterizing. Optional (omitting it uses `connected_comids_table` only). |
 | `waterbody_gpkg` | — | ✓ | NHDPlus waterbodies; depstor's `waterbody` step **raises** if unset |
 | `waterbody_layer` | — | ✓ | Layer name inside `waterbody_gpkg` |
 
@@ -176,6 +177,16 @@ These are hard-won; violating them silently corrupts outputs.
   isolation, and mosaics); reproject with streaming `gdal.Warp`, not in-memory
   `rioxarray.reproject_match`; window per `STRIP_ROWS` like `carea_map`. See
   CLAUDE.md for the full gotcha.
+- **On-stream classification is the union of two COMID sources.** The
+  `wbody_connectivity` builder loads both `connected_waterbody_comids.parquet`
+  (WBAREACOMI artificial-path topology, staged by `download/nhd_flowlines.py`)
+  and `flowthrough_waterbody_comids.parquet` (geometric flow-through topology,
+  staged by `download/nhd_flowthrough.py`) and unions them before rasterizing.
+  A waterbody is flow-through if a conveyance flowline enters AND exits it
+  (T1/T2 tests) or if it overlaps an NHDArea conveyance polygon (T3). Playa
+  and Ice Mass waterbodies are force-excluded from flow-through promotion and
+  remain dprst regardless. The `dprst` and downstream builders are unchanged
+  consumers — they see a larger on-stream set with no code change.
 - **`carea_max`/`smidx_coef` threshold mode.** The legacy `absolute`
   thresholds (8.0/15.6) are only calibrated against VPU 01's ArcPy TWI
   distribution. For any other fabric, use `threshold_mode: percentile` (the
