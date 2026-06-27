@@ -89,12 +89,19 @@ batches it into per-batch geopackages.
 ```bash
 # Stage NHD-connected waterbody COMIDs (one-time, CONUS):
 sbatch slurm_batch/download_nhd_flowlines.batch
+# Stage geometric flow-through waterbody COMIDs (one-time, CONUS):
+sbatch slurm_batch/stage_nhd_flowthrough.batch
 pixi run --as-is python scripts/clip_shared_to_fabric.py --fabric gfv2   # tiny VRT (login OK)
 sbatch slurm_batch/build_depstor_rasters.batch
 ```
 
 **What it does:** clips the fabric-bounds FDR template, then builds the full
-depression-storage raster stack.
+depression-storage raster stack. The two NHD staging steps are one-time CONUS
+runs; `nhd_flowlines` stages WBAREACOMI-connected COMIDs and
+`nhd_flowthrough` adds geometric flow-through COMIDs — both are unioned by
+the `wbody_connectivity` builder. If you update either NHD staging output
+after an initial build, rerun the depstor stack from `wbody_connectivity`
+(`sbatch slurm_batch/build_depstor_rasters.batch --from wbody_connectivity --force`).
 
 **Wait for:** the job `COMPLETED`; `{fabric}/depstor_rasters/` holds the full
 stack (through `carea_map_t8/t156_binary.tif`).

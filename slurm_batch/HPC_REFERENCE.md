@@ -170,7 +170,7 @@ Manually-staged files required before `--check`:
 | `input/soils_litho/` | `TEXT_PRMS.tif`, `AWC.tif`, `Lithology_exp_Konly_Project.shp` (+ `.dbf`, `.prj`, `.shx`) |
 | `input/lulc_veg/` | `RootDepth.tif`, `CNPY.tif`, `Imperv.tif` |
 | `input/nhm_default/` | NHM default parameter files |
-| `input/nhd/` | `conus_waterbodies.gpkg` (layer `waterbodies`); `connected_waterbody_comids.parquet` (produced by `download_nhd_flowlines.batch`) |
+| `input/nhd/` | `conus_waterbodies.gpkg` (layer `waterbodies`); `connected_waterbody_comids.parquet` (produced by `download_nhd_flowlines.batch`); `flowthrough_waterbody_comids.parquet` (produced by `stage_nhd_flowthrough.batch`) |
 | `input/twi/<rpu>/` | Per-RPU `twi.tif` + sidecars (staged via `stage_twi.sh`) |
 
 Download jobs (idempotent — already-downloaded files are skipped):
@@ -181,6 +181,7 @@ sbatch slurm_batch/download_rpu_rasters.batch    # NHDPlus RPU rasters (~112 GB)
 sbatch slurm_batch/download_nalcms.batch         # NALCMS 2020 land cover (~2 GB)
 sbatch slurm_batch/download_nhm_v11.batch        # NHM v1.1 LULC rasters
 sbatch slurm_batch/download_nhd_flowlines.batch  # NHD-connected waterbody COMIDs (one-time, CONUS)
+sbatch slurm_batch/stage_nhd_flowthrough.batch   # flow-through waterbody COMIDs (one-time, CONUS)
 ```
 
 Stage per-RPU TWI rasters (reads from the impd-group mirror by default):
@@ -306,12 +307,27 @@ rejected; never substitute it.
 vpu_id → routing → drains_perv / drains_imperv → carea_map. Selective re-runs
 via `--step <name>` or `--from <name>` passed through to the Python script.
 
+**On-stream staging.** The `wbody_connectivity` builder unions two COMID
+parquets: `connected_waterbody_comids.parquet` (WBAREACOMI, from
+`download_nhd_flowlines.batch`) and `flowthrough_waterbody_comids.parquet`
+(geometric flow-through topology, from
+`python -m gfv2_params.download.nhd_flowthrough`). The flow-through step is a
+per-VPU vector spatial join — sized like `nhd_flowlines` with no CONUS-grid
+array and no 384G concern — and runs on the login node or in a lightweight
+SLURM job. Updating either parquet after an initial build requires rebuilding
+from `wbody_connectivity`:
+
+```bash
+sbatch slurm_batch/build_depstor_rasters.batch --from wbody_connectivity --force
+```
+
 **dprst rebuild cascade.** Changing `dprst` membership (e.g. the per-cell
-impervious carve-out) invalidates everything downstream of it in the DAG:
-`perv`, `routing` → `drains_perv`/`drains_imperv`, and `carea_map` (it consumes
-`onstream` + `perv`). Rebuild with `--from dprst` and `FORCE=1`, then re-run the
-depstor zonal + merge for the affected fractions (`dprst_frac`, `perv_frac`,
-`drains_*_frac`, `onstream_storage_frac`, `carea_*`, `sro_to_dprst_*`).
+impervious carve-out, or the on-stream COMID set) invalidates everything
+downstream in the DAG: `perv`, `routing` → `drains_perv`/`drains_imperv`,
+and `carea_map` (it consumes `onstream` + `perv`). Rebuild with
+`--from dprst` and `FORCE=1`, then re-run the depstor zonal + merge for the
+affected fractions (`dprst_frac`, `perv_frac`, `drains_*_frac`,
+`onstream_storage_frac`, `carea_*`, `sro_to_dprst_*`).
 `waterbody`, `wbody_connectivity`, `vpu_id`, and `landmask` are upstream and
 unaffected.
 
@@ -777,6 +793,7 @@ sacct -j <JOBID> -o JobID,State,Elapsed,MaxRSS
 | `slurm_batch/download_nalcms.batch` | `configs/base_config.yml` | `gfv2_params.download.nalcms_lulc` |
 | `slurm_batch/download_nhm_v11.batch` | `configs/base_config.yml` | `gfv2_params.download.nhm_v11_lulc` |
 | `slurm_batch/download_nhd_flowlines.batch` | `configs/base_config.yml` | `gfv2_params.download.nhd_flowlines` — downloads per-VPU NHDPlusV2 `NHDFlowline` attributes and distills distinct non-zero `WBAREACOMI` values to `input/nhd/connected_waterbody_comids.parquet` (one-time, CONUS) |
+| `stage_nhd_flowthrough.batch` | `configs/base_config.yml` | `gfv2_params.download.nhd_flowthrough` — per-VPU vector spatial join; classifies flow-through NHDWaterbody polygons (T1: boundary crossings ≥2; T2: directional inflow+outflow endpoints; T3: NHDArea overlap); writes `input/nhd/flowthrough_waterbody_comids.parquet` (one-time, CONUS; no CONUS-grid array) |
 | `slurm_batch/submit_jobs.sh` | (caller-provided) | generic per-VPU array dispatcher |
 | (run directly) | `configs/base_config.yml` | `scripts/migrate_to_shared_layout.py --data-root <path>` (legacy `work/` layout upgrade) |
 | (run directly) | `configs/base_config.yml` | `scripts/clip_shared_to_fabric.py --fabric <name>` (fabric-bounds FDR/template clip) |
