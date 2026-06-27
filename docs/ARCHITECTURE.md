@@ -165,6 +165,23 @@ These are hard-won; violating them silently corrupts outputs.
   not from CONUS VRTs or per-VPU tiles. The clip must come from the
   hydrology lattice (`fdr.vrt` / `twi.vrt`); `elevation.vrt` is on the
   offset DEM lattice and `carea_map` requires `template ≡ twi` alignment.
+- **FDR provenance: `fdr.vrt` is the official NHDPlus V2 `FdrFac` flow
+  direction** — merged from the per-RPU `FdrFac` component
+  (`download/rpu_rasters.py`) into `Fdr_merged_*.tif` and VRT'd by
+  `shared_rasters/build_vrt.py` (`"fdr": ("Fdr_merged_*.tif", "255")`; Byte,
+  D8 codes 1–128). It is computed on the NHDPlus **HydroDEM**, which is
+  **stream-burned, walled, and depression-filled (fully drainage-enforced)** —
+  i.e. interior depressions are removed. `routing`/`drains_to_dprst` traces
+  upslope on this FDR, so a depression low in the network captures a large
+  contributing area *because the conditioning forces flow through former
+  sinks*. (The legacy ArcPy parameterization used a different but also
+  fully-filled FDR: SRTM → `arcpy.sa.Fill` → `FlowDirection`, no stream-burn;
+  Bock et al. 2020, DOI 10.5066/P971JAGF.) The repo's
+  `shared_rasters/compute_dem_derivatives.py` (richdem `FillDepressions`+epsilon
+  → WBT D8) is an **opt-in parallel** product (`Fdr_hydrodem`), **not** what
+  depstor routes on. Whether a *depression-respecting* FDR (breach, or
+  depth/area-thresholded fill) would give more local depression-storage
+  contributing areas is an open investigation — see issue #147.
 - **Land masking.** Every depstor raster is masked against `land_mask.tif`
   (the HRU fabric rasterised by the `landmask` step). Never use hydro-DEM
   nodata or FDR as a land mask.

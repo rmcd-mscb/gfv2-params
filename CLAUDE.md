@@ -77,7 +77,11 @@ These are hard-won; violating them silently corrupts outputs.
   (`scripts/clip_shared_to_fabric.py`), not CONUS VRTs or per-VPU tiles. The
   clip must come from the hydrology lattice (`fdr.vrt`/`twi.vrt`); `elevation.vrt`
   is on the offset DEM lattice and `carea_map` requires `template ≡ twi`
-  alignment.
+  alignment. `fdr.vrt` is the **official NHDPlus V2 `FdrFac`** (NHDPlus HydroDEM:
+  stream-burned + walled + fully depression-filled), so `drains_to_dprst` routes
+  on a fully drainage-enforced FDR with interior sinks removed — *not* the opt-in
+  richdem `Fdr_hydrodem` from `compute_dem_derivatives.py`. See `docs/ARCHITECTURE.md`
+  and issue #147 (depression-respecting FDR investigation) for the provenance/tradeoff.
 - **Land masking.** Every depstor raster is masked against `land_mask.tif` (HRU
   fabric rasterised by the `landmask` step). Never use hydro-DEM nodata or FDR
   as a land mask.
