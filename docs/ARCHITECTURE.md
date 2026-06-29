@@ -182,6 +182,16 @@ These are hard-won; violating them silently corrupts outputs.
   depstor routes on. Whether a *depression-respecting* FDR (breach, or
   depth/area-thresholded fill) would give more local depression-storage
   contributing areas is an open investigation — see issue #147.
+  A second opt-in step, `compute_breached_fdr`
+  (`shared_rasters/compute_breached_fdr.py`), produces
+  `Fdr_breached_<vpu>.tif` per VPU and is registered into `fdr_breached.vrt`
+  by `build_vrt`. This is **additional** infrastructure only — it never
+  replaces `fdr.vrt`. Custom fabrics investigating issue #147 may clip
+  `fdr_breached.vrt` and point `fdr_raster` at the result to route depstor
+  on the depression-respecting FDR. See the design spec
+  [`docs/superpowers/specs/2026-06-29-depression-respecting-fdr-design.md`](superpowers/specs/2026-06-29-depression-respecting-fdr-design.md)
+  and the A/B runbook in `slurm_batch/HPC_REFERENCE.md`
+  ("§ #147 depression-respecting FDR A/B").
 - **Land masking.** Every depstor raster is masked against `land_mask.tif`
   (the HRU fabric rasterised by the `landmask` step). Never use hydro-DEM
   nodata or FDR as a land mask.

@@ -277,6 +277,60 @@ for every LULC source listed in
 `configs/shared_rasters/shared_rasters.yml`'s `sources:` block (currently 4
 sources: nhm_v11, nalcms, nlcd, foresce).
 
+### Stage 2c' — `compute_breached_fdr` (#147 depression-respecting FDR A/B)
+
+Opt-in step that runs WhiteboxTools least-cost breach on the per-VPU HydroDEM
+and writes `Fdr_breached_<vpu>.tif` for each requested VPU.  Not in the
+default step list; must be named explicitly.  After staging, run `build_vrt` to
+register the tiles into `fdr_breached.vrt`.
+
+**Stage the breached FDR for the two test VPUs (09, 16):**
+
+```bash
+sbatch slurm_batch/stage_breached_fdr.batch
+```
+
+To rebuild VRTs afterwards (so `fdr_breached.vrt` picks up the new tiles):
+
+```bash
+FORCE=1 sbatch slurm_batch/build_shared_rasters.batch --step build_vrt
+```
+
+**A/B runs — compare three FDR conditionings on a single VPU:**
+
+For each of the six combinations (`--vpu {09,16}` × `--fdr {production,fill,breach}`):
+
+```bash
+pixi run --as-is python scripts/diagnose/ab_drains_to_dprst.py \
+    --vpu 09 \
+    --fdr production \
+    --fdr-vrt "$DR/shared/conus/vrt/fdr.vrt" \
+    --per-vpu-dir "$DR/shared/per_vpu" \
+    --dprst "$FABRIC_DIR/depstor_rasters/dprst.tif" \
+    --vpu-id "$FABRIC_DIR/depstor_rasters/vpu_id.tif" \
+    --template "$FABRIC_DIR/shared/${FABRIC}_fdr.vrt" \
+    --out-dir "$FABRIC_DIR/depstor_rasters/ab_fdr"
+```
+
+Replace `--fdr production` with `--fdr fill` or `--fdr breach` for the other
+two runs.  Optionally add `--labels <labeled_dprst_raster>` to get per-depression
+contributing-area CSVs alongside the drains raster.
+
+**Coverage summary across all runs:**
+
+```bash
+pixi run --as-is python scripts/diagnose/diagnose_drains_to_dprst.py \
+    --vpu 09 \
+    --out-dir "$FABRIC_DIR/depstor_rasters/ab_fdr"
+```
+
+FDR sources: `production` = `fdr.vrt` (NHDPlus FdrFac, fully filled);
+`fill` = `Fdr_hydrodem_<vpu>.tif` (richdem fill-all on HydroDEM);
+`breach` = `Fdr_breached_<vpu>.tif` (depression-respecting, this work).
+`fill` vs `breach` isolates the conditioning; `production` vs `fill` isolates
+the DEM/stream-burn difference.  See
+[`docs/superpowers/specs/2026-06-29-depression-respecting-fdr-design.md`](../docs/superpowers/specs/2026-06-29-depression-respecting-fdr-design.md).
+
 ---
 
 ### Stage 2d depstor detail
