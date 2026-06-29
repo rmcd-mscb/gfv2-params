@@ -21,6 +21,7 @@ from . import (
     build_lulc_rasters,
     build_vpu_landmask,
     build_vrt,
+    compute_breached_fdr,
     compute_dem_derivatives,
     compute_slope_aspect,
     merge_rpu_by_vpu,
@@ -41,6 +42,7 @@ BUILDERS: dict = {
     "build_border_dem":        build_border_dem.build,
     "build_vpu_landmask":      build_vpu_landmask.build,
     "compute_dem_derivatives": compute_dem_derivatives.build,
+    "compute_breached_fdr":    compute_breached_fdr.build,
     "merge_rpu_by_vpu_twi":    merge_rpu_by_vpu.build,  # post-landmask invocation
     "build_vrt":               build_vrt.build,
     "twi_reference":           twi_reference.build,
@@ -63,6 +65,7 @@ BUILDERS: dict = {
 #                               "border_aspect"                shared/conus/borders/border_aspect.tif
 #   build_vpu_landmask       -> (none; per-VPU)                shared/per_vpu/{vpu}/land_mask_{vpu}.tif
 #   compute_dem_derivatives  -> (none; per-VPU, optional)      shared/per_vpu/{vpu}/Twi_hydrodem_*.tif (open-source TWI)
+#   compute_breached_fdr     -> (none; per-VPU, optional)      shared/per_vpu/{vpu}/Fdr_breached_*.tif (depression-respecting FDR, #147)
 #   merge_rpu_by_vpu_twi     -> (none; per-VPU)                shared/per_vpu/{vpu}/Twi_*_{vpu}.tif (post-landmask invocation)
 #   build_vrt                -> "elevation_vrt", "slope_vrt",  shared/conus/vrt/{elevation,slope,aspect,fdr,twi,twi_hydrodem}.vrt
 #                               "aspect_vrt", "fdr_vrt",
@@ -79,6 +82,7 @@ STEP_ORDER: list[str] = [
     "build_border_dem",
     "build_vpu_landmask",
     "compute_dem_derivatives",  # optional / parallel
+    "compute_breached_fdr",     # optional / parallel (#147)
     "merge_rpu_by_vpu_twi",
     "build_vrt",
     "twi_reference",
