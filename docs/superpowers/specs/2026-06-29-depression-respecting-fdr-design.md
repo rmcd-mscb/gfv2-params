@@ -99,8 +99,14 @@ in `compute_dem_derivatives.py`). Too small a `--dist` re-introduces over-connec
 via fallback fill; too large over-carves real depressions. No automated tuning
 beyond this one pass.
 
-An optional `build_vrt`-style mosaic of the per-VPU tiles into `fdr_breached.vrt`
-is *convenience only* — the A/B runs per-VPU and does not require it.
+A `build_vrt`-style mosaic of the per-VPU breached tiles into `fdr_breached.vrt`
+is a **registered output** of this work, parallel to how `fdr.vrt` is built from
+the `Fdr_merged_*` tiles. The A/B itself runs per-VPU and does not need it, but
+the VRT is what makes the breached FDR usable by sub-CONUS / custom fabrics: a
+fabric profile can clip it (`clip_shared_to_fabric.py`) and point its
+`fdr_raster` at the breached VRT exactly as it does today with `fdr.vrt`. Built
+via the existing `build_vrt` machinery (a `Fdr_breached_*` glob entry), not a
+new bespoke mosaic.
 
 **Test:** `tests/test_compute_breached_fdr.py` (builder-level, matches nearest
 existing shared-raster test style). On a small synthetic DEM containing a real
@@ -111,9 +117,19 @@ the real depression survives (is not fully drained-through) while an artifact
 
 ### Piece 2 — A/B harness `scripts/ab_drains_to_dprst.py` (analysis tool)
 
-Mirrors the existing `scripts/diagnose_drains_to_dprst.py` precedent: an analysis
+Mirrors the existing `diagnose_drains_to_dprst.py` precedent: an analysis
 script, not a pipeline builder (so no DAG registration / config block — this is
 investigation tooling, like `diagnose_*`).
+
+**Diagnostic scripts move under `scripts/diagnose/`.** As part of this work the
+existing `scripts/diagnose_drains_to_dprst.py` relocates to
+`scripts/diagnose/diagnose_drains_to_dprst.py`, and the new A/B harness lands
+beside it at `scripts/diagnose/ab_drains_to_dprst.py`. This needs a
+`scripts/diagnose/__init__.py` so the test import resolves, and the test import in
+`tests/test_diagnose_drains_to_dprst.py` updates to
+`from scripts.diagnose.diagnose_drains_to_dprst import vpu_coverage`. Doc
+references to the old path (`slurm_batch/HPC_REFERENCE.md`, `RUNME.md`, the #145
+plan if cited) update to the new location.
 
 The per-VPU candidate FDRs (`Fdr_hydrodem`, `Fdr_breached`) live on the per-VPU
 **Hydrodem grid**; dprst pour-points and `vpu_id` live on the CONUS
@@ -187,15 +203,26 @@ a follow-up issue/branch.
 New:
 - `src/gfv2_params/shared_rasters/compute_breached_fdr.py`
 - `tests/test_compute_breached_fdr.py`
-- `scripts/ab_drains_to_dprst.py`
+- `scripts/diagnose/__init__.py`
+- `scripts/diagnose/ab_drains_to_dprst.py`
 - (per-VPU outputs) `shared/per_vpu/<vpu>/Hydrodem_breached_<vpu>.tif`,
-  `Fdr_breached_<vpu>.tif`
+  `Fdr_breached_<vpu>.tif`; (mosaic) `fdr_breached.vrt`
+
+Moved:
+- `scripts/diagnose_drains_to_dprst.py` → `scripts/diagnose/diagnose_drains_to_dprst.py`
 
 Modified:
 - `src/gfv2_params/shared_rasters/__init__.py` — register `compute_breached_fdr`
   in `BUILDERS`.
+- `configs/shared_rasters/shared_rasters.yml` (or the build_vrt config) — add a
+  `Fdr_breached_*` glob entry so `fdr_breached.vrt` is built by the existing
+  `build_vrt` step.
 - `src/gfv2_params/depstor_builders/routing.py` — factor `_align_fdr_to_dprst_grid`
   for reuse by the A/B script (no behavior change to the routing builder).
-- Docs: `docs/ARCHITECTURE.md` (note the additional FDR artifact + opt-in step),
-  and a short A/B usage note where `diagnose_drains_to_dprst.py` is referenced
+- `tests/test_diagnose_drains_to_dprst.py` — update import to
+  `from scripts.diagnose.diagnose_drains_to_dprst import vpu_coverage`.
+- Docs: `docs/ARCHITECTURE.md` (note the additional FDR artifact, the opt-in
+  step, and `fdr_breached.vrt` as a custom-fabric `fdr_raster` option), a short
+  A/B usage note beside the diagnostic, and updated paths in
+  `slurm_batch/HPC_REFERENCE.md` / `RUNME.md` where the diagnostic is cited
   (per the repo's "every code change needs a docs check" rule).
