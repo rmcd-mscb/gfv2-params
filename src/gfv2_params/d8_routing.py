@@ -94,21 +94,29 @@ def _resolve_labeled(fdr, label, fdr_nodata):
                     result = _NOT
                     break
                 if code == 1:
-                    dr = 0; dc = 1
+                    dr = 0
+                    dc = 1
                 elif code == 2:
-                    dr = 1; dc = 1
+                    dr = 1
+                    dc = 1
                 elif code == 4:
-                    dr = 1; dc = 0
+                    dr = 1
+                    dc = 0
                 elif code == 8:
-                    dr = 1; dc = -1
+                    dr = 1
+                    dc = -1
                 elif code == 16:
-                    dr = 0; dc = -1
+                    dr = 0
+                    dc = -1
                 elif code == 32:
-                    dr = -1; dc = -1
+                    dr = -1
+                    dc = -1
                 elif code == 64:
-                    dr = -1; dc = 0
+                    dr = -1
+                    dc = 0
                 elif code == 128:
-                    dr = -1; dc = 1
+                    dr = -1
+                    dc = 1
                 else:
                     result = _NOT
                     break

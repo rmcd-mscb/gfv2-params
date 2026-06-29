@@ -30,6 +30,7 @@ def test_cell_flowing_to_sink_gets_zero_label():
     fdr = np.array([[1, 255]], dtype=np.uint8)
     labels = np.array([[0, 0]], dtype=np.int32)
     out, n_cycles = drains_to_dprst_labeled_kernel(fdr, labels, fdr_nodata=255)
+    assert n_cycles == 0
     assert out.tolist() == [[0, 0]]
 
 
