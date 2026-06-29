@@ -776,11 +776,19 @@ def _run_one_vpu(fdr_path, dprst_path, vpu_id_path, template_path, vpu_code,
             fdr_aligned.unlink()
 
 
-def _write_window_uint8(drains, info, bbox, out_tif):
-    """Write the per-VPU drains window as a standalone GeoTIFF (nodata=255)."""
+def _write_window_uint8(arr, info, bbox, out_tif):
+    """Write a per-VPU drains WINDOW (already window-sized) as a GeoTIFF.
+
+    `arr` is the kernel output for this VPU's bbox window — do NOT re-slice it
+    with the full-grid bbox offsets (that would clamp to an empty array). bbox
+    is used only for the output dimensions and the transform offset.
+    """
     from rasterio.transform import Affine
     r0, r1, c0, c1 = bbox
-    win = drains[r0:r1, c0:c1].copy()
+    assert arr.shape == (r1 - r0, c1 - c0), (
+        f"window array {arr.shape} does not match bbox {(r1 - r0, c1 - c0)}"
+    )
+    win = np.ascontiguousarray(arr)
     # Offset the template transform to the window's top-left (col0,row0).
     transform = info.transform * Affine.translation(c0, r0)
     profile = {
