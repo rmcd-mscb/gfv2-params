@@ -46,6 +46,10 @@ RASTER_TYPES = {
     "slope":     ("NEDSnapshot_merged_slope_*.tif", "-9999"),
     "aspect":    ("NEDSnapshot_merged_aspect_*.tif", "-9999"),
     "fdr":       ("Fdr_merged_*.tif", "255"),
+    # Depression-respecting breached FDR (#147), opt-in additional artifact.
+    # Same Byte/nodata=255 ESRI-D8 convention as fdr; separate VRT so fabrics
+    # can opt in via fdr_raster without disturbing the production fdr.vrt.
+    "fdr_breached": ("Fdr_breached_*.tif", "255"),
     "twi":       ("Twi_merged_*.tif", "-9999"),
     # Open-source WhiteboxTools TWI (issue #94): CONUS-complete, drop-in grid
     # with fdr.vrt. Tiles report an "unnamed" Albers CRS, so the VRT must be

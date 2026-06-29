@@ -89,3 +89,24 @@ class TestVrtSourceOrdering:
             f"Expected primary value 100.0 but got {data[0, 0]}. "
             "GDAL VRT last-source-wins: primary must be listed last."
         )
+
+
+class TestBreachedFdrRegistered:
+    def test_fdr_breached_builds_and_is_keyed(self, tmp_path, caplog):
+        from gfv2_params.shared_rasters import build_vrt
+
+        per_vpu = tmp_path / "per_vpu"
+        (per_vpu / "09").mkdir(parents=True)
+        _make_tiny_tif(per_vpu / "09" / "Fdr_breached_09.tif", value=1.0, nodata=255.0)
+
+        class Ctx:
+            pass
+        ctx = Ctx()
+        ctx.per_vpu_dir = per_vpu
+        ctx.borders_dir = tmp_path / "nonexistent_borders"
+        ctx.vrt_dir = tmp_path / "vrt"
+
+        produced = build_vrt.build({}, ctx, __import__("logging").getLogger("t"))
+        assert "fdr_breached_vrt" in produced
+        assert produced["fdr_breached_vrt"].name == "fdr_breached.vrt"
+        assert produced["fdr_breached_vrt"].exists()
