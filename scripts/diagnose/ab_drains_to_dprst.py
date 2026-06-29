@@ -92,10 +92,26 @@ def _run_one_vpu(fdr_path, dprst_path, vpu_id_path, template_path, vpu_code,
         if labels_path is not None:
             with rasterio.open(labels_path) as lsrc:
                 label_win = lsrc.read(1, window=window).astype(np.int32)
-            label_win[vpu_win != code] = 0
+            # Restrict the per-depression attribution to the SAME pour-point set
+            # as the binary metric: dprst cells in this VPU. The labels raster
+            # (wbody_regions) ids every waterbody incl. on-stream ones; without
+            # the dprst mask the labeled kernel would seed on-stream waterbodies
+            # too and attribute whole river-corridor catchments to them, so the
+            # per-depression sum would not match the dprst-seeded binary drains.
+            label_win[(vpu_win != code) | (dprst_win != 1)] = 0
             labeled, _ = drains_to_dprst_labeled_kernel(fdr_masked, label_win,
                                                         fdr_nodata=255)
             counts = per_depression_counts(labeled)
+            # Consistency self-check: same pour-points => labeled coverage must
+            # equal the binary dprst-drains count. A mismatch means the label
+            # mask diverged from the dprst pour-points (the bug this guards).
+            n_labeled = int(sum(counts.values()))
+            if n_labeled != n_drain:
+                logger.warning(
+                    "  per-depression sum (%d) != binary drains (%d) for VPU %d "
+                    "[%s] — label/dprst pour-point mismatch.",
+                    n_labeled, n_drain, code, out_tif.stem,
+                )
             with open(out_csv, "w", newline="") as fh:
                 w = csv.writer(fh)
                 w.writerow(["depression_label", "contributing_cells"])
