@@ -316,12 +316,15 @@ Replace `--fdr production` with `--fdr fill` or `--fdr breach` for the other
 two runs.  Optionally add `--labels <labeled_dprst_raster>` to get per-depression
 contributing-area CSVs alongside the drains raster.
 
-**Coverage summary across all runs:**
+**Coverage summary for a run** (per-VPU `drains_to_dprst==1` land fraction;
+`diagnose_drains_to_dprst.py` takes the three rasters explicitly — run once per
+A/B output raster):
 
 ```bash
 pixi run --as-is python scripts/diagnose/diagnose_drains_to_dprst.py \
-    --vpu 09 \
-    --out-dir "$FABRIC_DIR/depstor_rasters/ab_fdr"
+    --drains "$FABRIC_DIR/depstor_rasters/ab_fdr/drains_to_dprst_09_breach.tif" \
+    --vpu-id "$FABRIC_DIR/depstor_rasters/vpu_id.tif" \
+    --land   "$FABRIC_DIR/depstor_rasters/land_mask.tif"
 ```
 
 FDR sources: `production` = `fdr.vrt` (NHDPlus FdrFac, fully filled);
