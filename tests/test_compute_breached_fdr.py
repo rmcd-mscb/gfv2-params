@@ -72,6 +72,33 @@ def test_missing_fixed_and_source_raises(monkeypatch, tmp_path):
     vpu = "10"
     out_dir = tmp_path / "per_vpu"
     (out_dir / vpu).mkdir(parents=True)
-    monkeypatch.setattr(cbf, "_run_wbt", lambda *a, **k: None)
     with pytest.raises(FileNotFoundError):
         cbf._process_vpu(vpu, out_dir, out_dir, runner="wbt", force=False, logger=LOGGER)
+
+
+def test_force_reruns_fix_and_wbt(monkeypatch, tmp_path):
+    vpu = "01"
+    out_dir = tmp_path / "per_vpu"
+    _touch(out_dir / vpu / f"Hydrodem_merged_{vpu}.tif")        # source Hydrodem
+    _touch(out_dir / vpu / f"Hydrodem_merged_fixed_{vpu}.tif")  # exists, but force=True
+    _touch(out_dir / vpu / f"Fdr_breached_{vpu}.tif")           # output exists too
+
+    fix_calls = []
+    wbt_calls = []
+
+    def fake_fix(src, dst, logger):
+        fix_calls.append(dst)
+
+    def fake_run_wbt(runner, tool, args, logger):
+        wbt_calls.append(tool)
+        for a in args:
+            if a.startswith("--output="):
+                _touch(Path(a.split("=", 1)[1]))
+
+    monkeypatch.setattr(cbf, "_fix_dem_nodata", fake_fix)
+    monkeypatch.setattr(cbf, "_run_wbt", fake_run_wbt)
+
+    cbf._process_vpu(vpu, out_dir, out_dir, runner="wbt", force=True, logger=LOGGER)
+
+    assert len(fix_calls) == 1                                   # force re-creates the fixed DEM
+    assert wbt_calls == ["BreachDepressionsLeastCost", "D8Pointer"]

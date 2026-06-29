@@ -28,6 +28,8 @@ from pathlib import Path
 
 from gfv2_params.wbt import find_whitebox_tools_binary
 
+# DEM_NODATA is re-exported here so callers/tests can import it from this module
+# without reaching into compute_dem_derivatives directly.
 from .compute_dem_derivatives import DEM_NODATA, _fix_dem_nodata, _run_wbt  # noqa: F401
 from .context import SharedRastersContext
 
@@ -43,14 +45,15 @@ BREACH_FILL = True
 
 
 def _breach_and_d8(dem_fixed: Path, dem_breached: Path, fdr_out: Path,
-                   runner: str, logger) -> None:
+                   runner: str, logger, *, dist: int = BREACH_DIST,
+                   fill: bool = BREACH_FILL) -> None:
     """WBT BreachDepressionsLeastCost on the fixed DEM, then D8Pointer."""
     breach_args = [
         f"--dem={dem_fixed}",
         f"--output={dem_breached}",
-        f"--dist={BREACH_DIST}",
+        f"--dist={dist}",
     ]
-    if BREACH_FILL:
+    if fill:
         breach_args.append("--fill")
     _run_wbt(runner, "BreachDepressionsLeastCost", breach_args, logger)
     _run_wbt(
@@ -61,7 +64,8 @@ def _breach_and_d8(dem_fixed: Path, dem_breached: Path, fdr_out: Path,
 
 
 def _process_vpu(vpu: str, input_dir: Path, output_dir: Path, runner: str,
-                 force: bool, logger) -> None:
+                 force: bool, logger, *, dist: int = BREACH_DIST,
+                 fill: bool = BREACH_FILL) -> None:
     vpu_dir = output_dir / vpu
     vpu_dir.mkdir(parents=True, exist_ok=True)
 
@@ -89,8 +93,8 @@ def _process_vpu(vpu: str, input_dir: Path, output_dir: Path, runner: str,
         logger.info("[VPU %s] reusing staged fixed DEM: %s", vpu, dem_fixed)
 
     logger.info("[VPU %s] --- WBT BreachDepressionsLeastCost (dist=%d, fill=%s) ---",
-                vpu, BREACH_DIST, BREACH_FILL)
-    _breach_and_d8(dem_fixed, dem_breached, fdr_out, runner, logger)
+                vpu, dist, fill)
+    _breach_and_d8(dem_fixed, dem_breached, fdr_out, runner, logger, dist=dist, fill=fill)
     logger.info("[VPU %s] wrote breached FDR: %s", vpu, fdr_out)
 
 
@@ -103,8 +107,12 @@ def build(step_cfg: dict, ctx: SharedRastersContext, logger) -> dict:
         logger.warning("compute_breached_fdr: ctx.vpus is empty, nothing to do")
         return {}
 
+    dist = int(step_cfg.get("breach_dist", BREACH_DIST))
+    fill = bool(step_cfg.get("breach_fill", BREACH_FILL))
+
     runner = find_whitebox_tools_binary()
     logger.info("WhiteboxTools binary: %s", runner)
     for vpu in ctx.vpus:
-        _process_vpu(vpu, input_dir, output_dir, runner, ctx.force, logger)
+        _process_vpu(vpu, input_dir, output_dir, runner, ctx.force, logger,
+                     dist=dist, fill=fill)
     return {}
