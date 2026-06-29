@@ -76,15 +76,18 @@ git commit -m "refactor(diagnose): move drains_to_dprst diagnostics under script
 
 ### Task 2: Labeled D8 kernel for per-depression contributing area
 
-The existing `drains_to_dprst_kernel` returns a binary mask; the #147 hypothesis is about *per-depression* contributing-area size, which needs to know *which* depression each cell drains to. Add a labeled variant beside it. D8 is out-degree-1, so each cell reaches exactly one pour-point — labeling is well-defined.
+The existing `drains_to_dprst_kernel` returns a binary mask; the #147 hypothesis is about *per-depression* contributing-area size, which needs to know *which* depression each cell drains to. D8 is out-degree-1, so each cell reaches exactly one pour-point — labeling is well-defined.
+
+**Refactor-to-delegate (decided in pre-flight, no duplication):** make `_resolve_labeled` the single traversal kernel and rewrite the existing `drains_to_dprst_kernel` to delegate to it (pour cells labeled 1, return `out > 0`). The old binary `_resolve` is **removed** — there is exactly one traversal implementation. This changes the internals of the production CONUS routing kernel but **preserves its output exactly**, so the existing `tests/test_drains_kernel.py` must stay green (that is the regression gate).
 
 **Files:**
-- Modify: `src/gfv2_params/d8_routing.py` (add `_resolve_labeled` njit + public `drains_to_dprst_labeled_kernel`)
-- Test: `tests/test_d8_routing_labeled.py`
+- Modify: `src/gfv2_params/d8_routing.py` (replace `_resolve` with `_resolve_labeled`; rewrite `drains_to_dprst_kernel` to delegate; add public `drains_to_dprst_labeled_kernel`)
+- Test: `tests/test_d8_routing_labeled.py` (new); `tests/test_drains_kernel.py` (existing — must remain green, unchanged)
 
 **Interfaces:**
 - Consumes: nothing new.
 - Produces: `drains_to_dprst_labeled_kernel(fdr_win: ndarray[uint8], label_win: ndarray[int32], fdr_nodata: int = 255) -> tuple[ndarray[int32], int]` — returns `(out, n_cycles)` where `out[r,c]` is the int32 label of the depression that cell drains to (0 = none/sink). `label_win` carries each depression's unique positive id at its cells, 0 elsewhere.
+- Preserves: `drains_to_dprst_kernel(fdr_win, pour_win, fdr_nodata=255) -> tuple[ndarray[uint8], int]` — same signature and output as today, now implemented by delegation.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -139,9 +142,9 @@ def test_cycle_marked_zero_and_counted():
 Run: `pixi run -e dev pytest tests/test_d8_routing_labeled.py -v`
 Expected: FAIL with `ImportError: cannot import name 'drains_to_dprst_labeled_kernel'`.
 
-- [ ] **Step 3: Implement the labeled kernel**
+- [ ] **Step 3: Implement the single traversal kernel + delegation**
 
-Append to `src/gfv2_params/d8_routing.py` (after `_resolve`/`drains_to_dprst_kernel`). It mirrors `_resolve` but carries an int32 label array and propagates the reached pour-point's label up the path:
+In `src/gfv2_params/d8_routing.py`: **delete** the existing `_resolve` njit function, add `_resolve_labeled` below (it carries an int32 label array and propagates the reached pour-point's label up the path), then **rewrite** `drains_to_dprst_kernel` to delegate to it. Keep the module's existing state constants (`_UNKNOWN`/`_DRAINS`/`_NOT`/`_ACTIVE`) and `drains_to_dprst_kernel`'s docstring/signature unchanged.
 
 ```python
 @njit(cache=True)
@@ -260,16 +263,33 @@ def drains_to_dprst_labeled_kernel(fdr_win, label_win, fdr_nodata=255):
     return _resolve_labeled(fdr, label, np.uint8(fdr_nodata))
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+Then rewrite the existing `drains_to_dprst_kernel` to delegate (keep its current docstring; only the body changes). Pour cells become label 1, and the binary result is `out > 0`:
 
-Run: `pixi run -e dev pytest tests/test_d8_routing_labeled.py -v`
-Expected: PASS (3 tests).
+```python
+def drains_to_dprst_kernel(fdr_win, pour_win, fdr_nodata=255):
+    """Mark cells whose ESRI-D8 path reaches a depression pour-point.
+
+    ... (KEEP the existing docstring verbatim) ...
+    """
+    # Delegate to the labeled kernel: every pour-point is one depression
+    # labeled 1, so "reaches any pour-point" is "reaches label 1".
+    fdr = np.ascontiguousarray(fdr_win, dtype=np.uint8)
+    pour = np.ascontiguousarray(pour_win, dtype=np.uint8)
+    label = (pour == 1).astype(np.int32)
+    labeled, n_cycles = _resolve_labeled(fdr, label, np.uint8(fdr_nodata))
+    return (labeled > 0).astype(np.uint8), n_cycles
+```
+
+- [ ] **Step 4: Run both the new and the regression tests**
+
+Run: `pixi run -e dev pytest tests/test_d8_routing_labeled.py tests/test_drains_kernel.py -v`
+Expected: PASS — the 3 new labeled tests AND every existing `test_drains_kernel.py` case (the regression gate proving delegation preserves the binary kernel's output exactly).
 
 - [ ] **Step 5: Commit**
 
 ```bash
 git add src/gfv2_params/d8_routing.py tests/test_d8_routing_labeled.py
-git commit -m "feat(routing): labeled D8 kernel for per-depression contributing area (#147)"
+git commit -m "feat(routing): single labeled D8 kernel; binary delegates to it (#147)"
 ```
 
 ---
