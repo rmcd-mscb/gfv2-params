@@ -31,7 +31,7 @@ from osgeo import gdal
 
 from gfv2_params.download.copernicus_dem import download_tiles, tiles_for_bbox
 
-from .cog import to_cog
+from .cog import cog_temp, to_cog
 from .context import SharedRastersContext
 
 # Border bounding boxes in EPSG:4326 (south, north, west, east).
@@ -183,29 +183,28 @@ def _apply_fill_mask(
     driver = gdal.GetDriverByName("GTiff")
     if driver is None:
         raise RuntimeError("GTiff driver not available — check GDAL installation")
-    tmp = output.with_suffix(".plain.tif")
-    out_ds = driver.Create(
-        str(tmp), cols, rows, 1, gdal.GDT_Float32,
-        options=["COMPRESS=LZW", "TILED=YES", "BLOCKXSIZE=512", "BLOCKYSIZE=512", "BIGTIFF=YES"],
-    )
-    if out_ds is None:
-        raise RuntimeError(
-            f"gdal driver.Create failed for output: {tmp} — {gdal.GetLastErrorMsg()}"
+    with cog_temp(output) as tmp:
+        out_ds = driver.Create(
+            str(tmp), cols, rows, 1, gdal.GDT_Float32,
+            options=["COMPRESS=LZW", "TILED=YES", "BLOCKXSIZE=512", "BLOCKYSIZE=512", "BIGTIFF=YES"],
         )
-    out_ds.SetGeoTransform(geotransform)
-    out_ds.SetProjection(projection)
-    out_band = out_ds.GetRasterBand(1)
-    out_band.SetNoDataValue(OUTPUT_NODATA)
-    err = out_band.WriteArray(masked)
-    if err != gdal.CE_None:
-        raise RuntimeError(
-            f"WriteArray failed for {tmp} — GDAL error code {err}: "
-            f"{gdal.GetLastErrorMsg()}"
-        )
-    out_ds.FlushCache()
-    del out_ds
-    to_cog(tmp, output, overview_resampling=overview_resampling, predictor=3)
-    tmp.unlink()
+        if out_ds is None:
+            raise RuntimeError(
+                f"gdal driver.Create failed for output: {tmp} — {gdal.GetLastErrorMsg()}"
+            )
+        out_ds.SetGeoTransform(geotransform)
+        out_ds.SetProjection(projection)
+        out_band = out_ds.GetRasterBand(1)
+        out_band.SetNoDataValue(OUTPUT_NODATA)
+        err = out_band.WriteArray(masked)
+        if err != gdal.CE_None:
+            raise RuntimeError(
+                f"WriteArray failed for {tmp} — GDAL error code {err}: "
+                f"{gdal.GetLastErrorMsg()}"
+            )
+        out_ds.FlushCache()
+        del out_ds
+        to_cog(tmp, output, overview_resampling=overview_resampling, predictor=3)
 
 
 def build(step_cfg: dict, ctx: SharedRastersContext, logger) -> dict:
@@ -312,30 +311,29 @@ def build(step_cfg: dict, ctx: SharedRastersContext, logger) -> dict:
         # Warp to a plain temp, then reorganize into a COG (tiled 512 +
         # overviews + ZSTD/pred3) — the elevation fill feeds elevation.vrt and
         # is GDAL/QGIS-consumed (never WBT), matching the per-VPU _fixed_ tiles.
-        elev_tmp = elev_out.with_suffix(".plain.tif")
-        warp_ds = gdal.Warp(
-            str(elev_tmp),
-            str(raw_vrt),
-            dstSRS="EPSG:5070",
-            xRes=30,
-            yRes=30,
-            resampleAlg="bilinear",
-            dstNodata=OUTPUT_NODATA,
-            outputType=gdal.GDT_Float32,
-            creationOptions=[
-                "COMPRESS=LZW", "TILED=YES",
-                "BLOCKXSIZE=512", "BLOCKYSIZE=512", "BIGTIFF=YES",
-            ],
-        )
-        if warp_ds is None:
-            raise RuntimeError(
-                f"gdal.Warp failed: {raw_vrt} -> {elev_tmp} (EPSG:5070, 30m) "
-                f"— {gdal.GetLastErrorMsg()}"
+        with cog_temp(elev_out) as elev_tmp:
+            warp_ds = gdal.Warp(
+                str(elev_tmp),
+                str(raw_vrt),
+                dstSRS="EPSG:5070",
+                xRes=30,
+                yRes=30,
+                resampleAlg="bilinear",
+                dstNodata=OUTPUT_NODATA,
+                outputType=gdal.GDT_Float32,
+                creationOptions=[
+                    "COMPRESS=LZW", "TILED=YES",
+                    "BLOCKXSIZE=512", "BLOCKYSIZE=512", "BIGTIFF=YES",
+                ],
             )
-        warp_ds.FlushCache()
-        del warp_ds
-        to_cog(elev_tmp, elev_out, overview_resampling="BILINEAR", predictor=3)
-        elev_tmp.unlink()
+            if warp_ds is None:
+                raise RuntimeError(
+                    f"gdal.Warp failed: {raw_vrt} -> {elev_tmp} (EPSG:5070, 30m) "
+                    f"— {gdal.GetLastErrorMsg()}"
+                )
+            warp_ds.FlushCache()
+            del warp_ds
+            to_cog(elev_tmp, elev_out, overview_resampling="BILINEAR", predictor=3)
         logger.info("  Warp complete in %s: %s", _elapsed(t2), elev_out)
     else:
         logger.info("  Elevation fill already exists: %s", elev_out)

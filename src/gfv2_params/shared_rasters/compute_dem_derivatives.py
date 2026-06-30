@@ -86,7 +86,7 @@ import rioxarray  # noqa: F401  (registers .rio accessor)
 from gfv2_params.depstor import read_land_mask
 from gfv2_params.wbt import find_whitebox_tools_binary, run_streamed
 
-from .cog import to_cog
+from .cog import cog_temp, to_cog
 from .context import SharedRastersContext
 
 # Hydrodem_merged_<vpu>.tif declares nodata=-99.99 (centimeters/100, same as
@@ -248,11 +248,10 @@ def _compute_twi(
     # (carea_map, marimo, QGIS) — never WBT — so write it as a COG (tiled 512 +
     # overviews + ZSTD/pred3). Write the plain temp first, then reorganize.
     twi_out.parent.mkdir(parents=True, exist_ok=True)
-    twi_tmp = twi_out.with_suffix(".plain.tif")
-    with rasterio.open(twi_tmp, "w", **twi_profile) as dst:
-        dst.write(twi, 1)
-    to_cog(twi_tmp, twi_out, overview_resampling="BILINEAR", predictor=3)
-    twi_tmp.unlink()
+    with cog_temp(twi_out) as twi_tmp:
+        with rasterio.open(twi_tmp, "w", **twi_profile) as dst:
+            dst.write(twi, 1)
+        to_cog(twi_tmp, twi_out, overview_resampling="BILINEAR", predictor=3)
     logger.info(
         "Wrote: %s (%d valid pixels of %d; %d cells dropped by land mask; "
         "%d cells slope-capped at %.0fdeg)",

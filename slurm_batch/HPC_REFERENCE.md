@@ -247,8 +247,9 @@ virtual rasters (elevation/slope/aspect/fdr/twi). Also builds
 `Twi_hydrodem_*.tif` tiles are present in `per_vpu/`. Each VRT also gets an
 external `.vrt.ovr` overview pyramid (bilinear for continuous surfaces; nearest
 for fdr and aspect) so full-extent QGIS rendering reads a coarse level instead
-of decimating the full 231026×128331 grid. Re-running this step alone refreshes
-the `.vrt.ovr` files even if the source tiles are unchanged. Rebuild:
+of decimating the full-resolution CONUS mosaic (e.g. 231026×128331 for
+elevation; the twi lattice differs). Re-running this step alone refreshes the
+`.vrt.ovr` files even if the source tiles are unchanged. Rebuild:
 
 ```bash
 FORCE=1 sbatch slurm_batch/build_shared_rasters.batch --step build_vrt

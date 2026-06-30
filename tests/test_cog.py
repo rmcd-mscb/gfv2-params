@@ -7,12 +7,13 @@ slope, aspect) which are consumed only by GDAL/rasterio/QGIS — NEVER for
 WhiteboxTools-fed rasters, whose format must stay LZW-without-predictor.
 """
 
+import fnmatch
 import struct
 
 import pytest
 from osgeo import gdal, osr
 
-from gfv2_params.shared_rasters.cog import to_cog
+from gfv2_params.shared_rasters.cog import cog_temp, to_cog
 
 
 def _make_striped_float_tif(path, *, width=1024, height=1024, value=12.5, nodata=-9999.0):
@@ -115,3 +116,48 @@ class TestToCog:
             return
         warnings, errors, _details = validate(str(dst))
         assert errors == [], f"COG validation errors: {errors}"
+
+
+# build_vrt source globs that a leaked pre-COG temp must NOT match.
+_VRT_PATTERNS = [
+    "NEDSnapshot_merged_fixed_*.tif",
+    "NEDSnapshot_merged_slope_*.tif",
+    "NEDSnapshot_merged_aspect_*.tif",
+    "Twi_merged_*.tif",
+    "Twi_hydrodem_*.tif",
+]
+
+
+class TestCogTemp:
+    """cog_temp() yields a scratch path for the plain pre-COG write and
+    guarantees cleanup, with a name that can never be globbed as a VRT source."""
+
+    def test_temp_name_is_unglobbable_by_vrt_patterns(self, tmp_path):
+        output = tmp_path / "NEDSnapshot_merged_fixed_01.tif"
+        with cog_temp(output) as tmp:
+            tmp.write_text("x")  # simulate the plain write
+            # While it exists on disk, it must not match any VRT source glob.
+            for pattern in _VRT_PATTERNS:
+                assert not fnmatch.fnmatch(tmp.name, pattern), (
+                    f"temp {tmp.name} is globbable by {pattern}"
+                )
+            # ...and a directory glob (as build_vrt does) must not list it.
+            assert tmp not in set(tmp_path.glob("NEDSnapshot_merged_fixed_*.tif"))
+
+    def test_temp_is_removed_on_success(self, tmp_path):
+        output = tmp_path / "Twi_merged_07.tif"
+        with cog_temp(output) as tmp:
+            tmp.write_text("x")
+            created = tmp
+        assert not created.exists()
+
+    def test_temp_is_removed_on_error(self, tmp_path):
+        """A failure between the plain write and to_cog must not strand the temp."""
+        output = tmp_path / "Twi_hydrodem_07.tif"
+        created = None
+        with pytest.raises(RuntimeError, match="boom"):
+            with cog_temp(output) as tmp:
+                tmp.write_text("x")
+                created = tmp
+                raise RuntimeError("boom")  # e.g. to_cog/gdal failure
+        assert created is not None and not created.exists()

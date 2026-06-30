@@ -158,3 +158,16 @@ class TestVrtOverviews:
         n = ds.GetRasterBand(1).GetOverviewCount()
         del ds
         assert n >= 1, "fdr.vrt has no overviews"
+
+
+class TestOverviewResamplingChoice:
+    """Categorical/circular fields (fdr D8 codes, aspect 0/360) must decimate
+    with nearest; continuous surfaces with bilinear."""
+
+    def test_nearest_for_fdr_and_aspect(self):
+        assert build_vrt._overview_resampling("fdr") == "nearest"
+        assert build_vrt._overview_resampling("aspect") == "nearest"
+
+    def test_bilinear_for_continuous(self):
+        for name in ("elevation", "slope", "twi", "twi_hydrodem"):
+            assert build_vrt._overview_resampling(name) == "bilinear"

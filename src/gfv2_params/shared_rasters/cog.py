@@ -24,6 +24,7 @@ LZW-without-predictor and are deliberately left on their existing write paths.
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 from pathlib import Path
 
 from osgeo import gdal
@@ -34,7 +35,34 @@ from osgeo import gdal
 # when source has none). NUM_THREADS speeds the CONUS-scale per-VPU tiles.
 _COG_BLOCKSIZE = "512"
 _COG_COMPRESS = "ZSTD"
+# ZSTD level 15: a mid-high setting that gains meaningful ratio over the default
+# (9) on continuous float DEMs while staying well short of the slow high end
+# (19-22). Build time is dominated by I/O at CONUS scale, so the extra CPU is
+# cheap relative to the storage saved.
 _COG_LEVEL = "15"
+
+
+@contextmanager
+def cog_temp(output: Path):
+    """Yield a scratch path for the plain pre-COG write, guaranteeing cleanup.
+
+    Callers write a plain GeoTIFF to the yielded path, then :func:`to_cog` it
+    into ``output``; the temp is unlinked on exit whether or not the body
+    raises (so a failed/interrupted conversion never strands it).
+
+    The temp name is a **leading-dot hidden sibling** of ``output``. This is
+    deliberate: ``build_vrt`` discovers its sources by globbing patterns like
+    ``NEDSnapshot_merged_fixed_*.tif`` / ``Twi_merged_*.tif``, and a plain
+    ``output.with_suffix(".plain.tif")`` name *matches* those globs — so a
+    leaked temp would be silently ingested as a phantom VRT source. A dotfile
+    cannot match a glob whose pattern starts with a literal name, so even a
+    temp that somehow survives cleanup can never become a VRT source.
+    """
+    tmp = output.parent / f".{output.stem}.cogtmp{output.suffix}"
+    try:
+        yield tmp
+    finally:
+        tmp.unlink(missing_ok=True)
 
 
 def to_cog(

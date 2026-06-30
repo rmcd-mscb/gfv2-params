@@ -24,7 +24,7 @@ from rioxarray.merge import merge_arrays
 
 from gfv2_params.depstor import read_land_mask_for_grid
 
-from .cog import to_cog
+from .cog import cog_temp, to_cog
 from .context import SharedRastersContext
 
 
@@ -170,13 +170,12 @@ def _process_dataset(
             # (carea_map, QGIS) — never WBT — so write it as a COG (tiled 512 +
             # overviews + ZSTD/pred3). rioxarray writes a plain temp; to_cog
             # reorganizes it into the COG layout, then the temp is removed.
-            tmp = output.with_suffix(".plain.tif")
-            merged.rio.to_raster(
-                tmp, compress="lzw", tiled=True,
-                blockxsize=512, blockysize=512, BIGTIFF="YES",
-            )
-            to_cog(tmp, output, overview_resampling="BILINEAR", predictor=3)
-            tmp.unlink()
+            with cog_temp(output) as tmp:
+                merged.rio.to_raster(
+                    tmp, compress="lzw", tiled=True,
+                    blockxsize=512, blockysize=512, BIGTIFF="YES",
+                )
+                to_cog(tmp, output, overview_resampling="BILINEAR", predictor=3)
         case "NEDSnapshot" | "Hydrodem":
             # NEDSnapshot is the compute_slope_aspect input; Hydrodem heads the
             # WBT-fed open-source FDR chain. Both stay LZW; predictor=2 is read

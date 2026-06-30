@@ -65,3 +65,42 @@ class TestTwiMergeFormat:
         assert overviews >= 1
         assert compression == "ZSTD"
         assert predictor == "3"
+
+
+class TestWbtFedTilesStayLzw:
+    """The WBT-fed merge tiles (NEDSnapshot/Hydrodem heads of the open-source
+    FDR chain, and FDR/FAC) must NEVER be COG/ZSTD/float-predictor — WBT only
+    reads PACKBITS/LZW/DEFLATE and silently corrupts predictor input. This is
+    the negative-space guard for cog.py's WBT-safety boundary."""
+
+    def _struct(self, path):
+        ds = gdal.Open(str(path))
+        s = ds.GetMetadata("IMAGE_STRUCTURE")
+        out = {"layout": s.get("LAYOUT"), "compression": s.get("COMPRESSION"),
+               "predictor": s.get("PREDICTOR")}
+        del ds
+        return out
+
+    def test_nedsnapshot_merge_tile_is_lzw_not_cog(self, tmp_path):
+        # NEDSnapshot source is in cm; the builder divides by 100.
+        _make_raster(tmp_path / "ned_in.tif", np.full((40, 40), 12300.0, dtype=np.float32))
+        values = {"rpus": ["ned_in.tif"], "output": "NEDSnapshot_merged_99.tif"}
+        _process_dataset("NEDSnapshot", values, "99", tmp_path, force=True, logger=LOGGER)
+
+        s = self._struct(tmp_path / "NEDSnapshot_merged_99.tif")
+        assert s["layout"] != "COG"
+        assert s["compression"] == "LZW"
+        assert s["predictor"] != "3", "WBT-fed DEM must not carry the float predictor"
+
+    def test_fac_merge_tile_is_lzw_without_predictor(self, tmp_path):
+        _make_raster(
+            tmp_path / "fac_in.tif", np.full((40, 40), 5, dtype=np.int32),
+            dtype=gdal.GDT_Int32, nodata=-9999,
+        )
+        values = {"rpus": ["fac_in.tif"], "output": "FdrFac_Fac_99.tif"}
+        _process_dataset("FdrFac_Fac", values, "99", tmp_path, force=True, logger=LOGGER)
+
+        s = self._struct(tmp_path / "FdrFac_Fac_99.tif")
+        assert s["layout"] != "COG"
+        assert s["compression"] == "LZW"
+        assert s["predictor"] in (None, "1"), "FDR/FAC must carry no predictor"

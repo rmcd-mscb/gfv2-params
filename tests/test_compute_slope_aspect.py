@@ -100,3 +100,20 @@ class TestComputeSlopeAspectFormat:
         for key in ("fixed", "slope", "aspect"):
             block = _meta(out[key])["block"]
             assert block[1] != 1, f"{key} is striped: block={block}"
+
+    def test_no_pre_cog_temp_left_behind(self, tmp_path):
+        """The plain pre-COG temp must be cleaned up and never left where a
+        later build_vrt would glob it as a phantom source."""
+        out = _run(tmp_path)
+        in_dir = out["fixed"].parent
+        out_dir = out["slope"].parent
+        leftovers = [
+            p.name
+            for d in {in_dir, out_dir}
+            for p in d.iterdir()
+            if "cogtmp" in p.name or p.name.endswith(".plain.tif")
+        ]
+        assert leftovers == [], f"pre-COG temp(s) left behind: {leftovers}"
+        # And the VRT glob must see exactly the one real tile per type.
+        assert len(list(in_dir.glob("NEDSnapshot_merged_fixed_*.tif"))) == 1
+        assert len(list(out_dir.glob("NEDSnapshot_merged_slope_*.tif"))) == 1
