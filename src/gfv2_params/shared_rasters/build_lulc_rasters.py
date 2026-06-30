@@ -43,7 +43,7 @@ def _raster_info(path: Path) -> str:
     with rasterio.open(path) as src:
         h, w = src.height, src.width
         crs = src.crs.to_epsg() if src.crs else "unknown CRS"
-        res_x, res_y = abs(src.transform.a), abs(src.transform.e)
+        res_x = abs(src.transform.a)
     size_mb = path.stat().st_size / 1024 ** 2
     return (
         f"{h:,} rows x {w:,} cols | {res_x:.1f} m pixels | "
