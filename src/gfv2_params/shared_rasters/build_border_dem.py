@@ -291,7 +291,12 @@ def build(step_cfg: dict, ctx: SharedRastersContext, logger) -> dict:
             f"Only {n_downloaded}/{n_requested} tiles downloaded "
             f"({shortfall_pct:.0f}% shortfall) — border DEM may have coverage gaps"
         )
-        if shortfall_pct > 20:
+        # The border bbox is deliberately generous (BORDER_ZONES), so a baseline
+        # ~20% of requested tiles are open-ocean / no-land and 404 *deterministically*
+        # — 1238/1557 (20.5% shortfall) for the current Canada+Mexico zones. Only
+        # abort on a gross shortfall that implies a real network/coverage failure,
+        # not this expected ocean baseline; lesser shortfalls log a warning.
+        if shortfall_pct > 30:
             raise RuntimeError(msg)
         logger.warning(msg)
 
