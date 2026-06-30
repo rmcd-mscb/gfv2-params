@@ -17,6 +17,7 @@ from pathlib import Path
 import richdem as rd
 import rioxarray
 
+from .cog import to_cog
 from .context import SharedRastersContext
 
 # The per-VPU merged DEM tiles (written by merge_rpu_by_vpu) declare and use
@@ -42,11 +43,18 @@ def _process_vpu(vpu: str, input_dir: Path, output_dir: Path, force: bool, logge
 
     # Always regenerate the _fixed_ tile — it is a fast rioxarray copy and its
     # nodata convention must stay in sync with build_vrt's srcNodata value.
-    logger.info("[VPU %s] creating fixed-nodata NEDSnapshot", vpu)
+    # The _fixed_ tile is the elevation VRT source, consumed only by
+    # GDAL/rasterio/QGIS (never WBT), so it is written as a COG (tiled 512 +
+    # overviews + ZSTD). rioxarray writes a plain temp; to_cog reorganizes it
+    # into the COG layout, then the temp is removed.
+    logger.info("[VPU %s] creating fixed-nodata NEDSnapshot (COG)", vpu)
     da = rioxarray.open_rasterio(dem_path, masked=True).squeeze()
     da_fixed = da.fillna(-9999)
     da_fixed.rio.write_nodata(-9999, inplace=True)
-    da_fixed.rio.to_raster(dem_fixed_path)
+    fixed_tmp = dem_fixed_path.with_suffix(".plain.tif")
+    da_fixed.rio.to_raster(fixed_tmp)
+    to_cog(fixed_tmp, dem_fixed_path, overview_resampling="BILINEAR", predictor=3)
+    fixed_tmp.unlink()
 
     if not force and slope_out.exists() and aspect_out.exists():
         logger.info("[VPU %s] slope/aspect exist, skipping (use --force to overwrite): %s",
@@ -56,16 +64,26 @@ def _process_vpu(vpu: str, input_dir: Path, output_dir: Path, force: bool, logge
     logger.info("[VPU %s] loading DEM: %s", vpu, dem_path)
     dem = rd.LoadGDAL(str(dem_path), no_data=DEM_NODATA)
 
+    # RichDEM SaveGDAL writes a plain (striped, uncompressed) GeoTIFF; convert
+    # each to a COG. Slope is continuous -> bilinear overviews; aspect is a
+    # circular 0-360 field whose 0/360 seam must not be averaged -> nearest.
+    slope_out.parent.mkdir(parents=True, exist_ok=True)
+
     logger.info("[VPU %s] computing slope (degrees)...", vpu)
     slope = rd.TerrainAttribute(dem, attrib="slope_degrees")
-    slope_out.parent.mkdir(parents=True, exist_ok=True)
-    rd.SaveGDAL(str(slope_out), slope)
-    logger.info("[VPU %s] slope saved: %s", vpu, slope_out)
+    slope_tmp = slope_out.with_suffix(".plain.tif")
+    rd.SaveGDAL(str(slope_tmp), slope)
+    to_cog(slope_tmp, slope_out, overview_resampling="BILINEAR", predictor=3)
+    slope_tmp.unlink()
+    logger.info("[VPU %s] slope saved (COG): %s", vpu, slope_out)
 
     logger.info("[VPU %s] computing aspect...", vpu)
     aspect = rd.TerrainAttribute(dem, attrib="aspect")
-    rd.SaveGDAL(str(aspect_out), aspect)
-    logger.info("[VPU %s] aspect saved: %s", vpu, aspect_out)
+    aspect_tmp = aspect_out.with_suffix(".plain.tif")
+    rd.SaveGDAL(str(aspect_tmp), aspect)
+    to_cog(aspect_tmp, aspect_out, overview_resampling="NEAREST", predictor=3)
+    aspect_tmp.unlink()
+    logger.info("[VPU %s] aspect saved (COG): %s", vpu, aspect_out)
 
 
 def build(step_cfg: dict, ctx: SharedRastersContext, logger) -> dict:

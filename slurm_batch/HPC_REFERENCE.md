@@ -150,8 +150,10 @@ Use `--step <name>` for a single step or `--from <name>` to resume mid-DAG.
 Step names match keys in `configs/shared_rasters/shared_rasters.yml`. Heavy
 single-step rebuilds should be submitted via the batch
 (`sbatch slurm_batch/build_shared_rasters.batch --step <name>`), not run
-directly on the login node. Only genuinely quick inspection steps (e.g.
-`--step build_vrt` on already-built tiles) are login-node safe.
+directly on the login node. `build_vrt` writes VRT XML cheaply but now also
+builds an external `.vrt.ovr` overview pyramid per VRT, which reads each
+CONUS mosaic at full resolution once — submit it via the batch, not the login
+node.
 
 ### Stage 0 — Initialize data root and stage inputs
 
@@ -199,7 +201,11 @@ present and newer than the source.
 ### Stage 1 — `merge_rpu_by_vpu` + `compute_slope_aspect`
 
 Merge per-RPU NHDPlus rasters into per-VPU GeoTIFFs (NED, Hydrodem, FDR, FAC),
-then derive slope/aspect on the fixed-nodata NEDSnapshot. Driven by the
+then derive slope/aspect on the fixed-nodata NEDSnapshot. The `_fixed_`
+elevation, slope, and aspect tiles are written as **Cloud-Optimized GeoTIFFs**
+(tiled 512 + internal overviews + ZSTD/`PREDICTOR=3`) — they feed the
+elevation/slope/aspect VRTs and are consumed only by GDAL/rasterio/QGIS, never
+WBT (the WBT-fed `Hydrodem` chain stays LZW-without-predictor). Driven by the
 orchestrator batch; single-VPU rebuild:
 
 ```bash
@@ -236,7 +242,11 @@ VPUS=17 FORCE=1 sbatch --mem=384G slurm_batch/build_shared_rasters.batch --step 
 Combine per-VPU rasters and optional Copernicus fill into CONUS-wide GDAL
 virtual rasters (elevation/slope/aspect/fdr/twi). Also builds
 `twi_hydrodem.vrt` (open-source WhiteboxTools TWI, CONUS-complete) if
-`Twi_hydrodem_*.tif` tiles are present in `per_vpu/`. Rebuild:
+`Twi_hydrodem_*.tif` tiles are present in `per_vpu/`. Each VRT also gets an
+external `.vrt.ovr` overview pyramid (bilinear for continuous surfaces; nearest
+for fdr and aspect) so full-extent QGIS rendering reads a coarse level instead
+of decimating the full 231026×128331 grid. Re-running this step alone refreshes
+the `.vrt.ovr` files even if the source tiles are unchanged. Rebuild:
 
 ```bash
 FORCE=1 sbatch slurm_batch/build_shared_rasters.batch --step build_vrt

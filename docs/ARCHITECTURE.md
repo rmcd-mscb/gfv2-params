@@ -187,6 +187,20 @@ These are hard-won; violating them silently corrupts outputs.
   nodata or FDR as a land mask.
 - **WhiteboxTools cannot read LZW + `predictor=2` GeoTIFFs** — it silently
   corrupts them. Never pass `predictor=2` rasters to WBT subprocesses.
+- **The elevation mosaic (`elevation`/`slope`/`aspect`) is Cloud-Optimized.**
+  `compute_slope_aspect` writes the `_fixed_` elevation, slope, and aspect
+  tiles as COGs (tiled 512, internal overviews, ZSTD + `PREDICTOR=3`) via the
+  shared `shared_rasters/cog.py` helper, and `build_vrt` adds an external
+  `.vrt.ovr` overview pyramid to each CONUS VRT. This serves both consumers —
+  fast continental QGIS pan/zoom and fast windowed reads for zonal
+  stats/resampling (exactextract/gdptools/rioxarray). **WBT-safety boundary:**
+  `to_cog` (ZSTD + predictor) is only for these GDAL/rasterio/QGIS-consumed
+  rasters. WBT-fed rasters — the `Hydrodem` fixed/filled DEMs in
+  `compute_dem_derivatives` and the depstor routing FDR — must stay
+  LZW-without-predictor and are deliberately left on their existing write paths
+  (see the predictor gotcha above). Aspect uses **nearest** overview resampling
+  (circular 0/360 field); FDR's VRT overview is nearest (categorical D8 codes);
+  continuous surfaces use bilinear.
 - **CONUS-scale memory: stream/window, never hold a full-grid array.** The
   CONUS template is ~16.9 B cells (~17 GB uint8, ~68 GB int32, ~135 GB
   float64); whole-grid ops OOM the 503 GB node ceiling. `routing` tiles the
