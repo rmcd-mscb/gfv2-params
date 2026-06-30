@@ -19,11 +19,18 @@ discovered by globbing the per_vpu directory.
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 from osgeo import gdal, osr
 
 from .context import SharedRastersContext
+
+# VRT types that are opt-in (not produced by a normal build): absence of source
+# tiles is expected, so it is logged at INFO rather than surfacing as a warning
+# on every run. fdr_breached is the #147 depression-respecting FDR — only built
+# after the opt-in compute_breached_fdr step has staged Fdr_breached_*.tif.
+_OPTIONAL_TYPES = {"fdr_breached"}
 
 # Maps VRT name -> (glob pattern, srcNodata for BuildVRT).
 # srcNodata rationale:
@@ -98,7 +105,11 @@ def build(step_cfg: dict, ctx: SharedRastersContext, logger) -> dict:
 
         source_files = fill_files + primary_files
         if not source_files:
-            logger.warning("No source files found for %s (pattern: */%s)", vrt_name, pattern)
+            # Opt-in types (e.g. fdr_breached) are legitimately absent from a
+            # normal build — keep those quiet so they don't read as an error.
+            level = logging.INFO if vrt_name in _OPTIONAL_TYPES else logging.WARNING
+            logger.log(level, "No source files found for %s (pattern: */%s) — skipping",
+                       vrt_name, pattern)
             continue
 
         vrt_path = vrt_dir / f"{vrt_name}.vrt"
