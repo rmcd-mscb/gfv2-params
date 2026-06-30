@@ -37,6 +37,20 @@ def test_single_line_passes_through_is_onstream():
     assert flowthrough_comids(wb, fl) == {101}
 
 
+def test_throughflow_running_along_boundary_is_onstream():
+    # Regression (real case: VPU 15 waterbody COMID 21744935, flowline 21745077).
+    # A single sinuous conveyance line passes through the waterbody but partly
+    # runs ALONG the shoreline, so `line.intersection(poly.boundary)` is a
+    # GeometryCollection (mixed Point + LineString), not a clean MultiPoint. The
+    # old T1 crossing-counter only recognised `Multi*` types and collapsed
+    # everything else to n=1, defeating T1. Both endpoints lie outside the
+    # waterbody, so T2 (endpoint-inside) also legitimately misses it.
+    wb = _wb([[112, "LakePond", SQUARE]])
+    fl = _fl([["StreamRiver", "With Digitized",
+               LineString([(-1, 1), (1, 1), (1, 0), (1.5, 0), (1.5, -1)])]])
+    assert flowthrough_comids(wb, fl) == {112}
+
+
 def test_split_inflow_and_outflow_is_onstream():
     # T2: line A ends inside (inflow), line B starts inside (outflow); neither
     # alone crosses twice, but together they pair to flow-through.

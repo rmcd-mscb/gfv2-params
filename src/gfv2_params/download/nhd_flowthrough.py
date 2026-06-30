@@ -70,7 +70,9 @@ def flowthrough_comids(
     FLOWDIR. `areas`: optional NHDArea polygons with FTYPE. All share one CRS.
 
     A waterbody is on-stream if ANY of:
-      T1  a single conveyance flowline crosses its boundary >= 2 times,
+      T1  a single conveyance flowline flows through it: crosses the boundary
+          >= 2 times, OR has non-zero interior length with both endpoints
+          outside the polygon (so it must enter and exit),
       T2  it has >= 1 inflow (a 'With Digitized' conveyance line whose
           downstream end is inside) AND >= 1 outflow (upstream end inside),
       T3  it overlaps a conveyance NHDArea polygon.
@@ -94,16 +96,35 @@ def flowthrough_comids(
             how="inner", predicate="intersects",
         )
 
-        # --- T1: a single line crosses the boundary >= 2 times ---
+        # --- T1: a single conveyance line flows through the waterbody ---
+        # Two complementary signals (either suffices), both direction-free:
+        #   (a) the line crosses the boundary >= 2 times, OR
+        #   (b) the line has non-zero interior length with BOTH endpoints outside
+        #       the polygon (it must therefore enter and exit -> flows through).
+        # (a) alone is fragile for sinuous lines that run ALONG the shoreline:
+        # those make `intersection(boundary)` a GeometryCollection (mixed Point +
+        # LineString), which is not a `Multi*` type, so the geom-count collapsed
+        # to 1 and real through-flow was missed (e.g. VPU 15 LakePond COMID
+        # 21744935, flowline 21745077). (b) catches that case topologically. (a)
+        # is retained because it also catches lines that cross >= 2 times but
+        # terminate INSIDE the polygon (endpoint covered), which (b) skips.
         t1_idx: set[int] = set()
         for line_pos, wbidx in zip(pairs.index, pairs["_wbidx"]):
             line = conv.geometry.iloc[line_pos]
             poly = wb.geometry.iloc[wbidx]
             crossing = line.intersection(poly.boundary)
+            # `geoms` exists on every multi-part/collection geometry (MultiPoint,
+            # MultiLineString, GeometryCollection); a lone Point/LineString has no
+            # `.geoms` and counts as a single crossing.
             n = 0 if crossing.is_empty else (
-                len(crossing.geoms) if crossing.geom_type.startswith("Multi") else 1
+                len(crossing.geoms) if hasattr(crossing, "geoms") else 1
             )
             if n >= 2:
+                t1_idx.add(int(wbidx))
+                continue
+            up, down = _endpoints(line)
+            if (not poly.covers(up)) and (not poly.covers(down)) \
+                    and line.intersection(poly).length > 0:
                 t1_idx.add(int(wbidx))
 
         # --- T2: inflow endpoint AND outflow endpoint, trusting digitization ---
