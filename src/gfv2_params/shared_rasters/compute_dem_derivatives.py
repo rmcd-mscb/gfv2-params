@@ -86,6 +86,7 @@ import rioxarray  # noqa: F401  (registers .rio accessor)
 from gfv2_params.depstor import read_land_mask
 from gfv2_params.wbt import find_whitebox_tools_binary, run_streamed
 
+from .cog import cog_temp, to_cog
 from .context import SharedRastersContext
 
 # Hydrodem_merged_<vpu>.tif declares nodata=-99.99 (centimeters/100, same as
@@ -217,10 +218,6 @@ def _compute_twi(
             "crs": fac_ds.crs,
             "transform": fac_ds.transform,
             "compress": "lzw",
-            # predictor=2 is safe here because the TWI output is consumed by
-            # GDAL-based tools only (build_vrt, marimo notebooks, QGIS) —
-            # never passed to a WhiteboxTools subprocess.
-            "predictor": 2,
             "tiled": True,
             "blockxsize": 512,
             "blockysize": 512,
@@ -247,9 +244,14 @@ def _compute_twi(
     twi_valid = np.log(((fac[valid] + 1.0) * 10.0) / (np.tan(slope_rad) + 0.01))
     twi[valid] = twi_valid.astype(np.float32)
 
+    # Twi_hydrodem is the twi_hydrodem.vrt source, consumed only by GDAL tools
+    # (carea_map, marimo, QGIS) — never WBT — so write it as a COG (tiled 512 +
+    # overviews + ZSTD/pred3). Write the plain temp first, then reorganize.
     twi_out.parent.mkdir(parents=True, exist_ok=True)
-    with rasterio.open(twi_out, "w", **twi_profile) as dst:
-        dst.write(twi, 1)
+    with cog_temp(twi_out) as twi_tmp:
+        with rasterio.open(twi_tmp, "w", **twi_profile) as dst:
+            dst.write(twi, 1)
+        to_cog(twi_tmp, twi_out, overview_resampling="BILINEAR", predictor=3)
     logger.info(
         "Wrote: %s (%d valid pixels of %d; %d cells dropped by land mask; "
         "%d cells slope-capped at %.0fdeg)",

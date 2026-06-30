@@ -24,6 +24,7 @@ from rioxarray.merge import merge_arrays
 
 from gfv2_params.depstor import read_land_mask_for_grid
 
+from .cog import cog_temp, to_cog
 from .context import SharedRastersContext
 
 
@@ -164,7 +165,21 @@ def _process_dataset(
     # avoid CPLE_AppDefinedError on the heaviest VPUs; the format overhead
     # for smaller VPUs is a few bytes (8-byte vs 4-byte offsets).
     match dataset_name:
-        case "NEDSnapshot" | "Hydrodem" | "TWI":
+        case "TWI":
+            # Twi_merged is the twi.vrt source, consumed only by GDAL tools
+            # (carea_map, QGIS) — never WBT — so write it as a COG (tiled 512 +
+            # overviews + ZSTD/pred3). rioxarray writes a plain temp; to_cog
+            # reorganizes it into the COG layout, then the temp is removed.
+            with cog_temp(output) as tmp:
+                merged.rio.to_raster(
+                    tmp, compress="lzw", tiled=True,
+                    blockxsize=512, blockysize=512, BIGTIFF="YES",
+                )
+                to_cog(tmp, output, overview_resampling="BILINEAR", predictor=3)
+        case "NEDSnapshot" | "Hydrodem":
+            # NEDSnapshot is the compute_slope_aspect input; Hydrodem heads the
+            # WBT-fed open-source FDR chain. Both stay LZW; predictor=2 is read
+            # fine by rioxarray/richdem (these are not the elevation VRT source).
             merged.rio.to_raster(
                 output, compress="lzw", predictor=2, tiled=True,
                 blockxsize=512, blockysize=512, BIGTIFF="YES",

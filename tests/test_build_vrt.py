@@ -2,9 +2,13 @@
 
 import struct
 from pathlib import Path
+from types import SimpleNamespace
 
+import numpy as np
 import pytest
 from osgeo import gdal, osr
+
+from gfv2_params.shared_rasters import build_vrt
 
 
 def _make_tiny_tif(path: Path, value: float, nodata: float = -9999.0) -> None:
@@ -44,10 +48,7 @@ class TestVrtSourceOrdering:
         FILL_DIRS = {"copernicus_fill"}
         pattern = "NEDSnapshot_merged_fixed_*.tif"
 
-        primary_files = sorted(
-            f for f in nhd_dir.glob(f"*/{pattern}")
-            if f.parent.name not in FILL_DIRS
-        )
+        primary_files = sorted(f for f in nhd_dir.glob(f"*/{pattern}") if f.parent.name not in FILL_DIRS)
         fill_files = []
         for fill_dir_name in sorted(FILL_DIRS):
             fill_files.extend(sorted(nhd_dir.glob(f"{fill_dir_name}/{pattern}")))
@@ -89,3 +90,84 @@ class TestVrtSourceOrdering:
             f"Expected primary value 100.0 but got {data[0, 0]}. "
             "GDAL VRT last-source-wins: primary must be listed last."
         )
+
+
+def _make_sized_tif(path, *, size, value, dtype, nodata):
+    """A constant-value GeoTIFF large enough to carry overviews."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    driver = gdal.GetDriverByName("GTiff")
+    ds = driver.Create(str(path), size, size, 1, dtype)
+    ds.SetGeoTransform([0, 30, 0, 0, 0, -30])
+    srs = osr.SpatialReference()
+    srs.ImportFromEPSG(5070)
+    ds.SetProjection(srs.ExportToWkt())
+    band = ds.GetRasterBand(1)
+    band.SetNoDataValue(nodata)
+    band.WriteArray(np.full((size, size), value))
+    ds.FlushCache()
+    del ds
+
+
+class TestVrtOverviews:
+    """build_vrt must add overviews to each VRT for fast full-extent rendering.
+
+    A bare .vrt over full-resolution sources forces QGIS to decimate
+    full-resolution data on every continental pan/zoom. An external .ovr
+    (gdaladdo on the VRT) gives a coarse pyramid for snappy rendering.
+    """
+
+    def _run_build(self, tmp_path):
+        per_vpu = tmp_path / "per_vpu"
+        borders = tmp_path / "borders"  # absent on purpose
+        vrt_dir = tmp_path / "vrt"
+        _make_sized_tif(
+            per_vpu / "01" / "NEDSnapshot_merged_fixed_01.tif",
+            size=1024,
+            value=100.0,
+            dtype=gdal.GDT_Float32,
+            nodata=-9999,
+        )
+        _make_sized_tif(
+            per_vpu / "01" / "Fdr_merged_01.tif",
+            size=1024,
+            value=1,
+            dtype=gdal.GDT_Byte,
+            nodata=255,
+        )
+        ctx = SimpleNamespace(
+            per_vpu_dir=per_vpu,
+            borders_dir=borders,
+            vrt_dir=vrt_dir,
+        )
+        import logging
+
+        build_vrt.build({}, ctx, logging.getLogger("test_build_vrt"))
+        return vrt_dir
+
+    def test_elevation_vrt_has_overviews(self, tmp_path):
+        vrt_dir = self._run_build(tmp_path)
+        ds = gdal.Open(str(vrt_dir / "elevation.vrt"))
+        n = ds.GetRasterBand(1).GetOverviewCount()
+        del ds
+        assert n >= 1, "elevation.vrt has no overviews"
+        assert (vrt_dir / "elevation.vrt.ovr").exists()
+
+    def test_fdr_vrt_has_overviews(self, tmp_path):
+        vrt_dir = self._run_build(tmp_path)
+        ds = gdal.Open(str(vrt_dir / "fdr.vrt"))
+        n = ds.GetRasterBand(1).GetOverviewCount()
+        del ds
+        assert n >= 1, "fdr.vrt has no overviews"
+
+
+class TestOverviewResamplingChoice:
+    """Categorical/circular fields (fdr D8 codes, aspect 0/360) must decimate
+    with nearest; continuous surfaces with bilinear."""
+
+    def test_nearest_for_fdr_and_aspect(self):
+        assert build_vrt._overview_resampling("fdr") == "nearest"
+        assert build_vrt._overview_resampling("aspect") == "nearest"
+
+    def test_bilinear_for_continuous(self):
+        for name in ("elevation", "slope", "twi", "twi_hydrodem"):
+            assert build_vrt._overview_resampling(name) == "bilinear"
