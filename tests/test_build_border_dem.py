@@ -57,6 +57,56 @@ class TestFillMask:
         assert masked_slope[1, 1] == 20.0
 
 
+class TestApplyFillMaskCog:
+    """The masked slope/aspect fill tiles feed the slope/aspect VRTs and must
+    be COGs (tiled 512 + overviews + ZSTD/pred3), like the per-VPU outputs."""
+
+    def _meta(self, path):
+        ds = gdal.Open(str(path))
+        band = ds.GetRasterBand(1)
+        s = ds.GetMetadata("IMAGE_STRUCTURE")
+        m = {
+            "block": band.GetBlockSize(),
+            "overviews": band.GetOverviewCount(),
+            "compression": s.get("COMPRESSION"),
+            "predictor": s.get("PREDICTOR"),
+            "overview_resampling": s.get("OVERVIEW_RESAMPLING"),
+            "layout": s.get("LAYOUT"),
+        }
+        del ds
+        return m
+
+    def test_slope_fill_is_cog_bilinear(self, tmp_path):
+        from gfv2_params.shared_rasters.build_border_dem import _apply_fill_mask
+
+        raw = tmp_path / "slope_raw.tif"
+        out = tmp_path / "slope.tif"
+        _make_tif(raw, np.full((1024, 1024), 7.5, dtype=np.float32))
+        mask = np.ones((1024, 1024), dtype=bool)
+
+        _apply_fill_mask(raw, mask, out, overview_resampling="BILINEAR")
+
+        m = self._meta(out)
+        assert m["layout"] == "COG"
+        assert m["block"] == [512, 512]
+        assert m["overviews"] >= 1
+        assert m["compression"] == "ZSTD"
+        assert m["predictor"] == "3"
+        assert m["overview_resampling"] == "BILINEAR"
+
+    def test_aspect_fill_is_cog_nearest(self, tmp_path):
+        from gfv2_params.shared_rasters.build_border_dem import _apply_fill_mask
+
+        raw = tmp_path / "aspect_raw.tif"
+        out = tmp_path / "aspect.tif"
+        _make_tif(raw, np.full((1024, 1024), 180.0, dtype=np.float32))
+        mask = np.ones((1024, 1024), dtype=bool)
+
+        _apply_fill_mask(raw, mask, out, overview_resampling="NEAREST")
+
+        assert self._meta(out)["overview_resampling"] == "NEAREST"
+
+
 class TestCompositeVrtOrdering:
     """Verify composite VRT lists Copernicus first, NHDPlus last."""
 

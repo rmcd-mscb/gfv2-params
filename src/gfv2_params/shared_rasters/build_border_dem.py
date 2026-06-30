@@ -31,6 +31,7 @@ from osgeo import gdal
 
 from gfv2_params.download.copernicus_dem import download_tiles, tiles_for_bbox
 
+from .cog import to_cog
 from .context import SharedRastersContext
 
 # Border bounding boxes in EPSG:4326 (south, north, west, east).
@@ -150,7 +151,12 @@ def _compute_fill_mask(
     return (cop_data != OUTPUT_NODATA) & (nhd_data == OUTPUT_NODATA)
 
 
-def _apply_fill_mask(raw_raster: Path, fill_mask: np.ndarray, output: Path) -> None:
+def _apply_fill_mask(
+    raw_raster: Path,
+    fill_mask: np.ndarray,
+    output: Path,
+    overview_resampling: str,
+) -> None:
     raw_ds = gdal.Open(str(raw_raster))
     if raw_ds is None:
         raise RuntimeError(
@@ -170,19 +176,21 @@ def _apply_fill_mask(raw_raster: Path, fill_mask: np.ndarray, output: Path) -> N
 
     masked = np.where(fill_mask, raw_data, np.float32(OUTPUT_NODATA))
 
+    # Write a plain temp, then reorganize into a COG (tiled 512 + overviews +
+    # ZSTD/pred3) matching the per-VPU slope/aspect tiles — these border fill
+    # tiles feed the same slope/aspect VRTs and are GDAL/QGIS-consumed (never
+    # WBT). Aspect passes overview_resampling="NEAREST" (circular 0/360 field).
     driver = gdal.GetDriverByName("GTiff")
     if driver is None:
         raise RuntimeError("GTiff driver not available — check GDAL installation")
+    tmp = output.with_suffix(".plain.tif")
     out_ds = driver.Create(
-        str(output), cols, rows, 1, gdal.GDT_Float32,
-        options=[
-            "COMPRESS=LZW", "PREDICTOR=2", "TILED=YES",
-            "BLOCKXSIZE=512", "BLOCKYSIZE=512", "BIGTIFF=YES",
-        ],
+        str(tmp), cols, rows, 1, gdal.GDT_Float32,
+        options=["COMPRESS=LZW", "TILED=YES", "BLOCKXSIZE=512", "BLOCKYSIZE=512", "BIGTIFF=YES"],
     )
     if out_ds is None:
         raise RuntimeError(
-            f"gdal driver.Create failed for output: {output} — {gdal.GetLastErrorMsg()}"
+            f"gdal driver.Create failed for output: {tmp} — {gdal.GetLastErrorMsg()}"
         )
     out_ds.SetGeoTransform(geotransform)
     out_ds.SetProjection(projection)
@@ -191,11 +199,13 @@ def _apply_fill_mask(raw_raster: Path, fill_mask: np.ndarray, output: Path) -> N
     err = out_band.WriteArray(masked)
     if err != gdal.CE_None:
         raise RuntimeError(
-            f"WriteArray failed for {output} — GDAL error code {err}: "
+            f"WriteArray failed for {tmp} — GDAL error code {err}: "
             f"{gdal.GetLastErrorMsg()}"
         )
     out_ds.FlushCache()
     del out_ds
+    to_cog(tmp, output, overview_resampling=overview_resampling, predictor=3)
+    tmp.unlink()
 
 
 def build(step_cfg: dict, ctx: SharedRastersContext, logger) -> dict:
@@ -299,8 +309,12 @@ def build(step_cfg: dict, ctx: SharedRastersContext, logger) -> dict:
     if not elev_out.exists() or ctx.force:
         logger.info("  Warping to EPSG:5070 at 30m (bilinear)...")
         t2 = time.time()
+        # Warp to a plain temp, then reorganize into a COG (tiled 512 +
+        # overviews + ZSTD/pred3) — the elevation fill feeds elevation.vrt and
+        # is GDAL/QGIS-consumed (never WBT), matching the per-VPU _fixed_ tiles.
+        elev_tmp = elev_out.with_suffix(".plain.tif")
         warp_ds = gdal.Warp(
-            str(elev_out),
+            str(elev_tmp),
             str(raw_vrt),
             dstSRS="EPSG:5070",
             xRes=30,
@@ -309,17 +323,19 @@ def build(step_cfg: dict, ctx: SharedRastersContext, logger) -> dict:
             dstNodata=OUTPUT_NODATA,
             outputType=gdal.GDT_Float32,
             creationOptions=[
-                "COMPRESS=LZW", "PREDICTOR=2", "TILED=YES",
+                "COMPRESS=LZW", "TILED=YES",
                 "BLOCKXSIZE=512", "BLOCKYSIZE=512", "BIGTIFF=YES",
             ],
         )
         if warp_ds is None:
             raise RuntimeError(
-                f"gdal.Warp failed: {raw_vrt} -> {elev_out} (EPSG:5070, 30m) "
+                f"gdal.Warp failed: {raw_vrt} -> {elev_tmp} (EPSG:5070, 30m) "
                 f"— {gdal.GetLastErrorMsg()}"
             )
         warp_ds.FlushCache()
         del warp_ds
+        to_cog(elev_tmp, elev_out, overview_resampling="BILINEAR", predictor=3)
+        elev_tmp.unlink()
         logger.info("  Warp complete in %s: %s", _elapsed(t2), elev_out)
     else:
         logger.info("  Elevation fill already exists: %s", elev_out)
@@ -424,11 +440,11 @@ def build(step_cfg: dict, ctx: SharedRastersContext, logger) -> dict:
             )
 
             logger.info("  Masking slope to fill zone...")
-            _apply_fill_mask(slope_raw, fill_mask, slope_out)
+            _apply_fill_mask(slope_raw, fill_mask, slope_out, "BILINEAR")
             logger.info("  Masked slope saved: %s", slope_out)
 
             logger.info("  Masking aspect to fill zone...")
-            _apply_fill_mask(aspect_raw, fill_mask, aspect_out)
+            _apply_fill_mask(aspect_raw, fill_mask, aspect_out, "NEAREST")
             logger.info("  Masked aspect saved: %s", aspect_out)
 
             logger.info("  Masking complete in %s", _elapsed(t4))

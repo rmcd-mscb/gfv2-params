@@ -230,8 +230,10 @@ onto the per-VPU `Hydrodem_merged_<vpu>.tif` grid. Depends only on Stage 1.
 ### Stage 1c2 — `merge_rpu_by_vpu_twi`
 
 Merge per-RPU TWI rasters (staged in Stage 0) into per-VPU GeoTIFFs
-(`Twi_merged_<vpu>.tif`). Clips its output to the per-VPU HRU mask from Stage
-1c1. Depends on Stage 1c1. Single-VPU rebuild:
+(`Twi_merged_<vpu>.tif`, written as **COGs** — tiled 512 + overviews +
+ZSTD/`PREDICTOR=3`, since TWI is GDAL-consumed only, never WBT). Clips its
+output to the per-VPU HRU mask from Stage 1c1. Depends on Stage 1c1.
+Single-VPU rebuild:
 
 ```bash
 VPUS=17 FORCE=1 sbatch --mem=384G slurm_batch/build_shared_rasters.batch --step merge_rpu_by_vpu_twi
