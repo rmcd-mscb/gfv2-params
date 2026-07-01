@@ -18,6 +18,7 @@ from ..depstor import (
     select_connected_waterbodies,
     write_uint8_binary,
 )
+from ..nhd_ftypes import NEVER_ONSTREAM_FTYPES
 from .context import BuildContext
 
 
@@ -89,6 +90,24 @@ def build(step_cfg: dict, ctx: BuildContext, logger) -> dict:
     wb_gdf = wb_gdf[wb_gdf.geometry.notna() & ~wb_gdf.geometry.is_empty]
 
     sel = select_connected_waterbodies(wb_gdf, connected)
+    if "FTYPE" in sel.columns:
+        n_before = len(sel)
+        sel = sel[~sel["FTYPE"].isin(NEVER_ONSTREAM_FTYPES)].copy()
+        n_forced = n_before - len(sel)
+        if n_forced:
+            logger.info(
+                "  never-on-stream guardrail: dropped %d Playa (force-dprst) / "
+                "Ice Mass (excluded) waterbodies promoted via WBAREACOMI", n_forced,
+            )
+    else:
+        raise KeyError(
+            "waterbody layer has no FTYPE column — never-on-stream guardrail "
+            "(Playa/Ice Mass) cannot be applied; refusing to write a raster "
+            "that would misclassify Playa/Ice Mass waterbodies promoted via "
+            "WBAREACOMI as on-stream. A genuinely FTYPE-less waterbody layer "
+            "is an upstream data problem (check the source gpkg), not "
+            "something this pipeline should paper over."
+        )
     logger.info(
         "  %d connected COMIDs; %d of %d waterbody polygons flagged connected",
         len(connected), len(sel), len(wb_gdf),

@@ -150,8 +150,10 @@ Use `--step <name>` for a single step or `--from <name>` to resume mid-DAG.
 Step names match keys in `configs/shared_rasters/shared_rasters.yml`. Heavy
 single-step rebuilds should be submitted via the batch
 (`sbatch slurm_batch/build_shared_rasters.batch --step <name>`), not run
-directly on the login node. Only genuinely quick inspection steps (e.g.
-`--step build_vrt` on already-built tiles) are login-node safe.
+directly on the login node. `build_vrt` writes VRT XML cheaply but now also
+builds an external `.vrt.ovr` overview pyramid per VRT, which reads each
+CONUS mosaic at full resolution once — submit it via the batch, not the login
+node.
 
 ### Stage 0 — Initialize data root and stage inputs
 
@@ -170,7 +172,7 @@ Manually-staged files required before `--check`:
 | `input/soils_litho/` | `TEXT_PRMS.tif`, `AWC.tif`, `Lithology_exp_Konly_Project.shp` (+ `.dbf`, `.prj`, `.shx`) |
 | `input/lulc_veg/` | `RootDepth.tif`, `CNPY.tif`, `Imperv.tif` |
 | `input/nhm_default/` | NHM default parameter files |
-| `input/nhd/` | `conus_waterbodies.gpkg` (layer `waterbodies`); `connected_waterbody_comids.parquet` (produced by `download_nhd_flowlines.batch`); `flowthrough_waterbody_comids.parquet` (produced by `stage_nhd_flowthrough.batch`) |
+| `input/nhd/` | `conus_waterbodies.gpkg` (layer `waterbodies`); `connected_waterbody_comids.parquet` (produced by `download_nhd_flowlines.batch`); `flowline_topology.parquet` (produced by `python -m gfv2_params.download.nhd_topology`; must run before flow-through staging below); `flowthrough_waterbody_comids.parquet` (produced by `stage_nhd_flowthrough.batch`) |
 | `input/twi/<rpu>/` | Per-RPU `twi.tif` + sidecars (staged via `stage_twi.sh`) |
 
 Download jobs (idempotent — already-downloaded files are skipped):
@@ -181,6 +183,7 @@ sbatch slurm_batch/download_rpu_rasters.batch    # NHDPlus RPU rasters (~112 GB)
 sbatch slurm_batch/download_nalcms.batch         # NALCMS 2020 land cover (~2 GB)
 sbatch slurm_batch/download_nhm_v11.batch        # NHM v1.1 LULC rasters
 sbatch slurm_batch/download_nhd_flowlines.batch  # NHD-connected waterbody COMIDs (one-time, CONUS)
+pixi run --as-is python -m gfv2_params.download.nhd_topology  # flowline topology (one-time, CONUS; run before flow-through)
 sbatch slurm_batch/stage_nhd_flowthrough.batch   # flow-through waterbody COMIDs (one-time, CONUS)
 ```
 
@@ -199,7 +202,11 @@ present and newer than the source.
 ### Stage 1 — `merge_rpu_by_vpu` + `compute_slope_aspect`
 
 Merge per-RPU NHDPlus rasters into per-VPU GeoTIFFs (NED, Hydrodem, FDR, FAC),
-then derive slope/aspect on the fixed-nodata NEDSnapshot. Driven by the
+then derive slope/aspect on the fixed-nodata NEDSnapshot. The `_fixed_`
+elevation, slope, and aspect tiles are written as **Cloud-Optimized GeoTIFFs**
+(tiled 512 + internal overviews + ZSTD/`PREDICTOR=3`) — they feed the
+elevation/slope/aspect VRTs and are consumed only by GDAL/rasterio/QGIS, never
+WBT (the WBT-fed `Hydrodem` chain stays LZW-without-predictor). Driven by the
 orchestrator batch; single-VPU rebuild:
 
 ```bash
@@ -224,8 +231,10 @@ onto the per-VPU `Hydrodem_merged_<vpu>.tif` grid. Depends only on Stage 1.
 ### Stage 1c2 — `merge_rpu_by_vpu_twi`
 
 Merge per-RPU TWI rasters (staged in Stage 0) into per-VPU GeoTIFFs
-(`Twi_merged_<vpu>.tif`). Clips its output to the per-VPU HRU mask from Stage
-1c1. Depends on Stage 1c1. Single-VPU rebuild:
+(`Twi_merged_<vpu>.tif`, written as **COGs** — tiled 512 + overviews +
+ZSTD/`PREDICTOR=3`, since TWI is GDAL-consumed only, never WBT). Clips its
+output to the per-VPU HRU mask from Stage 1c1. Depends on Stage 1c1.
+Single-VPU rebuild:
 
 ```bash
 VPUS=17 FORCE=1 sbatch --mem=384G slurm_batch/build_shared_rasters.batch --step merge_rpu_by_vpu_twi
@@ -236,7 +245,12 @@ VPUS=17 FORCE=1 sbatch --mem=384G slurm_batch/build_shared_rasters.batch --step 
 Combine per-VPU rasters and optional Copernicus fill into CONUS-wide GDAL
 virtual rasters (elevation/slope/aspect/fdr/twi). Also builds
 `twi_hydrodem.vrt` (open-source WhiteboxTools TWI, CONUS-complete) if
-`Twi_hydrodem_*.tif` tiles are present in `per_vpu/`. Rebuild:
+`Twi_hydrodem_*.tif` tiles are present in `per_vpu/`. Each VRT also gets an
+external `.vrt.ovr` overview pyramid (bilinear for continuous surfaces; nearest
+for fdr and aspect) so full-extent QGIS rendering reads a coarse level instead
+of decimating the full-resolution CONUS mosaic (e.g. 231026×128331 for
+elevation; the twi lattice differs). Re-running this step alone refreshes the
+`.vrt.ovr` files even if the source tiles are unchanged. Rebuild:
 
 ```bash
 FORCE=1 sbatch slurm_batch/build_shared_rasters.batch --step build_vrt
@@ -367,12 +381,17 @@ via `--step <name>` or `--from <name>` passed through to the Python script.
 **On-stream staging.** The `wbody_connectivity` builder unions two COMID
 parquets: `connected_waterbody_comids.parquet` (WBAREACOMI, from
 `download_nhd_flowlines.batch`) and `flowthrough_waterbody_comids.parquet`
-(geometric flow-through topology, from
-`python -m gfv2_params.download.nhd_flowthrough`). The flow-through step is a
-per-VPU vector spatial join — sized like `nhd_flowlines` with no CONUS-grid
-array and no 384G concern — and runs on the login node or in a lightweight
-SLURM job. Updating either parquet after an initial build requires rebuilding
-from `wbody_connectivity`:
+(flow-through topology, from
+`python -m gfv2_params.download.nhd_flowthrough`). Flow-through staging in
+turn requires `input/nhd/flowline_topology.parquet` (distilled NHDPlus
+PlusFlowlineVAA, staged by `python -m gfv2_params.download.nhd_topology` —
+run it first; `nhd_flowthrough` fails loud if the parquet is missing) for its
+D1 rule, which uses authoritative routed-network direction to promote
+source/headwater lakes and split-pass-through outflows. Both staging steps
+are per-VPU vector operations — sized like `nhd_flowlines` with no CONUS-grid
+array and no 384G concern — and run on the login node or in a lightweight
+SLURM job. Updating either COMID parquet after an initial build requires
+rebuilding from `wbody_connectivity`:
 
 ```bash
 sbatch slurm_batch/build_depstor_rasters.batch --from wbody_connectivity --force
@@ -850,7 +869,8 @@ sacct -j <JOBID> -o JobID,State,Elapsed,MaxRSS
 | `slurm_batch/download_nalcms.batch` | `configs/base_config.yml` | `gfv2_params.download.nalcms_lulc` |
 | `slurm_batch/download_nhm_v11.batch` | `configs/base_config.yml` | `gfv2_params.download.nhm_v11_lulc` |
 | `slurm_batch/download_nhd_flowlines.batch` | `configs/base_config.yml` | `gfv2_params.download.nhd_flowlines` — downloads per-VPU NHDPlusV2 `NHDFlowline` attributes and distills distinct non-zero `WBAREACOMI` values to `input/nhd/connected_waterbody_comids.parquet` (one-time, CONUS) |
-| `stage_nhd_flowthrough.batch` | `configs/base_config.yml` | `gfv2_params.download.nhd_flowthrough` — per-VPU vector spatial join; classifies flow-through NHDWaterbody polygons (T1: boundary crossings ≥2; T2: directional inflow+outflow endpoints; T3: NHDArea overlap); writes `input/nhd/flowthrough_waterbody_comids.parquet` (one-time, CONUS; no CONUS-grid array) |
+| (run directly) | `configs/base_config.yml` | `gfv2_params.download.nhd_topology` — downloads per-VPU NHDPlusV2 `PlusFlowlineVAA` attributes and distills COMID/DnHydroseq/Hydroseq/TerminalFl/StartFlag/StreamOrde/FromNode/ToNode to `input/nhd/flowline_topology.parquet` (one-time, CONUS); must run before `stage_nhd_flowthrough.batch` below |
+| `stage_nhd_flowthrough.batch` | `configs/base_config.yml` | `gfv2_params.download.nhd_flowthrough` — per-VPU vector spatial join; classifies flow-through NHDWaterbody polygons (T1: boundary crossings ≥2; D1: routed-network upstream endpoint inside the waterbody, from `flowline_topology.parquet`; T3: NHDArea overlap); Playa/Ice Mass dropped up front; writes `input/nhd/flowthrough_waterbody_comids.parquet` (one-time, CONUS; no CONUS-grid array) |
 | `slurm_batch/submit_jobs.sh` | (caller-provided) | generic per-VPU array dispatcher |
 | (run directly) | `configs/base_config.yml` | `scripts/migrate_to_shared_layout.py --data-root <path>` (legacy `work/` layout upgrade) |
 | (run directly) | `configs/base_config.yml` | `scripts/clip_shared_to_fabric.py --fabric <name>` (fabric-bounds FDR/template clip) |

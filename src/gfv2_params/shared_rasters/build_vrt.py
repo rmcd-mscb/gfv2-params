@@ -68,10 +68,37 @@ RASTER_TYPES = {
 # stamped with an explicit EPSG so strict CRS-equality checks downstream pass.
 _SRS_OVERRIDES = {"twi_hydrodem": "EPSG:5070"}
 
+# Overview pyramid for each VRT, written as an external ``.vrt.ovr`` so a
+# full-extent QGIS render reads a coarse level instead of decimating the
+# full-resolution CONUS grid on every pan/zoom. Continuous surfaces use
+# bilinear decimation; categorical FDR (D8 codes) and the circular aspect
+# field (0/360 wrap) must use nearest so values aren't averaged.
+_OVERVIEW_LEVELS = [2, 4, 8, 16, 32, 64, 128, 256]
+_NEAREST_OVERVIEW_VRTS = {"fdr", "aspect"}
+
 
 def _srs_override(vrt_name: str) -> str | None:
     """EPSG string to force onto the built VRT, or None to keep source CRS."""
     return _SRS_OVERRIDES.get(vrt_name)
+
+
+def _overview_resampling(vrt_name: str) -> str:
+    return "nearest" if vrt_name in _NEAREST_OVERVIEW_VRTS else "bilinear"
+
+
+def _add_vrt_overviews(vrt_path: Path, resampling: str, logger) -> None:
+    """Build an external overview pyramid (``.vrt.ovr``) for ``vrt_path``."""
+    ds = gdal.Open(str(vrt_path), gdal.GA_ReadOnly)
+    if ds is None:
+        raise RuntimeError(f"could not reopen {vrt_path} to build overviews")
+    if ds.BuildOverviews(resampling.upper(), _OVERVIEW_LEVELS) != gdal.CE_None:
+        raise RuntimeError(
+            f"BuildOverviews({resampling}) failed for {vrt_path} — {gdal.GetLastErrorMsg()}"
+        )
+    ds.FlushCache()
+    del ds
+    logger.info("Built %s overviews (%s) for %s",
+                len(_OVERVIEW_LEVELS), resampling, vrt_path)
 
 
 def build(step_cfg: dict, ctx: SharedRastersContext, logger) -> dict:
@@ -138,6 +165,8 @@ def build(step_cfg: dict, ctx: SharedRastersContext, logger) -> dict:
             ds.FlushCache()
             del ds
             logger.info("Stamped %s with %s", vrt_path, epsg)
+
+        _add_vrt_overviews(vrt_path, _overview_resampling(vrt_name), logger)
 
         built_count += 1
         produced[f"{vrt_name}_vrt"] = vrt_path

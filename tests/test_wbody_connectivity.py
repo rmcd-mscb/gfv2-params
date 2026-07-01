@@ -123,7 +123,8 @@ def test_wbody_connectivity_rasterizes_only_connected(tmp_path):
 
     # Connected polygon (COMID 10) at top-left; disconnected (COMID 20) bottom-right.
     gdf = gpd.GeoDataFrame(
-        {"COMID": [10, 20], "member_comid": ["10", "20"]},
+        {"COMID": [10, 20], "member_comid": ["10", "20"],
+         "FTYPE": ["LakePond", "LakePond"]},
         geometry=[box(0, 270, 60, 300), box(240, 0, 300, 30)],
         crs="EPSG:5070",
     )
@@ -185,7 +186,8 @@ def test_wbody_connectivity_zero_match_raises(tmp_path):
     _write_landmask(landmask)
 
     gpd.GeoDataFrame(
-        {"COMID": [10, 20], "member_comid": ["10", "20"]},
+        {"COMID": [10, 20], "member_comid": ["10", "20"],
+         "FTYPE": ["LakePond", "LakePond"]},
         geometry=[box(0, 270, 60, 300), box(240, 0, 300, 30)],
         crs="EPSG:5070",
     ).to_file(wb_gpkg, layer="waterbodies", driver="GPKG")
@@ -230,7 +232,7 @@ def test_wbody_connectivity_drops_non_land_cells(tmp_path):
 
     # Connected polygon covers the top-left 2x2 block (cells [0,0],[0,1],[1,0],[1,1]).
     gpd.GeoDataFrame(
-        {"COMID": [10], "member_comid": ["10"]},
+        {"COMID": [10], "member_comid": ["10"], "FTYPE": ["LakePond"]},
         geometry=[box(0, 240, 60, 300)],
         crs="EPSG:5070",
     ).to_file(wb_gpkg, layer="waterbodies", driver="GPKG")
@@ -278,7 +280,8 @@ def test_wbody_connectivity_flowthrough_only_waterbody_burned(tmp_path):
     #   WB 20 (COMID 20) — middle block, flow-through only
     #   WB 30 (COMID 30) — bottom-right block, in neither set
     gdf = gpd.GeoDataFrame(
-        {"COMID": [10, 20, 30], "member_comid": ["10", "20", "30"]},
+        {"COMID": [10, 20, 30], "member_comid": ["10", "20", "30"],
+         "FTYPE": ["LakePond", "LakePond", "LakePond"]},
         geometry=[
             box(0, 270, 60, 300),    # top-left 2x2: cells [0,0],[0,1],[1,0],[1,1]
             box(120, 150, 180, 180), # middle area: cells ~[4,4],[4,5],[5,4],[5,5]
@@ -381,6 +384,120 @@ def test_wbody_connectivity_flowthrough_empty_raises(tmp_path):
         wbody_connectivity.build({"output": "connected_wbody.tif"}, ctx, logging.getLogger("test"))
 
 
+def test_wbody_connectivity_force_dprst_ftypes_excluded(tmp_path):
+    """Playa/Ice Mass waterbodies promoted on-stream via WBAREACOMI must not burn.
+
+    The guardrail (previously applied only inside nhd_flowthrough's flow-through
+    classifier) must also apply at the wbody_connectivity union chokepoint,
+    since WBAREACOMI promotion has no guardrail of its own. It now uses
+    NEVER_ONSTREAM_FTYPES (= FORCE_DPRST_FTYPES | EXCLUDE_WATERBODY_FTYPES), so
+    both Playa (force-dprst) and Ice Mass (excluded from the waterbody
+    classification entirely — belt-and-suspenders, since Ice Mass is already
+    dropped upstream at the waterbody builder) are kept out of the on-stream set.
+    """
+    from shapely.geometry import box
+
+    from gfv2_params.depstor_builders import wbody_connectivity
+    from gfv2_params.depstor_builders.context import BuildContext
+
+    template = tmp_path / "template.tif"
+    landmask = tmp_path / "land_mask.tif"
+    wb_gpkg = tmp_path / "wb.gpkg"
+    connected_table = tmp_path / "connected.parquet"
+    _write_template(template)
+    _write_landmask(landmask)
+
+    # 3 waterbodies, all WBAREACOMI-connected:
+    #   WB 10 (COMID 10) — LakePond, ordinary connected waterbody -> burned
+    #   WB 20 (COMID 20) — Playa, force-dprst FTYPE -> must be dropped
+    #   WB 30 (COMID 30) — Ice Mass, excluded FTYPE -> must be dropped
+    gdf = gpd.GeoDataFrame(
+        {
+            "COMID": [10, 20, 30],
+            "member_comid": ["10", "20", "30"],
+            "FTYPE": ["LakePond", "Playa", "Ice Mass"],
+        },
+        geometry=[
+            box(0, 270, 60, 300),    # top-left 2x2: cells [0,0],[0,1],[1,0],[1,1]
+            box(240, 0, 300, 30),    # bottom-right 2x2: cells [8,8],[8,9],[9,8],[9,9]
+            box(120, 150, 180, 180), # middle: cells [4,4],[4,5],[5,4],[5,5]
+        ],
+        crs="EPSG:5070",
+    )
+    gdf.to_file(wb_gpkg, layer="waterbodies", driver="GPKG")
+    pd.DataFrame({"comid": pd.array([10, 20, 30], dtype="int64")}).to_parquet(
+        connected_table, index=False
+    )
+
+    ctx = BuildContext(
+        fabric="t", template_path=template, output_dir=tmp_path,
+        hru_gpkg=wb_gpkg, hru_layer="waterbodies",
+        waterbody_gpkg=wb_gpkg, waterbody_layer="waterbodies",
+        connected_comids_table=connected_table,
+    )
+    ctx.paths["landmask"] = landmask
+
+    produced = wbody_connectivity.build(
+        {"output": "connected_wbody.tif"}, ctx, logging.getLogger("test")
+    )
+
+    with rasterio.open(produced["connected_wbody"]) as src:
+        arr = src.read(1)
+
+    assert arr[0, 0] == 1              # WB 10 (LakePond) burned
+    assert arr[9, 9] != 1              # WB 20 (Playa) NOT burned despite WBAREACOMI connection
+    assert arr[4, 4:6].max() != 1      # WB 30 (Ice Mass) NOT burned despite WBAREACOMI connection
+
+
+def test_wbody_connectivity_missing_ftype_column_raises(tmp_path):
+    """A waterbody layer without FTYPE must raise (refuse to silently skip the
+    never-on-stream guardrail and promote a Playa/Ice Mass waterbody)."""
+    import pytest
+    from shapely.geometry import box
+
+    from gfv2_params.depstor_builders import wbody_connectivity
+    from gfv2_params.depstor_builders.context import BuildContext
+
+    template = tmp_path / "template.tif"
+    landmask = tmp_path / "land_mask.tif"
+    wb_gpkg = tmp_path / "wb.gpkg"
+    connected_table = tmp_path / "connected.parquet"
+    _write_template(template)
+    _write_landmask(landmask)
+
+    # Same fixture as test_wbody_connectivity_force_dprst_ftypes_excluded, minus
+    # the FTYPE column.
+    gdf = gpd.GeoDataFrame(
+        {
+            "COMID": [10, 20, 30],
+            "member_comid": ["10", "20", "30"],
+        },
+        geometry=[
+            box(0, 270, 60, 300),    # top-left 2x2: cells [0,0],[0,1],[1,0],[1,1]
+            box(240, 0, 300, 30),    # bottom-right 2x2: cells [8,8],[8,9],[9,8],[9,9]
+            box(120, 150, 180, 180), # middle: cells [4,4],[4,5],[5,4],[5,5]
+        ],
+        crs="EPSG:5070",
+    )
+    gdf.to_file(wb_gpkg, layer="waterbodies", driver="GPKG")
+    pd.DataFrame({"comid": pd.array([10, 20, 30], dtype="int64")}).to_parquet(
+        connected_table, index=False
+    )
+
+    ctx = BuildContext(
+        fabric="t", template_path=template, output_dir=tmp_path,
+        hru_gpkg=wb_gpkg, hru_layer="waterbodies",
+        waterbody_gpkg=wb_gpkg, waterbody_layer="waterbodies",
+        connected_comids_table=connected_table,
+    )
+    ctx.paths["landmask"] = landmask
+
+    with pytest.raises(KeyError):
+        wbody_connectivity.build(
+            {"output": "connected_wbody.tif"}, ctx, logging.getLogger("test")
+        )
+
+
 def test_wbody_connectivity_flowthrough_none_is_silent_noop(tmp_path):
     """When flowthrough_comids_table is None, build() must succeed without error."""
     from shapely.geometry import box
@@ -396,7 +513,7 @@ def test_wbody_connectivity_flowthrough_none_is_silent_noop(tmp_path):
     _write_landmask(landmask)
 
     gpd.GeoDataFrame(
-        {"COMID": [10], "member_comid": ["10"]},
+        {"COMID": [10], "member_comid": ["10"], "FTYPE": ["LakePond"]},
         geometry=[box(0, 270, 60, 300)],
         crs="EPSG:5070",
     ).to_file(wb_gpkg, layer="waterbodies", driver="GPKG")
