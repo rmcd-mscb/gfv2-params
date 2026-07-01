@@ -6,7 +6,6 @@ must still parse its config, walk zero steps, and exit cleanly.
 
 import subprocess
 import sys
-import tempfile
 from pathlib import Path
 
 import pytest
@@ -25,6 +24,24 @@ ORCHESTRATOR = REPO_ROOT / "scripts" / "build_shared_rasters.py"
 
 def test_every_registered_step_has_a_builder():
     assert set(STEP_ORDER) == set(BUILDERS.keys())
+
+
+def test_default_vpus_scope_matches_merge_manifests():
+    """The per-VPU loop scope (`vpus:` in shared_rasters.yml) must match the
+    consolidated VPU keys of the merge manifests (01-18), NOT the RPU-split
+    units (03N/03S/03W, 10L/10U).
+
+    If they drift, a per-VPU `--step` run with no `--vpus` override walks the
+    21-unit list and raises FileNotFoundError on the missing
+    NEDSnapshot_merged_03N.tif (the merged tiles are named `03`/`10`). This
+    test pins the two together so the config can't go stale again.
+    """
+    cfg_dir = REPO_ROOT / "configs" / "shared_rasters"
+    vpus = set(yaml.safe_load((cfg_dir / "shared_rasters.yml").read_text())["vpus"])
+    std = set(yaml.safe_load((cfg_dir / "merge_rpu_by_vpu.yml").read_text()))
+    twi = set(yaml.safe_load((cfg_dir / "merge_rpu_by_vpu_twi.yml").read_text()))
+    assert vpus == std, f"vpus scope != merge_rpu_by_vpu manifest: {vpus ^ std}"
+    assert vpus == twi, f"vpus scope != merge_rpu_by_vpu_twi manifest: {vpus ^ twi}"
 
 
 def test_every_registered_step_is_in_planned_or_documented_aliases():

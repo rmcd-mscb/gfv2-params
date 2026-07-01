@@ -18,20 +18,25 @@
 # Per-VPU loop scope. Per-VPU steps iterate this list internally rather
 # than being launched once per VPU. Override at the CLI with --vpus to
 # scope a partial run (e.g., --vpus 01 for VPU01 validation only).
+#
+# These are the CONSOLIDATED VPU ids (01-18), matching the per-VPU merged
+# tiles on disk (shared/per_vpu/<vpu>/) and the keys of the merge manifests
+# (merge_rpu_by_vpu*.yml). Do NOT list the RPU-split units (03N/03S/03W,
+# 10L/10U) here: the merge step consolidates those RPUs into single 03/10
+# tiles, so a per-VPU step iterating split units FileNotFounds on the missing
+# NEDSnapshot_merged_03N.tif. test_default_vpus_scope_matches_merge_manifests
+# pins this list to the manifests.
 vpus:
   - "01"
   - "02"
-  - "03N"
-  - "03S"
-  - "03W"
+  - "03"
   - "04"
   - "05"
   - "06"
   - "07"
   - "08"
   - "09"
-  - "10L"
-  - "10U"
+  - "10"
   - "11"
   - "12"
   - "13"
