@@ -18,6 +18,7 @@ from ..depstor import (
     select_connected_waterbodies,
     write_uint8_binary,
 )
+from ..download.nhd_flowthrough import FORCE_DPRST_FTYPES
 from .context import BuildContext
 
 
@@ -89,6 +90,20 @@ def build(step_cfg: dict, ctx: BuildContext, logger) -> dict:
     wb_gdf = wb_gdf[wb_gdf.geometry.notna() & ~wb_gdf.geometry.is_empty]
 
     sel = select_connected_waterbodies(wb_gdf, connected)
+    if "FTYPE" in sel.columns:
+        n_before = len(sel)
+        sel = sel[~sel["FTYPE"].isin(FORCE_DPRST_FTYPES)].copy()
+        n_forced = n_before - len(sel)
+        if n_forced:
+            logger.info(
+                "  force-dprst guardrail: dropped %d Playa/Ice Mass waterbodies "
+                "promoted via WBAREACOMI", n_forced,
+            )
+    else:
+        logger.warning(
+            "  waterbody layer has no FTYPE column — force-dprst guardrail "
+            "(Playa/Ice Mass) cannot be applied"
+        )
     logger.info(
         "  %d connected COMIDs; %d of %d waterbody polygons flagged connected",
         len(connected), len(sel), len(wb_gdf),

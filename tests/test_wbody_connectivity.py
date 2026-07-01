@@ -381,6 +381,64 @@ def test_wbody_connectivity_flowthrough_empty_raises(tmp_path):
         wbody_connectivity.build({"output": "connected_wbody.tif"}, ctx, logging.getLogger("test"))
 
 
+def test_wbody_connectivity_force_dprst_ftypes_excluded(tmp_path):
+    """Playa/Ice Mass waterbodies promoted on-stream via WBAREACOMI must not burn.
+
+    The force-dprst guardrail (previously applied only inside nhd_flowthrough's
+    flow-through classifier) must also apply at the wbody_connectivity union
+    chokepoint, since WBAREACOMI promotion has no guardrail of its own.
+    """
+    from shapely.geometry import box
+
+    from gfv2_params.depstor_builders import wbody_connectivity
+    from gfv2_params.depstor_builders.context import BuildContext
+
+    template = tmp_path / "template.tif"
+    landmask = tmp_path / "land_mask.tif"
+    wb_gpkg = tmp_path / "wb.gpkg"
+    connected_table = tmp_path / "connected.parquet"
+    _write_template(template)
+    _write_landmask(landmask)
+
+    # 2 waterbodies, both WBAREACOMI-connected:
+    #   WB 10 (COMID 10) — LakePond, ordinary connected waterbody -> burned
+    #   WB 20 (COMID 20) — Playa, force-dprst FTYPE -> must be dropped
+    gdf = gpd.GeoDataFrame(
+        {
+            "COMID": [10, 20],
+            "member_comid": ["10", "20"],
+            "FTYPE": ["LakePond", "Playa"],
+        },
+        geometry=[
+            box(0, 270, 60, 300),    # top-left 2x2: cells [0,0],[0,1],[1,0],[1,1]
+            box(240, 0, 300, 30),    # bottom-right 2x2: cells [8,8],[8,9],[9,8],[9,9]
+        ],
+        crs="EPSG:5070",
+    )
+    gdf.to_file(wb_gpkg, layer="waterbodies", driver="GPKG")
+    pd.DataFrame({"comid": pd.array([10, 20], dtype="int64")}).to_parquet(
+        connected_table, index=False
+    )
+
+    ctx = BuildContext(
+        fabric="t", template_path=template, output_dir=tmp_path,
+        hru_gpkg=wb_gpkg, hru_layer="waterbodies",
+        waterbody_gpkg=wb_gpkg, waterbody_layer="waterbodies",
+        connected_comids_table=connected_table,
+    )
+    ctx.paths["landmask"] = landmask
+
+    produced = wbody_connectivity.build(
+        {"output": "connected_wbody.tif"}, ctx, logging.getLogger("test")
+    )
+
+    with rasterio.open(produced["connected_wbody"]) as src:
+        arr = src.read(1)
+
+    assert arr[0, 0] == 1     # WB 10 (LakePond) burned
+    assert arr[9, 9] != 1     # WB 20 (Playa) NOT burned despite WBAREACOMI connection
+
+
 def test_wbody_connectivity_flowthrough_none_is_silent_noop(tmp_path):
     """When flowthrough_comids_table is None, build() must succeed without error."""
     from shapely.geometry import box
