@@ -17,6 +17,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import geopandas as gpd
+import pandas as pd
 import pyogrio
 import shapely
 from shapely.geometry import Point
@@ -38,8 +39,6 @@ CONVEYANCE_AREA_FTYPES = {"StreamRiver"}
 # Endorheic guardrail: these never get promoted out of dprst, regardless of
 # topology (and FLOWDIR is unreliable around them).
 FORCE_DPRST_FTYPES = {"Playa", "Ice Mass"}
-
-_DIGITIZED = "With Digitized"  # FLOWDIR value where geometry direction is trusted
 
 
 def _endpoints(geom):
@@ -63,18 +62,21 @@ def flowthrough_comids(
     waterbodies: gpd.GeoDataFrame,
     flowlines: gpd.GeoDataFrame,
     areas: gpd.GeoDataFrame | None = None,
+    routed_comids: set[int] | None = None,
 ) -> set[int]:
     """COMIDs of waterbodies classified on-stream by flow-through topology.
 
-    `waterbodies`: polygons with COMID, FTYPE. `flowlines`: lines with FTYPE,
-    FLOWDIR. `areas`: optional NHDArea polygons with FTYPE. All share one CRS.
+    `waterbodies`: polygons with COMID, FTYPE. `flowlines`: lines with COMID,
+    FTYPE, FLOWDIR. `areas`: optional NHDArea polygons with FTYPE. All share
+    one CRS.
 
     A waterbody is on-stream if ANY of:
       T1  a single conveyance flowline flows through it: crosses the boundary
           >= 2 times, OR has non-zero interior length with both endpoints
           outside the polygon (so it must enter and exit),
-      T2  it has >= 1 inflow (a 'With Digitized' conveyance line whose
-          downstream end is inside) AND >= 1 outflow (upstream end inside),
+      D1  a routed-network conveyance flowline (in flowline_topology with
+          DnHydroseq != 0) has its UPSTREAM end inside the waterbody -> it
+          discharges to the network (source lake or split-pass-through outflow),
       T3  it overlaps a conveyance NHDArea polygon.
     Playa / Ice Mass waterbodies are dropped first and never returned.
     """
@@ -127,20 +129,23 @@ def flowthrough_comids(
                     and line.intersection(poly).length > 0:
                 t1_idx.add(int(wbidx))
 
-        # --- T2: inflow endpoint AND outflow endpoint, trusting digitization ---
-        has_inflow: set[int] = set()
-        has_outflow: set[int] = set()
-        dig = pairs[pairs["FLOWDIR"] == _DIGITIZED]
-        for line_pos, wbidx in zip(dig.index, dig["_wbidx"]):
-            up, down = _endpoints(conv.geometry.iloc[line_pos])
-            poly = wb.geometry.iloc[wbidx]
-            if poly.covers(down):   # downstream end inside -> water flows IN
-                has_inflow.add(int(wbidx))
-            if poly.covers(up):     # upstream end inside -> water flows OUT
-                has_outflow.add(int(wbidx))
-        t2_idx = has_inflow & has_outflow
+        # --- D1: routed network outflow (authoritative direction via topology) ---
+        # A routed conveyance flowline whose UPSTREAM end is inside W discharges
+        # out of W: a source/headwater lake, or the outflow half of a stream NHD
+        # split at the shore. NHDPlus network flowlines are digitized downstream,
+        # so the first vertex (_endpoints[0]) is the upstream end. Direction is
+        # taken from topology membership, never the unreliable FLOWDIR field.
+        d1_idx: set[int] = set()
+        routed = routed_comids or set()
+        if routed:
+            for line_pos, wbidx in zip(pairs.index, pairs["_wbidx"]):
+                if int(conv["COMID"].iloc[line_pos]) not in routed:
+                    continue
+                up, _ = _endpoints(conv.geometry.iloc[line_pos])
+                if wb.geometry.iloc[wbidx].covers(up):
+                    d1_idx.add(int(wbidx))
 
-        for wbidx in t1_idx | t2_idx:
+        for wbidx in t1_idx | d1_idx:
             onstream.add(int(wb.loc[wbidx, "COMID"]))
 
     # --- T3: overlap a conveyance NHDArea polygon ---
@@ -196,6 +201,16 @@ def main() -> None:
     download_dir.mkdir(parents=True, exist_ok=True)
     extract_dir.mkdir(parents=True, exist_ok=True)
 
+    topo_path = data_root / "input/nhd/flowline_topology.parquet"
+    if not topo_path.exists():
+        raise FileNotFoundError(
+            f"flowline_topology.parquet not found: {topo_path}. Run "
+            f"`python -m gfv2_params.download.nhd_topology` first."
+        )
+    topo = pd.read_parquet(topo_path, columns=["comid", "dnhydroseq"])
+    routed_comids = {int(c) for c in topo[topo["dnhydroseq"] != 0]["comid"]}
+    logger.info(f"Loaded {len(routed_comids)} routed-network COMIDs")
+
     onstream: set[int] = set()
     failures = []
     for vpu, dd in vpu_index.items():
@@ -208,10 +223,10 @@ def main() -> None:
             failures.append(vpu)
             continue
         waterbodies = read_layer(wb_path, ["COMID", "FTYPE"])
-        flowlines = read_layer(flowline, ["FTYPE", "FLOWDIR"])
+        flowlines = read_layer(flowline, ["COMID", "FTYPE", "FLOWDIR"])
         area_path = locate_layer(flowline, "NHDArea")
         areas = read_layer(area_path, ["FTYPE"]) if area_path else None
-        vpu_set = flowthrough_comids(waterbodies, flowlines, areas)
+        vpu_set = flowthrough_comids(waterbodies, flowlines, areas, routed_comids)
         if not vpu_set:
             logger.warning(
                 "VPU %s: 0 flow-through COMIDs — check FTYPE/FLOWDIR domain values "

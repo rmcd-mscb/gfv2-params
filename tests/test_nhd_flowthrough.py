@@ -21,13 +21,33 @@ def _wb(rows):
 
 
 def _fl(rows):
+    # rows are [FTYPE, FLOWDIR, geometry]; assign synthetic COMIDs 9001.. so the
+    # frame carries the COMID column D1 joins against routed_comids on.
+    out = [[9001 + i, *r] for i, r in enumerate(rows)]
     return gpd.GeoDataFrame(
-        rows, columns=["FTYPE", "FLOWDIR", "geometry"], crs=CRS
+        out, columns=["COMID", "FTYPE", "FLOWDIR", "geometry"], crs=CRS
     )
 
 
 # A unit square waterbody centred near (0,0)..(2,2).
 SQUARE = Polygon([(0, 0), (2, 0), (2, 2), (0, 2)])
+
+
+def test_source_lake_routed_outflow_is_onstream():
+    # D1: a headwater line whose UPSTREAM end is inside W, present in the routed
+    # network (DnHydroseq != 0), promotes W even with no inflow (the VPU 14
+    # COMID 16969532 case). The line is COMID 9001 (first _fl row).
+    wb = _wb([[201, "LakePond", SQUARE]])
+    fl = _fl([["StreamRiver", "Uninitialized", LineString([(1, 1), (3, 1)])]])
+    assert flowthrough_comids(wb, fl, routed_comids={9001}) == {201}
+
+
+def test_outflow_only_non_network_stays_dprst():
+    # Same geometry but the outflow line is NOT in the routed network -> a local
+    # spill, not a source lake -> stays dprst.
+    wb = _wb([[202, "LakePond", SQUARE]])
+    fl = _fl([["StreamRiver", "Uninitialized", LineString([(1, 1), (3, 1)])]])
+    assert flowthrough_comids(wb, fl, routed_comids=set()) == set()
 
 
 def test_single_line_passes_through_is_onstream():
@@ -52,28 +72,22 @@ def test_throughflow_running_along_boundary_is_onstream():
 
 
 def test_split_inflow_and_outflow_is_onstream():
-    # T2: line A ends inside (inflow), line B starts inside (outflow); neither
-    # alone crosses twice, but together they pair to flow-through.
+    # Split pass-through: line A ends inside (inflow), line B starts inside
+    # (outflow). D1 promotes via B's upstream-inside end when B is routed.
     wb = _wb([[102, "SwampMarsh", SQUARE]])
     fl = _fl([
-        ["StreamRiver", "With Digitized", LineString([(-1, 1), (1, 1)])],  # downstream end inside -> inflow
-        ["StreamRiver", "With Digitized", LineString([(1, 1), (3, 1)])],   # upstream end inside -> outflow
+        ["StreamRiver", "With Digitized", LineString([(-1, 1), (1, 1)])],
+        ["StreamRiver", "With Digitized", LineString([(1, 1), (3, 1)])],
     ])
-    assert flowthrough_comids(wb, fl) == {102}
+    assert flowthrough_comids(wb, fl, routed_comids={9002}) == {102}
 
 
 def test_terminal_sink_inflow_only_stays_dprst():
-    # Inflow only (line ends inside, nothing leaves) -> NOT promoted.
+    # Inflow only (downstream end inside); upstream end outside -> D1 false even
+    # when routed -> stays dprst. Endorheic terminal-sink guardrail.
     wb = _wb([[103, "LakePond", SQUARE]])
     fl = _fl([["StreamRiver", "With Digitized", LineString([(-1, 1), (1, 1)])]])
-    assert flowthrough_comids(wb, fl) == set()
-
-
-def test_spilling_pothole_outflow_only_stays_dprst():
-    # Outflow only (line starts inside, nothing enters) -> NOT promoted.
-    wb = _wb([[104, "SwampMarsh", SQUARE]])
-    fl = _fl([["StreamRiver", "With Digitized", LineString([(1, 1), (3, 1)])]])
-    assert flowthrough_comids(wb, fl) == set()
+    assert flowthrough_comids(wb, fl, routed_comids={9001}) == set()
 
 
 def test_isolated_waterbody_stays_dprst():
@@ -109,15 +123,15 @@ def test_uninitialized_flowdir_still_caught_by_t1():
     assert flowthrough_comids(wb, fl) == {109}
 
 
-def test_uninitialized_split_pair_not_paired_by_t2():
-    # Two separate Uninitialized lines (one ends inside, one starts inside):
-    # T2 must NOT trust their direction, so they don't pair -> stays dprst.
+def test_split_pair_not_in_routed_network_stays_dprst():
+    # Two split lines, neither in the routed network -> no D1 promotion -> dprst.
+    # (Direction/FLOWDIR is now irrelevant; network membership decides.)
     wb = _wb([[110, "SwampMarsh", SQUARE]])
     fl = _fl([
         ["StreamRiver", "Uninitialized", LineString([(-1, 1), (1, 1)])],
         ["StreamRiver", "Uninitialized", LineString([(1, 1), (3, 1)])],
     ])
-    assert flowthrough_comids(wb, fl) == set()
+    assert flowthrough_comids(wb, fl, routed_comids=set()) == set()
 
 
 def test_nhdarea_coincidence_is_onstream():
