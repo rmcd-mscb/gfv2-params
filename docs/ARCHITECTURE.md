@@ -192,6 +192,16 @@ These are hard-won; violating them silently corrupts outputs.
   [`docs/superpowers/specs/2026-06-29-depression-respecting-fdr-design.md`](superpowers/specs/2026-06-29-depression-respecting-fdr-design.md)
   and the A/B runbook in `slurm_batch/HPC_REFERENCE.md`
   ("§ #147 depression-respecting FDR A/B").
+- **On-stream waterbodies are traversal barriers in `routing`.** The `routing`
+  step also consumes `onstream_binary.tif` (emitted by the `dprst` step): a
+  cell is `drains_to_dprst` only if its D8 flow path reaches a
+  depression-storage pour-point **before** it reaches any on-stream waterbody
+  cell — traversal stops at the first waterbody on the path. This makes
+  `drains_to_dprst` a strict subtraction from the pre-barrier behavior
+  (coverage can only decrease, never increase): land upslope of an on-stream
+  lake or reservoir is captured by that waterbody's stream/lake routing, not
+  a downstream depression. Playas need no special handling — they are
+  classified `dprst`, never `onstream`, so they are never barriers.
 - **Land masking.** Every depstor raster is masked against `land_mask.tif`
   (the HRU fabric rasterised by the `landmask` step). Never use hydro-DEM
   nodata or FDR as a land mask.
