@@ -25,41 +25,88 @@ def _make_tif(path: Path, data: np.ndarray, nodata: float = -9999.0) -> None:
     del ds
 
 
-class TestFillMask:
-    """Verify fill_mask = (copernicus != nodata) & (nhdplus == nodata)."""
+def _make_mask_tif(path: Path, mask: np.ndarray) -> None:
+    """Create a UInt8 mask GeoTIFF (1 = fill zone) on the standard test grid."""
+    rows, cols = mask.shape
+    driver = gdal.GetDriverByName("GTiff")
+    ds = driver.Create(str(path), cols, rows, 1, gdal.GDT_Byte)
+    ds.SetGeoTransform([0, 30, 0, 0, 0, -30])
+    srs = osr.SpatialReference()
+    srs.ImportFromEPSG(5070)
+    ds.SetProjection(srs.ExportToWkt())
+    ds.GetRasterBand(1).WriteArray(mask.astype(np.uint8))
+    ds.FlushCache()
+    del ds
 
-    def test_fill_mask_basic(self):
-        """Fill mask should be True only where Copernicus has data and NHDPlus does not."""
-        nodata = -9999.0
-        copernicus = np.array([[nodata, 500.0], [600.0, 700.0]])
-        nhdplus = np.array([[100.0, 200.0], [nodata, nodata]])
 
-        fill_mask = (copernicus != nodata) & (nhdplus == nodata)
+def _read(path: Path) -> np.ndarray:
+    ds = gdal.Open(str(path))
+    arr = ds.GetRasterBand(1).ReadAsArray()
+    del ds
+    return arr
 
-        assert not fill_mask[0, 0]
-        assert not fill_mask[0, 1]
-        assert fill_mask[1, 0]
-        assert fill_mask[1, 1]
 
-    def test_masked_slope_retains_only_fill_zone(self):
-        """After masking, slope values should only exist in the fill zone."""
-        nodata = -9999.0
-        copernicus = np.array([[nodata, 500.0], [600.0, 700.0]])
-        nhdplus = np.array([[100.0, 200.0], [nodata, nodata]])
-        raw_slope = np.array([[5.0, 10.0], [15.0, 20.0]])
+class TestWriteFillMask:
+    """_write_fill_mask streams a UInt8 fill-zone raster (1 where Copernicus has
+    data AND NHDPlus is nodata) instead of holding full-extent arrays in memory
+    (the previous _compute_fill_mask OOM'd at CONUS scale). See issue: the
+    2x full-extent gdal.Warp-to-MEM needed ~560 GB > the 503 GB node."""
 
-        fill_mask = (copernicus != nodata) & (nhdplus == nodata)
-        masked_slope = np.where(fill_mask, raw_slope, nodata)
+    def test_fill_zone_values(self, tmp_path):
+        from gfv2_params.shared_rasters import build_border_dem as bbd
 
-        assert masked_slope[0, 0] == nodata
-        assert masked_slope[0, 1] == nodata
-        assert masked_slope[1, 0] == 15.0
-        assert masked_slope[1, 1] == 20.0
+        nd = -9999.0
+        cop = np.array([[nd, 500.0], [600.0, 700.0]], dtype=np.float32)
+        nhd = np.array([[100.0, 200.0], [nd, nd]], dtype=np.float32)
+        _make_tif(tmp_path / "cop.tif", cop)
+        _make_tif(tmp_path / "nhd.tif", nhd)
+        _make_tif(tmp_path / "ref.tif", np.zeros((2, 2), dtype=np.float32))
+        mask_out = tmp_path / "mask.tif"
+
+        bbd._write_fill_mask(
+            tmp_path / "cop.tif", tmp_path / "nhd.tif", tmp_path / "ref.tif", mask_out,
+        )
+
+        # fill zone = Copernicus has data AND NHDPlus is nodata -> row 1 only
+        np.testing.assert_array_equal(
+            _read(mask_out), np.array([[0, 0], [1, 1]], dtype=np.uint8),
+        )
+
+    def test_streaming_multi_strip_matches_naive(self, tmp_path):
+        """With STRIP_ROWS forced small, the streamed mask must equal the naive
+        full-array computation across strip boundaries."""
+        from gfv2_params.shared_rasters import build_border_dem as bbd
+
+        nd = -9999.0
+        cop = np.full((6, 4), 100.0, dtype=np.float32)
+        cop[0, :] = nd
+        cop[3, 1] = nd
+        nhd = np.full((6, 4), nd, dtype=np.float32)
+        nhd[4, :] = 5.0
+        nhd[0, 0] = 5.0
+        expected = ((cop != nd) & (nhd == nd)).astype(np.uint8)
+
+        _make_tif(tmp_path / "cop.tif", cop)
+        _make_tif(tmp_path / "nhd.tif", nhd)
+        _make_tif(tmp_path / "ref.tif", np.zeros((6, 4), dtype=np.float32))
+        mask_out = tmp_path / "mask.tif"
+
+        orig = bbd.STRIP_ROWS
+        try:
+            bbd.STRIP_ROWS = 2  # 3 strips over 6 rows
+            bbd._write_fill_mask(
+                tmp_path / "cop.tif", tmp_path / "nhd.tif", tmp_path / "ref.tif", mask_out,
+            )
+        finally:
+            bbd.STRIP_ROWS = orig
+
+        np.testing.assert_array_equal(_read(mask_out), expected)
 
 
 class TestApplyFillMaskCog:
-    """The masked slope/aspect fill tiles feed the slope/aspect VRTs and must
-    be COGs (tiled 512 + overviews + ZSTD/pred3), like the per-VPU outputs."""
+    """_apply_fill_mask stream-applies a mask RASTER to a raw slope/aspect tile
+    and writes a COG (tiled 512 + overviews + ZSTD/pred3), windowed to avoid
+    loading the full-extent raw into memory."""
 
     def _meta(self, path):
         ds = gdal.Open(str(path))
@@ -80,9 +127,10 @@ class TestApplyFillMaskCog:
         from gfv2_params.shared_rasters.build_border_dem import _apply_fill_mask
 
         raw = tmp_path / "slope_raw.tif"
+        mask = tmp_path / "mask.tif"
         out = tmp_path / "slope.tif"
         _make_tif(raw, np.full((1024, 1024), 7.5, dtype=np.float32))
-        mask = np.ones((1024, 1024), dtype=bool)
+        _make_mask_tif(mask, np.ones((1024, 1024), dtype=np.uint8))
 
         _apply_fill_mask(raw, mask, out, overview_resampling="BILINEAR")
 
@@ -98,13 +146,41 @@ class TestApplyFillMaskCog:
         from gfv2_params.shared_rasters.build_border_dem import _apply_fill_mask
 
         raw = tmp_path / "aspect_raw.tif"
+        mask = tmp_path / "mask.tif"
         out = tmp_path / "aspect.tif"
         _make_tif(raw, np.full((1024, 1024), 180.0, dtype=np.float32))
-        mask = np.ones((1024, 1024), dtype=bool)
+        _make_mask_tif(mask, np.ones((1024, 1024), dtype=np.uint8))
 
         _apply_fill_mask(raw, mask, out, overview_resampling="NEAREST")
 
         assert self._meta(out)["overview_resampling"] == "NEAREST"
+
+    def test_masked_values_multi_strip(self, tmp_path):
+        """Windowed apply must keep raw values in the fill zone and write nodata
+        elsewhere, correctly across strip boundaries."""
+        from gfv2_params.shared_rasters import build_border_dem as bbd
+
+        raw = np.arange(24, dtype=np.float32).reshape(6, 4)
+        mask = np.zeros((6, 4), dtype=np.uint8)
+        mask[1, 1] = 1
+        mask[4, 3] = 1  # in different strips (STRIP_ROWS=2)
+        _make_tif(tmp_path / "raw.tif", raw)
+        _make_mask_tif(tmp_path / "mask.tif", mask)
+        out = tmp_path / "out.tif"
+
+        orig = bbd.STRIP_ROWS
+        try:
+            bbd.STRIP_ROWS = 2
+            bbd._apply_fill_mask(
+                tmp_path / "raw.tif", tmp_path / "mask.tif", out,
+                overview_resampling="BILINEAR",
+            )
+        finally:
+            bbd.STRIP_ROWS = orig
+
+        result = _read(out)
+        expected = np.where(mask.astype(bool), raw, np.float32(-9999.0))
+        np.testing.assert_array_equal(result, expected)
 
 
 class TestCompositeVrtOrdering:
