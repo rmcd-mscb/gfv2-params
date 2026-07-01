@@ -229,7 +229,7 @@ These are hard-won; violating them silently corrupts outputs.
   `dprst` and downstream builders are unchanged consumers — they see a larger
   on-stream set with no code change.
 - **`flowline_topology.parquet`** — distilled NHDPlus PlusFlowlineVAA (COMID,
-  DnHydroseq, Hydroseq, TerminalFl, StartFlag, StreamOrde). Staged by
+  DnHydroseq, Hydroseq, TerminalFl, StartFlag, StreamOrde, FromNode, ToNode). Staged by
   `download/nhd_topology.py`; consumed by `download/nhd_flowthrough.py` (rule
   D1, routed-network outflow). Hardcoded data_root-relative, no config key —
   `nhd_topology.py` must run before `nhd_flowthrough.py` (which fails loud if
