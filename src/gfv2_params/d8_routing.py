@@ -8,7 +8,12 @@ docs/superpowers/specs/2026-05-29-depstor-d8-routing-kernel-design.md).
 `drains_to_dprst_kernel` answers, for every cell: does following the ESRI-D8
 flow pointer downstream eventually reach a depression pour-point? It is the
 upslope contributing area of the pour-point set on a functional (out-degree-1)
-flow graph — a textbook O(N) traversal.
+flow graph — a textbook O(N) traversal. Pour-point (dprst) cells seed as
+draining; barrier cells (on-stream waterbodies) seed as non-draining termini,
+so a flow path that reaches a barrier before a pour stops there and its
+upslope land is not attributed to a downstream depression — the first
+waterbody on the flow path wins (dprst wins any impossible-by-construction
+overlap with a barrier).
 
 `drains_to_dprst_labeled_kernel` extends this to per-depression attribution:
 each cell receives the label of the specific depression its D8 path reaches,
@@ -32,6 +37,119 @@ _UNKNOWN = 0
 _DRAINS = 1
 _NOT = 2
 _ACTIVE = 3  # currently on the path being walked (detects cycles)
+
+
+@njit(cache=True)
+def _resolve(fdr, pour, barrier, fdr_nodata):
+    ny, nx = fdr.shape
+    st = np.zeros((ny, nx), dtype=np.uint8)
+
+    # Seed: every pour-point cell drains (to itself / the depression).
+    for r in range(ny):
+        for c in range(nx):
+            if pour[r, c] == 1:
+                st[r, c] = _DRAINS
+
+    # Seed barriers as non-draining termini (on-stream waterbodies). A flow
+    # path that reaches a barrier before a pour resolves _NOT and stops there,
+    # so its upslope land is not attributed to a downstream depression. dprst
+    # wins any overlap (disjoint by construction; only seed still-_UNKNOWN cells).
+    for r in range(ny):
+        for c in range(nx):
+            if barrier[r, c] == 1 and st[r, c] == _UNKNOWN:
+                st[r, c] = _NOT
+
+    cap = 1 << 20
+    stack_r = np.empty(cap, dtype=np.int64)
+    stack_c = np.empty(cap, dtype=np.int64)
+    n_cycles = 0
+
+    for sr in range(ny):
+        for sc in range(nx):
+            if st[sr, sc] != _UNKNOWN:
+                continue
+            n = 0
+            cr = sr
+            cc = sc
+            result = _NOT
+            while True:
+                s = st[cr, cc]
+                if s == _DRAINS:
+                    result = _DRAINS
+                    break
+                if s == _NOT:
+                    result = _NOT
+                    break
+                if s == _ACTIVE:
+                    n_cycles += 1
+                    result = _NOT
+                    break
+
+                st[cr, cc] = _ACTIVE
+                if n >= cap:
+                    new_cap = cap * 2
+                    nr_ = np.empty(new_cap, dtype=np.int64)
+                    nc_ = np.empty(new_cap, dtype=np.int64)
+                    nr_[:cap] = stack_r
+                    nc_[:cap] = stack_c
+                    stack_r = nr_
+                    stack_c = nc_
+                    cap = new_cap
+                stack_r[n] = cr
+                stack_c[n] = cc
+                n += 1
+
+                code = fdr[cr, cc]
+                if code == fdr_nodata:
+                    result = _NOT
+                    break
+                if code == 1:
+                    dr = 0
+                    dc = 1
+                elif code == 2:
+                    dr = 1
+                    dc = 1
+                elif code == 4:
+                    dr = 1
+                    dc = 0
+                elif code == 8:
+                    dr = 1
+                    dc = -1
+                elif code == 16:
+                    dr = 0
+                    dc = -1
+                elif code == 32:
+                    dr = -1
+                    dc = -1
+                elif code == 64:
+                    dr = -1
+                    dc = 0
+                elif code == 128:
+                    dr = -1
+                    dc = 1
+                else:
+                    result = _NOT
+                    break
+
+                nr2 = cr + dr
+                nc2 = cc + dc
+                if nr2 < 0 or nr2 >= ny or nc2 < 0 or nc2 >= nx:
+                    result = _NOT
+                    break
+                cr = nr2
+                cc = nc2
+
+            for i in range(n):
+                rr = stack_r[i]
+                ric = stack_c[i]
+                st[rr, ric] = result
+
+    out = np.zeros((ny, nx), dtype=np.uint8)
+    for r in range(ny):
+        for c in range(nx):
+            if st[r, c] == _DRAINS:
+                out[r, c] = 1
+    return out, n_cycles
 
 
 @njit(cache=True)
@@ -144,8 +262,16 @@ def _resolve_labeled(fdr, label, fdr_nodata):
     return out, n_cycles
 
 
-def drains_to_dprst_kernel(fdr_win, pour_win, fdr_nodata=255):
+def drains_to_dprst_kernel(fdr_win, pour_win, barrier_win, fdr_nodata=255):
     """Mark cells whose ESRI-D8 path reaches a depression pour-point.
+
+    Pour-point (dprst) cells seed as draining (`_DRAINS`); barrier cells
+    (on-stream waterbodies) seed as non-draining termini (`_NOT`). A flow path
+    that reaches a barrier before it reaches a pour stops there and is marked
+    non-draining, so land upslope of an on-stream waterbody is not attributed
+    to a downstream depression — the first waterbody on the flow path wins.
+    dprst wins on any (impossible-by-construction) overlap between the two
+    masks.
 
     Parameters
     ----------
@@ -154,6 +280,9 @@ def drains_to_dprst_kernel(fdr_win, pour_win, fdr_nodata=255):
         flow directions; `fdr_nodata` and any other value terminate as sinks.
     pour_win : ndarray[uint8]
         Pour-point mask: 1 = depression cell, 0 = background.
+    barrier_win : ndarray[uint8]
+        Barrier mask, same shape as `fdr_win`/`pour_win`: 1 = barrier cell
+        (on-stream waterbody), 0 = background. Required.
     fdr_nodata : int, default 255
         FDR nodata value (treated as a sink).
 
@@ -168,13 +297,10 @@ def drains_to_dprst_kernel(fdr_win, pour_win, fdr_nodata=255):
         its cells are resolved as non-draining. A non-zero count is worth a
         warning at the call site.
     """
-    # Delegate to the labeled kernel: every pour-point is one depression
-    # labeled 1, so "reaches any pour-point" is "reaches label 1".
     fdr = np.ascontiguousarray(fdr_win, dtype=np.uint8)
     pour = np.ascontiguousarray(pour_win, dtype=np.uint8)
-    label = (pour == 1).astype(np.int32)
-    labeled, n_cycles = _resolve_labeled(fdr, label, np.uint8(fdr_nodata))
-    return (labeled > 0).astype(np.uint8), n_cycles
+    barrier = np.ascontiguousarray(barrier_win, dtype=np.uint8)
+    return _resolve(fdr, pour, barrier, np.uint8(fdr_nodata))
 
 
 def drains_to_dprst_labeled_kernel(fdr_win, label_win, fdr_nodata=255):
