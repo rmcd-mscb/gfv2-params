@@ -4,9 +4,12 @@ WBAREACOMI (see nhd_flowlines) only flags waterbodies NHD drew an artificial
 path through. Many through-flow swamps/marshes carry no WBAREACOMI and are
 wrongly left in depression storage, so their whole upstream watershed counts as
 draining to dprst. This module adds a second, geometry-based on-stream signal:
-a waterbody that a stream demonstrably flows THROUGH (channel inflow AND
-outflow) is on-stream/lake, not a depression. Endorheic terminal sinks (Playa,
-Ice Mass) are force-kept as dprst.
+a waterbody is on-stream/lake, not a depression, if a stream demonstrably flows
+THROUGH it (channel inflow AND outflow), or if it discharges to the routed
+network even without inflow (a source/headwater lake). Playa (an endorheic
+terminal sink) is force-kept as dprst; Ice Mass is not depression storage at
+all and is excluded from the waterbody classification entirely (at the
+`waterbody` builder), so it is neither dprst nor on-stream.
 
 The COMID set written here is unioned with connected_waterbody_comids.parquet by
 the depstor wbody_connectivity builder.
@@ -17,6 +20,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import geopandas as gpd
+import pandas as pd
 import pyogrio
 import shapely
 from shapely.geometry import Point
@@ -28,6 +32,7 @@ from gfv2_params.download.nhd_flowlines import (
     write_connected_comids,
 )
 from gfv2_params.log import configure_logging
+from gfv2_params.nhd_ftypes import NEVER_ONSTREAM_FTYPES
 
 logger = configure_logging("download_nhd_flowthrough")
 
@@ -35,11 +40,6 @@ logger = configure_logging("download_nhd_flowthrough")
 CONVEYANCE_FTYPES = {"StreamRiver", "ArtificialPath", "Connector", "CanalDitch"}
 # NHDArea polygons that ARE the 2-D channel (wide/braided rivers).
 CONVEYANCE_AREA_FTYPES = {"StreamRiver"}
-# Endorheic guardrail: these never get promoted out of dprst, regardless of
-# topology (and FLOWDIR is unreliable around them).
-FORCE_DPRST_FTYPES = {"Playa", "Ice Mass"}
-
-_DIGITIZED = "With Digitized"  # FLOWDIR value where geometry direction is trusted
 
 
 def _endpoints(geom):
@@ -63,20 +63,30 @@ def flowthrough_comids(
     waterbodies: gpd.GeoDataFrame,
     flowlines: gpd.GeoDataFrame,
     areas: gpd.GeoDataFrame | None = None,
+    routed_comids: set[int] | None = None,
 ) -> set[int]:
     """COMIDs of waterbodies classified on-stream by flow-through topology.
 
-    `waterbodies`: polygons with COMID, FTYPE. `flowlines`: lines with FTYPE,
-    FLOWDIR. `areas`: optional NHDArea polygons with FTYPE. All share one CRS.
+    `waterbodies`: polygons with COMID, FTYPE. `flowlines`: lines with COMID,
+    FTYPE (direction now comes from `routed_comids`/topology, so FLOWDIR is no
+    longer read). `areas`: optional NHDArea polygons with FTYPE. All share one
+    CRS.
 
     A waterbody is on-stream if ANY of:
-      T1  a single conveyance flowline crosses its boundary >= 2 times,
-      T2  it has >= 1 inflow (a 'With Digitized' conveyance line whose
-          downstream end is inside) AND >= 1 outflow (upstream end inside),
+      T1  a single conveyance flowline flows through it: crosses the boundary
+          >= 2 times, OR has non-zero interior length with both endpoints
+          outside the polygon (so it must enter and exit),
+      D1  a routed-network conveyance flowline (in flowline_topology with
+          DnHydroseq != 0) has its UPSTREAM end inside the waterbody -> it
+          discharges to the network (source lake or split-pass-through outflow),
       T3  it overlaps a conveyance NHDArea polygon.
-    Playa / Ice Mass waterbodies are dropped first and never returned.
+    Playa (force-dprst) and Ice Mass (excluded from the waterbody classification
+    entirely) are both dropped first and never returned.
+
+    When `routed_comids` is omitted or empty, D1 is inert (no waterbody can be
+    promoted by it) and only T1/T3 apply.
     """
-    wb = waterbodies[~waterbodies["FTYPE"].isin(FORCE_DPRST_FTYPES)].copy()
+    wb = waterbodies[~waterbodies["FTYPE"].isin(NEVER_ONSTREAM_FTYPES)].copy()
     if wb.empty:
         return set()
     wb = wb.reset_index(drop=True)
@@ -89,37 +99,64 @@ def flowthrough_comids(
         conv = conv.reset_index(drop=True)
         # Candidate (waterbody, flowline) pairs that intersect at all.
         pairs = gpd.sjoin(
-            conv[["FTYPE", "FLOWDIR", "geometry"]],
+            conv[["FTYPE", "geometry"]],
             wb[["_wbidx", "geometry"]],
             how="inner", predicate="intersects",
         )
 
-        # --- T1: a single line crosses the boundary >= 2 times ---
+        # --- T1: a single conveyance line flows through the waterbody ---
+        # Two complementary signals (either suffices), both direction-free:
+        #   (a) the line crosses the boundary >= 2 times, OR
+        #   (b) the line has non-zero interior length with BOTH endpoints outside
+        #       the polygon (it must therefore enter and exit -> flows through).
+        # (a) alone is fragile for sinuous lines that run ALONG the shoreline:
+        # those make `intersection(boundary)` a GeometryCollection (mixed Point +
+        # LineString), which is not a `Multi*` type, so the geom-count collapsed
+        # to 1 and real through-flow was missed (e.g. VPU 15 LakePond COMID
+        # 21744935, flowline 21745077). (b) catches that case topologically. (a)
+        # is retained because it also catches lines that cross >= 2 times but
+        # terminate INSIDE the polygon (endpoint covered), which (b) skips.
         t1_idx: set[int] = set()
         for line_pos, wbidx in zip(pairs.index, pairs["_wbidx"]):
             line = conv.geometry.iloc[line_pos]
             poly = wb.geometry.iloc[wbidx]
             crossing = line.intersection(poly.boundary)
+            # `geoms` exists on every multi-part/collection geometry (MultiPoint,
+            # MultiLineString, GeometryCollection); a lone Point/LineString has no
+            # `.geoms` and counts as a single crossing.
             n = 0 if crossing.is_empty else (
-                len(crossing.geoms) if crossing.geom_type.startswith("Multi") else 1
+                len(crossing.geoms) if hasattr(crossing, "geoms") else 1
             )
             if n >= 2:
                 t1_idx.add(int(wbidx))
+                continue
+            up, down = _endpoints(line)
+            if (not poly.covers(up)) and (not poly.covers(down)) \
+                    and line.intersection(poly).length > 0:
+                t1_idx.add(int(wbidx))
 
-        # --- T2: inflow endpoint AND outflow endpoint, trusting digitization ---
-        has_inflow: set[int] = set()
-        has_outflow: set[int] = set()
-        dig = pairs[pairs["FLOWDIR"] == _DIGITIZED]
-        for line_pos, wbidx in zip(dig.index, dig["_wbidx"]):
-            up, down = _endpoints(conv.geometry.iloc[line_pos])
-            poly = wb.geometry.iloc[wbidx]
-            if poly.covers(down):   # downstream end inside -> water flows IN
-                has_inflow.add(int(wbidx))
-            if poly.covers(up):     # upstream end inside -> water flows OUT
-                has_outflow.add(int(wbidx))
-        t2_idx = has_inflow & has_outflow
+        # --- D1: routed network outflow (authoritative direction via topology) ---
+        # A routed conveyance flowline whose UPSTREAM end is inside W discharges
+        # out of W: a source/headwater lake, or the outflow half of a stream NHD
+        # split at the shore. NHDPlus network flowlines are digitized downstream,
+        # so the first vertex (_endpoints[0]) is the upstream end. Direction is
+        # taken from topology membership, never the unreliable FLOWDIR field.
+        d1_idx: set[int] = set()
+        routed = routed_comids or set()
+        logger.debug(
+            "D1 %s (%d routed-network COMID(s) supplied)",
+            "active" if routed else "inert — only T1/T3 apply",
+            len(routed),
+        )
+        if routed:
+            for line_pos, wbidx in zip(pairs.index, pairs["_wbidx"]):
+                if int(conv["COMID"].iloc[line_pos]) not in routed:
+                    continue
+                up, _ = _endpoints(conv.geometry.iloc[line_pos])
+                if wb.geometry.iloc[wbidx].covers(up):
+                    d1_idx.add(int(wbidx))
 
-        for wbidx in t1_idx | t2_idx:
+        for wbidx in t1_idx | d1_idx:
             onstream.add(int(wb.loc[wbidx, "COMID"]))
 
     # --- T3: overlap a conveyance NHDArea polygon ---
@@ -175,6 +212,16 @@ def main() -> None:
     download_dir.mkdir(parents=True, exist_ok=True)
     extract_dir.mkdir(parents=True, exist_ok=True)
 
+    topo_path = data_root / "input/nhd/flowline_topology.parquet"
+    if not topo_path.exists():
+        raise FileNotFoundError(
+            f"flowline_topology.parquet not found: {topo_path}. Run "
+            f"`python -m gfv2_params.download.nhd_topology` first."
+        )
+    topo = pd.read_parquet(topo_path, columns=["comid", "dnhydroseq"])
+    routed_comids = {int(c) for c in topo[topo["dnhydroseq"] != 0]["comid"]}
+    logger.info(f"Loaded {len(routed_comids)} routed-network COMIDs")
+
     onstream: set[int] = set()
     failures = []
     for vpu, dd in vpu_index.items():
@@ -187,13 +234,13 @@ def main() -> None:
             failures.append(vpu)
             continue
         waterbodies = read_layer(wb_path, ["COMID", "FTYPE"])
-        flowlines = read_layer(flowline, ["FTYPE", "FLOWDIR"])
+        flowlines = read_layer(flowline, ["COMID", "FTYPE"])
         area_path = locate_layer(flowline, "NHDArea")
         areas = read_layer(area_path, ["FTYPE"]) if area_path else None
-        vpu_set = flowthrough_comids(waterbodies, flowlines, areas)
+        vpu_set = flowthrough_comids(waterbodies, flowlines, areas, routed_comids)
         if not vpu_set:
             logger.warning(
-                "VPU %s: 0 flow-through COMIDs — check FTYPE/FLOWDIR domain values "
+                "VPU %s: 0 flow-through COMIDs — check FTYPE/topology domain values "
                 "in this snapshot (Playa/Ice Mass waterbodies are excluded by design).",
                 vpu,
             )
@@ -208,7 +255,7 @@ def main() -> None:
     if not onstream:
         raise ValueError(
             "distilled 0 on-stream COMIDs across all VPUs → every swamp/marsh "
-            "would stay in depression storage; likely an NHD FTYPE/FLOWDIR "
+            "would stay in depression storage; likely an NHD FTYPE/topology "
             "value-domain change or CRS/geometry problem"
         )
 

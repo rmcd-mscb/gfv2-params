@@ -68,7 +68,11 @@ These are hard-won; violating them silently corrupts outputs.
   `nhd_flowthrough`). A waterbody promoted by the flow-through test must have
   both inflow and outflow — terminal sinks (inflow only), locally-spilling
   potholes (outflow only), and isolated depressions stay dprst. Playa and Ice
-  Mass FTYPEs are a hard guardrail and are never promoted regardless. If
+  Mass FTYPEs are a hard guardrail and are never promoted on-stream regardless
+  — but they are not equivalent: Playa IS depression storage (force-dprst);
+  Ice Mass is NOT depression storage and is excluded from the waterbody
+  classification entirely (its cells fall back to land, perv/imperv via LULC)
+  at the `waterbody` builder, upstream of this union. If
   `drains_to_dprst` over-extends into humid open-drainage basins, fix the
   **classifier** (which waterbodies are on-stream) — never add a cap or tuning
   knob to routing. A cap cannot distinguish a legitimately large endorheic basin
