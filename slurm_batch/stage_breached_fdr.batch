@@ -1,0 +1,39 @@
+#!/bin/bash
+#SBATCH -p cpu
+#SBATCH -A impd
+#SBATCH --job-name=stage_breached_fdr
+#SBATCH --output=logs/job_%j.out
+#SBATCH --error=logs/job_%j.err
+#SBATCH --time=12:00:00
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=16
+#SBATCH --mem=96G
+
+# Stage the depression-respecting (breached) flow-direction raster for two
+# test VPUs (09, 16) — opt-in step for the #147 A/B investigation.
+#
+# compute_breached_fdr is registered in the shared-raster BUILDERS dict but
+# is NOT in the default steps list; it only runs when named explicitly via
+# --step.  Outputs: per_vpu/<vpu>/Fdr_breached_<vpu>.tif for each VPU.
+# After this job, run build_vrt (--step build_vrt) so fdr_breached.vrt is
+# updated.
+#
+# Memory: breach is computed per-VPU (not whole-CONUS), so 96G is sufficient
+# for VPU 09/16.  Raise to --mem=192G if WhiteboxTools OOMs on a larger VPU.
+#
+# Env knobs:
+#   VPUS=01,17     override the default VPU list (09,16)
+#   FORCE=1        rebuild outputs that already exist
+
+set -euo pipefail
+
+cd "$SLURM_SUBMIT_DIR"
+
+FORCE=${FORCE:+--force}
+VPUS_OVERRIDE=${VPUS:-09,16}
+
+pixi run --as-is python scripts/build_shared_rasters.py \
+    --config configs/shared_rasters/shared_rasters.yml \
+    --step compute_breached_fdr \
+    --vpus "$VPUS_OVERRIDE" \
+    $FORCE "$@"

@@ -1,6 +1,6 @@
 import numpy as np
 
-from scripts.diagnose_drains_to_dprst import vpu_coverage
+from scripts.diagnose.diagnose_drains_to_dprst import vpu_coverage
 
 
 def test_vpu_coverage_fraction_of_land():

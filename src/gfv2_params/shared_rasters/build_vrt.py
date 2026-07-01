@@ -19,11 +19,18 @@ discovered by globbing the per_vpu directory.
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 from osgeo import gdal, osr
 
 from .context import SharedRastersContext
+
+# VRT types that are opt-in (not produced by a normal build): absence of source
+# tiles is expected, so it is logged at INFO rather than surfacing as a warning
+# on every run. fdr_breached is the #147 depression-respecting FDR — only built
+# after the opt-in compute_breached_fdr step has staged Fdr_breached_*.tif.
+_OPTIONAL_TYPES = {"fdr_breached"}
 
 # Maps VRT name -> (glob pattern, srcNodata for BuildVRT).
 # srcNodata rationale:
@@ -46,6 +53,10 @@ RASTER_TYPES = {
     "slope":     ("NEDSnapshot_merged_slope_*.tif", "-9999"),
     "aspect":    ("NEDSnapshot_merged_aspect_*.tif", "-9999"),
     "fdr":       ("Fdr_merged_*.tif", "255"),
+    # Depression-respecting breached FDR (#147), opt-in additional artifact.
+    # Same Byte/nodata=255 ESRI-D8 convention as fdr; separate VRT so fabrics
+    # can opt in via fdr_raster without disturbing the production fdr.vrt.
+    "fdr_breached": ("Fdr_breached_*.tif", "255"),
     "twi":       ("Twi_merged_*.tif", "-9999"),
     # Open-source WhiteboxTools TWI (issue #94): CONUS-complete, drop-in grid
     # with fdr.vrt. Tiles report an "unnamed" Albers CRS, so the VRT must be
@@ -121,7 +132,11 @@ def build(step_cfg: dict, ctx: SharedRastersContext, logger) -> dict:
 
         source_files = fill_files + primary_files
         if not source_files:
-            logger.warning("No source files found for %s (pattern: */%s)", vrt_name, pattern)
+            # Opt-in types (e.g. fdr_breached) are legitimately absent from a
+            # normal build — keep those quiet so they don't read as an error.
+            level = logging.INFO if vrt_name in _OPTIONAL_TYPES else logging.WARNING
+            logger.log(level, "No source files found for %s (pattern: */%s) — skipping",
+                       vrt_name, pattern)
             continue
 
         vrt_path = vrt_dir / f"{vrt_name}.vrt"

@@ -10,6 +10,10 @@ flow pointer downstream eventually reach a depression pour-point? It is the
 upslope contributing area of the pour-point set on a functional (out-degree-1)
 flow graph — a textbook O(N) traversal.
 
+`drains_to_dprst_labeled_kernel` extends this to per-depression attribution:
+each cell receives the label of the specific depression its D8 path reaches,
+enabling per-depression contributing-area counts.
+
 This is the ONLY numba user in the package; it is deliberately isolated here so
 the widely-imported `depstor.py` stays numba-free.
 
@@ -31,24 +35,22 @@ _ACTIVE = 3  # currently on the path being walked (detects cycles)
 
 
 @njit(cache=True)
-def _resolve(fdr, pour, fdr_nodata):
+def _resolve_labeled(fdr, label, fdr_nodata):
     ny, nx = fdr.shape
     st = np.zeros((ny, nx), dtype=np.uint8)
+    lab = np.zeros((ny, nx), dtype=np.int32)
 
-    # Seed: every pour-point cell drains (to itself / the depression).
+    # Seed: each depression cell drains to its own label.
     for r in range(ny):
         for c in range(nx):
-            if pour[r, c] == 1:
+            if label[r, c] > 0:
                 st[r, c] = _DRAINS
+                lab[r, c] = label[r, c]
 
-    # Reusable path stack (flat r/c), grown on demand. Holds only the single
-    # downstream path currently being walked — bounded by the longest flow
-    # path, not by N — so it stays small (a few MB) in practice.
     cap = 1 << 20
     stack_r = np.empty(cap, dtype=np.int64)
     stack_c = np.empty(cap, dtype=np.int64)
-
-    n_cycles = 0  # flow cycles encountered (each marks its path non-draining)
+    n_cycles = 0
 
     for sr in range(ny):
         for sc in range(nx):
@@ -58,22 +60,21 @@ def _resolve(fdr, pour, fdr_nodata):
             cr = sr
             cc = sc
             result = _NOT
+            result_lab = 0
             while True:
                 s = st[cr, cc]
                 if s == _DRAINS:
                     result = _DRAINS
+                    result_lab = lab[cr, cc]
                     break
                 if s == _NOT:
                     result = _NOT
                     break
                 if s == _ACTIVE:
-                    # Re-entered the active path => cycle. It never reached a
-                    # pour point, so the whole path does not drain.
                     n_cycles += 1
                     result = _NOT
                     break
 
-                # Unknown: mark active and push onto the path.
                 st[cr, cc] = _ACTIVE
                 if n >= cap:
                     new_cap = cap * 2
@@ -117,27 +118,29 @@ def _resolve(fdr, pour, fdr_nodata):
                     dr = -1
                     dc = 1
                 else:
-                    # Any other value is a sink/terminus.
                     result = _NOT
                     break
 
                 nr2 = cr + dr
                 nc2 = cc + dc
                 if nr2 < 0 or nr2 >= ny or nc2 < 0 or nc2 >= nx:
-                    result = _NOT  # flows off the window
+                    result = _NOT
                     break
                 cr = nr2
                 cc = nc2
 
-            # Path compression: every cell on the path resolves to `result`.
             for i in range(n):
-                st[stack_r[i], stack_c[i]] = result
+                rr = stack_r[i]
+                ric = stack_c[i]
+                st[rr, ric] = result
+                if result == _DRAINS:
+                    lab[rr, ric] = result_lab
 
-    out = np.zeros((ny, nx), dtype=np.uint8)
+    out = np.zeros((ny, nx), dtype=np.int32)
     for r in range(ny):
         for c in range(nx):
             if st[r, c] == _DRAINS:
-                out[r, c] = 1
+                out[r, c] = lab[r, c]
     return out, n_cycles
 
 
@@ -165,6 +168,24 @@ def drains_to_dprst_kernel(fdr_win, pour_win, fdr_nodata=255):
         its cells are resolved as non-draining. A non-zero count is worth a
         warning at the call site.
     """
+    # Delegate to the labeled kernel: every pour-point is one depression
+    # labeled 1, so "reaches any pour-point" is "reaches label 1".
     fdr = np.ascontiguousarray(fdr_win, dtype=np.uint8)
     pour = np.ascontiguousarray(pour_win, dtype=np.uint8)
-    return _resolve(fdr, pour, np.uint8(fdr_nodata))
+    label = (pour == 1).astype(np.int32)
+    labeled, n_cycles = _resolve_labeled(fdr, label, np.uint8(fdr_nodata))
+    return (labeled > 0).astype(np.uint8), n_cycles
+
+
+def drains_to_dprst_labeled_kernel(fdr_win, label_win, fdr_nodata=255):
+    """Per-cell label of the depression its ESRI-D8 path reaches (0 = none).
+
+    Like ``drains_to_dprst_kernel`` but attributes each draining cell to a
+    specific depression. ``label_win`` carries each depression region's unique
+    positive id at its cells (0 background); the return holds that id for every
+    cell that drains there, enabling per-depression contributing-area counts via
+    ``np.bincount(out.ravel())``. Returns ``(out_int32, n_cycles)``.
+    """
+    fdr = np.ascontiguousarray(fdr_win, dtype=np.uint8)
+    label = np.ascontiguousarray(label_win, dtype=np.int32)
+    return _resolve_labeled(fdr, label, np.uint8(fdr_nodata))
