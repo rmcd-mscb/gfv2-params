@@ -4,11 +4,12 @@ WBAREACOMI (see nhd_flowlines) only flags waterbodies NHD drew an artificial
 path through. Many through-flow swamps/marshes carry no WBAREACOMI and are
 wrongly left in depression storage, so their whole upstream watershed counts as
 draining to dprst. This module adds a second, geometry-based on-stream signal:
-a waterbody that a stream demonstrably flows THROUGH (channel inflow AND
-outflow) is on-stream/lake, not a depression. Playa (an endorheic terminal
-sink) is force-kept as dprst; Ice Mass is not depression storage at all and is
-excluded from the waterbody classification entirely (at the `waterbody`
-builder), so it is neither dprst nor on-stream.
+a waterbody is on-stream/lake, not a depression, if a stream demonstrably flows
+THROUGH it (channel inflow AND outflow), or if it discharges to the routed
+network even without inflow (a source/headwater lake). Playa (an endorheic
+terminal sink) is force-kept as dprst; Ice Mass is not depression storage at
+all and is excluded from the waterbody classification entirely (at the
+`waterbody` builder), so it is neither dprst nor on-stream.
 
 The COMID set written here is unioned with connected_waterbody_comids.parquet by
 the depstor wbody_connectivity builder.
@@ -31,6 +32,7 @@ from gfv2_params.download.nhd_flowlines import (
     write_connected_comids,
 )
 from gfv2_params.log import configure_logging
+from gfv2_params.nhd_ftypes import NEVER_ONSTREAM_FTYPES
 
 logger = configure_logging("download_nhd_flowthrough")
 
@@ -38,15 +40,6 @@ logger = configure_logging("download_nhd_flowthrough")
 CONVEYANCE_FTYPES = {"StreamRiver", "ArtificialPath", "Connector", "CanalDitch"}
 # NHDArea polygons that ARE the 2-D channel (wide/braided rivers).
 CONVEYANCE_AREA_FTYPES = {"StreamRiver"}
-# Waterbodies that are always depression storage — never promoted on-stream.
-FORCE_DPRST_FTYPES = {"Playa"}
-# Waterbodies excluded from the depstor waterbody classification entirely:
-# neither dprst nor on-stream. A glacier/permanent ice mass is not depression
-# storage; its cells fall back to land (perv/imperv via LULC).
-EXCLUDE_WATERBODY_FTYPES = {"Ice Mass"}
-# Union: FTYPEs that must never appear in the on-stream set (dropped up front in
-# flow-through and at the wbody_connectivity union guardrail).
-NEVER_ONSTREAM_FTYPES = FORCE_DPRST_FTYPES | EXCLUDE_WATERBODY_FTYPES
 
 
 def _endpoints(geom):
@@ -89,6 +82,9 @@ def flowthrough_comids(
       T3  it overlaps a conveyance NHDArea polygon.
     Playa (force-dprst) and Ice Mass (excluded from the waterbody classification
     entirely) are both dropped first and never returned.
+
+    When `routed_comids` is omitted or empty, D1 is inert (no waterbody can be
+    promoted by it) and only T1/T3 apply.
     """
     wb = waterbodies[~waterbodies["FTYPE"].isin(NEVER_ONSTREAM_FTYPES)].copy()
     if wb.empty:
@@ -147,6 +143,11 @@ def flowthrough_comids(
         # taken from topology membership, never the unreliable FLOWDIR field.
         d1_idx: set[int] = set()
         routed = routed_comids or set()
+        logger.debug(
+            "D1 %s (%d routed-network COMID(s) supplied)",
+            "active" if routed else "inert — only T1/T3 apply",
+            len(routed),
+        )
         if routed:
             for line_pos, wbidx in zip(pairs.index, pairs["_wbidx"]):
                 if int(conv["COMID"].iloc[line_pos]) not in routed:
@@ -239,7 +240,7 @@ def main() -> None:
         vpu_set = flowthrough_comids(waterbodies, flowlines, areas, routed_comids)
         if not vpu_set:
             logger.warning(
-                "VPU %s: 0 flow-through COMIDs — check FTYPE/FLOWDIR domain values "
+                "VPU %s: 0 flow-through COMIDs — check FTYPE/topology domain values "
                 "in this snapshot (Playa/Ice Mass waterbodies are excluded by design).",
                 vpu,
             )
@@ -254,7 +255,7 @@ def main() -> None:
     if not onstream:
         raise ValueError(
             "distilled 0 on-stream COMIDs across all VPUs → every swamp/marsh "
-            "would stay in depression storage; likely an NHD FTYPE/FLOWDIR "
+            "would stay in depression storage; likely an NHD FTYPE/topology "
             "value-domain change or CRS/geometry problem"
         )
 

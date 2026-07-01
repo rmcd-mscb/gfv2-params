@@ -22,9 +22,10 @@ def _wb(rows):
 
 def _fl(rows):
     # rows are [FTYPE, FLOWDIR, geometry]; assign synthetic COMIDs 9001.. so the
-    # frame carries the COMID column D1 joins against routed_comids on. FLOWDIR is
-    # legacy — the classifier no longer reads it (direction comes from topology);
-    # it is retained here only so existing call sites stay unchanged. See
+    # frame carries the COMID column D1 joins against routed_comids on. FLOWDIR
+    # is dead fixture data here — the classifier never reads it (direction comes
+    # from topology/routed_comids); several older tests below still pass a
+    # FLOWDIR literal per row purely as leftover fixture shape. See
     # test_flowthrough_ignores_missing_flowdir_column for the FLOWDIR-free contract.
     out = [[9001 + i, *r] for i, r in enumerate(rows)]
     return gpd.GeoDataFrame(
@@ -78,7 +79,7 @@ def test_throughflow_running_along_boundary_is_onstream():
     # GeometryCollection (mixed Point + LineString), not a clean MultiPoint. The
     # old T1 crossing-counter only recognised `Multi*` types and collapsed
     # everything else to n=1, defeating T1. Both endpoints lie outside the
-    # waterbody, so T2 (endpoint-inside) also legitimately misses it.
+    # waterbody, so the endpoint-inside rule (D1) also legitimately misses it.
     wb = _wb([[112, "LakePond", SQUARE]])
     fl = _fl([["StreamRiver", "With Digitized",
                LineString([(-1, 1), (1, 1), (1, 0), (1.5, 0), (1.5, -1)])]])

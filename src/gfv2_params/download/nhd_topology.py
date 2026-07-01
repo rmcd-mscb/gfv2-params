@@ -117,10 +117,24 @@ def read_vaa(path: Path) -> pd.DataFrame:
 
 
 def write_topology(df: pd.DataFrame, out_path: Path) -> None:
-    """Write the distilled topology to a parquet, lower-case columns, comid int64."""
+    """Write the distilled topology to a parquet, lower-case columns, comid int64.
+
+    Raises ValueError if any comid fails numeric parse. COMID is a numeric
+    field, so a parse failure means a column-format change in the
+    PlusFlowlineVAA schema; silently coercing those rows to NaN would drop
+    them from the routed-network COMID set that D1 (nhd_flowthrough) relies
+    on, silently degrading the flow-through classifier.
+    """
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out = df.rename(columns={c: c.lower() for c in df.columns}).copy()
-    out["comid"] = out["comid"].astype("int64")
+    coerced = pd.to_numeric(out["comid"], errors="coerce")
+    n_lost = int(out["comid"].notna().sum() - coerced.notna().sum())
+    if n_lost:
+        raise ValueError(
+            f"{n_lost} non-null comid value(s) failed numeric parse — likely a "
+            "PlusFlowlineVAA schema issue."
+        )
+    out["comid"] = coerced.astype("int64")
     out.to_parquet(out_path, index=False)
 
 
@@ -146,7 +160,31 @@ def main() -> None:
     if failures:
         raise RuntimeError(f"NHDPlusAttributes staging failed for VPU(s): {failures}")
 
-    combined = pd.concat(frames, ignore_index=True).drop_duplicates(subset=["COMID"])
+    combined_raw = pd.concat(frames, ignore_index=True)
+    # Cross-VPU boundary COMIDs can appear in more than one VPU's VAA export.
+    # Dedupe is only safe if all duplicate rows for a COMID agree on
+    # DNHYDROSEQ (routing direction); a conflict means the two VPU exports
+    # disagree about which way that boundary COMID routes, which silently
+    # corrupts the routed-network set if dropped without investigation.
+    dupe_mask = combined_raw.duplicated(subset=["COMID"], keep=False)
+    if dupe_mask.any():
+        dupes = combined_raw.loc[dupe_mask]
+        n_conflicting = int(
+            (dupes.groupby("COMID")["DNHYDROSEQ"].nunique() > 1).sum()
+        )
+        if n_conflicting:
+            raise ValueError(
+                f"{n_conflicting} COMID(s) duplicated across VPU VAA exports "
+                "with CONFLICTING DNHYDROSEQ — this means the two exports "
+                "disagree on routing direction for a boundary flowline; "
+                "investigate before staging (do not silently pick one)."
+            )
+        n_dropped = int(dupe_mask.sum() - dupes["COMID"].nunique())
+        logger.info(
+            f"Dropping {n_dropped} duplicate VAA row(s) across VPU exports "
+            "(identical DNHYDROSEQ — safe to dedupe)"
+        )
+    combined = combined_raw.drop_duplicates(subset=["COMID"])
     if combined.empty:
         raise ValueError("distilled 0 VAA records across all VPUs — check inputs")
 

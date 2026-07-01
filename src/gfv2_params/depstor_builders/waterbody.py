@@ -14,7 +14,7 @@ from ..depstor import (
     write_int32_regions,
     write_uint8_binary,
 )
-from ..download.nhd_flowthrough import EXCLUDE_WATERBODY_FTYPES
+from ..nhd_ftypes import EXCLUDE_WATERBODY_FTYPES
 from .context import BuildContext
 
 
@@ -67,9 +67,13 @@ def build(step_cfg: dict, ctx: BuildContext, logger) -> dict:
                 "treated as land)", n_excluded,
             )
     else:
-        logger.warning(
-            "  waterbody layer has no FTYPE column — cannot exclude Ice Mass "
-            "(EXCLUDE_WATERBODY_FTYPES); those cells may be misclassified as dprst"
+        raise KeyError(
+            "waterbody layer has no FTYPE column — cannot exclude Ice Mass "
+            "(EXCLUDE_WATERBODY_FTYPES); refusing to write a raster that would "
+            "misclassify glacier/permanent-ice cells as depression storage. A "
+            "genuinely FTYPE-less waterbody layer is an upstream data problem "
+            "(check the source gpkg), not something this pipeline should paper "
+            "over."
         )
 
     n_before = len(wb_gdf)

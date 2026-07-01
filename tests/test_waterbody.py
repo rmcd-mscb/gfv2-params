@@ -73,8 +73,10 @@ def test_waterbody_excludes_ice_mass_keeps_lakepond(tmp_path):
     assert arr[9, 9] != 1     # WB 20 (Ice Mass) absent
 
 
-def test_waterbody_missing_ftype_column_is_graceful(tmp_path):
-    """A waterbody layer without FTYPE must still build (warn, don't crash)."""
+def test_waterbody_missing_ftype_column_raises(tmp_path):
+    """A waterbody layer without FTYPE must raise (refuse to silently miss Ice Mass)."""
+    import pytest
+
     from gfv2_params.depstor_builders import waterbody
     from gfv2_params.depstor_builders.context import BuildContext
 
@@ -97,11 +99,8 @@ def test_waterbody_missing_ftype_column_is_graceful(tmp_path):
     )
     ctx.paths["landmask"] = landmask
 
-    produced = waterbody.build(
-        {"outputs": {"binary": "wbody_binary.tif", "regions": "wbody_regions.tif"}},
-        ctx, logging.getLogger("test"),
-    )
-
-    with rasterio.open(produced["wbody_binary"]) as src:
-        arr = src.read(1)
-    assert arr[0, 0] == 1  # waterbody still rasterised despite missing FTYPE
+    with pytest.raises(KeyError):
+        waterbody.build(
+            {"outputs": {"binary": "wbody_binary.tif", "regions": "wbody_regions.tif"}},
+            ctx, logging.getLogger("test"),
+        )
