@@ -103,7 +103,10 @@ def test_playa_force_dprst_even_with_throughflow():
     assert flowthrough_comids(wb, fl) == set()
 
 
-def test_ice_mass_force_dprst():
+def test_ice_mass_excluded_from_onstream():
+    # Ice Mass is kept out of the on-stream set here (via NEVER_ONSTREAM_FTYPES);
+    # it is also excluded from dprst entirely upstream at the waterbody builder
+    # (not depression storage — a glacier's cells fall back to land/LULC).
     wb = _wb([[107, "Ice Mass", SQUARE]])
     fl = _fl([["StreamRiver", "With Digitized", LineString([(-1, 1), (3, 1)])]])
     assert flowthrough_comids(wb, fl) == set()

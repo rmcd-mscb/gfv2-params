@@ -36,9 +36,15 @@ logger = configure_logging("download_nhd_flowthrough")
 CONVEYANCE_FTYPES = {"StreamRiver", "ArtificialPath", "Connector", "CanalDitch"}
 # NHDArea polygons that ARE the 2-D channel (wide/braided rivers).
 CONVEYANCE_AREA_FTYPES = {"StreamRiver"}
-# Endorheic guardrail: these never get promoted out of dprst, regardless of
-# topology (and FLOWDIR is unreliable around them).
-FORCE_DPRST_FTYPES = {"Playa", "Ice Mass"}
+# Waterbodies that are always depression storage — never promoted on-stream.
+FORCE_DPRST_FTYPES = {"Playa"}
+# Waterbodies excluded from the depstor waterbody classification entirely:
+# neither dprst nor on-stream. A glacier/permanent ice mass is not depression
+# storage; its cells fall back to land (perv/imperv via LULC).
+EXCLUDE_WATERBODY_FTYPES = {"Ice Mass"}
+# Union: FTYPEs that must never appear in the on-stream set (dropped up front in
+# flow-through and at the wbody_connectivity union guardrail).
+NEVER_ONSTREAM_FTYPES = FORCE_DPRST_FTYPES | EXCLUDE_WATERBODY_FTYPES
 
 
 def _endpoints(geom):
@@ -78,9 +84,10 @@ def flowthrough_comids(
           DnHydroseq != 0) has its UPSTREAM end inside the waterbody -> it
           discharges to the network (source lake or split-pass-through outflow),
       T3  it overlaps a conveyance NHDArea polygon.
-    Playa / Ice Mass waterbodies are dropped first and never returned.
+    Playa (force-dprst) and Ice Mass (excluded from the waterbody classification
+    entirely) are both dropped first and never returned.
     """
-    wb = waterbodies[~waterbodies["FTYPE"].isin(FORCE_DPRST_FTYPES)].copy()
+    wb = waterbodies[~waterbodies["FTYPE"].isin(NEVER_ONSTREAM_FTYPES)].copy()
     if wb.empty:
         return set()
     wb = wb.reset_index(drop=True)

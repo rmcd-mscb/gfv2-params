@@ -14,6 +14,7 @@ from ..depstor import (
     write_int32_regions,
     write_uint8_binary,
 )
+from ..download.nhd_flowthrough import EXCLUDE_WATERBODY_FTYPES
 from .context import BuildContext
 
 
@@ -55,6 +56,22 @@ def build(step_cfg: dict, ctx: BuildContext, logger) -> dict:
         logger.info("  Reprojecting wbodies from %s to %s", wb_gdf.crs, info.crs)
         wb_gdf = wb_gdf.to_crs(info.crs)
     wb_gdf = wb_gdf[wb_gdf.geometry.notna() & ~wb_gdf.geometry.is_empty]
+
+    if "FTYPE" in wb_gdf.columns:
+        n_pre = len(wb_gdf)
+        wb_gdf = wb_gdf[~wb_gdf["FTYPE"].isin(EXCLUDE_WATERBODY_FTYPES)].copy()
+        n_excluded = n_pre - len(wb_gdf)
+        if n_excluded:
+            logger.info(
+                "  excluded %d Ice Mass waterbodies (not depression storage; "
+                "treated as land)", n_excluded,
+            )
+    else:
+        logger.warning(
+            "  waterbody layer has no FTYPE column — cannot exclude Ice Mass "
+            "(EXCLUDE_WATERBODY_FTYPES); those cells may be misclassified as dprst"
+        )
+
     n_before = len(wb_gdf)
     wb_gdf = wb_gdf[wb_gdf.geometry.area >= min_area].copy()
     logger.info("  Loaded %d wbodies, kept %d after >= %.1f m^2 filter", n_before, len(wb_gdf), min_area)

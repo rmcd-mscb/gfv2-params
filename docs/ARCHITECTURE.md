@@ -135,8 +135,8 @@ whether the depstor pipeline will be run for the fabric:
 | `segments_gpkg` | — | ✓ | Stream-segment gpkg (no longer feeds any depstor step — the `streambuffer` step is retired). A VPU-based fabric (gfv2) merges per-VPU `nsegment` layers via `scripts/merge_vpu_segments.py` for other potential uses. |
 | `segments_layer` | — | ✓ | Layer name inside `segments_gpkg` (typically `nsegment`) |
 | `connected_comids_table` | — | ✓ | Path to `input/nhd/connected_waterbody_comids.parquet` — the set of NHDPlusV2 waterbody COMIDs that an NHD artificial path flows through (i.e. on-stream via `WBAREACOMI`). Produced by `download/nhd_flowlines.py`; consumed by the depstor `wbody_connectivity` builder. Required only for fabrics whose waterbody layer is COMID-keyed (`gfv2`, `oregon`, `tjc`); the `gfv2_vpu01` profile omits it (its `wbs` layer has no COMID), so `wbody_connectivity`/`dprst` fail-fast there — use `gfv2` for depstor validation. |
-| `flowthrough_comids_table` | — | — | Path to `input/nhd/flowthrough_waterbody_comids.parquet` — a second on-stream COMID set from flow-through topology: waterbodies that a conveyance flowline demonstrably enters AND exits (T1), or whose upstream end is inside the waterbody per authoritative NHDPlus routed-network direction (D1 — source/headwater lakes and split pass-through outflows), or that overlap an NHDArea conveyance polygon (T3). Playa/Ice Mass waterbodies are dropped up front and never promoted. Produced by `download/nhd_flowthrough.py`; unioned with `connected_comids_table` by `wbody_connectivity` before rasterizing (which also re-applies the Playa/Ice Mass guardrail to the unioned set, so it covers the WBAREACOMI path too). Optional (omitting it uses `connected_comids_table` only). |
-| `waterbody_gpkg` | — | ✓ | NHDPlus waterbodies; depstor's `waterbody` step **raises** if unset |
+| `flowthrough_comids_table` | — | — | Path to `input/nhd/flowthrough_waterbody_comids.parquet` — a second on-stream COMID set from flow-through topology: waterbodies that a conveyance flowline demonstrably enters AND exits (T1), or whose upstream end is inside the waterbody per authoritative NHDPlus routed-network direction (D1 — source/headwater lakes and split pass-through outflows), or that overlap an NHDArea conveyance polygon (T3). Playa/Ice Mass waterbodies are dropped up front and never promoted onto the on-stream set (Playa because it's force-dprst; Ice Mass because it's excluded from the waterbody classification entirely — see the `waterbody` row below). Produced by `download/nhd_flowthrough.py`; unioned with `connected_comids_table` by `wbody_connectivity` before rasterizing (which also re-applies the `NEVER_ONSTREAM_FTYPES` guardrail to the unioned set, so it covers the WBAREACOMI path too). Optional (omitting it uses `connected_comids_table` only). |
+| `waterbody_gpkg` | — | ✓ | NHDPlus waterbodies; depstor's `waterbody` step **raises** if unset. If the layer has an `FTYPE` column, `waterbody` drops `EXCLUDE_WATERBODY_FTYPES` (`{"Ice Mass"}`) before rasterizing: a glacier/permanent ice mass is not depression storage, so its cells are left out of `wbody_binary`/`wbody_regions` entirely and fall back to land (perv/imperv via LULC), not dprst and not on-stream. Playa is unaffected here — it stays a normal waterbody clump and is force-dprst downstream by the `NEVER_ONSTREAM_FTYPES` guardrail in `wbody_connectivity`/`nhd_flowthrough`. |
 | `waterbody_layer` | — | ✓ | Layer name inside `waterbody_gpkg` |
 
 For `template_raster`/`fdr_raster`, stage the clip with:
@@ -222,11 +222,17 @@ These are hard-won; violating them silently corrupts outputs.
   authoritative NHDPlus direction from `flowline_topology.parquet`, staged by
   `download/nhd_topology.py`; this catches source/headwater lakes and
   split-pass-through outflows and replaced the old `FLOWDIR`-gated T2), or if
-  it overlaps an NHDArea conveyance polygon (T3). Playa and Ice Mass
-  waterbodies are dropped up front in `flowthrough_comids` and never promoted;
-  `wbody_connectivity` re-applies the same guardrail to the unioned set so a
-  Playa/Ice Mass waterbody promoted via WBAREACOMI is also excluded. The
-  `dprst` and downstream builders are unchanged consumers — they see a larger
+  it overlaps an NHDArea conveyance polygon (T3). `nhd_flowthrough` defines
+  `FORCE_DPRST_FTYPES = {"Playa"}` (always depression storage, never promoted
+  on-stream) and `EXCLUDE_WATERBODY_FTYPES = {"Ice Mass"}` (not depression
+  storage either — a glacier is excluded from the depstor waterbody
+  classification entirely and falls back to land/LULC), unioned into
+  `NEVER_ONSTREAM_FTYPES`. Both are dropped up front in `flowthrough_comids`
+  and never promoted; `wbody_connectivity` re-applies `NEVER_ONSTREAM_FTYPES`
+  to the unioned set so a Playa/Ice Mass waterbody promoted via WBAREACOMI is
+  also excluded (Ice Mass is belt-and-suspenders here — it's already removed
+  upstream at the `waterbody` builder; see the `waterbody_gpkg` row above).
+  The `dprst` and downstream builders are unchanged consumers — they see a larger
   on-stream set with no code change.
 - **`flowline_topology.parquet`** — distilled NHDPlus PlusFlowlineVAA (COMID,
   DnHydroseq, Hydroseq, TerminalFl, StartFlag, StreamOrde, FromNode, ToNode). Staged by

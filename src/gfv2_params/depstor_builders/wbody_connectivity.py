@@ -18,7 +18,7 @@ from ..depstor import (
     select_connected_waterbodies,
     write_uint8_binary,
 )
-from ..download.nhd_flowthrough import FORCE_DPRST_FTYPES
+from ..download.nhd_flowthrough import NEVER_ONSTREAM_FTYPES
 from .context import BuildContext
 
 
@@ -92,7 +92,7 @@ def build(step_cfg: dict, ctx: BuildContext, logger) -> dict:
     sel = select_connected_waterbodies(wb_gdf, connected)
     if "FTYPE" in sel.columns:
         n_before = len(sel)
-        sel = sel[~sel["FTYPE"].isin(FORCE_DPRST_FTYPES)].copy()
+        sel = sel[~sel["FTYPE"].isin(NEVER_ONSTREAM_FTYPES)].copy()
         n_forced = n_before - len(sel)
         if n_forced:
             logger.info(
