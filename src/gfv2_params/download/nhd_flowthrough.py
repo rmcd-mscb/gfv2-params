@@ -75,8 +75,9 @@ def flowthrough_comids(
     """COMIDs of waterbodies classified on-stream by flow-through topology.
 
     `waterbodies`: polygons with COMID, FTYPE. `flowlines`: lines with COMID,
-    FTYPE, FLOWDIR. `areas`: optional NHDArea polygons with FTYPE. All share
-    one CRS.
+    FTYPE (direction now comes from `routed_comids`/topology, so FLOWDIR is no
+    longer read). `areas`: optional NHDArea polygons with FTYPE. All share one
+    CRS.
 
     A waterbody is on-stream if ANY of:
       T1  a single conveyance flowline flows through it: crosses the boundary
@@ -102,7 +103,7 @@ def flowthrough_comids(
         conv = conv.reset_index(drop=True)
         # Candidate (waterbody, flowline) pairs that intersect at all.
         pairs = gpd.sjoin(
-            conv[["FTYPE", "FLOWDIR", "geometry"]],
+            conv[["FTYPE", "geometry"]],
             wb[["_wbidx", "geometry"]],
             how="inner", predicate="intersects",
         )
@@ -232,7 +233,7 @@ def main() -> None:
             failures.append(vpu)
             continue
         waterbodies = read_layer(wb_path, ["COMID", "FTYPE"])
-        flowlines = read_layer(flowline, ["COMID", "FTYPE", "FLOWDIR"])
+        flowlines = read_layer(flowline, ["COMID", "FTYPE"])
         area_path = locate_layer(flowline, "NHDArea")
         areas = read_layer(area_path, ["FTYPE"]) if area_path else None
         vpu_set = flowthrough_comids(waterbodies, flowlines, areas, routed_comids)

@@ -22,7 +22,10 @@ def _wb(rows):
 
 def _fl(rows):
     # rows are [FTYPE, FLOWDIR, geometry]; assign synthetic COMIDs 9001.. so the
-    # frame carries the COMID column D1 joins against routed_comids on.
+    # frame carries the COMID column D1 joins against routed_comids on. FLOWDIR is
+    # legacy — the classifier no longer reads it (direction comes from topology);
+    # it is retained here only so existing call sites stay unchanged. See
+    # test_flowthrough_ignores_missing_flowdir_column for the FLOWDIR-free contract.
     out = [[9001 + i, *r] for i, r in enumerate(rows)]
     return gpd.GeoDataFrame(
         out, columns=["COMID", "FTYPE", "FLOWDIR", "geometry"], crs=CRS
@@ -31,6 +34,17 @@ def _fl(rows):
 
 # A unit square waterbody centred near (0,0)..(2,2).
 SQUARE = Polygon([(0, 0), (2, 0), (2, 2), (0, 2)])
+
+
+def test_flowthrough_ignores_missing_flowdir_column():
+    # FLOWDIR is no longer part of the contract (T2 was replaced by topology-based
+    # D1), so flowthrough_comids must work on flowlines carrying only COMID/FTYPE.
+    wb = _wb([[301, "SwampMarsh", SQUARE]])
+    fl = gpd.GeoDataFrame(
+        [[9001, "StreamRiver", LineString([(-1, 1), (3, 1)])]],
+        columns=["COMID", "FTYPE", "geometry"], crs=CRS,
+    )
+    assert flowthrough_comids(wb, fl) == {301}  # T1 through-flow, no FLOWDIR needed
 
 
 def test_source_lake_routed_outflow_is_onstream():
