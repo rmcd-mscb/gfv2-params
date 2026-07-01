@@ -5,8 +5,10 @@ path through. Many through-flow swamps/marshes carry no WBAREACOMI and are
 wrongly left in depression storage, so their whole upstream watershed counts as
 draining to dprst. This module adds a second, geometry-based on-stream signal:
 a waterbody that a stream demonstrably flows THROUGH (channel inflow AND
-outflow) is on-stream/lake, not a depression. Endorheic terminal sinks (Playa,
-Ice Mass) are force-kept as dprst.
+outflow) is on-stream/lake, not a depression. Playa (an endorheic terminal
+sink) is force-kept as dprst; Ice Mass is not depression storage at all and is
+excluded from the waterbody classification entirely (at the `waterbody`
+builder), so it is neither dprst nor on-stream.
 
 The COMID set written here is unioned with connected_waterbody_comids.parquet by
 the depstor wbody_connectivity builder.

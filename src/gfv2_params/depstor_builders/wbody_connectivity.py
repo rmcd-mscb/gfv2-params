@@ -96,12 +96,12 @@ def build(step_cfg: dict, ctx: BuildContext, logger) -> dict:
         n_forced = n_before - len(sel)
         if n_forced:
             logger.info(
-                "  force-dprst guardrail: dropped %d Playa/Ice Mass waterbodies "
-                "promoted via WBAREACOMI", n_forced,
+                "  never-on-stream guardrail: dropped %d Playa (force-dprst) / "
+                "Ice Mass (excluded) waterbodies promoted via WBAREACOMI", n_forced,
             )
     else:
         logger.warning(
-            "  waterbody layer has no FTYPE column — force-dprst guardrail "
+            "  waterbody layer has no FTYPE column — never-on-stream guardrail "
             "(Playa/Ice Mass) cannot be applied"
         )
     logger.info(
