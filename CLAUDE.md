@@ -93,6 +93,16 @@ These are hard-won; violating them silently corrupts outputs.
   hits, before it can reach a dprst pour-point. The barrier set is the full
   `onstream` mask (no size filtering); the fix is a strict subtraction that
   can only reduce `drains_to_dprst` coverage, never increase it.
+- **`sro_to_dprst_perv`/`sro_to_dprst_imperv` are same-HRU-restricted via a
+  raster intersection, not gdptools.** `same_hru_drains` computes
+  `drains_to_dprst_hru == hru_id` (both int32, per-cell) to build
+  `drains_perv_binary.tif`/`drains_imperv_binary.tif`, replacing the old plain
+  `intersect` — because it's a per-cell reached-HRU-vs-own-HRU test that
+  gdptools' partial-pixel zonal weighting cannot express. The per-HRU COUNT
+  aggregation downstream still uses gdptools as normal. This reproduces the
+  legacy `Con(rSro == hru)` (`docs/0b_TB_depr_stor.py:214`). `drains_to_dprst`
+  itself (from `routing`) stays HRU-agnostic — only the `sro_to_dprst_*`
+  ratios get the same-HRU restriction.
 - **Land masking.** Every depstor raster is masked against `land_mask.tif` (HRU
   fabric rasterised by the `landmask` step). Never use hydro-DEM nodata or FDR
   as a land mask.

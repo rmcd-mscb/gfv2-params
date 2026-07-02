@@ -202,6 +202,29 @@ These are hard-won; violating them silently corrupts outputs.
   lake or reservoir is captured by that waterbody's stream/lake routing, not
   a downstream depression. Playas need no special handling — they are
   classified `dprst`, never `onstream`, so they are never barriers.
+- **Same-HRU restriction on `sro_to_dprst_perv`/`sro_to_dprst_imperv` is a
+  raster-space intersection, not a gdptools operation.** The chain is
+  `hru_id` (rasterises `nat_hru_id` onto the template via `rasterize_ids` →
+  `hru_id.tif`, int32) → `routing_hru` (a labeled, barrier-aware D8 trace —
+  same per-VPU tiling and on-stream barriers as `routing`, but each depression
+  cell is labelled with its own HRU id and the kernel propagates that label to
+  every cell that drains to it → `drains_to_dprst_hru.tif`, int32, per-cell
+  reached-HRU) → `same_hru_drains` (replaces the old plain `intersect` step
+  for `drains_perv`/`drains_imperv`, same output filenames/keys). It computes
+  `drains_to_dprst_hru == hru_id` cell-by-cell (`same_hru_intersect` in
+  `depstor.py`) **before** aggregation — deliberately **not** expressed as a
+  gdptools zonal operation, because it is a per-cell test (does this cell's
+  reached depression belong to *this same cell's* HRU?) that gdptools'
+  partial-pixel weighting cannot express; a fractional-overlap weight has no
+  way to encode "same HRU or not." The per-HRU **count** aggregation
+  downstream is unaffected and still uses gdptools as normal. This reproduces
+  the legacy `Con(rSro == hru)` (`docs/0b_TB_depr_stor.py:214`). The tradeoff
+  is a 1-pixel HRU-boundary approximation (a cell rasterised into HRU A that
+  geometrically straddles into HRU B), which is immaterial against the
+  basin-scale `sro_to_dprst_*` signal. `drains_to_dprst.tif` (from `routing`)
+  and the `drains_to_dprst_frac` param stay HRU-agnostic — only the
+  `sro_to_dprst_*` ratios get the same-HRU restriction; `depstor_params.yml`
+  is unchanged.
 - **Land masking.** Every depstor raster is masked against `land_mask.tif`
   (the HRU fabric rasterised by the `landmask` step). Never use hydro-DEM
   nodata or FDR as a land mask.

@@ -2,8 +2,13 @@
 
 Ported from depstor's RasterPipeline (depstor/scripts/DepStor.py:42-410), but
 operating on numpy arrays + a shared raster template. The depstor "rasterize
-HRU polygons and tag cells with HRU IDs" pattern is intentionally NOT carried
-over — gdptools handles HRU overlay directly during zonal aggregation.
+HRU polygons and tag cells with HRU IDs" pattern is carried over narrowly: the
+`hru_id`/`routing_hru`/`same_hru_drains` builders rasterize `nat_hru_id`
+(`rasterize_ids` → `hru_id.tif`) to reinstate the legacy same-HRU restriction
+on `sro_to_dprst_perv/imperv` (`same_hru_intersect`, a per-cell raster-space
+test — see docs/ARCHITECTURE.md). Everywhere else, gdptools still handles HRU
+overlay directly during zonal aggregation, including the per-HRU COUNT for
+these same params.
 
 All raster outputs use the conventions:
 - uint8 binary masks: value 1 = present, value 255 = nodata
