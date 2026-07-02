@@ -58,12 +58,12 @@ steps:
     output: drains_to_dprst_hru.tif
 
   - name: drains_perv
-    inputs: [drains_to_dprst, perv]
+    inputs: [drains_to_dprst_hru, hru_id, perv]
     output_key: drains_perv
     output: drains_perv_binary.tif
 
   - name: drains_imperv
-    inputs: [drains_to_dprst, imperv]
+    inputs: [drains_to_dprst_hru, hru_id, imperv]
     output_key: drains_imperv
     output: drains_imperv_binary.tif
 

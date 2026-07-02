@@ -14,7 +14,7 @@ These modules are thin orchestration wrappers around those helpers.
 
 from __future__ import annotations
 
-from . import carea_map, dprst, hru_id, imperv, intersect, landmask, perv, routing, routing_hru, vpu_id, waterbody, wbody_connectivity
+from . import carea_map, dprst, hru_id, imperv, landmask, perv, routing, routing_hru, same_hru_drains, vpu_id, waterbody, wbody_connectivity
 from .context import BuildContext
 
 BUILDERS = {
@@ -27,8 +27,8 @@ BUILDERS = {
     "hru_id":            hru_id.build,
     "routing":           routing.build,
     "routing_hru":       routing_hru.build,
-    "drains_perv":       intersect.build,
-    "drains_imperv":     intersect.build,
+    "drains_perv":       same_hru_drains.build,
+    "drains_imperv":     same_hru_drains.build,
     "vpu_id":            vpu_id.build,
     "carea_map":         carea_map.build,
 }

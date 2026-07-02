@@ -186,6 +186,21 @@ def intersect_binaries(a: np.ndarray, b: np.ndarray) -> np.ndarray:
     return out
 
 
+def same_hru_intersect(labeled: np.ndarray, hru_id: np.ndarray, land: np.ndarray) -> np.ndarray:
+    """1 where a land cell drains to a depression in its OWN HRU, else 255.
+
+    `labeled` is the per-cell reached-depression HRU id (0 = doesn't drain to
+    any depression, from `drains_to_dprst_hru.tif`); `hru_id` is the cell's own
+    HRU id; `land` is a 1/255 binary mask (perv or imperv). Restores the same-HRU
+    restriction from the legacy `Con(rSro == hru)` (docs/0b_TB_depr_stor.py:214) —
+    a per-cell raster-space comparison, not a gdptools zonal operation.
+    """
+    hit = (labeled == hru_id) & (labeled > 0) & (land == 1)
+    out = np.full(land.shape, np.uint8(255), dtype=np.uint8)
+    out[hit] = 1
+    return out
+
+
 def compute_carea_map_binary(
     perv: np.ndarray,
     onstream: np.ndarray,
