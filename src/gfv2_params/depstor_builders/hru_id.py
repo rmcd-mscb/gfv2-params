@@ -30,9 +30,15 @@ def build(step_cfg: dict, ctx: BuildContext, logger) -> dict:
     info = RasterInfo.from_path(ctx.template_path)
     gdf = gpd.read_file(ctx.hru_gpkg, layer=ctx.hru_layer)
     gdf = gdf[gdf.geometry.notna() & ~gdf.geometry.is_empty]
-    if (gdf[ctx.id_feature] <= 0).any():
-        raise ValueError(f"{ctx.id_feature} must be positive (0 is the no-HRU sentinel).")
-    ids = rasterize_ids(gdf, ctx.id_feature, info)
+    if gdf[ctx.id_feature].isna().any() or (gdf[ctx.id_feature] <= 0).any():
+        raise ValueError(
+            f"{ctx.id_feature} must be non-NaN and positive (0 is the no-HRU sentinel)."
+        )
+    # all_touched=True matches land_mask.tif/perv_binary.tif's footprint
+    # (landmask.py rasterises all_touched=True for the same reason); otherwise
+    # HRU-boundary land cells burn as hru_id==0 and same_hru_intersect silently
+    # drops them (undercounts drains_perv/imperv at every HRU edge).
+    ids = rasterize_ids(gdf, ctx.id_feature, info, all_touched=True)
     write_int32_regions(ids, info, output_path)
     n = int((ids > 0).sum())
     logger.info("  Rasterised %d HRUs | %d labelled cells (%.2f%%)", len(gdf), n, 100 * n / ids.size)

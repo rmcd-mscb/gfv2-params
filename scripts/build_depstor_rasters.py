@@ -134,6 +134,8 @@ def _expected_outputs(step: dict) -> dict:
             "perv": "perv",
             "routing": "drains_to_dprst",
             "vpu_id": "vpu_id",
+            "hru_id": "hru_id",
+            "routing_hru": "drains_to_dprst_hru",
         }
         return {single_key[name]: step["output"]}
     outputs = step["outputs"]

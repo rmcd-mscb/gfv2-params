@@ -204,8 +204,8 @@ These are hard-won; violating them silently corrupts outputs.
   classified `dprst`, never `onstream`, so they are never barriers.
 - **Same-HRU restriction on `sro_to_dprst_perv`/`sro_to_dprst_imperv` is a
   raster-space intersection, not a gdptools operation.** The chain is
-  `hru_id` (rasterises `nat_hru_id` onto the template via `rasterize_ids` →
-  `hru_id.tif`, int32) → `routing_hru` (a labeled, barrier-aware D8 trace —
+  `hru_id` (rasterises `nat_hru_id` onto the template via `rasterize_ids`,
+  `all_touched=True` → `hru_id.tif`, int32) → `routing_hru` (a labeled, barrier-aware D8 trace —
   same per-VPU tiling and on-stream barriers as `routing`, but each depression
   cell is labelled with its own HRU id and the kernel propagates that label to
   every cell that drains to it → `drains_to_dprst_hru.tif`, int32, per-cell
@@ -218,7 +218,12 @@ These are hard-won; violating them silently corrupts outputs.
   partial-pixel weighting cannot express; a fractional-overlap weight has no
   way to encode "same HRU or not." The per-HRU **count** aggregation
   downstream is unaffected and still uses gdptools as normal. This reproduces
-  the legacy `Con(rSro == hru)` (`docs/0b_TB_depr_stor.py:214`). The tradeoff
+  the legacy `Con(rSro == hru)` (`docs/0b_TB_depr_stor.py:214`). `hru_id.tif`
+  is rasterised `all_touched=True` to match `land_mask.tif`/`perv_binary.tif`'s
+  footprint (`landmask.py`); a stricter (default) footprint would leave
+  HRU-boundary land cells at `hru_id==0`, and `same_hru_intersect` (which
+  requires `labeled==hru_id & labeled>0`) would silently drop them —
+  undercounting `drains_perv`/`drains_imperv` at every HRU edge. The tradeoff
   is a 1-pixel HRU-boundary approximation (a cell rasterised into HRU A that
   geometrically straddles into HRU B), which is immaterial against the
   basin-scale `sro_to_dprst_*` signal. `drains_to_dprst.tif` (from `routing`)

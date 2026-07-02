@@ -14,8 +14,14 @@ from rasterio.windows import Window
 
 from ..d8_routing import drains_to_dprst_labeled_kernel
 from ..depstor import (
-    RasterInfo, align_fdr_to_dprst_grid, assert_raster_aligned, mask_fdr_to_vpu,
-    read_aligned_uint8, vpu_bbox, vpu_codes_present, vpu_pour_points,
+    RasterInfo,
+    align_fdr_to_dprst_grid,
+    assert_raster_aligned,
+    mask_fdr_to_vpu,
+    read_aligned_uint8,
+    vpu_bbox,
+    vpu_codes_present,
+    vpu_pour_points,
 )
 from .context import BuildContext
 
@@ -65,6 +71,7 @@ def build(step_cfg: dict, ctx: BuildContext, logger) -> dict:
             assert_raster_aligned(onstream_src, info, "onstream")
             assert_raster_aligned(hru_src, info, "hru_id")
             assert_raster_aligned(land_src, info, "landmask")
+            n_total = 0
             for code in codes:
                 bbox = vpu_bbox(vpu_id, code)
                 r0, r1, c0, c1 = bbox
@@ -90,8 +97,17 @@ def build(step_cfg: dict, ctx: BuildContext, logger) -> dict:
                 sel = (vpu_win == code) & (out > 0) & (land_win == 1)
                 existing[sel] = out[sel]
                 dst.write(existing, 1, window=window)
-                logger.info("  VPU %d: %d labelled drain cells", code, int(sel.sum()))
+                n_sel = int(sel.sum())
+                n_total += n_sel
+                logger.info("  VPU %d: %d labelled drain cells", code, n_sel)
     finally:
         if not keep_intermediates and fdr_aligned.exists():
             fdr_aligned.unlink()
+
+    if n_total == 0:
+        raise RuntimeError(
+            f"drains_to_dprst_hru is all-nodata after routing {len(codes)} VPU(s) — "
+            "an all-empty mask is never a valid product. Check that dprst, vpu_id, "
+            "hru_id, and the FDR are aligned to the same template grid."
+        )
     return {"drains_to_dprst_hru": output_path}

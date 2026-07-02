@@ -85,12 +85,22 @@ def rasterize_binary(gdf, info: RasterInfo, all_touched: bool = False) -> np.nda
     return out
 
 
-def rasterize_ids(gdf, id_field: str, info: "RasterInfo") -> np.ndarray:
+def rasterize_ids(
+    gdf, id_field: str, info: "RasterInfo", all_touched: bool = False,
+) -> np.ndarray:
     """Burn an integer id attribute onto the template grid (0 = no polygon).
 
     Geometries are reprojected to `info.crs` first if needed — a CRS-mismatched
     burn silently lands geometries in the wrong place (no error), so guard it as
     every other rasterize helper here does.
+
+    `all_touched` must match the footprint of any raster this output is later
+    compared against cell-by-cell. In particular, `hru_id.tif` needs
+    `all_touched=True` to match `land_mask.tif`/`perv_binary.tif` (rasterised
+    with `all_touched=True` in `landmask.py`) — otherwise HRU-boundary land
+    cells burn as `hru_id==0` under the default centroid rule, and
+    `same_hru_intersect` (which requires `labeled==hru_id & labeled>0`) silently
+    drops them, undercounting `drains_perv`/`drains_imperv` at every HRU edge.
     """
     if gdf.crs is None:
         raise ValueError("Input GeoDataFrame has no CRS")
@@ -101,7 +111,7 @@ def rasterize_ids(gdf, id_field: str, info: "RasterInfo") -> np.ndarray:
     shapes = ((geom, int(val)) for geom, val in zip(gdf.geometry, gdf[id_field]))
     return rio_rasterize(
         shapes, out_shape=(info.height, info.width), transform=info.transform,
-        fill=0, dtype="int32",
+        fill=0, dtype="int32", all_touched=all_touched,
     ).astype(np.int32, copy=False)
 
 

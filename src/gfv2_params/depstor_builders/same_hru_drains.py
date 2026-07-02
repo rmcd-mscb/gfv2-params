@@ -51,5 +51,14 @@ def build(step_cfg: dict, ctx: BuildContext, logger) -> dict:
                                      land_src.read(1, window=window))
             dst.write(out, 1, window=window)
             n_hit += int((out == 1).sum())
-    logger.info("  %d same-HRU %s cells", n_hit, output_key)
+    if n_hit == 0:
+        logger.warning(
+            "  0 same-HRU %s cells — suspicious for drains_perv (expect some "
+            "same-HRU pervious drainage on almost any fabric), but can be "
+            "legitimate for drains_imperv on a low-impervious fabric. Not "
+            "raising here: routing_hru's all-empty guard already hard-catches "
+            "upstream truncation of drains_to_dprst_hru.", output_key,
+        )
+    else:
+        logger.info("  %d same-HRU %s cells", n_hit, output_key)
     return {output_key: output_path}
