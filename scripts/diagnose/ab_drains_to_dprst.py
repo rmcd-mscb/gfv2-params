@@ -34,12 +34,12 @@ from gfv2_params.d8_routing import (
 )
 from gfv2_params.depstor import (
     RasterInfo,
+    align_fdr_to_dprst_grid,
     mask_fdr_to_vpu,
     read_aligned_uint8,
     vpu_bbox,
     vpu_pour_points,
 )
-from gfv2_params.depstor_builders.routing import _align_fdr_to_dprst_grid
 
 _FDR_CHOICES = ("production", "fill", "breach")
 
@@ -66,7 +66,7 @@ def _run_one_vpu(fdr_path, dprst_path, vpu_id_path, template_path, vpu_code,
                  labels_path, out_tif, out_csv, logger):
     info = RasterInfo.from_path(template_path)
     fdr_aligned = out_tif.parent / f"_fdr_aligned_{vpu_code}.tif"
-    _align_fdr_to_dprst_grid(fdr_path, dprst_path, fdr_aligned, logger)
+    align_fdr_to_dprst_grid(fdr_path, dprst_path, fdr_aligned, logger)
     try:
         vpu_id = read_aligned_uint8(vpu_id_path, info)
         code = int(vpu_code)
