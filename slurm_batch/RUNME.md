@@ -87,10 +87,11 @@ batches it into per-batch geopackages.
 ### 3 · Build depstor rasters
 
 ```bash
+# Stage NHDPlus flowline topology FIRST (one-time, CONUS; required by both NHD
+# COMID steps below for the Network-Flowline gate):
+pixi run --as-is python -m gfv2_params.download.nhd_topology
 # Stage NHD-connected waterbody COMIDs (one-time, CONUS):
 sbatch slurm_batch/download_nhd_flowlines.batch
-# Stage NHDPlus flowline topology (one-time, CONUS; required by flow-through below):
-pixi run --as-is python -m gfv2_params.download.nhd_topology
 # Stage flow-through waterbody COMIDs (one-time, CONUS):
 sbatch slurm_batch/stage_nhd_flowthrough.batch
 pixi run --as-is python scripts/clip_shared_to_fabric.py --fabric gfv2   # tiny VRT (login OK)
@@ -99,11 +100,14 @@ sbatch slurm_batch/build_depstor_rasters.batch
 
 **What it does:** clips the fabric-bounds FDR template, then builds the full
 depression-storage raster stack. The three NHD staging steps are one-time
-CONUS runs; `nhd_flowlines` stages WBAREACOMI-connected COMIDs, `nhd_topology`
-stages authoritative flow-direction (`flowline_topology.parquet`), and
-`nhd_flowthrough` (which requires `nhd_topology` to have run first) adds
-flow-through COMIDs — the two COMID sets (`nhd_flowlines`,
-`nhd_flowthrough`) are unioned by the `wbody_connectivity` builder. If you
+CONUS runs. `nhd_topology` stages the NHDPlus PlusFlowlineVAA network
+(`flowline_topology.parquet`) and **must run first**: both COMID steps gate
+on-stream promotion on Network-Flowline membership, so a waterbody NHD tagged
+only via Non-Network flowlines (closed-basin lakes) stays depression storage
+(issue #161). `nhd_flowlines` then stages WBAREACOMI-connected COMIDs and
+`nhd_flowthrough` adds flow-through COMIDs (both fail loud if the topology
+parquet is missing) — the two COMID sets are unioned by the
+`wbody_connectivity` builder. If you
 update either NHD staging COMID output after an initial build, rerun the
 depstor stack from `wbody_connectivity`
 (`sbatch slurm_batch/build_depstor_rasters.batch --from wbody_connectivity --force`).

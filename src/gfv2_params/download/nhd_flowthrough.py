@@ -64,6 +64,7 @@ def flowthrough_comids(
     flowlines: gpd.GeoDataFrame,
     areas: gpd.GeoDataFrame | None = None,
     routed_comids: set[int] | None = None,
+    network_comids: set[int] | None = None,
 ) -> set[int]:
     """COMIDs of waterbodies classified on-stream by flow-through topology.
 
@@ -83,8 +84,13 @@ def flowthrough_comids(
     Playa (force-dprst) and Ice Mass (excluded from the waterbody classification
     entirely) are both dropped first and never returned.
 
-    When `routed_comids` is omitted or empty, D1 is inert (no waterbody can be
-    promoted by it) and only T1/T3 apply.
+    When `network_comids` is supplied, only **Network Flowlines** (COMIDs present
+    in the NHDPlus PlusFlowlineVAA topology) are eligible to promote via T1/D1.
+    NHD draws Non-Network conveyance lines through closed-basin lakes, so ungated
+    geometry promotes genuinely endorheic waterbodies on-stream (issue #161);
+    the gate keeps them in depression storage. When omitted, T1 stays
+    pure-geometry (the pre-gate contract). When `routed_comids` is omitted or
+    empty, D1 is inert and only T1/T3 apply.
     """
     wb = waterbodies[~waterbodies["FTYPE"].isin(NEVER_ONSTREAM_FTYPES)].copy()
     if wb.empty:
@@ -93,6 +99,13 @@ def flowthrough_comids(
     wb["_wbidx"] = wb.index
 
     conv = flowlines[flowlines["FTYPE"].isin(CONVEYANCE_FTYPES)].copy()
+    if network_comids is not None:
+        # Coerce COMID before the membership test: NHD ships numeric fields as
+        # strings in some VPU snapshots, and `network_comids` is a set of ints,
+        # so a raw str `.isin` would silently match nothing and drop the whole
+        # VPU's T1/D1 promotions (matches the coercion in nhd_flowlines).
+        on_network = pd.to_numeric(conv["COMID"], errors="coerce").isin(network_comids)
+        conv = conv[on_network]
     onstream: set[int] = set()
 
     if not conv.empty:
@@ -220,7 +233,19 @@ def main() -> None:
         )
     topo = pd.read_parquet(topo_path, columns=["comid", "dnhydroseq"])
     routed_comids = {int(c) for c in topo[topo["dnhydroseq"] != 0]["comid"]}
-    logger.info(f"Loaded {len(routed_comids)} routed-network COMIDs")
+    # Network Flowlines = every COMID with a VAA record (gates T1/D1 candidates
+    # so Non-Network closed-basin lines can't promote endorheic lakes; #161).
+    network_comids = {int(c) for c in topo["comid"]}
+    if not network_comids:
+        raise ValueError(
+            f"flowline_topology.parquet has 0 COMIDs ({topo_path}) → the "
+            "Network-Flowline gate would drop every waterbody to depression "
+            "storage; re-stage via `python -m gfv2_params.download.nhd_topology`."
+        )
+    logger.info(
+        f"Loaded {len(routed_comids)} routed-network + "
+        f"{len(network_comids)} Network-Flowline COMIDs"
+    )
 
     onstream: set[int] = set()
     failures = []
@@ -237,7 +262,9 @@ def main() -> None:
         flowlines = read_layer(flowline, ["COMID", "FTYPE"])
         area_path = locate_layer(flowline, "NHDArea")
         areas = read_layer(area_path, ["FTYPE"]) if area_path else None
-        vpu_set = flowthrough_comids(waterbodies, flowlines, areas, routed_comids)
+        vpu_set = flowthrough_comids(
+            waterbodies, flowlines, areas, routed_comids, network_comids
+        )
         if not vpu_set:
             logger.warning(
                 "VPU %s: 0 flow-through COMIDs — check FTYPE/topology domain values "

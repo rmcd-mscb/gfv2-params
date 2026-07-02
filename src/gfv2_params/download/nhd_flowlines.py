@@ -40,11 +40,21 @@ _S3_HOST = "https://dmap-data-commons-ow.s3.amazonaws.com"
 _S3_NS = "{http://s3.amazonaws.com/doc/2006-03-01/}"
 
 
-def connected_comids_from_flowlines(df: pd.DataFrame) -> set[int]:
+def connected_comids_from_flowlines(
+    df: pd.DataFrame, network_comids: set[int] | None = None
+) -> set[int]:
     """Distinct positive WBAREACOMI values (connected waterbody COMIDs) as ints.
 
     Only positive values are kept: 0 and the -9999 nodata sentinel both mean the
     flowline does not pass through a waterbody.
+
+    When ``network_comids`` is supplied, a WBAREACOMI is kept only if the flowline
+    carrying it is a **Network Flowline** (its COMID is present in the NHDPlus
+    PlusFlowlineVAA topology). NHD draws Non-Network artificial paths through
+    essentially every closed-basin lake, so the ungated WBAREACOMI set promotes
+    genuinely endorheic waterbodies on-stream and wrongly drops them from
+    depression storage (see issue #161). When omitted, every positive WBAREACOMI
+    is kept (the pre-gate contract; the COMID column is not required).
 
     Raises ValueError if any non-null WBAREACOMI fails to parse as a number.
     WBAREACOMI is a numeric COMID field, so a parse failure means a column-format
@@ -59,6 +69,9 @@ def connected_comids_from_flowlines(df: pd.DataFrame) -> set[int]:
             f"{n_lost} non-null WBAREACOMI value(s) failed numeric parse — "
             "likely a column-format change in this NHDFlowline snapshot."
         )
+    if network_comids is not None:
+        on_network = pd.to_numeric(df["COMID"], errors="coerce").isin(network_comids)
+        col = col[on_network]
     vals = col[col > 0]
     return {int(v) for v in vals.unique()}
 
@@ -179,6 +192,28 @@ def main() -> None:
     download_dir.mkdir(parents=True, exist_ok=True)
     extract_dir.mkdir(parents=True, exist_ok=True)
 
+    # Network Flowlines are those with a PlusFlowlineVAA record (staged by
+    # nhd_topology). Gating WBAREACOMI on network membership keeps closed-basin
+    # lakes NHD tagged only via Non-Network artificial paths out of the on-stream
+    # set (issue #161), so they stay depression storage.
+    topo_path = data_root / "input/nhd/flowline_topology.parquet"
+    if not topo_path.exists():
+        raise FileNotFoundError(
+            f"flowline_topology.parquet not found: {topo_path}. Run "
+            f"`python -m gfv2_params.download.nhd_topology` first."
+        )
+    network_comids = {
+        int(c) for c in pd.read_parquet(topo_path, columns=["comid"])["comid"]
+    }
+    if not network_comids:
+        raise ValueError(
+            f"flowline_topology.parquet has 0 COMIDs ({topo_path}) → the "
+            "Network-Flowline gate would drop every WBAREACOMI waterbody to "
+            "depression storage; re-stage via "
+            "`python -m gfv2_params.download.nhd_topology`."
+        )
+    logger.info(f"Loaded {len(network_comids)} Network-Flowline COMIDs")
+
     connected: set[int] = set()
     failures = []
     for vpu, dd in vpu_index.items():
@@ -187,13 +222,25 @@ def main() -> None:
             failures.append(vpu)
             continue
         df = read_flowline_attrs(flowline)
-        vpu_connected = connected_comids_from_flowlines(df)
+        vpu_connected = connected_comids_from_flowlines(df, network_comids)
         logger.info(f"VPU {vpu}: {len(vpu_connected)} connected waterbody COMIDs")
         connected |= vpu_connected
 
     if failures:
         # A silently dropped VPU under-flags connectivity there — make it loud.
         raise RuntimeError(f"NHDSnapshot download/read failed for VPU(s): {failures}")
+
+    if not connected:
+        # Symmetric with nhd_flowthrough's empty-onstream guard: an empty set
+        # here would revert every WBAREACOMI waterbody to depression storage.
+        # With the Network-Flowline gate, a partial/empty topology parquet or a
+        # COMID column-format change can silently cause this — fail loud instead.
+        raise ValueError(
+            "distilled 0 connected WBAREACOMI COMIDs across all VPUs → every "
+            "WBAREACOMI waterbody would revert to depression storage; likely an "
+            "empty/partial flowline_topology.parquet or a COMID column-format "
+            "change."
+        )
 
     out_path = data_root / "input/nhd/connected_waterbody_comids.parquet"
     write_connected_comids(connected, out_path)
