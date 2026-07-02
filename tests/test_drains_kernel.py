@@ -1,7 +1,10 @@
 import numpy as np
 import pytest
 
-from gfv2_params.d8_routing import drains_to_dprst_kernel
+from gfv2_params.d8_routing import (
+    drains_to_dprst_kernel,
+    drains_to_dprst_labeled_kernel,
+)
 
 # ESRI D8 codes used in the fixtures:
 #   1=E  2=SE  4=S  8=SW  16=W  32=NW  64=N  128=NE   255=nodata/sink
@@ -237,3 +240,44 @@ def test_mismatched_barrier_shape_raises():
     barrier = np.zeros((2, 1), dtype=np.uint8)
     with pytest.raises(ValueError):
         drains_to_dprst_kernel(fdr, pour, barrier)
+
+
+def test_labeled_barrier_blocks_upslope():
+    # cell0 -> cell1 -> [barrier] -> [dprst label 7]
+    fdr = np.array([[1, 1, 1, 255]], dtype=np.uint8)
+    label = np.array([[0, 0, 0, 7]], dtype=np.int32)
+    barrier = np.array([[0, 0, 1, 0]], dtype=np.uint8)
+    out, n = drains_to_dprst_labeled_kernel(fdr, label, barrier)
+    assert out.tolist() == [[0, 0, 0, 7]]
+    assert n == 0
+
+
+def test_labeled_no_barrier_matches_unbarriered():
+    # all-zero barrier reproduces the straight-chain label fill
+    fdr = np.array([[1, 1, 1, 255]], dtype=np.uint8)
+    label = np.array([[0, 0, 0, 7]], dtype=np.int32)
+    barrier = np.zeros_like(label, dtype=np.uint8)
+    out, n = drains_to_dprst_labeled_kernel(fdr, label, barrier)
+    assert out.tolist() == [[7, 7, 7, 7]]
+    assert n == 0
+
+
+def test_labeled_mismatched_shape_raises():
+    # Same guard as drains_to_dprst_kernel, but for the labeled wrapper: a
+    # label/barrier that isn't the same shape as fdr must raise, not silently
+    # OOB (numba runs bounds-check-off).
+    fdr = np.zeros((2, 2), dtype=np.uint8)
+    label = np.zeros((2, 2), dtype=np.int32)
+    barrier = np.zeros((2, 1), dtype=np.uint8)
+    with pytest.raises(ValueError):
+        drains_to_dprst_labeled_kernel(fdr, label, barrier)
+
+
+def test_labeled_first_waterbody_wins():
+    # cell0 -> [dprst 5] -> [barrier]: label reached before barrier
+    fdr = np.array([[1, 1, 255]], dtype=np.uint8)
+    label = np.array([[0, 5, 0]], dtype=np.int32)
+    barrier = np.array([[0, 0, 1]], dtype=np.uint8)
+    out, n = drains_to_dprst_labeled_kernel(fdr, label, barrier)
+    assert out.tolist() == [[5, 5, 0]]
+    assert n == 0

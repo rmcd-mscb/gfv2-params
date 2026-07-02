@@ -2,8 +2,13 @@
 
 Ported from depstor's RasterPipeline (depstor/scripts/DepStor.py:42-410), but
 operating on numpy arrays + a shared raster template. The depstor "rasterize
-HRU polygons and tag cells with HRU IDs" pattern is intentionally NOT carried
-over — gdptools handles HRU overlay directly during zonal aggregation.
+HRU polygons and tag cells with HRU IDs" pattern is carried over narrowly: the
+`hru_id`/`routing_hru`/`same_hru_drains` builders rasterize `nat_hru_id`
+(`rasterize_ids` → `hru_id.tif`) to reinstate the legacy same-HRU restriction
+on `sro_to_dprst_perv/imperv` (`same_hru_intersect`, a per-cell raster-space
+test — see docs/ARCHITECTURE.md). Everywhere else, gdptools still handles HRU
+overlay directly during zonal aggregation, including the per-HRU COUNT for
+these same params.
 
 All raster outputs use the conventions:
 - uint8 binary masks: value 1 = present, value 255 = nodata
@@ -19,6 +24,7 @@ from typing import Optional
 import numpy as np
 import pandas as pd
 import rasterio
+from osgeo import gdal
 from rasterio.coords import BoundingBox
 from rasterio.crs import CRS
 from rasterio.features import rasterize as rio_rasterize
@@ -77,6 +83,36 @@ def rasterize_binary(gdf, info: RasterInfo, all_touched: bool = False) -> np.nda
         all_touched=all_touched,
     )
     return out
+
+
+def rasterize_ids(
+    gdf, id_field: str, info: "RasterInfo", all_touched: bool = False,
+) -> np.ndarray:
+    """Burn an integer id attribute onto the template grid (0 = no polygon).
+
+    Geometries are reprojected to `info.crs` first if needed — a CRS-mismatched
+    burn silently lands geometries in the wrong place (no error), so guard it as
+    every other rasterize helper here does.
+
+    `all_touched` must match the footprint of any raster this output is later
+    compared against cell-by-cell. In particular, `hru_id.tif` needs
+    `all_touched=True` to match `land_mask.tif`/`perv_binary.tif` (rasterised
+    with `all_touched=True` in `landmask.py`) — otherwise HRU-boundary land
+    cells burn as `hru_id==0` under the default centroid rule, and
+    `same_hru_intersect` (which requires `labeled==hru_id & labeled>0`) silently
+    drops them, undercounting `drains_perv`/`drains_imperv` at every HRU edge.
+    """
+    if gdf.crs is None:
+        raise ValueError("Input GeoDataFrame has no CRS")
+    if info.crs is None:
+        raise ValueError("RasterInfo has no CRS")
+    if gdf.crs != info.crs:
+        gdf = gdf.to_crs(info.crs)
+    shapes = ((geom, int(val)) for geom, val in zip(gdf.geometry, gdf[id_field]))
+    return rio_rasterize(
+        shapes, out_shape=(info.height, info.width), transform=info.transform,
+        fill=0, dtype="int32", all_touched=all_touched,
+    ).astype(np.int32, copy=False)
 
 
 def threshold_above(values: np.ndarray, threshold: float, src_nodata) -> np.ndarray:
@@ -162,6 +198,21 @@ def intersect_binaries(a: np.ndarray, b: np.ndarray) -> np.ndarray:
     mask = (a == 1) & (b == 1)
     out = np.full_like(a, 255, dtype=np.uint8)
     out[mask] = 1
+    return out
+
+
+def same_hru_intersect(labeled: np.ndarray, hru_id: np.ndarray, land: np.ndarray) -> np.ndarray:
+    """1 where a land cell drains to a depression in its OWN HRU, else 255.
+
+    `labeled` is the per-cell reached-depression HRU id (0 = doesn't drain to
+    any depression, from `drains_to_dprst_hru.tif`); `hru_id` is the cell's own
+    HRU id; `land` is a 1/255 binary mask (perv or imperv). Restores the same-HRU
+    restriction from the legacy `Con(rSro == hru)` (docs/0b_TB_depr_stor.py:214) —
+    a per-cell raster-space comparison, not a gdptools zonal operation.
+    """
+    hit = (labeled == hru_id) & (labeled > 0) & (land == 1)
+    out = np.full(land.shape, np.uint8(255), dtype=np.uint8)
+    out[hit] = 1
     return out
 
 
@@ -297,9 +348,9 @@ def uint8_binary_profile(info: RasterInfo) -> dict:
     """Build the rasterio profile dict for a uint8 binary raster.
 
     Used by both the full-array writer (`write_uint8_binary`, below) and the
-    streaming depstor builders (`perv`, `carea_map`, `intersect`). Keeping a
-    single source means the two write paths can't drift on compression,
-    tiling, nodata, or BIGTIFF settings.
+    streaming depstor builders (`perv`, `carea_map`, `same_hru_drains`).
+    Keeping a single source means the two write paths can't drift on
+    compression, tiling, nodata, or BIGTIFF settings.
     """
     return {
         "driver": "GTiff",
@@ -347,7 +398,7 @@ def write_int32_regions(arr: np.ndarray, info: RasterInfo, out_path: Path) -> No
         "BIGTIFF": "YES",
     }
     with rasterio.open(out_path, "w", **profile) as dst:
-        dst.write(arr.astype(np.int32), 1)
+        dst.write(arr.astype(np.int32, copy=False), 1)
 
 
 def read_aligned_uint8(path: Path, info: RasterInfo) -> np.ndarray:
@@ -367,6 +418,48 @@ def read_aligned_uint8(path: Path, info: RasterInfo) -> np.ndarray:
         if src.transform != info.transform:
             raise ValueError(f"Raster {path} transform mismatch with template")
         return src.read(1)
+
+
+def align_fdr_to_dprst_grid(fdr_path, dprst_path, out_path, logger) -> None:
+    """Materialise the FDR onto the dprst grid as a concrete GeoTIFF.
+
+    Streams via gdal.Warp (block-by-block, bounded RAM) rather than an in-memory
+    rioxarray.reproject_match: the latter materialised the full 16.9-billion-cell
+    CONUS array plus float intermediates and OOM-killed the step at ~400 GB on a
+    uint8 source that is only ~17 GB. The FDR clip already shares the dprst grid,
+    so this is a near-identity nearest-neighbour resample that just realises the
+    VRT into a concrete raster for fast per-VPU windowed reads.
+    """
+    logger.info("  Aligning FDR to dprst grid (gdal.Warp, streaming)...")
+    gdal.UseExceptions()
+    with rasterio.open(dprst_path) as d:
+        b = d.bounds
+        width, height, dst_srs = d.width, d.height, d.crs.to_wkt()
+    with rasterio.open(fdr_path) as f:
+        src_nodata = f.nodata
+    if out_path.exists():
+        out_path.unlink()
+    ds = gdal.Warp(
+        str(out_path),
+        str(fdr_path),
+        options=gdal.WarpOptions(
+            format="GTiff",
+            outputBounds=[b.left, b.bottom, b.right, b.top],
+            width=width,
+            height=height,
+            dstSRS=dst_srs,
+            resampleAlg="near",
+            outputType=gdal.GDT_Byte,
+            srcNodata=src_nodata,
+            dstNodata=255,
+            multithread=True,
+            warpMemoryLimit=2_000_000_000,
+            creationOptions=["COMPRESS=LZW", "TILED=YES", "BLOCKXSIZE=256", "BLOCKYSIZE=256", "BIGTIFF=YES"],
+        ),
+    )
+    if ds is None:
+        raise RuntimeError(f"gdal.Warp produced no dataset for {out_path} — FDR alignment failed.")
+    ds = None  # flush/close
 
 
 def vpu_codes_present(vpu_id: np.ndarray, nodata: int = 0) -> list[int]:

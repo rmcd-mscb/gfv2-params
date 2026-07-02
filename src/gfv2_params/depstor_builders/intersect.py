@@ -1,8 +1,13 @@
 """Cell-wise intersection of two aligned uint8 binary rasters.
 
-Used for both drains_perv (drains_to_dprst x perv) and drains_imperv
-(drains_to_dprst x imperv). The step config names the inputs by their
-upstream-output key (`drains_to_dprst`, `perv`, `imperv`).
+`build()` here is no longer wired into `drains_perv`/`drains_imperv` — those
+steps were rewired to `same_hru_drains.build()` (a same-HRU-restricted
+intersection, not a plain one; see that module's docstring), and this module
+is not imported by `depstor_builders/__init__.py`'s `BUILDERS`/`STEP_ORDER`.
+It is retained as a generic two-input intersection builder in case a future
+step needs a plain cell-wise AND. `intersect_binaries` in `depstor.py` (the
+helper this module wraps) is still exercised directly by
+`tests/test_intersect_binaries.py`.
 """
 
 from __future__ import annotations

@@ -34,12 +34,12 @@ from gfv2_params.d8_routing import (
 )
 from gfv2_params.depstor import (
     RasterInfo,
+    align_fdr_to_dprst_grid,
     mask_fdr_to_vpu,
     read_aligned_uint8,
     vpu_bbox,
     vpu_pour_points,
 )
-from gfv2_params.depstor_builders.routing import _align_fdr_to_dprst_grid
 
 _FDR_CHOICES = ("production", "fill", "breach")
 
@@ -66,7 +66,7 @@ def _run_one_vpu(fdr_path, dprst_path, vpu_id_path, template_path, vpu_code,
                  labels_path, out_tif, out_csv, logger):
     info = RasterInfo.from_path(template_path)
     fdr_aligned = out_tif.parent / f"_fdr_aligned_{vpu_code}.tif"
-    _align_fdr_to_dprst_grid(fdr_path, dprst_path, fdr_aligned, logger)
+    align_fdr_to_dprst_grid(fdr_path, dprst_path, fdr_aligned, logger)
     try:
         vpu_id = read_aligned_uint8(vpu_id_path, info)
         code = int(vpu_code)
@@ -104,8 +104,14 @@ def _run_one_vpu(fdr_path, dprst_path, vpu_id_path, template_path, vpu_code,
             # too and attribute whole river-corridor catchments to them, so the
             # per-depression sum would not match the dprst-seeded binary drains.
             label_win[(vpu_win != code) | (dprst_win != 1)] = 0
-            labeled, _ = drains_to_dprst_labeled_kernel(fdr_masked, label_win,
-                                                        fdr_nodata=255)
+            # This A/B diagnostic has no on-stream barrier concept (see the
+            # no_barrier comment above for the binary kernel); pass an
+            # all-zero barrier so labeled coverage stays comparable to the
+            # barrier-free binary drains count in the n_labeled == n_drain
+            # self-check below.
+            labeled, _ = drains_to_dprst_labeled_kernel(
+                fdr_masked, label_win, np.zeros_like(label_win, dtype=np.uint8),
+                fdr_nodata=255)
             counts = per_depression_counts(labeled)
             # Consistency self-check: same pour-points => labeled coverage must
             # equal the binary dprst-drains count. A mismatch means the label

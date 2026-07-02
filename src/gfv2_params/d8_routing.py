@@ -17,7 +17,9 @@ overlap with a barrier).
 
 `drains_to_dprst_labeled_kernel` extends this to per-depression attribution:
 each cell receives the label of the specific depression its D8 path reaches,
-enabling per-depression contributing-area counts.
+enabling per-depression contributing-area counts. It takes the same barrier
+treatment as `drains_to_dprst_kernel` (barrier seeds as a non-draining
+terminus; labels win any overlap with a barrier).
 
 This is the ONLY numba user in the package; it is deliberately isolated here so
 the widely-imported `depstor.py` stays numba-free.
@@ -153,7 +155,7 @@ def _resolve(fdr, pour, barrier, fdr_nodata):
 
 
 @njit(cache=True)
-def _resolve_labeled(fdr, label, fdr_nodata):
+def _resolve_labeled(fdr, label, barrier, fdr_nodata):
     ny, nx = fdr.shape
     st = np.zeros((ny, nx), dtype=np.uint8)
     lab = np.zeros((ny, nx), dtype=np.int32)
@@ -164,6 +166,13 @@ def _resolve_labeled(fdr, label, fdr_nodata):
             if label[r, c] > 0:
                 st[r, c] = _DRAINS
                 lab[r, c] = label[r, c]
+
+    # Seed barriers (on-stream waterbodies) as non-draining termini, but only
+    # where not already a label cell — labels win any overlap.
+    for r in range(ny):
+        for c in range(nx):
+            if barrier[r, c] == 1 and st[r, c] == _UNKNOWN:
+                st[r, c] = _NOT
 
     cap = 1 << 20
     stack_r = np.empty(cap, dtype=np.int64)
@@ -310,15 +319,32 @@ def drains_to_dprst_kernel(fdr_win, pour_win, barrier_win, fdr_nodata=255):
     return _resolve(fdr, pour, barrier, np.uint8(fdr_nodata))
 
 
-def drains_to_dprst_labeled_kernel(fdr_win, label_win, fdr_nodata=255):
+def drains_to_dprst_labeled_kernel(fdr_win, label_win, barrier_win, fdr_nodata=255):
     """Per-cell label of the depression its ESRI-D8 path reaches (0 = none).
 
     Like ``drains_to_dprst_kernel`` but attributes each draining cell to a
     specific depression. ``label_win`` carries each depression region's unique
     positive id at its cells (0 background); the return holds that id for every
     cell that drains there, enabling per-depression contributing-area counts via
-    ``np.bincount(out.ravel())``. Returns ``(out_int32, n_cycles)``.
+    ``np.bincount(out.ravel())``.
+
+    ``barrier_win`` (required, uint8, same shape): 1 = barrier cell (on-stream
+    waterbody). A flow path that reaches a barrier before it reaches a labeled
+    depression stops there and is `0` in the output — the first waterbody on
+    the flow path wins. Labels win any (impossible-by-construction) overlap
+    with a barrier.
+
+    Returns ``(out_int32, n_cycles)``.
     """
+    # numba runs with bounds-checking off; a smaller label/barrier than fdr
+    # would be silent out-of-bounds reads, not an error. Guard loudly in
+    # plain Python (parity with drains_to_dprst_kernel's guard above).
+    if not (fdr_win.shape == label_win.shape == barrier_win.shape):
+        raise ValueError(
+            f"fdr/label/barrier shapes must match: {fdr_win.shape}, "
+            f"{label_win.shape}, {barrier_win.shape}"
+        )
     fdr = np.ascontiguousarray(fdr_win, dtype=np.uint8)
     label = np.ascontiguousarray(label_win, dtype=np.int32)
-    return _resolve_labeled(fdr, label, np.uint8(fdr_nodata))
+    barrier = np.ascontiguousarray(barrier_win, dtype=np.uint8)
+    return _resolve_labeled(fdr, label, barrier, np.uint8(fdr_nodata))

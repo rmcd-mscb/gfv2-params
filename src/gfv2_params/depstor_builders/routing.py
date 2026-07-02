@@ -26,12 +26,12 @@ from __future__ import annotations
 
 import numpy as np
 import rasterio
-from osgeo import gdal
 from rasterio.windows import Window
 
 from ..d8_routing import drains_to_dprst_kernel
 from ..depstor import (
     RasterInfo,
+    align_fdr_to_dprst_grid,
     assert_raster_aligned,
     assign_vpu_drains,
     mask_fdr_to_vpu,
@@ -47,48 +47,6 @@ from .context import BuildContext
 # ESRI-D8 flow codes plus the nodata/sink value (255). Any other value in the
 # FDR is unexpected and is silently treated as a sink by the kernel — surface it.
 _VALID_FDR_VALUES = frozenset({1, 2, 4, 8, 16, 32, 64, 128, 255})
-
-
-def _align_fdr_to_dprst_grid(fdr_path, dprst_path, out_path, logger) -> None:
-    """Materialise the FDR onto the dprst grid as a concrete GeoTIFF.
-
-    Streams via gdal.Warp (block-by-block, bounded RAM) rather than an in-memory
-    rioxarray.reproject_match: the latter materialised the full 16.9-billion-cell
-    CONUS array plus float intermediates and OOM-killed the step at ~400 GB on a
-    uint8 source that is only ~17 GB. The FDR clip already shares the dprst grid,
-    so this is a near-identity nearest-neighbour resample that just realises the
-    VRT into a concrete raster for fast per-VPU windowed reads.
-    """
-    logger.info("  Aligning FDR to dprst grid (gdal.Warp, streaming)...")
-    gdal.UseExceptions()
-    with rasterio.open(dprst_path) as d:
-        b = d.bounds
-        width, height, dst_srs = d.width, d.height, d.crs.to_wkt()
-    with rasterio.open(fdr_path) as f:
-        src_nodata = f.nodata
-    if out_path.exists():
-        out_path.unlink()
-    ds = gdal.Warp(
-        str(out_path),
-        str(fdr_path),
-        options=gdal.WarpOptions(
-            format="GTiff",
-            outputBounds=[b.left, b.bottom, b.right, b.top],
-            width=width,
-            height=height,
-            dstSRS=dst_srs,
-            resampleAlg="near",
-            outputType=gdal.GDT_Byte,
-            srcNodata=src_nodata,
-            dstNodata=255,
-            multithread=True,
-            warpMemoryLimit=2_000_000_000,
-            creationOptions=["COMPRESS=LZW", "TILED=YES", "BLOCKXSIZE=256", "BLOCKYSIZE=256", "BIGTIFF=YES"],
-        ),
-    )
-    if ds is None:
-        raise RuntimeError(f"gdal.Warp produced no dataset for {out_path} — FDR alignment failed.")
-    ds = None  # flush/close
 
 
 def build(step_cfg: dict, ctx: BuildContext, logger) -> dict:
@@ -118,7 +76,7 @@ def build(step_cfg: dict, ctx: BuildContext, logger) -> dict:
     fdr_aligned = output_path.parent / "fdr_aligned.tif"
 
     try:
-        _align_fdr_to_dprst_grid(ctx.fdr_raster, dprst_path, fdr_aligned, logger)
+        align_fdr_to_dprst_grid(ctx.fdr_raster, dprst_path, fdr_aligned, logger)
 
         # read_aligned_uint8 asserts vpu_id is on the exact template grid;
         # a mismatch would silently mosaic into the wrong CONUS region.

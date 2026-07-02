@@ -21,6 +21,7 @@ class BuildContext:
     output_dir: Path
     hru_gpkg: Path
     hru_layer: str
+    id_feature: str = "nat_hru_id"
     segments_gpkg: Path | None = None
     segments_layer: str = "nsegment"
     waterbody_gpkg: Path | None = None
