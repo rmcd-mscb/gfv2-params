@@ -81,7 +81,12 @@ def _run_one_vpu(fdr_path, dprst_path, vpu_id_path, template_path, vpu_code,
             dprst_win = dsrc.read(1, window=window)
         fdr_masked = mask_fdr_to_vpu(fdr_win, vpu_win, code, nodata=255)
         pour = vpu_pour_points(dprst_win, vpu_win, code)
-        drains, n_cycles = drains_to_dprst_kernel(fdr_masked, pour, fdr_nodata=255)
+        # This A/B diagnostic compares FDR variants only; it has no on-stream
+        # barrier concept, so pass an all-zero barrier (keeps the binary result
+        # comparable to the barrier-free labeled kernel below for the
+        # n_labeled == n_drain self-check).
+        no_barrier = np.zeros_like(pour)
+        drains, n_cycles = drains_to_dprst_kernel(fdr_masked, pour, no_barrier, fdr_nodata=255)
         n_land = int((vpu_win == code).sum())
         n_drain = int((drains[vpu_win == code] == 1).sum())
         logger.info("VPU %d [%s]: %d/%d land cells drain (%.4f); %d cycles",

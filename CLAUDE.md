@@ -86,6 +86,13 @@ These are hard-won; violating them silently corrupts outputs.
   on a fully drainage-enforced FDR with interior sinks removed — *not* the opt-in
   richdem `Fdr_hydrodem` from `compute_dem_derivatives.py`. See `docs/ARCHITECTURE.md`
   and issue #147 (depression-respecting FDR investigation) for the provenance/tradeoff.
+- **On-stream waterbodies are traversal barriers in `routing`.** Land upslope
+  of an on-stream (non-dprst) waterbody is captured by that waterbody's
+  stream/lake routing and must not be attributed to a downstream depression —
+  `routing` stops a cell's D8 trace at the first on-stream waterbody cell it
+  hits, before it can reach a dprst pour-point. The barrier set is the full
+  `onstream` mask (no size filtering); the fix is a strict subtraction that
+  can only reduce `drains_to_dprst` coverage, never increase it.
 - **Land masking.** Every depstor raster is masked against `land_mask.tif` (HRU
   fabric rasterised by the `landmask` step). Never use hydro-DEM nodata or FDR
   as a land mask.

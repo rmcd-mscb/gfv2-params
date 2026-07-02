@@ -1,5 +1,6 @@
 import numpy as np
 
+from gfv2_params.d8_routing import drains_to_dprst_kernel
 from gfv2_params.depstor import (
     assign_vpu_drains,
     mask_fdr_to_vpu,
@@ -77,3 +78,19 @@ def test_assign_vpu_drains_all_nodata_marks_nothing():
     ws = np.full((2, 2), -32768, dtype=np.int32)
     assign_vpu_drains(drains, vpu, 1, (0, 2, 0, 2), ws, ws_nodata=-32768)
     assert (drains == 255).all()
+
+
+def test_onstream_barrier_blocks_drainage_at_helper_level():
+    # Single VPU (code 1). Row flows East into a dprst pour at the right end,
+    # with an on-stream waterbody cell in the middle acting as a barrier.
+    #   land -> land -> [onstream] -> [dprst]
+    vpu = np.ones((1, 4), dtype=np.uint8)
+    fdr = np.array([[1, 1, 1, 255]], dtype=np.uint8)
+    dprst = np.array([[0, 0, 0, 1]], dtype=np.uint8)
+    onstream = np.array([[0, 0, 1, 0]], dtype=np.uint8)
+
+    pour = vpu_pour_points(dprst, vpu, code=1)
+    barrier = vpu_pour_points(onstream, vpu, code=1)  # reused: mask ∩ VPU
+    out, _ = drains_to_dprst_kernel(fdr, pour, barrier)
+
+    assert out.tolist() == [[0, 0, 0, 1]]  # upslope land blocked by on-stream cell

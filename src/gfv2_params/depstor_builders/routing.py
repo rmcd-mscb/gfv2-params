@@ -7,6 +7,14 @@ WhiteboxTools `Watershed`, which hung on CONUS VPU 2 (a flow-cycle /
 pathological-trace stall, not OOM). See
 docs/superpowers/specs/2026-05-29-depstor-d8-routing-kernel-design.md.
 
+On-stream waterbody cells (`onstream_binary.tif`, emitted by the `dprst` step)
+are passed to the kernel as traversal barriers: a flow path that reaches an
+on-stream waterbody before it reaches a dprst pour-point stops there and is
+marked non-draining, so land captured by an on-stream lake is not attributed
+to a downstream depression — traversal stops at the first waterbody on each
+flow path. This makes `drains_to_dprst` a strict subtraction from the
+pre-barrier raster (coverage can only decrease).
+
 NHDPlus VPU boundaries follow drainage divides, so each VPU's contributing area
 is local: we route each VPU in isolation (FDR masked to the VPU via vpu_id) and
 mosaic the per-VPU results into the CONUS grid. Memory note: this keeps the
@@ -24,6 +32,7 @@ from rasterio.windows import Window
 from ..d8_routing import drains_to_dprst_kernel
 from ..depstor import (
     RasterInfo,
+    assert_raster_aligned,
     assign_vpu_drains,
     mask_fdr_to_vpu,
     read_aligned_uint8,
@@ -88,6 +97,7 @@ def build(step_cfg: dict, ctx: BuildContext, logger) -> dict:
     output_path = ctx.resolve_output(step_cfg["output"])
     landmask_path = ctx.require("landmask")
     dprst_path = ctx.require("dprst")
+    onstream_path = ctx.require("onstream")
     vpu_id_path = ctx.require("vpu_id")
     keep_intermediates = bool(step_cfg.get("keep_intermediates", False))
 
@@ -118,7 +128,14 @@ def build(step_cfg: dict, ctx: BuildContext, logger) -> dict:
 
         drains = np.full((info.height, info.width), np.uint8(255), dtype=np.uint8)
 
-        with rasterio.open(fdr_aligned) as fdr_src, rasterio.open(dprst_path) as dprst_src:
+        with rasterio.open(fdr_aligned) as fdr_src, \
+                rasterio.open(dprst_path) as dprst_src, \
+                rasterio.open(onstream_path) as onstream_src:
+            # dprst/onstream are windowed by vpu_id's grid; a same-shape but
+            # differently-georeferenced raster would be read at the wrong origin
+            # silently. Assert both are on the template grid (as carea_map does).
+            assert_raster_aligned(dprst_src, info, "dprst")
+            assert_raster_aligned(onstream_src, info, "onstream")
             for code in codes:
                 bbox = vpu_bbox(vpu_id, code)
                 r0, r1, c0, c1 = bbox
@@ -126,9 +143,14 @@ def build(step_cfg: dict, ctx: BuildContext, logger) -> dict:
                 vpu_win = vpu_id[r0:r1, c0:c1]
                 fdr_win = fdr_src.read(1, window=window)
                 dprst_win = dprst_src.read(1, window=window)
+                onstream_win = onstream_src.read(1, window=window)
 
                 fdr_masked = mask_fdr_to_vpu(fdr_win, vpu_win, code, nodata=255)
                 pour = vpu_pour_points(dprst_win, vpu_win, code)
+                # On-stream waterbodies of THIS vpu are traversal barriers, so
+                # land captured by an on-stream lake is not attributed to a
+                # downstream dprst. vpu_pour_points is the generic mask∩VPU op.
+                barrier = vpu_pour_points(onstream_win, vpu_win, code)
 
                 unexpected = set(np.unique(fdr_masked).tolist()) - _VALID_FDR_VALUES
                 if unexpected:
@@ -139,8 +161,11 @@ def build(step_cfg: dict, ctx: BuildContext, logger) -> dict:
 
                 # In-process D8 traversal (replaces WBT Watershed). Output is
                 # 1 where the cell drains to a pour-point, else 0, so
-                # assign_vpu_drains treats 0 as nodata.
-                ws_win, n_cycles = drains_to_dprst_kernel(fdr_masked, pour, fdr_nodata=255)
+                # assign_vpu_drains treats 0 as nodata. Barrier cells (on-stream
+                # waterbodies) stop the traversal before it reaches a pour.
+                ws_win, n_cycles = drains_to_dprst_kernel(
+                    fdr_masked, pour, barrier, fdr_nodata=255
+                )
                 if n_cycles:
                     logger.warning(
                         "  VPU %d: %d flow cycle(s) in FDR — those cells marked "
@@ -148,10 +173,15 @@ def build(step_cfg: dict, ctx: BuildContext, logger) -> dict:
                     )
                 assign_vpu_drains(drains, vpu_id, code, bbox, ws_win, ws_nodata=0)
                 n_vpu = int((drains[r0:r1, c0:c1][vpu_win == code] == 1).sum())
+                n_barrier = int((barrier == 1).sum())
+                if n_barrier:
+                    logger.info("  VPU %d: %d on-stream barrier cell(s)", code, n_barrier)
                 if n_vpu == 0:
                     logger.warning(
-                        "  VPU %d: 0 cells drain to dprst — expected for a VPU with "
-                        "no depressions, else check dprst/vpu_id alignment.", code,
+                        "  VPU %d: 0 cells drain to dprst (%d on-stream barrier "
+                        "cell(s)) — expected for a VPU with no depressions or where "
+                        "barriers intercept every path, else check "
+                        "dprst/vpu_id/onstream alignment.", code, n_barrier,
                     )
                 else:
                     logger.info("  VPU %d: %d cells drain to dprst", code, n_vpu)

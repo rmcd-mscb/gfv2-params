@@ -1,4 +1,5 @@
 import numpy as np
+import pytest
 
 from gfv2_params.d8_routing import drains_to_dprst_kernel
 
@@ -12,7 +13,7 @@ def test_pour_point_itself_drains():
     # A lone pour point with no inflow still counts as draining.
     fdr = np.array([[255]], dtype=np.uint8)
     pour = np.array([[1]], dtype=np.uint8)
-    out, n_cycles = drains_to_dprst_kernel(fdr, pour)
+    out, n_cycles = drains_to_dprst_kernel(fdr, pour, np.zeros_like(pour))
     assert out.tolist() == [[1]]
     assert n_cycles == 0
 
@@ -22,7 +23,7 @@ def test_straight_chain_into_pour_point():
     # cells:  ->  ->  ->  [pour]
     fdr = np.array([[1, 1, 1, 255]], dtype=np.uint8)
     pour = np.array([[0, 0, 0, 1]], dtype=np.uint8)
-    out, n_cycles = drains_to_dprst_kernel(fdr, pour)
+    out, n_cycles = drains_to_dprst_kernel(fdr, pour, np.zeros_like(pour))
     # every upstream cell reaches the pour point
     assert out.tolist() == [[1, 1, 1, 1]]
     assert n_cycles == 0
@@ -33,7 +34,7 @@ def test_chain_draining_away_is_not_marked():
     # The pour point drains (itself); nothing upstream of it exists.
     fdr = np.array([[16, 16, 16, 255]], dtype=np.uint8)
     pour = np.array([[0, 0, 0, 1]], dtype=np.uint8)
-    out, n_cycles = drains_to_dprst_kernel(fdr, pour)
+    out, n_cycles = drains_to_dprst_kernel(fdr, pour, np.zeros_like(pour))
     # cells 0..2 flow further West off-grid -> do not reach the pour point
     assert out.tolist() == [[0, 0, 0, 1]]
     assert n_cycles == 0
@@ -44,7 +45,7 @@ def test_two_cell_cycle_with_no_pour_terminates_and_marks_zero():
     # left flows East (1) into right; right flows West (16) into left.
     fdr = np.array([[1, 16]], dtype=np.uint8)
     pour = np.array([[0, 0]], dtype=np.uint8)
-    out, n_cycles = drains_to_dprst_kernel(fdr, pour)  # must return, not hang
+    out, n_cycles = drains_to_dprst_kernel(fdr, pour, np.zeros_like(pour))  # must return, not hang
     assert out.tolist() == [[0, 0]]
     assert n_cycles >= 1  # the cycle is detected and counted
 
@@ -54,7 +55,7 @@ def test_four_cell_cycle_with_no_pour_terminates_and_marks_zero():
     fdr = np.array([[1, 4],
                     [64, 16]], dtype=np.uint8)
     pour = np.zeros((2, 2), dtype=np.uint8)
-    out, n_cycles = drains_to_dprst_kernel(fdr, pour)  # must return, not hang
+    out, n_cycles = drains_to_dprst_kernel(fdr, pour, np.zeros_like(pour))  # must return, not hang
     assert out.tolist() == [[0, 0], [0, 0]]
     assert n_cycles >= 1
 
@@ -65,7 +66,7 @@ def test_cell_upstream_of_cycle_not_marked():
     #   col0 -> col1 -> col2, col2 -> col1  => cycle between col1 and col2
     fdr = np.array([[1, 1, 16]], dtype=np.uint8)
     pour = np.array([[0, 0, 0]], dtype=np.uint8)
-    out, n_cycles = drains_to_dprst_kernel(fdr, pour)  # must return, not hang
+    out, n_cycles = drains_to_dprst_kernel(fdr, pour, np.zeros_like(pour))  # must return, not hang
     assert out.tolist() == [[0, 0, 0]]
     assert n_cycles >= 1
 
@@ -78,7 +79,7 @@ def test_cycle_containing_pour_point_marks_drains():
     # left(E->right) and right(W->left) form a cycle; left is the pour point.
     fdr = np.array([[1, 16]], dtype=np.uint8)
     pour = np.array([[1, 0]], dtype=np.uint8)  # col 0 is the pour point
-    out, n_cycles = drains_to_dprst_kernel(fdr, pour)
+    out, n_cycles = drains_to_dprst_kernel(fdr, pour, np.zeros_like(pour))
     # col 0 is the pour point => drains; col 1 flows into it => drains too
     assert out.tolist() == [[1, 1]]
     assert n_cycles == 0  # the pour point breaks the cycle before it is entered
@@ -88,7 +89,7 @@ def test_nodata_sink_does_not_drain():
     # Single non-pour sink cell.
     fdr = np.array([[255]], dtype=np.uint8)
     pour = np.array([[0]], dtype=np.uint8)
-    out, n_cycles = drains_to_dprst_kernel(fdr, pour)
+    out, n_cycles = drains_to_dprst_kernel(fdr, pour, np.zeros_like(pour))
     assert out.tolist() == [[0]]
     assert n_cycles == 0
 
@@ -103,7 +104,7 @@ def test_branching_tributaries_all_reach_pour():
                     [255, 255, 255]], dtype=np.uint8)
     pour = np.zeros((3, 3), dtype=np.uint8)
     pour[2, 1] = 1
-    out, n_cycles = drains_to_dprst_kernel(fdr, pour)
+    out, n_cycles = drains_to_dprst_kernel(fdr, pour, np.zeros_like(pour))
     assert out[0, 0] == 1   # NW tributary
     assert out[0, 2] == 1   # NE tributary
     assert out[1, 1] == 1   # confluence
@@ -124,7 +125,7 @@ def test_all_eight_directions_decode_into_a_central_pour():
                     [128, 64, 32]], dtype=np.uint8)
     pour = np.zeros((3, 3), dtype=np.uint8)
     pour[1, 1] = 1
-    out, n_cycles = drains_to_dprst_kernel(fdr, pour)
+    out, n_cycles = drains_to_dprst_kernel(fdr, pour, np.zeros_like(pour))
     assert out.tolist() == [[1, 1, 1], [1, 1, 1], [1, 1, 1]]
     assert n_cycles == 0
 
@@ -133,7 +134,7 @@ def test_off_window_flow_does_not_drain():
     # A cell flowing North off the top edge terminates as does-not-drain.
     fdr = np.array([[64]], dtype=np.uint8)
     pour = np.array([[0]], dtype=np.uint8)
-    out, n_cycles = drains_to_dprst_kernel(fdr, pour)
+    out, n_cycles = drains_to_dprst_kernel(fdr, pour, np.zeros_like(pour))
     assert out.tolist() == [[0]]
     assert n_cycles == 0
 
@@ -142,6 +143,97 @@ def test_custom_nodata_value_terminates():
     # fdr_nodata is configurable; 0 here marks the sink.
     fdr = np.array([[1, 0]], dtype=np.uint8)
     pour = np.array([[0, 0]], dtype=np.uint8)
-    out, n_cycles = drains_to_dprst_kernel(fdr, pour, fdr_nodata=0)
+    out, n_cycles = drains_to_dprst_kernel(fdr, pour, np.zeros_like(pour), fdr_nodata=0)
     assert out.tolist() == [[0, 0]]
     assert n_cycles == 0
+
+
+def test_barrier_blocks_upslope_from_pour():
+    # Row flowing East into a pour point at the right end, with a barrier in
+    # the middle:  cell0 ->  cell1 -> [barrier] -> [pour]
+    # cell0/cell1 hit the barrier before the pour => not draining.
+    fdr = np.array([[1, 1, 1, 255]], dtype=np.uint8)
+    pour = np.array([[0, 0, 0, 1]], dtype=np.uint8)
+    barrier = np.array([[0, 0, 1, 0]], dtype=np.uint8)
+    out, n_cycles = drains_to_dprst_kernel(fdr, pour, barrier)
+    # cell0, cell1 blocked; barrier itself non-draining; pour drains itself.
+    assert out.tolist() == [[0, 0, 0, 1]]
+    assert n_cycles == 0
+
+
+def test_barrier_downstream_of_pour_does_not_unmark():
+    # Path reaches the pour BEFORE the barrier: first-waterbody-wins => drains.
+    # cell0 -> [pour] -> [barrier]
+    fdr = np.array([[1, 1, 255]], dtype=np.uint8)
+    pour = np.array([[0, 1, 0]], dtype=np.uint8)
+    barrier = np.array([[0, 0, 1]], dtype=np.uint8)
+    out, n_cycles = drains_to_dprst_kernel(fdr, pour, barrier)
+    assert out.tolist() == [[1, 1, 0]]
+    assert n_cycles == 0
+
+
+def test_no_barrier_is_equivalent_to_old_behavior():
+    # An all-zero barrier reproduces the pre-barrier straight-chain result.
+    fdr = np.array([[1, 1, 1, 255]], dtype=np.uint8)
+    pour = np.array([[0, 0, 0, 1]], dtype=np.uint8)
+    barrier = np.zeros_like(pour)
+    out, n_cycles = drains_to_dprst_kernel(fdr, pour, barrier)
+    assert out.tolist() == [[1, 1, 1, 1]]
+    assert n_cycles == 0
+
+
+def test_pour_wins_when_cell_is_both_pour_and_barrier():
+    # Defensive: overlap is impossible by construction, but if a cell is both,
+    # dprst (_DRAINS) must win over the barrier seed.
+    fdr = np.array([[1, 255]], dtype=np.uint8)
+    pour = np.array([[0, 1]], dtype=np.uint8)
+    barrier = np.array([[0, 1]], dtype=np.uint8)
+    out, n_cycles = drains_to_dprst_kernel(fdr, pour, barrier)
+    assert out.tolist() == [[1, 1]]
+    assert n_cycles == 0
+
+
+def test_barrier_on_two_cell_cycle_breaks_it_without_counting_a_cycle():
+    # Mirror of test_cycle_containing_pour_point_marks_drains, but the seeded
+    # cell is a BARRIER, not a pour. left(E->right) and right(W->left) would
+    # form a cycle; right is a barrier. Barriers are seeded _NOT before the
+    # walk, so the barrier cell exits via the _NOT branch (not the cycle guard):
+    # left resolves _NOT and no cycle is counted. Pins the seeding-order
+    # invariant for barriers.
+    fdr = np.array([[1, 16]], dtype=np.uint8)
+    pour = np.array([[0, 0]], dtype=np.uint8)
+    barrier = np.array([[0, 1]], dtype=np.uint8)  # col 1 is the barrier
+    out, n_cycles = drains_to_dprst_kernel(fdr, pour, barrier)
+    assert out.tolist() == [[0, 0]]
+    assert n_cycles == 0  # barrier breaks the cycle before it is entered
+
+
+def test_confluence_into_single_barrier_blocks_both_tributaries():
+    # Two tributaries merge at a barrier cell that sits directly upstream of a
+    # pour. Both branches must be blocked at the shared barrier, the barrier
+    # itself is non-draining, and the barrier must NOT let the downstream pour
+    # propagate draining back up.
+    #   (0,0) SE(2) ->(1,1)=barrier   (0,2) SW(8) ->(1,1)=barrier
+    #   (1,1) S(4)  ->(2,1)=pour
+    fdr = np.array([[2, 255, 8],
+                    [255, 4, 255],
+                    [255, 255, 255]], dtype=np.uint8)
+    pour = np.zeros((3, 3), dtype=np.uint8)
+    pour[2, 1] = 1
+    barrier = np.zeros((3, 3), dtype=np.uint8)
+    barrier[1, 1] = 1
+    out, n_cycles = drains_to_dprst_kernel(fdr, pour, barrier)
+    assert out.tolist() == [[0, 0, 0],
+                            [0, 0, 0],
+                            [0, 1, 0]]  # only the pour drains itself
+    assert n_cycles == 0
+
+
+def test_mismatched_barrier_shape_raises():
+    # numba has no bounds-checking; the plain-Python wrapper must reject a
+    # barrier/pour that is not the same shape as fdr (loud, not silent OOB).
+    fdr = np.zeros((2, 2), dtype=np.uint8)
+    pour = np.zeros((2, 2), dtype=np.uint8)
+    barrier = np.zeros((2, 1), dtype=np.uint8)
+    with pytest.raises(ValueError):
+        drains_to_dprst_kernel(fdr, pour, barrier)
