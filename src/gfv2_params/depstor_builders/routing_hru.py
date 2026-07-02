@@ -14,8 +14,8 @@ from rasterio.windows import Window
 
 from ..d8_routing import drains_to_dprst_labeled_kernel
 from ..depstor import (
-    RasterInfo, align_fdr_to_dprst_grid, mask_fdr_to_vpu, read_aligned_uint8,
-    vpu_bbox, vpu_codes_present, vpu_pour_points,
+    RasterInfo, align_fdr_to_dprst_grid, assert_raster_aligned, mask_fdr_to_vpu,
+    read_aligned_uint8, vpu_bbox, vpu_codes_present, vpu_pour_points,
 )
 from .context import BuildContext
 
@@ -24,6 +24,7 @@ def build(step_cfg: dict, ctx: BuildContext, logger) -> dict:
     if ctx.fdr_raster is None or not ctx.fdr_raster.exists():
         raise FileNotFoundError(f"routing_hru needs fdr_raster: {ctx.fdr_raster}")
     output_path = ctx.resolve_output(step_cfg["output"])
+    landmask_path = ctx.require("landmask")
     dprst_path = ctx.require("dprst")
     onstream_path = ctx.require("onstream")
     vpu_id_path = ctx.require("vpu_id")
@@ -47,13 +48,23 @@ def build(step_cfg: dict, ctx: BuildContext, logger) -> dict:
         profile = dict(
             driver="GTiff", height=info.height, width=info.width, count=1,
             dtype="int32", crs=info.crs, transform=info.transform, nodata=0,
-            compress="LZW", tiled=True, blockxsize=256, blockysize=256, bigtiff="YES",
+            compress="LZW", tiled=True, blockxsize=256, blockysize=256,
         )
-        with rasterio.open(output_path, "w", **profile) as dst, \
+        profile["BIGTIFF"] = "YES"
+        with rasterio.open(output_path, "w+", **profile) as dst, \
                 rasterio.open(fdr_aligned) as fdr_src, \
                 rasterio.open(dprst_path) as dprst_src, \
                 rasterio.open(onstream_path) as onstream_src, \
-                rasterio.open(hru_id_path) as hru_src:
+                rasterio.open(hru_id_path) as hru_src, \
+                rasterio.open(landmask_path) as land_src:
+            # dprst/onstream/hru_id/landmask are windowed by vpu_id's grid; a
+            # same-shape but differently-georeferenced raster would be read at
+            # the wrong origin silently. Assert all are on the template grid
+            # (as routing.py does for dprst/onstream).
+            assert_raster_aligned(dprst_src, info, "dprst")
+            assert_raster_aligned(onstream_src, info, "onstream")
+            assert_raster_aligned(hru_src, info, "hru_id")
+            assert_raster_aligned(land_src, info, "landmask")
             for code in codes:
                 bbox = vpu_bbox(vpu_id, code)
                 r0, r1, c0, c1 = bbox
@@ -63,6 +74,7 @@ def build(step_cfg: dict, ctx: BuildContext, logger) -> dict:
                 dprst_win = dprst_src.read(1, window=window)
                 onstream_win = onstream_src.read(1, window=window)
                 hru_win = hru_src.read(1, window=window)
+                land_win = land_src.read(1, window=window)
 
                 fdr_masked = mask_fdr_to_vpu(fdr_win, vpu_win, code, nodata=255)
                 label = np.where((dprst_win == 1) & (vpu_win == code), hru_win, 0).astype(np.int32)
@@ -71,9 +83,11 @@ def build(step_cfg: dict, ctx: BuildContext, logger) -> dict:
                 if n_cycles:
                     logger.warning("  VPU %d: %d flow cycle(s) — cells non-draining", code, n_cycles)
 
-                # read-modify-write only this VPU's cells (bboxes overlap at corners)
+                # read-modify-write only this VPU's cells (bboxes overlap at corners),
+                # and only where land_mask.tif confirms the cell is land (never use
+                # FDR/hydro-DEM nodata as a land mask — see CLAUDE.md).
                 existing = dst.read(1, window=window)
-                sel = (vpu_win == code) & (out > 0)
+                sel = (vpu_win == code) & (out > 0) & (land_win == 1)
                 existing[sel] = out[sel]
                 dst.write(existing, 1, window=window)
                 logger.info("  VPU %d: %d labelled drain cells", code, int(sel.sum()))
