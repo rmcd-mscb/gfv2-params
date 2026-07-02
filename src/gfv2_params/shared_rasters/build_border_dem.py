@@ -100,86 +100,151 @@ def _build_composite_vrt(
     return output_vrt
 
 
-def _compute_fill_mask(
+# Windowed-strip height for the fill-mask computation and mask application.
+# The fill zone spans the full continental Copernicus extent at 30 m. The
+# previous approach loaded it whole — two gdal.Warp(format="MEM") full-extent
+# float32 readbacks plus their .astype copies (~4 full-extent arrays,
+# ~560 GB combined) — which exceeded the 503 GB node and OOM'd (numpy
+# _ArrayMemoryError). Both _write_fill_mask and _apply_fill_mask now process
+# STRIP_ROWS rows at a time, holding only strip-sized arrays. Mirrors
+# carea_map's windowed-strip pattern (see the CONUS-scale memory note in
+# docs/ARCHITECTURE.md). Larger STRIP_ROWS = fewer warp calls (less I/O
+# overhead) but proportionally more resident memory per strip.
+STRIP_ROWS = 4096
+
+
+def _write_fill_mask(
     copernicus_elev: Path,
     nhdplus_vrt: Path,
-    geotransform: tuple,
-    rows: int,
-    cols: int,
-) -> np.ndarray:
-    """Fill zone = pixels where Copernicus has valid data AND NHDPlus has nodata."""
-    output_bounds = [
-        geotransform[0],
-        geotransform[3] + rows * geotransform[5],
-        geotransform[0] + cols * geotransform[1],
-        geotransform[3],
-    ]
-    warp_kwargs = dict(
-        format="MEM",
-        outputBounds=output_bounds,
-        xRes=abs(geotransform[1]),
-        yRes=abs(geotransform[5]),
-        dstNodata=OUTPUT_NODATA,
-        srcNodata=OUTPUT_NODATA,
+    ref_raster: Path,
+    mask_out: Path,
+) -> None:
+    """Stream a UInt8 fill-zone mask onto ``ref_raster``'s grid.
+
+    Fill zone = 1 where Copernicus has valid data AND NHDPlus is nodata, else 0.
+    Warps Copernicus and NHDPlus into each horizontal strip's window in memory
+    (strip-sized, never full-extent) and writes the mask strip-by-strip.
+    """
+    ref_ds = gdal.Open(str(ref_raster))
+    if ref_ds is None:
+        raise RuntimeError(
+            f"gdal.Open failed for ref raster: {ref_raster} — {gdal.GetLastErrorMsg()}"
+        )
+    gt = ref_ds.GetGeoTransform()
+    proj = ref_ds.GetProjection()
+    cols = ref_ds.RasterXSize
+    rows = ref_ds.RasterYSize
+    del ref_ds
+
+    driver = gdal.GetDriverByName("GTiff")
+    if driver is None:
+        raise RuntimeError("GTiff driver not available — check GDAL installation")
+    mask_ds = driver.Create(
+        str(mask_out), cols, rows, 1, gdal.GDT_Byte,
+        options=["COMPRESS=LZW", "TILED=YES", "BLOCKXSIZE=512", "BLOCKYSIZE=512", "BIGTIFF=YES"],
     )
-
-    cop_ds = gdal.Warp("", str(copernicus_elev), **warp_kwargs)
-    if cop_ds is None:
+    if mask_ds is None:
         raise RuntimeError(
-            f"gdal.Warp to MEM failed for Copernicus readback: "
-            f"{copernicus_elev} — {gdal.GetLastErrorMsg()}"
+            f"gdal driver.Create failed for mask: {mask_out} — {gdal.GetLastErrorMsg()}"
         )
-    cop_data = cop_ds.GetRasterBand(1).ReadAsArray().astype(np.float32)
-    del cop_ds
+    mask_ds.SetGeoTransform(gt)
+    mask_ds.SetProjection(proj)
+    mask_band = mask_ds.GetRasterBand(1)
 
-    nhd_ds = gdal.Warp("", str(nhdplus_vrt), **warp_kwargs)
-    if nhd_ds is None:
-        raise RuntimeError(
-            f"gdal.Warp to MEM failed for NHDPlus VRT readback: "
-            f"{nhdplus_vrt} — {gdal.GetLastErrorMsg()}"
+    for r0 in range(0, rows, STRIP_ROWS):
+        strip_h = min(STRIP_ROWS, rows - r0)
+        # Strip bounds in the ref CRS (gt[5] is negative for a north-up grid).
+        strip_bounds = [
+            gt[0],
+            gt[3] + (r0 + strip_h) * gt[5],
+            gt[0] + cols * gt[1],
+            gt[3] + r0 * gt[5],
+        ]
+        warp_kwargs = dict(
+            format="MEM",
+            outputBounds=strip_bounds,
+            width=cols,
+            height=strip_h,
+            dstNodata=OUTPUT_NODATA,
+            srcNodata=OUTPUT_NODATA,
         )
-    nhd_data = nhd_ds.GetRasterBand(1).ReadAsArray().astype(np.float32)
-    del nhd_ds
+        cop_ds = gdal.Warp("", str(copernicus_elev), **warp_kwargs)
+        if cop_ds is None:
+            raise RuntimeError(
+                f"gdal.Warp to MEM failed for Copernicus strip (row {r0}): "
+                f"{copernicus_elev} — {gdal.GetLastErrorMsg()}"
+            )
+        cop = cop_ds.GetRasterBand(1).ReadAsArray()
+        del cop_ds
+        if cop is None:
+            raise RuntimeError(
+                f"ReadAsArray returned None for Copernicus strip (row {r0}): "
+                f"{copernicus_elev} — {gdal.GetLastErrorMsg()}"
+            )
+        nhd_ds = gdal.Warp("", str(nhdplus_vrt), **warp_kwargs)
+        if nhd_ds is None:
+            raise RuntimeError(
+                f"gdal.Warp to MEM failed for NHDPlus strip (row {r0}): "
+                f"{nhdplus_vrt} — {gdal.GetLastErrorMsg()}"
+            )
+        nhd = nhd_ds.GetRasterBand(1).ReadAsArray()
+        del nhd_ds
+        if nhd is None:
+            raise RuntimeError(
+                f"ReadAsArray returned None for NHDPlus strip (row {r0}): "
+                f"{nhdplus_vrt} — {gdal.GetLastErrorMsg()}"
+            )
 
-    if cop_data.shape != (rows, cols) or nhd_data.shape != (rows, cols):
-        raise RuntimeError(
-            f"Shape mismatch after warp: expected ({rows}, {cols}), "
-            f"got cop={cop_data.shape}, nhd={nhd_data.shape}"
-        )
+        # -9999 is exactly representable in float32, so equality is safe.
+        strip_mask = ((cop != OUTPUT_NODATA) & (nhd == OUTPUT_NODATA)).astype(np.uint8)
+        err = mask_band.WriteArray(strip_mask, 0, r0)
+        if err != gdal.CE_None:
+            raise RuntimeError(
+                f"WriteArray failed for mask strip (row {r0}) — code {err}: "
+                f"{gdal.GetLastErrorMsg()}"
+            )
 
-    # -9999 is exactly representable in float32, so equality is safe.
-    return (cop_data != OUTPUT_NODATA) & (nhd_data == OUTPUT_NODATA)
+    mask_ds.FlushCache()
+    del mask_ds
 
 
 def _apply_fill_mask(
     raw_raster: Path,
-    fill_mask: np.ndarray,
+    mask_raster: Path,
     output: Path,
     overview_resampling: str,
 ) -> None:
+    """Stream-apply ``mask_raster`` to ``raw_raster``, writing ``output`` as a COG.
+
+    Keeps raw values where the mask is 1, writes nodata elsewhere, one
+    STRIP_ROWS-tall window at a time (never the full-extent array). The plain
+    windowed write goes to a temp, then to_cog reorganizes it into a COG (tiled
+    512 + overviews + ZSTD/pred3) — border slope/aspect fill feed the same VRTs
+    as the per-VPU tiles and are GDAL/QGIS-consumed (never WBT). Aspect passes
+    overview_resampling="NEAREST" (circular 0/360 field).
+    """
     raw_ds = gdal.Open(str(raw_raster))
     if raw_ds is None:
         raise RuntimeError(
             f"gdal.Open failed for raw raster: {raw_raster} — {gdal.GetLastErrorMsg()}"
         )
-    raw_data = raw_ds.GetRasterBand(1).ReadAsArray().astype(np.float32)
-    geotransform = raw_ds.GetGeoTransform()
-    projection = raw_ds.GetProjection()
-    rows, cols = raw_data.shape
-    del raw_ds
-
-    if fill_mask.shape != (rows, cols):
+    mask_ds = gdal.Open(str(mask_raster))
+    if mask_ds is None:
+        raise RuntimeError(
+            f"gdal.Open failed for mask raster: {mask_raster} — {gdal.GetLastErrorMsg()}"
+        )
+    gt = raw_ds.GetGeoTransform()
+    proj = raw_ds.GetProjection()
+    cols = raw_ds.RasterXSize
+    rows = raw_ds.RasterYSize
+    if (mask_ds.RasterXSize, mask_ds.RasterYSize) != (cols, rows):
         raise RuntimeError(
             f"Shape mismatch in _apply_fill_mask for {output.name}: "
-            f"raw=({rows}, {cols}), mask={fill_mask.shape}"
+            f"raw=({rows}, {cols}), mask=({mask_ds.RasterYSize}, {mask_ds.RasterXSize})"
         )
+    raw_band = raw_ds.GetRasterBand(1)
+    mask_band = mask_ds.GetRasterBand(1)
 
-    masked = np.where(fill_mask, raw_data, np.float32(OUTPUT_NODATA))
-
-    # Write a plain temp, then reorganize into a COG (tiled 512 + overviews +
-    # ZSTD/pred3) matching the per-VPU slope/aspect tiles — these border fill
-    # tiles feed the same slope/aspect VRTs and are GDAL/QGIS-consumed (never
-    # WBT). Aspect passes overview_resampling="NEAREST" (circular 0/360 field).
     driver = gdal.GetDriverByName("GTiff")
     if driver is None:
         raise RuntimeError("GTiff driver not available — check GDAL installation")
@@ -192,19 +257,70 @@ def _apply_fill_mask(
             raise RuntimeError(
                 f"gdal driver.Create failed for output: {tmp} — {gdal.GetLastErrorMsg()}"
             )
-        out_ds.SetGeoTransform(geotransform)
-        out_ds.SetProjection(projection)
+        out_ds.SetGeoTransform(gt)
+        out_ds.SetProjection(proj)
         out_band = out_ds.GetRasterBand(1)
         out_band.SetNoDataValue(OUTPUT_NODATA)
-        err = out_band.WriteArray(masked)
-        if err != gdal.CE_None:
-            raise RuntimeError(
-                f"WriteArray failed for {tmp} — GDAL error code {err}: "
-                f"{gdal.GetLastErrorMsg()}"
+
+        for r0 in range(0, rows, STRIP_ROWS):
+            strip_h = min(STRIP_ROWS, rows - r0)
+            raw = raw_band.ReadAsArray(0, r0, cols, strip_h)
+            if raw is None:
+                raise RuntimeError(
+                    f"ReadAsArray returned None for raw strip (row {r0}): "
+                    f"{raw_raster} — {gdal.GetLastErrorMsg()}"
+                )
+            mask = mask_band.ReadAsArray(0, r0, cols, strip_h)
+            if mask is None:
+                raise RuntimeError(
+                    f"ReadAsArray returned None for mask strip (row {r0}): "
+                    f"{mask_raster} — {gdal.GetLastErrorMsg()}"
+                )
+            masked = np.where(
+                mask.astype(bool), raw.astype(np.float32), np.float32(OUTPUT_NODATA)
             )
+            err = out_band.WriteArray(masked, 0, r0)
+            if err != gdal.CE_None:
+                raise RuntimeError(
+                    f"WriteArray failed for {tmp} strip (row {r0}) — code {err}: "
+                    f"{gdal.GetLastErrorMsg()}"
+                )
+
         out_ds.FlushCache()
         del out_ds
+        del raw_ds, mask_ds
         to_cog(tmp, output, overview_resampling=overview_resampling, predictor=3)
+
+
+# Baseline fraction of requested border tiles that 404 deterministically. The
+# BORDER_ZONES bbox is deliberately generous, so a large share cover open ocean
+# / no land and 404 every run (1238/1557 downloaded = 20.5% shortfall for the
+# current Canada+Mexico zones). Abort only *above* this, where a count-based
+# shortfall implies a real coverage failure rather than the expected ocean
+# baseline. This threshold cannot see non-404 download errors — those are
+# treated as a hard error separately (see download_tiles' `failed` list).
+OCEAN_SHORTFALL_PCT = 30
+
+
+def _check_shortfall(n_requested: int, n_downloaded: int) -> str | None:
+    """Classify a tile-count shortfall against the ocean baseline.
+
+    Returns None when every requested tile is present, a warning message for a
+    shortfall within the expected open-ocean 404 baseline (<= OCEAN_SHORTFALL_PCT,
+    strict), and raises RuntimeError for a gross shortfall above it (a likely
+    real coverage failure). Non-404 download failures are NOT visible here and
+    must be gated by the caller before calling this.
+    """
+    if n_downloaded >= n_requested:
+        return None
+    shortfall_pct = 100 * (n_requested - n_downloaded) / n_requested
+    msg = (
+        f"Only {n_downloaded}/{n_requested} tiles downloaded "
+        f"({shortfall_pct:.0f}% shortfall) — border DEM may have coverage gaps"
+    )
+    if shortfall_pct > OCEAN_SHORTFALL_PCT:
+        raise RuntimeError(msg)
+    return msg
 
 
 def build(step_cfg: dict, ctx: SharedRastersContext, logger) -> dict:
@@ -240,8 +356,8 @@ def build(step_cfg: dict, ctx: SharedRastersContext, logger) -> dict:
     # Early-exit if every output is already on disk. Without this the
     # orchestrator re-runs the Copernicus download on every walk, even
     # when the three output tiles are cached — slow (network-bound) and
-    # fragile (the >20% shortfall guard at line ~259 trips intermittently
-    # on transient 404s from the deliberately-generous border bbox).
+    # fragile (the shortfall guard, _check_shortfall, trips intermittently
+    # on transient failures from the deliberately-generous border bbox).
     # Mirrors the skip-if-exists pattern every per-VPU builder uses.
     if (
         not ctx.force
@@ -275,7 +391,7 @@ def build(step_cfg: dict, ctx: SharedRastersContext, logger) -> dict:
     logger.info("  Total unique tiles: %d", len(all_labels))
 
     t1 = time.time()
-    tile_paths = download_tiles(all_labels, raw_dir)
+    tile_paths, failed = download_tiles(all_labels, raw_dir)
     logger.info("  Download complete in %s: %d tiles available", _elapsed(t1), len(tile_paths))
 
     if not tile_paths:
@@ -283,17 +399,22 @@ def build(step_cfg: dict, ctx: SharedRastersContext, logger) -> dict:
             "No Copernicus tiles downloaded — check network access and tile labels"
         )
 
-    n_requested = len(all_labels)
-    n_downloaded = len(tile_paths)
-    if n_downloaded < n_requested:
-        shortfall_pct = 100 * (n_requested - n_downloaded) / n_requested
-        msg = (
-            f"Only {n_downloaded}/{n_requested} tiles downloaded "
-            f"({shortfall_pct:.0f}% shortfall) — border DEM may have coverage gaps"
+    # Non-404 failures (timeout / 5xx / DNS) are real download errors, not the
+    # expected open-ocean baseline. Abort regardless of the overall shortfall so
+    # a partial network outage can't silently drop land tiles from the border
+    # fill — the count-based ocean-baseline check below cannot distinguish them.
+    if failed:
+        preview = ", ".join(failed[:10]) + (" ..." if len(failed) > 10 else "")
+        raise RuntimeError(
+            f"{len(failed)} Copernicus tile(s) failed to download for a non-404 "
+            f"reason (network/HTTP error, not open-ocean): {preview} — this is a "
+            f"real download failure, not the expected ocean baseline; rerun once "
+            f"resolved"
         )
-        if shortfall_pct > 20:
-            raise RuntimeError(msg)
-        logger.warning(msg)
+
+    warning = _check_shortfall(len(all_labels), len(tile_paths))
+    if warning:
+        logger.warning(warning)
 
     # --- Step 2: Mosaic raw tiles and reproject ---
     logger.info("=== Step 2/5: Mosaic -> reproject to EPSG:5070 ===")
@@ -344,7 +465,11 @@ def build(step_cfg: dict, ctx: SharedRastersContext, logger) -> dict:
     composite_clipped = fill_dir / "composite_elevation_clipped.tif"
     slope_raw = fill_dir / "slope_raw.tif"
     aspect_raw = fill_dir / "aspect_raw.tif"
-    intermediates = [slope_raw, aspect_raw, nhdplus_vrt, composite_vrt, composite_clipped]
+    fill_mask_raster = fill_dir / "fill_mask.tif"
+    intermediates = [
+        slope_raw, aspect_raw, nhdplus_vrt, composite_vrt, composite_clipped,
+        fill_mask_raster,
+    ]
 
     if not slope_out.exists() or not aspect_out.exists() or ctx.force:
         try:
@@ -422,27 +547,19 @@ def build(step_cfg: dict, ctx: SharedRastersContext, logger) -> dict:
             logger.info("=== Step 5/5: Mask slope/aspect to fill zone ===")
             t4 = time.time()
 
-            ref_ds = gdal.Open(str(slope_raw))
-            if ref_ds is None:
-                raise RuntimeError(
-                    f"gdal.Open failed for slope raw raster: {slope_raw} "
-                    f"— {gdal.GetLastErrorMsg()}"
-                )
-            ref_gt = ref_ds.GetGeoTransform()
-            ref_rows = ref_ds.RasterYSize
-            ref_cols = ref_ds.RasterXSize
-            del ref_ds
-
-            fill_mask = _compute_fill_mask(
-                elev_out, nhdplus_vrt, ref_gt, ref_rows, ref_cols,
-            )
+            # Compute the fill-zone mask once (streamed to disk on slope_raw's
+            # grid), then stream-apply it to both slope and aspect. Windowed
+            # throughout so peak memory is strip-sized, not full-extent (the
+            # old full-array _compute_fill_mask OOM'd on CONUS — see STRIP_ROWS).
+            logger.info("  Computing fill-zone mask (streaming)...")
+            _write_fill_mask(elev_out, nhdplus_vrt, slope_raw, fill_mask_raster)
 
             logger.info("  Masking slope to fill zone...")
-            _apply_fill_mask(slope_raw, fill_mask, slope_out, "BILINEAR")
+            _apply_fill_mask(slope_raw, fill_mask_raster, slope_out, "BILINEAR")
             logger.info("  Masked slope saved: %s", slope_out)
 
             logger.info("  Masking aspect to fill zone...")
-            _apply_fill_mask(aspect_raw, fill_mask, aspect_out, "NEAREST")
+            _apply_fill_mask(aspect_raw, fill_mask_raster, aspect_out, "NEAREST")
             logger.info("  Masked aspect saved: %s", aspect_out)
 
             logger.info("  Masking complete in %s", _elapsed(t4))
