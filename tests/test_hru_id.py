@@ -5,7 +5,7 @@ import numpy as np
 import pytest
 import rasterio
 from rasterio.transform import from_origin
-from shapely.geometry import box
+from shapely.geometry import Polygon, box
 
 from gfv2_params.depstor import RasterInfo, rasterize_ids
 
@@ -25,6 +25,33 @@ def test_rasterize_ids_burns_attribute(tmp_path):
     out = rasterize_ids(gdf, "nat_hru_id", info)
     assert out.dtype == np.int32
     assert out[0, 0] == 11 and out[0, 3] == 22   # left half 11, right half 22
+
+
+def test_rasterize_ids_all_touched_burns_corner_clipped_pixel(tmp_path):
+    """hru_id.build() must pass all_touched=True (matching land_mask.tif's
+    footprint, see landmask.py) so an HRU-boundary land cell isn't left at
+    hru_id==0 and silently dropped by same_hru_intersect. Exercise the looser
+    footprint directly: a sliver that only clips a pixel's corner is burned
+    under all_touched=True but not under the default centroid-style fill.
+    """
+    tpl = tmp_path / "tpl.tif"
+    transform = from_origin(0, 4, 1, 1)
+    with rasterio.open(tpl, "w", driver="GTiff", height=4, width=4, count=1,
+                       dtype="uint8", crs="EPSG:5070", transform=transform) as d:
+        d.write(np.zeros((4, 4), np.uint8), 1)
+    info = RasterInfo.from_path(tpl)
+
+    # Pixel (row=0, col=2) spans x:[2,3], y:[3,4], center (2.5, 3.5). This
+    # sliver triangle only clips its top-left corner (2, 4) and stays well
+    # clear of the center.
+    corner_clip = Polygon([(2.0, 4.0), (2.2, 4.0), (2.0, 3.8)])
+    gdf = gpd.GeoDataFrame({"nat_hru_id": [77]}, geometry=[corner_clip], crs="EPSG:5070")
+
+    default_out = rasterize_ids(gdf, "nat_hru_id", info)
+    touched_out = rasterize_ids(gdf, "nat_hru_id", info, all_touched=True)
+
+    assert default_out[0, 2] == 0    # centroid-style fill: corner sliver not burned
+    assert touched_out[0, 2] == 77   # all_touched: any partial overlap is burned
 
 
 def _write_template(path, n: int = 4) -> None:
