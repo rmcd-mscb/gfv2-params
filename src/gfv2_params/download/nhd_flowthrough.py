@@ -100,7 +100,12 @@ def flowthrough_comids(
 
     conv = flowlines[flowlines["FTYPE"].isin(CONVEYANCE_FTYPES)].copy()
     if network_comids is not None:
-        conv = conv[conv["COMID"].isin(network_comids)].copy()
+        # Coerce COMID before the membership test: NHD ships numeric fields as
+        # strings in some VPU snapshots, and `network_comids` is a set of ints,
+        # so a raw str `.isin` would silently match nothing and drop the whole
+        # VPU's T1/D1 promotions (matches the coercion in nhd_flowlines).
+        on_network = pd.to_numeric(conv["COMID"], errors="coerce").isin(network_comids)
+        conv = conv[on_network]
     onstream: set[int] = set()
 
     if not conv.empty:
@@ -231,6 +236,12 @@ def main() -> None:
     # Network Flowlines = every COMID with a VAA record (gates T1/D1 candidates
     # so Non-Network closed-basin lines can't promote endorheic lakes; #161).
     network_comids = {int(c) for c in topo["comid"]}
+    if not network_comids:
+        raise ValueError(
+            f"flowline_topology.parquet has 0 COMIDs ({topo_path}) → the "
+            "Network-Flowline gate would drop every waterbody to depression "
+            "storage; re-stage via `python -m gfv2_params.download.nhd_topology`."
+        )
     logger.info(
         f"Loaded {len(routed_comids)} routed-network + "
         f"{len(network_comids)} Network-Flowline COMIDs"

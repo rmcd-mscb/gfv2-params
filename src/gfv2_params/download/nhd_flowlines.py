@@ -205,6 +205,13 @@ def main() -> None:
     network_comids = {
         int(c) for c in pd.read_parquet(topo_path, columns=["comid"])["comid"]
     }
+    if not network_comids:
+        raise ValueError(
+            f"flowline_topology.parquet has 0 COMIDs ({topo_path}) → the "
+            "Network-Flowline gate would drop every WBAREACOMI waterbody to "
+            "depression storage; re-stage via "
+            "`python -m gfv2_params.download.nhd_topology`."
+        )
     logger.info(f"Loaded {len(network_comids)} Network-Flowline COMIDs")
 
     connected: set[int] = set()
@@ -222,6 +229,18 @@ def main() -> None:
     if failures:
         # A silently dropped VPU under-flags connectivity there — make it loud.
         raise RuntimeError(f"NHDSnapshot download/read failed for VPU(s): {failures}")
+
+    if not connected:
+        # Symmetric with nhd_flowthrough's empty-onstream guard: an empty set
+        # here would revert every WBAREACOMI waterbody to depression storage.
+        # With the Network-Flowline gate, a partial/empty topology parquet or a
+        # COMID column-format change can silently cause this — fail loud instead.
+        raise ValueError(
+            "distilled 0 connected WBAREACOMI COMIDs across all VPUs → every "
+            "WBAREACOMI waterbody would revert to depression storage; likely an "
+            "empty/partial flowline_topology.parquet or a COMID column-format "
+            "change."
+        )
 
     out_path = data_root / "input/nhd/connected_waterbody_comids.parquet"
     write_connected_comids(connected, out_path)

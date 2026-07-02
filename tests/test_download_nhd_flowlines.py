@@ -133,6 +133,21 @@ def test_connected_comids_network_gate_absent_keeps_all():
     assert connected_comids_from_flowlines(df) == {100, 200}
 
 
+def test_connected_comids_empty_network_gate_drops_all():
+    # An empty (not None) network set activates the gate and matches nothing, so
+    # every WBAREACOMI is dropped — distinct from None (ungated). Guards against a
+    # truthiness-vs-`is not None` regression in the gate condition.
+    df = pd.DataFrame({"COMID": [10, 20], "WBAREACOMI": [100, 200]})
+    assert connected_comids_from_flowlines(df, network_comids=set()) == set()
+
+
+def test_connected_comids_network_gate_coerces_string_comid():
+    # NHD ships COMID as strings in some VPU snapshots; the gate coerces so a
+    # string COMID still matches the int network set.
+    df = pd.DataFrame({"COMID": ["10", "20"], "WBAREACOMI": [100, 200]})
+    assert connected_comids_from_flowlines(df, network_comids={10}) == {100}
+
+
 def test_write_connected_comids_roundtrip(tmp_path):
     out = tmp_path / "nested" / "connected_waterbody_comids.parquet"
     write_connected_comids({300, 100, 200}, out)

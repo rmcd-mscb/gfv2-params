@@ -264,10 +264,12 @@ These are hard-won; violating them silently corrupts outputs.
   on-stream set with no code change.
 - **`flowline_topology.parquet`** — distilled NHDPlus PlusFlowlineVAA (COMID,
   DnHydroseq, Hydroseq, TerminalFl, StartFlag, StreamOrde, FromNode, ToNode). Staged by
-  `download/nhd_topology.py`; consumed by `download/nhd_flowthrough.py` (rule
-  D1, routed-network outflow). Hardcoded data_root-relative, no config key —
-  `nhd_topology.py` must run before `nhd_flowthrough.py` (which fails loud if
-  `input/nhd/flowline_topology.parquet` is missing).
+  `download/nhd_topology.py`; consumed by **both** `download/nhd_flowlines.py`
+  (the Network-Flowline gate on WBAREACOMI) and `download/nhd_flowthrough.py`
+  (the Network-Flowline gate on T1/D1 candidates + the D1 routed-network outflow
+  rule). Hardcoded data_root-relative, no config key — `nhd_topology.py` must
+  run before **both** `nhd_flowlines.py` and `nhd_flowthrough.py` (each fails
+  loud if `input/nhd/flowline_topology.parquet` is missing).
 - **`carea_max`/`smidx_coef` threshold mode.** The legacy `absolute`
   thresholds (8.0/15.6) are only calibrated against VPU 01's ArcPy TWI
   distribution. For any other fabric, use `threshold_mode: percentile` (the
