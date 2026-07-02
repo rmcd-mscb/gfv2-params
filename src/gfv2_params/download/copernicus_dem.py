@@ -57,16 +57,27 @@ def download_tiles(
     tile_labels: list[str],
     out_dir: Path,
     timeout: int = 120,
-) -> list[Path]:
+) -> tuple[list[Path], list[str]]:
     """Download Copernicus GLO-30 tiles to *out_dir*.
 
-    Idempotent: skips files that already exist.  Tiles that return 404
-    (ocean, polar) are logged as warnings and skipped.
+    Idempotent: skips files that already exist. Tiles that return HTTP 404 are
+    the *expected* open-ocean/polar case (the border bbox is deliberately
+    generous, see BORDER_ZONES) and are silently skipped. Tiles that fail for
+    any *other* reason (timeout, 5xx, connection reset, DNS) are real download
+    failures and are collected separately so the caller can distinguish
+    "no land here" from "the download broke" — a count-based shortfall check
+    cannot tell them apart.
 
-    Returns list of paths to successfully downloaded .tif files.
+    Returns
+    -------
+    (paths, failed) : tuple[list[Path], list[str]]
+        ``paths`` — .tif files now available (freshly downloaded or pre-existing).
+        ``failed`` — labels that failed for a non-404 reason (empty on a clean
+        run); the caller should treat any entries as a hard error.
     """
     out_dir.mkdir(parents=True, exist_ok=True)
     paths = []
+    failed = []
     skipped = 0
 
     for i, label in enumerate(tile_labels, start=1):
@@ -100,10 +111,12 @@ def download_tiles(
                 )
         except requests.RequestException as e:
             partial.unlink(missing_ok=True)
+            failed.append(label)
             logger.warning("Failed to download %s: %s", label, e)
 
     logger.info(
-        "Download complete: %d tiles available, %d skipped (existing), %d total requested",
-        len(paths), skipped, len(tile_labels),
+        "Download complete: %d tiles available, %d skipped (existing), "
+        "%d failed (non-404), %d total requested",
+        len(paths), skipped, len(failed), len(tile_labels),
     )
-    return paths
+    return paths, failed

@@ -101,13 +101,15 @@ def _build_composite_vrt(
 
 
 # Windowed-strip height for the fill-mask computation and mask application.
-# The fill zone spans the full Copernicus extent (~29.6 B cells at CONUS 30m).
-# The previous approach loaded it whole — two gdal.Warp(format="MEM") full-extent
-# readbacks plus their float32 copies (~4x139 GiB) — which exceeded the 503 GiB
-# node and OOM'd (numpy _ArrayMemoryError). Both _write_fill_mask and
-# _apply_fill_mask now process STRIP_ROWS rows at a time, holding only
-# strip-sized arrays. Mirrors carea_map's windowed-strip pattern (see the
-# CONUS-scale memory note in docs/ARCHITECTURE.md).
+# The fill zone spans the full continental Copernicus extent at 30 m. The
+# previous approach loaded it whole — two gdal.Warp(format="MEM") full-extent
+# float32 readbacks plus their .astype copies (~4 full-extent arrays,
+# ~560 GB combined) — which exceeded the 503 GB node and OOM'd (numpy
+# _ArrayMemoryError). Both _write_fill_mask and _apply_fill_mask now process
+# STRIP_ROWS rows at a time, holding only strip-sized arrays. Mirrors
+# carea_map's windowed-strip pattern (see the CONUS-scale memory note in
+# docs/ARCHITECTURE.md). Larger STRIP_ROWS = fewer warp calls (less I/O
+# overhead) but proportionally more resident memory per strip.
 STRIP_ROWS = 4096
 
 
@@ -174,6 +176,11 @@ def _write_fill_mask(
             )
         cop = cop_ds.GetRasterBand(1).ReadAsArray()
         del cop_ds
+        if cop is None:
+            raise RuntimeError(
+                f"ReadAsArray returned None for Copernicus strip (row {r0}): "
+                f"{copernicus_elev} — {gdal.GetLastErrorMsg()}"
+            )
         nhd_ds = gdal.Warp("", str(nhdplus_vrt), **warp_kwargs)
         if nhd_ds is None:
             raise RuntimeError(
@@ -182,6 +189,11 @@ def _write_fill_mask(
             )
         nhd = nhd_ds.GetRasterBand(1).ReadAsArray()
         del nhd_ds
+        if nhd is None:
+            raise RuntimeError(
+                f"ReadAsArray returned None for NHDPlus strip (row {r0}): "
+                f"{nhdplus_vrt} — {gdal.GetLastErrorMsg()}"
+            )
 
         # -9999 is exactly representable in float32, so equality is safe.
         strip_mask = ((cop != OUTPUT_NODATA) & (nhd == OUTPUT_NODATA)).astype(np.uint8)
@@ -252,9 +264,21 @@ def _apply_fill_mask(
 
         for r0 in range(0, rows, STRIP_ROWS):
             strip_h = min(STRIP_ROWS, rows - r0)
-            raw = raw_band.ReadAsArray(0, r0, cols, strip_h).astype(np.float32)
+            raw = raw_band.ReadAsArray(0, r0, cols, strip_h)
+            if raw is None:
+                raise RuntimeError(
+                    f"ReadAsArray returned None for raw strip (row {r0}): "
+                    f"{raw_raster} — {gdal.GetLastErrorMsg()}"
+                )
             mask = mask_band.ReadAsArray(0, r0, cols, strip_h)
-            masked = np.where(mask.astype(bool), raw, np.float32(OUTPUT_NODATA))
+            if mask is None:
+                raise RuntimeError(
+                    f"ReadAsArray returned None for mask strip (row {r0}): "
+                    f"{mask_raster} — {gdal.GetLastErrorMsg()}"
+                )
+            masked = np.where(
+                mask.astype(bool), raw.astype(np.float32), np.float32(OUTPUT_NODATA)
+            )
             err = out_band.WriteArray(masked, 0, r0)
             if err != gdal.CE_None:
                 raise RuntimeError(
@@ -266,6 +290,37 @@ def _apply_fill_mask(
         del out_ds
         del raw_ds, mask_ds
         to_cog(tmp, output, overview_resampling=overview_resampling, predictor=3)
+
+
+# Baseline fraction of requested border tiles that 404 deterministically. The
+# BORDER_ZONES bbox is deliberately generous, so a large share cover open ocean
+# / no land and 404 every run (1238/1557 downloaded = 20.5% shortfall for the
+# current Canada+Mexico zones). Abort only *above* this, where a count-based
+# shortfall implies a real coverage failure rather than the expected ocean
+# baseline. This threshold cannot see non-404 download errors — those are
+# treated as a hard error separately (see download_tiles' `failed` list).
+OCEAN_SHORTFALL_PCT = 30
+
+
+def _check_shortfall(n_requested: int, n_downloaded: int) -> str | None:
+    """Classify a tile-count shortfall against the ocean baseline.
+
+    Returns None when every requested tile is present, a warning message for a
+    shortfall within the expected open-ocean 404 baseline (<= OCEAN_SHORTFALL_PCT,
+    strict), and raises RuntimeError for a gross shortfall above it (a likely
+    real coverage failure). Non-404 download failures are NOT visible here and
+    must be gated by the caller before calling this.
+    """
+    if n_downloaded >= n_requested:
+        return None
+    shortfall_pct = 100 * (n_requested - n_downloaded) / n_requested
+    msg = (
+        f"Only {n_downloaded}/{n_requested} tiles downloaded "
+        f"({shortfall_pct:.0f}% shortfall) — border DEM may have coverage gaps"
+    )
+    if shortfall_pct > OCEAN_SHORTFALL_PCT:
+        raise RuntimeError(msg)
+    return msg
 
 
 def build(step_cfg: dict, ctx: SharedRastersContext, logger) -> dict:
@@ -301,8 +356,8 @@ def build(step_cfg: dict, ctx: SharedRastersContext, logger) -> dict:
     # Early-exit if every output is already on disk. Without this the
     # orchestrator re-runs the Copernicus download on every walk, even
     # when the three output tiles are cached — slow (network-bound) and
-    # fragile (the >20% shortfall guard at line ~259 trips intermittently
-    # on transient 404s from the deliberately-generous border bbox).
+    # fragile (the shortfall guard, _check_shortfall, trips intermittently
+    # on transient failures from the deliberately-generous border bbox).
     # Mirrors the skip-if-exists pattern every per-VPU builder uses.
     if (
         not ctx.force
@@ -336,7 +391,7 @@ def build(step_cfg: dict, ctx: SharedRastersContext, logger) -> dict:
     logger.info("  Total unique tiles: %d", len(all_labels))
 
     t1 = time.time()
-    tile_paths = download_tiles(all_labels, raw_dir)
+    tile_paths, failed = download_tiles(all_labels, raw_dir)
     logger.info("  Download complete in %s: %d tiles available", _elapsed(t1), len(tile_paths))
 
     if not tile_paths:
@@ -344,22 +399,22 @@ def build(step_cfg: dict, ctx: SharedRastersContext, logger) -> dict:
             "No Copernicus tiles downloaded — check network access and tile labels"
         )
 
-    n_requested = len(all_labels)
-    n_downloaded = len(tile_paths)
-    if n_downloaded < n_requested:
-        shortfall_pct = 100 * (n_requested - n_downloaded) / n_requested
-        msg = (
-            f"Only {n_downloaded}/{n_requested} tiles downloaded "
-            f"({shortfall_pct:.0f}% shortfall) — border DEM may have coverage gaps"
+    # Non-404 failures (timeout / 5xx / DNS) are real download errors, not the
+    # expected open-ocean baseline. Abort regardless of the overall shortfall so
+    # a partial network outage can't silently drop land tiles from the border
+    # fill — the count-based ocean-baseline check below cannot distinguish them.
+    if failed:
+        preview = ", ".join(failed[:10]) + (" ..." if len(failed) > 10 else "")
+        raise RuntimeError(
+            f"{len(failed)} Copernicus tile(s) failed to download for a non-404 "
+            f"reason (network/HTTP error, not open-ocean): {preview} — this is a "
+            f"real download failure, not the expected ocean baseline; rerun once "
+            f"resolved"
         )
-        # The border bbox is deliberately generous (BORDER_ZONES), so a baseline
-        # ~20% of requested tiles are open-ocean / no-land and 404 *deterministically*
-        # — 1238/1557 (20.5% shortfall) for the current Canada+Mexico zones. Only
-        # abort on a gross shortfall that implies a real network/coverage failure,
-        # not this expected ocean baseline; lesser shortfalls log a warning.
-        if shortfall_pct > 30:
-            raise RuntimeError(msg)
-        logger.warning(msg)
+
+    warning = _check_shortfall(len(all_labels), len(tile_paths))
+    if warning:
+        logger.warning(warning)
 
     # --- Step 2: Mosaic raw tiles and reproject ---
     logger.info("=== Step 2/5: Mosaic -> reproject to EPSG:5070 ===")
