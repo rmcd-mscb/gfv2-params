@@ -336,6 +336,14 @@ def drains_to_dprst_labeled_kernel(fdr_win, label_win, barrier_win, fdr_nodata=2
 
     Returns ``(out_int32, n_cycles)``.
     """
+    # numba runs with bounds-checking off; a smaller label/barrier than fdr
+    # would be silent out-of-bounds reads, not an error. Guard loudly in
+    # plain Python (parity with drains_to_dprst_kernel's guard above).
+    if not (fdr_win.shape == label_win.shape == barrier_win.shape):
+        raise ValueError(
+            f"fdr/label/barrier shapes must match: {fdr_win.shape}, "
+            f"{label_win.shape}, {barrier_win.shape}"
+        )
     fdr = np.ascontiguousarray(fdr_win, dtype=np.uint8)
     label = np.ascontiguousarray(label_win, dtype=np.int32)
     barrier = np.ascontiguousarray(barrier_win, dtype=np.uint8)

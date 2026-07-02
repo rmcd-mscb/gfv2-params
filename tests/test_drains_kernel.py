@@ -262,6 +262,17 @@ def test_labeled_no_barrier_matches_unbarriered():
     assert n == 0
 
 
+def test_labeled_mismatched_shape_raises():
+    # Same guard as drains_to_dprst_kernel, but for the labeled wrapper: a
+    # label/barrier that isn't the same shape as fdr must raise, not silently
+    # OOB (numba runs bounds-check-off).
+    fdr = np.zeros((2, 2), dtype=np.uint8)
+    label = np.zeros((2, 2), dtype=np.int32)
+    barrier = np.zeros((2, 1), dtype=np.uint8)
+    with pytest.raises(ValueError):
+        drains_to_dprst_labeled_kernel(fdr, label, barrier)
+
+
 def test_labeled_first_waterbody_wins():
     # cell0 -> [dprst 5] -> [barrier]: label reached before barrier
     fdr = np.array([[1, 1, 255]], dtype=np.uint8)

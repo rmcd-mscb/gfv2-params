@@ -33,7 +33,6 @@ def build(step_cfg: dict, ctx: BuildContext, logger) -> dict:
     if (gdf[ctx.id_feature] <= 0).any():
         raise ValueError(f"{ctx.id_feature} must be positive (0 is the no-HRU sentinel).")
     ids = rasterize_ids(gdf, ctx.id_feature, info)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
     write_int32_regions(ids, info, output_path)
     n = int((ids > 0).sum())
     logger.info("  Rasterised %d HRUs | %d labelled cells (%.2f%%)", len(gdf), n, 100 * n / ids.size)

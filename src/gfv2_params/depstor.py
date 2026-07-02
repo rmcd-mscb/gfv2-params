@@ -338,9 +338,9 @@ def uint8_binary_profile(info: RasterInfo) -> dict:
     """Build the rasterio profile dict for a uint8 binary raster.
 
     Used by both the full-array writer (`write_uint8_binary`, below) and the
-    streaming depstor builders (`perv`, `carea_map`, `intersect`). Keeping a
-    single source means the two write paths can't drift on compression,
-    tiling, nodata, or BIGTIFF settings.
+    streaming depstor builders (`perv`, `carea_map`, `same_hru_drains`).
+    Keeping a single source means the two write paths can't drift on
+    compression, tiling, nodata, or BIGTIFF settings.
     """
     return {
         "driver": "GTiff",
@@ -388,7 +388,7 @@ def write_int32_regions(arr: np.ndarray, info: RasterInfo, out_path: Path) -> No
         "BIGTIFF": "YES",
     }
     with rasterio.open(out_path, "w", **profile) as dst:
-        dst.write(arr.astype(np.int32), 1)
+        dst.write(arr.astype(np.int32, copy=False), 1)
 
 
 def read_aligned_uint8(path: Path, info: RasterInfo) -> np.ndarray:
