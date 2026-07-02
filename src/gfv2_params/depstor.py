@@ -19,6 +19,7 @@ from typing import Optional
 import numpy as np
 import pandas as pd
 import rasterio
+from osgeo import gdal
 from rasterio.coords import BoundingBox
 from rasterio.crs import CRS
 from rasterio.features import rasterize as rio_rasterize
@@ -387,6 +388,48 @@ def read_aligned_uint8(path: Path, info: RasterInfo) -> np.ndarray:
         if src.transform != info.transform:
             raise ValueError(f"Raster {path} transform mismatch with template")
         return src.read(1)
+
+
+def align_fdr_to_dprst_grid(fdr_path, dprst_path, out_path, logger) -> None:
+    """Materialise the FDR onto the dprst grid as a concrete GeoTIFF.
+
+    Streams via gdal.Warp (block-by-block, bounded RAM) rather than an in-memory
+    rioxarray.reproject_match: the latter materialised the full 16.9-billion-cell
+    CONUS array plus float intermediates and OOM-killed the step at ~400 GB on a
+    uint8 source that is only ~17 GB. The FDR clip already shares the dprst grid,
+    so this is a near-identity nearest-neighbour resample that just realises the
+    VRT into a concrete raster for fast per-VPU windowed reads.
+    """
+    logger.info("  Aligning FDR to dprst grid (gdal.Warp, streaming)...")
+    gdal.UseExceptions()
+    with rasterio.open(dprst_path) as d:
+        b = d.bounds
+        width, height, dst_srs = d.width, d.height, d.crs.to_wkt()
+    with rasterio.open(fdr_path) as f:
+        src_nodata = f.nodata
+    if out_path.exists():
+        out_path.unlink()
+    ds = gdal.Warp(
+        str(out_path),
+        str(fdr_path),
+        options=gdal.WarpOptions(
+            format="GTiff",
+            outputBounds=[b.left, b.bottom, b.right, b.top],
+            width=width,
+            height=height,
+            dstSRS=dst_srs,
+            resampleAlg="near",
+            outputType=gdal.GDT_Byte,
+            srcNodata=src_nodata,
+            dstNodata=255,
+            multithread=True,
+            warpMemoryLimit=2_000_000_000,
+            creationOptions=["COMPRESS=LZW", "TILED=YES", "BLOCKXSIZE=256", "BLOCKYSIZE=256", "BIGTIFF=YES"],
+        ),
+    )
+    if ds is None:
+        raise RuntimeError(f"gdal.Warp produced no dataset for {out_path} — FDR alignment failed.")
+    ds = None  # flush/close
 
 
 def vpu_codes_present(vpu_id: np.ndarray, nodata: int = 0) -> list[int]:
