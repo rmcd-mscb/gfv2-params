@@ -80,7 +80,18 @@ def rasterize_binary(gdf, info: RasterInfo, all_touched: bool = False) -> np.nda
 
 
 def rasterize_ids(gdf, id_field: str, info: "RasterInfo") -> np.ndarray:
-    """Burn an integer id attribute onto the template grid (0 = no polygon)."""
+    """Burn an integer id attribute onto the template grid (0 = no polygon).
+
+    Geometries are reprojected to `info.crs` first if needed — a CRS-mismatched
+    burn silently lands geometries in the wrong place (no error), so guard it as
+    every other rasterize helper here does.
+    """
+    if gdf.crs is None:
+        raise ValueError("Input GeoDataFrame has no CRS")
+    if info.crs is None:
+        raise ValueError("RasterInfo has no CRS")
+    if gdf.crs != info.crs:
+        gdf = gdf.to_crs(info.crs)
     shapes = ((geom, int(val)) for geom, val in zip(gdf.geometry, gdf[id_field]))
     return rio_rasterize(
         shapes, out_shape=(info.height, info.width), transform=info.transform,
