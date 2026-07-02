@@ -79,6 +79,15 @@ def rasterize_binary(gdf, info: RasterInfo, all_touched: bool = False) -> np.nda
     return out
 
 
+def rasterize_ids(gdf, id_field: str, info: "RasterInfo") -> np.ndarray:
+    """Burn an integer id attribute onto the template grid (0 = no polygon)."""
+    shapes = ((geom, int(val)) for geom, val in zip(gdf.geometry, gdf[id_field]))
+    return rio_rasterize(
+        shapes, out_shape=(info.height, info.width), transform=info.transform,
+        fill=0, dtype="int32",
+    ).astype(np.int32, copy=False)
+
+
 def threshold_above(values: np.ndarray, threshold: float, src_nodata) -> np.ndarray:
     """Return uint8 binary mask: 1 where values >= threshold, else 255 (nodata).
 

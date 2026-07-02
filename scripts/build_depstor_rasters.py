@@ -68,6 +68,7 @@ def _build_context(config: dict, force: bool) -> BuildContext:
     template_path = Path(require_config_key(config, "template_raster", "build_depstor_rasters"))
     hru_gpkg = Path(require_config_key(config, "hru_gpkg", "build_depstor_rasters"))
     hru_layer = require_config_key(config, "hru_layer", "build_depstor_rasters")
+    id_feature = require_config_key(config, "id_feature", "build_depstor_rasters")
 
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -77,6 +78,7 @@ def _build_context(config: dict, force: bool) -> BuildContext:
         output_dir=output_dir,
         hru_gpkg=hru_gpkg,
         hru_layer=hru_layer,
+        id_feature=id_feature,
         segments_gpkg=Path(config["segments_gpkg"]) if config.get("segments_gpkg") else None,
         segments_layer=config.get("segments_layer", "nsegment"),
         waterbody_gpkg=Path(config["waterbody_gpkg"]) if config.get("waterbody_gpkg") else None,

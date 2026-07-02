@@ -44,6 +44,9 @@ steps:
   - name: perv
     output: perv_binary.tif
 
+  - name: hru_id
+    output: hru_id.tif
+
   - name: vpu_id
     output: vpu_id.tif
 
