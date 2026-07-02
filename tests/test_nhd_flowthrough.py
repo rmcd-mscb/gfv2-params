@@ -152,6 +152,32 @@ def test_split_pair_not_in_routed_network_stays_dprst():
     assert flowthrough_comids(wb, fl, routed_comids=set()) == set()
 
 
+def test_t1_throughflow_non_network_line_stays_dprst():
+    # Network gate: a conveyance line that geometrically flows through the
+    # waterbody but is a Non-Network Flowline (absent from network_comids) must
+    # NOT promote on-stream. This is the endorheic closed-basin case (e.g. VPU 18
+    # COMID 2556875, promoted by Non-Network ArtificialPath 2561885).
+    wb = _wb([[120, "LakePond", SQUARE]])
+    fl = _fl([["ArtificialPath", "Uninitialized", LineString([(-1, 1), (3, 1)])]])
+    assert flowthrough_comids(wb, fl, network_comids=set()) == set()
+
+
+def test_t1_throughflow_network_line_is_onstream():
+    # Same through-flow geometry, but the line IS a Network Flowline -> genuine
+    # on-stream through-flow is still promoted under the gate.
+    wb = _wb([[121, "LakePond", SQUARE]])
+    fl = _fl([["ArtificialPath", "Uninitialized", LineString([(-1, 1), (3, 1)])]])
+    assert flowthrough_comids(wb, fl, network_comids={9001}) == {121}
+
+
+def test_network_gate_absent_leaves_t1_ungated():
+    # Backward-compat: with no network set supplied, T1 stays pure-geometry
+    # (the pre-gate contract), so a through-flow line still promotes.
+    wb = _wb([[122, "LakePond", SQUARE]])
+    fl = _fl([["ArtificialPath", "Uninitialized", LineString([(-1, 1), (3, 1)])]])
+    assert flowthrough_comids(wb, fl) == {122}
+
+
 def test_nhdarea_coincidence_is_onstream():
     # T3: waterbody overlaps a StreamRiver NHDArea polygon (2-D channel).
     wb = _wb([[111, "LakePond", SQUARE]])

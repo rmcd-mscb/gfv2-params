@@ -104,6 +104,35 @@ def test_connected_comids_raises_on_coercion_loss():
         connected_comids_from_flowlines(df)
 
 
+def test_connected_comids_network_gate_drops_non_network_wbareacomi():
+    # Network gate: a WBAREACOMI carried by a Non-Network Flowline (absent from
+    # the network set) must NOT promote its waterbody on-stream. NHD draws
+    # Non-Network artificial paths through every closed-basin lake, so the raw
+    # WBAREACOMI set over-promotes endorheic waterbodies (e.g. VPU 18 COMID
+    # 2556875 via Non-Network ArtificialPath 2561885).
+    df = pd.DataFrame(
+        {"COMID": [10, 20], "WBAREACOMI": [100, 200]}
+    )
+    # only flowline 10 is a Network Flowline -> only its WBAREACOMI survives
+    assert connected_comids_from_flowlines(df, network_comids={10}) == {100}
+
+
+def test_connected_comids_network_gate_keeps_when_any_network_path():
+    # A lake tagged by BOTH a Network and a Non-Network artificial path is a
+    # genuine on-stream lake and stays promoted.
+    df = pd.DataFrame(
+        {"COMID": [10, 11, 20], "WBAREACOMI": [100, 100, 200]}
+    )
+    assert connected_comids_from_flowlines(df, network_comids={11}) == {100}
+
+
+def test_connected_comids_network_gate_absent_keeps_all():
+    # Backward-compat: with no network set supplied, every positive WBAREACOMI is
+    # kept (the pre-gate contract; COMID column is not even required).
+    df = pd.DataFrame({"WBAREACOMI": [100, 200]})
+    assert connected_comids_from_flowlines(df) == {100, 200}
+
+
 def test_write_connected_comids_roundtrip(tmp_path):
     out = tmp_path / "nested" / "connected_waterbody_comids.parquet"
     write_connected_comids({300, 100, 200}, out)

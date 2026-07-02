@@ -65,7 +65,14 @@ These are hard-won; violating them silently corrupts outputs.
   `wbody_connectivity` unions `connected_waterbody_comids.parquet` (WBAREACOMI
   artificial-path topology, from `nhd_flowlines`) with
   `flowthrough_waterbody_comids.parquet` (geometric flow-through topology, from
-  `nhd_flowthrough`). A waterbody promoted by the flow-through test must have
+  `nhd_flowthrough`). **Both sources gate on-stream promotion on Network-Flowline
+  membership** (a COMID present in `flowline_topology.parquet` / NHDPlus
+  PlusFlowlineVAA): NHD draws Non-Network artificial paths through essentially
+  every closed-basin lake, so the ungated WBAREACOMI set and the ungated
+  geometric T1 test both wrongly promoted genuinely endorheic waterbodies
+  on-stream (issue #161). Because of this gate, **`nhd_topology` must run before
+  both `nhd_flowlines` and `nhd_flowthrough`** (both fail loud if the topology
+  parquet is missing). A waterbody promoted by the flow-through test must have
   both inflow and outflow — terminal sinks (inflow only), locally-spilling
   potholes (outflow only), and isolated depressions stay dprst. Playa and Ice
   Mass FTYPEs are a hard guardrail and are never promoted on-stream regardless
