@@ -54,6 +54,9 @@ steps:
     keep_intermediates: false
     output: drains_to_dprst.tif
 
+  - name: routing_hru
+    output: drains_to_dprst_hru.tif
+
   - name: drains_perv
     inputs: [drains_to_dprst, perv]
     output_key: drains_perv

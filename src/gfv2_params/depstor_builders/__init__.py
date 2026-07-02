@@ -14,7 +14,7 @@ These modules are thin orchestration wrappers around those helpers.
 
 from __future__ import annotations
 
-from . import carea_map, dprst, hru_id, imperv, intersect, landmask, perv, routing, vpu_id, waterbody, wbody_connectivity
+from . import carea_map, dprst, hru_id, imperv, intersect, landmask, perv, routing, routing_hru, vpu_id, waterbody, wbody_connectivity
 from .context import BuildContext
 
 BUILDERS = {
@@ -26,6 +26,7 @@ BUILDERS = {
     "perv":              perv.build,
     "hru_id":            hru_id.build,
     "routing":           routing.build,
+    "routing_hru":       routing_hru.build,
     "drains_perv":       intersect.build,
     "drains_imperv":     intersect.build,
     "vpu_id":            vpu_id.build,
@@ -49,6 +50,8 @@ BUILDERS = {
 #   perv               -> "perv"                   perv_binary.tif
 #   hru_id             -> "hru_id"                 hru_id.tif (int32, per-cell nat_hru_id)
 #   routing            -> "drains_to_dprst"        drains_to_dprst.tif (in-process D8 kernel)
+#   routing_hru        -> "drains_to_dprst_hru"     drains_to_dprst_hru.tif (int32, per-cell nat_hru_id
+#                                                    of the reached depression; labeled D8 kernel)
 #   drains_perv        -> "drains_perv"            drains_perv_binary.tif (output_key from config)
 #   drains_imperv      -> "drains_imperv"          drains_imperv_binary.tif (output_key from config)
 #   vpu_id             -> "vpu_id"                 vpu_id.tif (per-cell VPU code, multi-VPU only)
@@ -64,6 +67,7 @@ STEP_ORDER = [
     "hru_id",
     "vpu_id",
     "routing",
+    "routing_hru",
     "drains_perv",
     "drains_imperv",
     "carea_map",
