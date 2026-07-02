@@ -1,4 +1,5 @@
 import numpy as np
+import pytest
 
 from gfv2_params.d8_routing import drains_to_dprst_kernel
 
@@ -190,3 +191,49 @@ def test_pour_wins_when_cell_is_both_pour_and_barrier():
     out, n_cycles = drains_to_dprst_kernel(fdr, pour, barrier)
     assert out.tolist() == [[1, 1]]
     assert n_cycles == 0
+
+
+def test_barrier_on_two_cell_cycle_breaks_it_without_counting_a_cycle():
+    # Mirror of test_cycle_containing_pour_point_marks_drains, but the seeded
+    # cell is a BARRIER, not a pour. left(E->right) and right(W->left) would
+    # form a cycle; right is a barrier. Barriers are seeded _NOT before the
+    # walk, so the barrier cell exits via the _NOT branch (not the cycle guard):
+    # left resolves _NOT and no cycle is counted. Pins the seeding-order
+    # invariant for barriers.
+    fdr = np.array([[1, 16]], dtype=np.uint8)
+    pour = np.array([[0, 0]], dtype=np.uint8)
+    barrier = np.array([[0, 1]], dtype=np.uint8)  # col 1 is the barrier
+    out, n_cycles = drains_to_dprst_kernel(fdr, pour, barrier)
+    assert out.tolist() == [[0, 0]]
+    assert n_cycles == 0  # barrier breaks the cycle before it is entered
+
+
+def test_confluence_into_single_barrier_blocks_both_tributaries():
+    # Two tributaries merge at a barrier cell that sits directly upstream of a
+    # pour. Both branches must be blocked at the shared barrier, the barrier
+    # itself is non-draining, and the barrier must NOT let the downstream pour
+    # propagate draining back up.
+    #   (0,0) SE(2) ->(1,1)=barrier   (0,2) SW(8) ->(1,1)=barrier
+    #   (1,1) S(4)  ->(2,1)=pour
+    fdr = np.array([[2, 255, 8],
+                    [255, 4, 255],
+                    [255, 255, 255]], dtype=np.uint8)
+    pour = np.zeros((3, 3), dtype=np.uint8)
+    pour[2, 1] = 1
+    barrier = np.zeros((3, 3), dtype=np.uint8)
+    barrier[1, 1] = 1
+    out, n_cycles = drains_to_dprst_kernel(fdr, pour, barrier)
+    assert out.tolist() == [[0, 0, 0],
+                            [0, 0, 0],
+                            [0, 1, 0]]  # only the pour drains itself
+    assert n_cycles == 0
+
+
+def test_mismatched_barrier_shape_raises():
+    # numba has no bounds-checking; the plain-Python wrapper must reject a
+    # barrier/pour that is not the same shape as fdr (loud, not silent OOB).
+    fdr = np.zeros((2, 2), dtype=np.uint8)
+    pour = np.zeros((2, 2), dtype=np.uint8)
+    barrier = np.zeros((2, 1), dtype=np.uint8)
+    with pytest.raises(ValueError):
+        drains_to_dprst_kernel(fdr, pour, barrier)

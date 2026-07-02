@@ -297,6 +297,13 @@ def drains_to_dprst_kernel(fdr_win, pour_win, barrier_win, fdr_nodata=255):
         its cells are resolved as non-draining. A non-zero count is worth a
         warning at the call site.
     """
+    # numba runs with bounds-checking off; a smaller pour/barrier than fdr would
+    # be silent out-of-bounds reads, not an error. Guard loudly in plain Python.
+    if not (fdr_win.shape == pour_win.shape == barrier_win.shape):
+        raise ValueError(
+            f"fdr/pour/barrier shapes must match: {fdr_win.shape}, "
+            f"{pour_win.shape}, {barrier_win.shape}"
+        )
     fdr = np.ascontiguousarray(fdr_win, dtype=np.uint8)
     pour = np.ascontiguousarray(pour_win, dtype=np.uint8)
     barrier = np.ascontiguousarray(barrier_win, dtype=np.uint8)

@@ -32,6 +32,7 @@ from rasterio.windows import Window
 from ..d8_routing import drains_to_dprst_kernel
 from ..depstor import (
     RasterInfo,
+    assert_raster_aligned,
     assign_vpu_drains,
     mask_fdr_to_vpu,
     read_aligned_uint8,
@@ -130,6 +131,11 @@ def build(step_cfg: dict, ctx: BuildContext, logger) -> dict:
         with rasterio.open(fdr_aligned) as fdr_src, \
                 rasterio.open(dprst_path) as dprst_src, \
                 rasterio.open(onstream_path) as onstream_src:
+            # dprst/onstream are windowed by vpu_id's grid; a same-shape but
+            # differently-georeferenced raster would be read at the wrong origin
+            # silently. Assert both are on the template grid (as carea_map does).
+            assert_raster_aligned(dprst_src, info, "dprst")
+            assert_raster_aligned(onstream_src, info, "onstream")
             for code in codes:
                 bbox = vpu_bbox(vpu_id, code)
                 r0, r1, c0, c1 = bbox
@@ -172,8 +178,10 @@ def build(step_cfg: dict, ctx: BuildContext, logger) -> dict:
                     logger.info("  VPU %d: %d on-stream barrier cell(s)", code, n_barrier)
                 if n_vpu == 0:
                     logger.warning(
-                        "  VPU %d: 0 cells drain to dprst — expected for a VPU with "
-                        "no depressions, else check dprst/vpu_id alignment.", code,
+                        "  VPU %d: 0 cells drain to dprst (%d on-stream barrier "
+                        "cell(s)) — expected for a VPU with no depressions or where "
+                        "barriers intercept every path, else check "
+                        "dprst/vpu_id/onstream alignment.", code, n_barrier,
                     )
                 else:
                     logger.info("  VPU %d: %d cells drain to dprst", code, n_vpu)
