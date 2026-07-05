@@ -694,6 +694,48 @@ JupyterHub is the interactive alternative for exploratory inspection.
 
 ---
 
+### Stage 10 — Snow depletion curves (SNODAS → snarea_curve)
+
+Two fabric-independent stages deriving the PRMS `snarea_curve`/`hru_deplcrv`
+parameters from daily SNODAS SWE (Driscoll, Hay & Bock 2017 method; design
+spec [`docs/superpowers/specs/2026-07-04-snodas-snarea-curve-design.md`](../docs/superpowers/specs/2026-07-04-snodas-snarea-curve-design.md)).
+Not yet wired into SLURM batches — run directly with `pixi run`:
+
+```bash
+# Stage 1 — aggregate daily SNODAS SWE to the HRU fabric (per calendar year)
+pixi run python scripts/derive_aggregate.py --source snodas --fabric <name>
+# Stage 2 — derive per-HRU snarea_curve from the aggregated SWE/SCA
+pixi run python scripts/derive_snarea_curve.py --fabric <name>
+```
+
+**Stage 1** (`src/gfv2_params/aggregate/`, config
+`configs/aggregate/aggregate_sources.yml`) wraps gdptools `UserCatData` /
+`WeightGen` / `AggGen` behind a declarative `SourceAdapter` — the time-series
+counterpart to the static-raster `zonal_runners`. It reads raw daily SNODAS
+NetCDFs (default path `{data_root}/../nhf-datastore/snodas/daily`,
+overridable per-fabric via the profile's `snodas_dir` key) and writes one
+`snodas_agg_<year>.nc` per calendar year plus a cached gdptools weight CSV
+under `{data_root}/{fabric}/weights_agg/`.
+
+**Stage 2** (`src/gfv2_params/snarea/`, config
+`configs/snarea/snarea_curve.yml`) reads the Stage 1 NetCDFs, builds per-HRU
+melt-season depletion curves, applies the six Driscoll selection criteria
+(HRUs that fail fall back to a configured default curve, flagged in
+`sdc_status`), and writes
+`{data_root}/{fabric}/params/merged/nhm_snarea_curve_params.csv`.
+
+**Cost profile:** Stage 1's gdptools weight-generation (`WeightGen`, one
+polygon/cell intersection pass over the fabric) is the expensive step; the
+weight CSV is cached to `weight_dir` and reused on subsequent runs (including
+across years) unless removed. The per-year `AggGen` aggregation itself is
+cheap once weights exist. Stage 2 is a pure per-HRU pandas/numpy computation
+over the already-aggregated daily series — cheap regardless of fabric size.
+
+The Stage 1 SWE aggregation can optionally be cross-checked against the
+sibling `gfv2-spatial-targets` repo's `snodas_<year>_agg.nc` oracle.
+
+---
+
 ## Adding a new fabric
 
 A new fabric is added by appending a profile to `configs/base_config.yml` —
@@ -836,6 +878,8 @@ sacct -j <JOBID> -o JobID,State,Elapsed,MaxRSS
 | `slurm_batch/build_depstor_rasters.batch` | `configs/depstor/depstor_rasters.yml` | `scripts/build_depstor_rasters.py` |
 | `slurm_batch/submit_zonal_params.sh` | `configs/zonal/zonal_params.yml` | `scripts/derive_zonal_params.py` (dispatches 10 params × zonal+merge, with ssflux's `build_weights` prereq chained automatically) |
 | `slurm_batch/submit_depstor_params.sh` | `configs/depstor/depstor_params.yml` | `scripts/derive_depstor_params.py` (dispatches 10 fractions × zonal+merge, then ratios via afterok) |
+| (run directly; no batch yet) | `configs/aggregate/aggregate_sources.yml` | `scripts/derive_aggregate.py --source snodas` (Stage 1: gridded-time-series → HRU aggregation via `src/gfv2_params/aggregate/`) |
+| (run directly; no batch yet) | `configs/snarea/snarea_curve.yml` | `scripts/derive_snarea_curve.py` (Stage 2: per-HRU `snarea_curve`/`hru_deplcrv` via `src/gfv2_params/snarea/`) |
 
 ### Part-2 workers (looped by the wrappers; also runnable by hand per Stage 4A)
 
