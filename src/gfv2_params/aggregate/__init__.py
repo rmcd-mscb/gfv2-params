@@ -8,5 +8,6 @@ can be area-weighted to an HRU fabric via a declarative SourceAdapter.
 from __future__ import annotations
 
 from .adapter import SourceAdapter
+from .driver import aggregate_source
 
-__all__ = ["SourceAdapter"]
+__all__ = ["SourceAdapter", "aggregate_source"]
