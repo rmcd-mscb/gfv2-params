@@ -108,6 +108,39 @@ def _year_of(path: Path) -> int:
     return int(m.group(1))
 
 
+def subset_to_gdf_bounds(
+    ds: xr.Dataset,
+    gdf: gpd.GeoDataFrame,
+    source_crs,
+    x_coord: str,
+    y_coord: str,
+    margin_m: float = 2000.0,
+) -> xr.Dataset:
+    """Clip the source grid to the target polygons' bounding box (+ margin).
+
+    The target polygons are reprojected to the source-grid CRS and the grid is
+    sliced to their total bounds padded by ``margin_m`` (default ~2 cells at
+    1 km, so boundary cells the polygons partially overlap are retained for
+    area weighting). This is a **lazy** coordinate selection, so — applied
+    before ``pre_aggregate_hook`` — it stops a per-fabric/per-batch aggregation
+    from ever materializing the full source grid: the hook and weight
+    generation see only the target's extent. Selecting by the filtered
+    coordinate labels (not a slice) is order-agnostic, so a descending ``y``
+    axis is handled correctly.
+    """
+    minx, miny, maxx, maxy = gdf.to_crs(source_crs).total_bounds
+    x = ds[x_coord]
+    y = ds[y_coord]
+    xsel = x[(x >= minx - margin_m) & (x <= maxx + margin_m)]
+    ysel = y[(y >= miny - margin_m) & (y <= maxy + margin_m)]
+    if xsel.size == 0 or ysel.size == 0:
+        raise ValueError(
+            "Source grid does not overlap the target polygons' bounds "
+            f"(x in [{minx}, {maxx}], y in [{miny}, {maxy}]). Check CRS/extent."
+        )
+    return ds.sel({x_coord: xsel, y_coord: ysel})
+
+
 def aggregate_source(
     adapter: SourceAdapter,
     fabric_gdf: gpd.GeoDataFrame,
@@ -138,6 +171,12 @@ def aggregate_source(
         if years is not None and year not in years:
             continue
         ds = xr.open_dataset(f)
+        # Clip to the target extent BEFORE the hook so neither the hook nor
+        # weight generation ever materializes the full source grid (the
+        # per-fabric/per-batch memory bound; see subset_to_gdf_bounds).
+        ds = subset_to_gdf_bounds(
+            ds, fabric_gdf, adapter.source_crs, adapter.x_coord, adapter.y_coord
+        )
         if adapter.pre_aggregate_hook is not None:
             ds = adapter.pre_aggregate_hook(ds)
         period = _period_bounds(ds, adapter.time_coord)

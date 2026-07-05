@@ -1,0 +1,35 @@
+#!/bin/bash
+#SBATCH -p cpu
+#SBATCH -A impd
+#SBATCH --job-name=snodas_agg
+#SBATCH --output=logs/job_%j.out
+#SBATCH --error=logs/job_%j.err
+#SBATCH --time=08:00:00
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=8
+#SBATCH --mem=96G
+#
+# Stage 1 of the SNODAS -> snarea_curve pipeline: aggregate daily 1-km SNODAS
+# SWE to the HRU fabric, emitting per-HRU daily mean SWE + snow-covered-area
+# fraction (scov). One per-calendar-year NetCDF is written to
+# {data_root}/{fabric}/snodas/snodas_agg_<year>.nc. gdptools grid->polygon
+# weights are computed once (first year) and cached under
+# {data_root}/{fabric}/weights_agg/, then reused for every year/variable.
+#
+# Resource note: weight generation over the full CONUS SNODAS grid is the cost
+# and the memory wildcard on this first run (Task 5 was deferred). If this OOMs
+# or times out, bump --mem / --time; the durable fix (a fabric-bounds SNODAS
+# clip) is tracked in issue #166.
+#
+#   FABRIC=oregon sbatch slurm_batch/derive_snodas_aggregate.batch
+# Optional year subset: append `--years 2010 2011` to the command below.
+
+cd "$SLURM_SUBMIT_DIR"
+BASE_CONFIG=${BASE_CONFIG:-configs/base_config.yml}
+FABRIC=${FABRIC:-oregon}
+
+pixi run --as-is python scripts/derive_aggregate.py \
+    --source snodas \
+    --fabric "$FABRIC" \
+    --config configs/aggregate/aggregate_sources.yml \
+    --base_config "$BASE_CONFIG"
