@@ -24,6 +24,16 @@ class SelectionParams:
     max_constant_frac: float = 0.8
     max_similarity: float = 0.15
 
+    def __post_init__(self):
+        if self.min_cells < 0:
+            raise ValueError(f"min_cells must be >= 0, got {self.min_cells}")
+        for name in (
+            "max_water_frac", "min_seasonal_sca", "max_constant_frac", "max_similarity",
+        ):
+            value = getattr(self, name)
+            if not 0.0 <= value <= 1.0:
+                raise ValueError(f"{name} must be within [0.0, 1.0], got {value}")
+
 
 def passes_selection(
     *,

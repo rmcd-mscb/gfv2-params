@@ -22,7 +22,10 @@ _CURVE_COLS = [f"snarea_curve_{i}" for i in range(11)]
 
 
 def _seasons(daily: pd.DataFrame) -> list[np.ndarray]:
-    """One annual SDC per calendar year present in the daily frame."""
+    """Up to one annual SDC per calendar year; years where annual_sdc returns
+    None (no snow / never melts / too few points) are omitted, so
+    len(result) counts USABLE seasons, not calendar years.
+    """
     out = []
     for _year, grp in daily.groupby(daily.index.year):
         curve = annual_sdc(grp["swe"], grp["sca"])
@@ -32,7 +35,10 @@ def _seasons(daily: pd.DataFrame) -> list[np.ndarray]:
 
 
 def _constant_frac(daily: pd.DataFrame) -> float:
-    """Fraction of snow-present days whose SCA equals the daily max (flat SCA)."""
+    """Fraction of snow-present days whose SCA is within 1e-9 of the single max
+    SCA over the full (possibly multi-year) record — a flat/degenerate-SCA
+    proxy.
+    """
     snow = daily[daily["swe"] > 0]
     if len(snow) == 0:
         return 1.0
@@ -75,7 +81,9 @@ def build_hru_record(
 
     record = {
         "hru_id": hru_id,
-        "hru_deplcrv": hru_id,          # 1:1 index (each HRU → own curve)
+        # 1:1 index; assumes id_feature is already the dense/1-based index
+        # PRMS expects (revisit for non-contiguous ids)
+        "hru_deplcrv": hru_id,
         "sdc_status": status,
         "sca_class": classify(rep),
         "similarity": sim,

@@ -7,6 +7,7 @@ writes one per-HRU per-day NetCDF per calendar year. Fabric-agnostic.
 from __future__ import annotations
 
 import argparse
+import re
 from pathlib import Path
 
 import geopandas as gpd
@@ -29,6 +30,12 @@ def _resolve(value, repl: dict):
     if isinstance(value, str):
         for ph, rep in repl.items():
             value = value.replace(f"{{{ph}}}", str(rep))
+        remaining = re.findall(r"\{(\w+)\}", value)
+        if remaining:
+            raise ValueError(
+                f"Unresolved placeholder(s) {remaining} in value '{value}'. "
+                f"Available: {sorted(repl)}"
+            )
         return value
     if isinstance(value, list):
         return [_resolve(v, repl) for v in value]

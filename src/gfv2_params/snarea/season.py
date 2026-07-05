@@ -21,11 +21,20 @@ def melt_season(swe: pd.Series, sca: pd.Series):
     """
     if swe.max() <= 0:
         return None
-    peak_pos = int(np.argmax(swe.values))
+    if swe.notna().sum() == 0:
+        return None
+    peak_pos = int(np.nanargmax(swe.values))
+    if peak_pos == 0:
+        # Peak on the first day of the calendar-year record: accumulation
+        # began in the prior year (or the record starts already declining).
+        # Excluded per design spec §4.
+        return None
     after = swe.iloc[peak_pos:]
     zero_positions = np.where(after.values <= 0)[0]
     if len(zero_positions) == 0:
-        return None                        # never melts out — flagged upstream
+        # never melts out (persistent snowfield / truncated year); this
+        # HRU-year is dropped from the season list, not surfaced as a diagnostic
+        return None
     end_pos = peak_pos + int(zero_positions[0])
     return swe.iloc[peak_pos:end_pos + 1], sca.iloc[peak_pos:end_pos + 1]
 
@@ -66,7 +75,8 @@ def annual_sdc(swe: pd.Series, sca: pd.Series):
     if sca_w.iloc[0] <= 0:
         return None
     swe_n, sca_n = normalize_curve(swe_w, sca_w)
-    # np.interp needs ascending x; swe_n descends over the melt, so sort ascending.
+    # np.interp needs ascending x; remove_reversals filters on SCA only, so
+    # swe_n may be non-monotonic — sort explicitly.
     order = np.argsort(swe_n)
     xs, ys = swe_n[order], sca_n[order]
     curve = np.interp(SWE_LEVELS, xs, ys, left=ys[0], right=ys[-1])

@@ -5,12 +5,14 @@ from gfv2_params.snarea.selection import SelectionParams
 
 
 def _daily_two_years():
-    # two clean melt seasons in 2010 and 2011, snow present, monotonic
+    # two clean melt seasons in 2010 and 2011, snow present, monotonic.
+    # A lower lead-in day precedes the peak so the peak isn't on day 0 of
+    # the calendar-year record (melt_season excludes peak-at-day0 per spec §4).
     frames = []
     for yr in (2010, 2011):
-        idx = pd.date_range(f"{yr}-02-01", periods=6, freq="D")
+        idx = pd.date_range(f"{yr}-01-31", periods=7, freq="D")
         frames.append(pd.DataFrame(
-            {"swe": [10, 8, 6, 4, 2, 0], "sca": [1.0, .9, .7, .5, .3, 0.0]}, index=idx))
+            {"swe": [5, 10, 8, 6, 4, 2, 0], "sca": [.5, 1.0, .9, .7, .5, .3, 0.0]}, index=idx))
     return pd.concat(frames)
 
 

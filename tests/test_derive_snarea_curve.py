@@ -8,9 +8,14 @@ from __future__ import annotations
 
 import numpy as np
 import pandas as pd
+import pytest
 import xarray as xr
 
-from scripts.derive_snarea_curve import cells_from_weights, read_daily_by_hru  # noqa: E402
+from scripts.derive_snarea_curve import (  # noqa: E402
+    cells_from_weights,
+    read_daily_by_hru,
+    validate_default_curve,
+)
 
 
 def test_cells_from_weights(tmp_path):
@@ -31,3 +36,24 @@ def test_read_daily_by_hru(tmp_path):
     assert set(out) == {1, 2}
     assert list(out[1]["swe"].values) == [10, 8, 0]
     assert "sca" in out[1].columns          # scov renamed to sca
+
+
+def test_validate_default_curve_accepts_valid():
+    validate_default_curve(np.linspace(1.0, 0.0, 11))
+
+
+def test_validate_default_curve_rejects_wrong_length():
+    with pytest.raises(ValueError):
+        validate_default_curve(np.linspace(1.0, 0.0, 10))
+
+
+def test_validate_default_curve_rejects_out_of_range():
+    arr = np.linspace(1.0, 0.0, 11)
+    arr[0] = 1.5
+    with pytest.raises(ValueError):
+        validate_default_curve(arr)
+
+
+def test_validate_default_curve_rejects_increasing():
+    with pytest.raises(ValueError):
+        validate_default_curve(np.linspace(0.0, 1.0, 11))

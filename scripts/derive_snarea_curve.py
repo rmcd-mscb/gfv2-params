@@ -27,8 +27,23 @@ from gfv2_params.snarea.selection import SelectionParams
 __all__ = [
     "read_daily_by_hru",
     "cells_from_weights",
+    "validate_default_curve",
     "main",
 ]
+
+
+def validate_default_curve(arr: np.ndarray) -> None:
+    """Validate a `default_curve` override: shape, value range, non-increasing.
+
+    Raises ValueError (not `assert`, which is stripped under `python -O`)
+    naming which check failed.
+    """
+    if arr.shape != (11,):
+        raise ValueError(f"default_curve must have shape (11,), got {arr.shape}")
+    if not np.all((arr >= 0.0) & (arr <= 1.0)):
+        raise ValueError(f"default_curve values must all be within [0.0, 1.0], got {arr}")
+    if not np.all(np.diff(arr) <= 1e-9):
+        raise ValueError(f"default_curve must be non-increasing, got {arr}")
 
 
 def read_daily_by_hru(nc_dir: Path, id_dim: str) -> dict[int, pd.DataFrame]:
@@ -78,7 +93,7 @@ def main() -> None:
 
     sel = SelectionParams(**cfg["selection"])
     default_curve = np.asarray(cfg.get("default_curve", DEFAULT_SNAREA_CURVE), dtype=float)
-    assert default_curve.shape == (11,), "default_curve must have 11 values"
+    validate_default_curve(default_curve)
 
     daily = read_daily_by_hru(nc_dir, id_feature)
     cells = cells_from_weights(weight_file, id_feature)
