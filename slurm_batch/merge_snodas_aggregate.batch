@@ -1,0 +1,32 @@
+#!/bin/bash
+#SBATCH -p cpu
+#SBATCH -A impd
+#SBATCH --job-name=snodas_merge
+#SBATCH --output=logs/job_%j.out
+#SBATCH --error=logs/job_%j.err
+#SBATCH --time=01:00:00
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=2
+#SBATCH --mem=32G
+#
+# Merge per-batch SNODAS aggregation NetCDFs into the final per-year files.
+# Concatenates {data_root}/{fabric}/snodas/_batches/snodas_batch*_agg_<year>.nc
+# on the id_feature dim (sorted) into {data_root}/{fabric}/snodas/snodas_agg_<year>.nc
+# — the file Stage 2 (derive_snarea_curve.py) globs for.
+#
+# Submit with an afterok dependency on the matching aggregate array job:
+#   AID=$(sbatch --parsable --array=0-$((N-1)) --export=ALL,FABRIC=oregon \
+#       slurm_batch/derive_snodas_aggregate.batch)
+#   sbatch --dependency=afterok:$AID --export=ALL,FABRIC=oregon \
+#       slurm_batch/merge_snodas_aggregate.batch
+
+cd "$SLURM_SUBMIT_DIR"
+BASE_CONFIG=${BASE_CONFIG:-configs/base_config.yml}
+FABRIC=${FABRIC:-oregon}
+
+pixi run --as-is python scripts/derive_aggregate.py \
+    --source snodas \
+    --fabric "$FABRIC" \
+    --config configs/aggregate/aggregate_sources.yml \
+    --base_config "$BASE_CONFIG" \
+    --mode merge

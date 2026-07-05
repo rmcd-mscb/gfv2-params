@@ -237,21 +237,28 @@ sbatch slurm_batch/render_figures.batch     # PNGs -> docs/figures/gfv2/
 ### 8 · (optional) Snow depletion curves (SNODAS → snarea_curve)
 
 ```bash
-pixi run python scripts/derive_aggregate.py --source snodas --fabric gfv2
+N=$(grep '^n_batches:' "$BATCHES/manifest.yml" | awk '{print $2}')
+AID=$(sbatch --parsable --array=0-$((N-1)) --export=ALL,FABRIC=gfv2 \
+    slurm_batch/derive_snodas_aggregate.batch)
+sbatch --dependency=afterok:$AID --export=ALL,FABRIC=gfv2 \
+    slurm_batch/merge_snodas_aggregate.batch
 pixi run python scripts/derive_snarea_curve.py --fabric gfv2
 ```
 
-**What it does:** Stage 1 aggregates daily SNODAS SWE to the HRU fabric (one
-NetCDF per calendar year, area-weighted mean SWE + snow-covered-area fraction
-via the gdptools-backed `aggregate` harness); Stage 2 derives the per-HRU
-`snarea_curve`/`hru_deplcrv` PRMS parameters from those daily series (Driscoll,
-Hay & Bock 2017 method). Fabric-independent — no code change to run against
-`gfv2`, `gfv2_vpu01`, or `oregon`. Not yet wired into SLURM batches; run both
-commands directly (`pixi run python ...`), not via `sbatch`.
+**What it does:** Stage 1 aggregates daily SNODAS SWE to the HRU fabric as a
+SLURM array over the fabric's spatial batches (`derive_snodas_aggregate.batch`,
+one array task per batch, source grid clipped to each batch's extent), then
+`merge_snodas_aggregate.batch` concatenates the per-batch per-year NetCDFs
+into one final `snodas_agg_<year>.nc` per calendar year (area-weighted mean
+SWE + snow-covered-area fraction via the gdptools-backed `aggregate` harness);
+Stage 2 derives the per-HRU `snarea_curve`/`hru_deplcrv` PRMS parameters from
+those daily series (Driscoll, Hay & Bock 2017 method). Fabric-independent —
+no code change to run against `gfv2`, `gfv2_vpu01`, or `oregon`. Stage 2 is
+still run directly (`pixi run python ...`), not via `sbatch`.
 
-**Wait for:** Stage 1 prints one `snodas_agg_<year>.nc` per year written;
-Stage 2 prints the `sdc_status` breakdown and writes the merged CSV. See
-HPC_REFERENCE.md "Stage 10" for per-stage detail.
+**Wait for:** the merge job `COMPLETED`, printing one `snodas_agg_<year>.nc`
+per year written; Stage 2 prints the `sdc_status` breakdown and writes the
+merged CSV. See HPC_REFERENCE.md "Stage 10" for per-stage detail.
 
 ---
 
