@@ -1,0 +1,19 @@
+# Stage 2: derive per-HRU snarea_curve from the aggregated daily SWE/SCA.
+#
+# Top-level keys (not nested under `defaults:`): gfv2_params.config.load_config
+# only resolves {data_root}/{fabric} placeholders in top-level string values.
+snodas_agg_dir: "{data_root}/{fabric}/snodas"
+weight_file: "{data_root}/{fabric}/weights_agg/snodas_weights_{fabric}.csv"
+output_dir: "{data_root}/{fabric}/params/merged"
+merged_file: nhm_snarea_curve_params.csv
+
+selection:
+  min_cells: 25
+  max_water_frac: 0.5
+  min_seasonal_sca: 0.5
+  max_constant_frac: 0.8
+  max_similarity: 0.15
+
+# Placeholder near-linear default (see Task 9). Override with the real NHM default
+# when staged. Must be 11 descending values in [0,1].
+default_curve: [1.0, 0.9, 0.8, 0.7, 0.6, 0.5, 0.4, 0.3, 0.2, 0.1, 0.0]
