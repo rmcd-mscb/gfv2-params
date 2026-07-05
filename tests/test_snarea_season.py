@@ -49,3 +49,19 @@ def test_annual_sdc_shape_and_endpoints():
     assert curve[0] == 1.0                        # at swe_n=1 -> sca_n=1
     np.testing.assert_allclose(curve[-1], 0.0, atol=1e-9)  # at swe_n=0 -> ~0
     assert np.all(np.diff(curve) <= 1e-9)         # non-increasing across levels
+
+
+def test_annual_sdc_none_when_sca_zero_at_peak():
+    # mean SWE peaks but SCA at peak is 0 -> unusable season, not a flat-zero curve
+    swe = _series([10, 6, 2, 0])
+    sca = _series([0.0, 0.0, 0.0, 0.0])
+    assert annual_sdc(swe, sca) is None
+
+
+def test_annual_sdc_after_reversal_is_monotonic():
+    # a post-peak snowfall reversal must not produce an increasing curve
+    swe = _series([10, 8, 9, 5, 0])
+    sca = _series([1.0, 0.6, 0.9, 0.4, 0.0])
+    curve = annual_sdc(swe, sca)
+    assert curve is not None and curve.shape == (11,)
+    assert np.all(np.diff(curve) <= 1e-9)

@@ -63,6 +63,8 @@ def annual_sdc(swe: pd.Series, sca: pd.Series):
     swe_w, sca_w = remove_reversals(*ms)
     if len(swe_w) < 2:
         return None
+    if sca_w.iloc[0] <= 0:
+        return None
     swe_n, sca_n = normalize_curve(swe_w, sca_w)
     # np.interp needs ascending x; swe_n descends over the melt, so sort ascending.
     order = np.argsort(swe_n)
@@ -70,5 +72,4 @@ def annual_sdc(swe: pd.Series, sca: pd.Series):
     curve = np.interp(SWE_LEVELS, xs, ys, left=ys[0], right=ys[-1])
     # Enforce monotonic non-increasing across descending SWE levels (numerical guard).
     curve = np.minimum.accumulate(curve)
-    curve[0] = min(curve[0], 1.0)
     return np.clip(curve, 0.0, 1.0)
