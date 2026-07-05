@@ -310,6 +310,40 @@ bash slurm_batch/submit_zonal_params.sh \
 See [`docs/ARCHITECTURE.md#orchestrator-builder-unified-config-pattern`](docs/ARCHITECTURE.md#orchestrator-builder-unified-config-pattern)
 for the pattern.
 
+## Snow depletion curves (SNODAS → snarea_curve)
+
+Derives the PRMS `snarea_curve` parameter (an 11-point areal snow-depletion
+curve) plus `hru_deplcrv` from daily SNODAS SWE, following the Driscoll, Hay &
+Bock (2017) method. Two fabric-independent stages, each a plain `pixi run`
+command (no SLURM wiring yet):
+
+```bash
+# Stage 1 — aggregate daily SNODAS SWE to the HRU fabric, one NC per calendar year
+pixi run python scripts/derive_aggregate.py --source snodas --fabric oregon
+
+# Stage 2 — derive per-HRU snarea_curve from the aggregated SWE/SCA
+pixi run python scripts/derive_snarea_curve.py --fabric oregon
+```
+
+- **Inputs:** raw daily SNODAS SWE NetCDFs from the shared datastore (default
+  `{data_root}/../nhf-datastore/snodas/daily` in
+  [`configs/aggregate/aggregate_sources.yml`](configs/aggregate/aggregate_sources.yml);
+  overridable per-fabric via the profile's `snodas_dir` key).
+- **Stage 1 output:** `{data_root}/{fabric}/snodas/snodas_agg_<year>.nc` (dims
+  `time`/`<id_feature>`; vars `swe` area-weighted mean, `scov` snow-covered-area
+  fraction), plus a cached gdptools weight CSV under
+  `{data_root}/{fabric}/weights_agg/`.
+- **Stage 2 output:**
+  `{data_root}/{fabric}/params/merged/nhm_snarea_curve_params.csv` — one row per
+  HRU with `snarea_curve_0..10`, `hru_deplcrv`, and `sdc_status`/`sca_class`
+  diagnostics; HRUs failing the six Driscoll selection criteria fall back to a
+  configured default curve, flagged in `sdc_status`.
+
+`--fabric` is resolved the same way as every other stage (CLI flag → `FABRIC`
+env var → `default_fabric`); swap in `--fabric gfv2` for the CONUS fabric.
+Design spec: [`docs/superpowers/specs/2026-07-04-snodas-snarea-curve-design.md`](docs/superpowers/specs/2026-07-04-snodas-snarea-curve-design.md);
+converted method paper: [`docs/Snow_Depletion_Curves.md`](docs/Snow_Depletion_Curves.md).
+
 ## Viewing fabric results
 
 Once a fabric is processed, the Jupyter notebooks in

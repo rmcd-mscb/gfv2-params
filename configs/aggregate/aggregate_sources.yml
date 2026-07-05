@@ -1,0 +1,17 @@
+# configs/aggregate/aggregate_sources.yml
+# Stage 1: aggregate gridded time-series sources to the HRU fabric.
+# Fabric-agnostic — per-fabric fabric gpkg / id_feature come from base_config.yml.
+#
+# output_dir/weight_dir live at the TOP LEVEL (not nested under a `defaults:`
+# block): gfv2_params.config.load_config only resolves {data_root}/{fabric}
+# placeholders in top-level string values, so these two keys arrive from
+# load_config already-resolved. The `sources:` list is nested and is resolved
+# by scripts/derive_aggregate.py's own recursive `_resolve` helper instead.
+output_dir: "{data_root}/{fabric}/snodas"
+weight_dir: "{data_root}/{fabric}/weights_agg"
+
+sources:
+  - name: snodas
+    # Shared raw datastore; a profile may override `snodas_dir`.
+    snodas_dir: "{data_root}/../nhf-datastore/snodas/daily"
+    output_prefix: snodas

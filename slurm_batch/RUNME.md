@@ -25,6 +25,8 @@ in [HPC_REFERENCE.md](HPC_REFERENCE.md).
 6. **Step 5** — KNN gap-fill missing parameter values.
 7. **Step 6** — (optional) Merge NHM default parameter tables.
 8. **Step 7** — Render results figures headlessly.
+9. **Step 8** — (optional, fabric-independent) Derive snow depletion curves
+   (SNODAS → `snarea_curve`).
 
 ---
 
@@ -232,6 +234,27 @@ sbatch slurm_batch/render_figures.batch     # PNGs -> docs/figures/gfv2/
 
 ---
 
+### 8 · (optional) Snow depletion curves (SNODAS → snarea_curve)
+
+```bash
+pixi run python scripts/derive_aggregate.py --source snodas --fabric gfv2
+pixi run python scripts/derive_snarea_curve.py --fabric gfv2
+```
+
+**What it does:** Stage 1 aggregates daily SNODAS SWE to the HRU fabric (one
+NetCDF per calendar year, area-weighted mean SWE + snow-covered-area fraction
+via the gdptools-backed `aggregate` harness); Stage 2 derives the per-HRU
+`snarea_curve`/`hru_deplcrv` PRMS parameters from those daily series (Driscoll,
+Hay & Bock 2017 method). Fabric-independent — no code change to run against
+`gfv2`, `gfv2_vpu01`, or `oregon`. Not yet wired into SLURM batches; run both
+commands directly (`pixi run python ...`), not via `sbatch`.
+
+**Wait for:** Stage 1 prints one `snodas_agg_<year>.nc` per year written;
+Stage 2 prints the `sdc_status` breakdown and writes the merged CSV. See
+HPC_REFERENCE.md "Stage 10" for per-stage detail.
+
+---
+
 ## Monitoring
 
 ```bash
@@ -250,6 +273,10 @@ tail -n 200 logs/job_<JOBID>.err
 - `{data_root}/gfv2/params/merged/_intermediates/` — 10 per-fraction count
   CSVs (inputs to ratio derivation; `count` is NOT a [0, 1] fraction).
 - `docs/figures/gfv2/` — rendered PNG figures.
+- `{data_root}/gfv2/snodas/` — per-year aggregated SNODAS SWE/SCA NetCDFs
+  (Stage 1 of the snow depletion curve pipeline, optional Step 8).
+- `{data_root}/gfv2/params/merged/nhm_snarea_curve_params.csv` — per-HRU
+  `snarea_curve`/`hru_deplcrv` (Stage 2, optional Step 8).
 
 ---
 

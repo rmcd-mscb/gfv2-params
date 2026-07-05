@@ -77,6 +77,8 @@ shells around the same builders. The four stages:
 | Part 2a depstor rasters | `scripts/build_depstor_rasters.py` | `configs/depstor/depstor_rasters.yml` | `src/gfv2_params/depstor_builders/` |
 | Part 2a depstor params | `scripts/derive_depstor_params.py` | `configs/depstor/depstor_params.yml` | `src/gfv2_params/depstor_ratios.py` |
 | Part 2b zonal params | `scripts/derive_zonal_params.py` | `configs/zonal/zonal_params.yml` | `src/gfv2_params/zonal_runners/` |
+| Part 2c snow-depletion aggregation | `scripts/derive_aggregate.py` | `configs/aggregate/aggregate_sources.yml` | `src/gfv2_params/aggregate/` |
+| Part 2c snow-depletion curve build | `scripts/derive_snarea_curve.py` | `configs/snarea/snarea_curve.yml` | `src/gfv2_params/snarea/` |
 
 Orchestrators support `--step <name>` (one step), `--from <name>` (resume),
 and `--force` (rebuild outputs that already exist). The zonal orchestrator
@@ -93,6 +95,25 @@ contract:
 - [`src/gfv2_params/shared_rasters/__init__.py`](../src/gfv2_params/shared_rasters/__init__.py) — Part 1 builders (10 modules)
 - [`src/gfv2_params/depstor_builders/__init__.py`](../src/gfv2_params/depstor_builders/__init__.py) — Part 2a raster builders (11 modules)
 - [`src/gfv2_params/zonal_runners/__init__.py`](../src/gfv2_params/zonal_runners/__init__.py) — Part 2b param runners (6 modules)
+- [`src/gfv2_params/aggregate/`](../src/gfv2_params/aggregate/) — Part 2c
+  Stage 1: a source-agnostic gridded-**time-series** → HRU aggregation
+  harness — the time-series counterpart to `zonal_runners` (which handles
+  static rasters). Wraps gdptools `UserCatData`/`WeightGen`/`AggGen` behind a
+  declarative `SourceAdapter` (`adapter.py`); `driver.py`'s `aggregate_source`
+  caches the per-fabric weight matrix once and loops `AggGen` per year. The
+  current adapter, `snodas.py`, area-weights daily SNODAS SWE to `swe` (mean)
+  and derives `scov`/SCA (`masked_mean` of `swe > 0`, NaN-preserving over
+  fill/nodata cells) — feeds Part 2c Stage 2 below. New gridded time-series
+  sources (e.g. climate) plug in as a new `SourceAdapter`, not a new script.
+- [`src/gfv2_params/snarea/`](../src/gfv2_params/snarea/) — Part 2c Stage 2:
+  derives the PRMS `snarea_curve` (11-point areal snow-depletion curve) and
+  `hru_deplcrv` per HRU from the Stage 1 daily SWE/SCA, per Driscoll, Hay &
+  Bock (2017): per-calendar-year melt-season curve extraction (`season.py`),
+  median/similarity/representative-curve selection (`representative.py`), six
+  selection criteria + low/mid/high classification (`selection.py`), and
+  final per-HRU assembly with default-curve fallback (`build.py`). Design
+  spec: [`docs/superpowers/specs/2026-07-04-snodas-snarea-curve-design.md`](superpowers/specs/2026-07-04-snodas-snarea-curve-design.md);
+  converted method paper: [`docs/Snow_Depletion_Curves.md`](Snow_Depletion_Curves.md).
 
 Each `build(step_cfg, ctx, logger)` function produces named outputs that
 downstream steps can reach via the shared context. The orchestrator/builder
@@ -149,6 +170,13 @@ pixi run --as-is python scripts/clip_shared_to_fabric.py --fabric <name>
 Every depstor builder sizes its arrays to the `template_raster` grid, so the
 clip scopes compute to the fabric extent while staying VPU-agnostic (works
 for fabrics that straddle VPU boundaries).
+
+`snodas_dir` is a similar profile-overridable path, but optional: it points
+the Part 2c snow-depletion aggregation (Stage 1) at a fabric's raw daily
+SNODAS SWE NetCDFs. It defaults to the shared datastore path
+(`{data_root}/../nhf-datastore/snodas/daily`) in
+`configs/aggregate/aggregate_sources.yml` and only needs a profile entry if a
+fabric's SNODAS source differs from that default.
 
 ### Common fabrics
 
