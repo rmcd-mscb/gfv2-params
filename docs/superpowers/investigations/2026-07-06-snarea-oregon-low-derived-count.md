@@ -135,3 +135,4 @@ unchanged aggregated NCs:
   CONUS gfv2 (coarser HRUs) is unlikely to need different values but should be
   re-checked at its own run.
 
+**Final calibrated run** (`min_cells=15`, `max_similarity=0.10`, job 327212): **derived 8,923 (53%)**, too_few_cells 4,868 (29%), dissimilar 2,574 (15%), constant_sca 429, no_snow 20. Sensible distribution; matches the paper's ~49% CONUS-wide derived fraction.
