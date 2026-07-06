@@ -8,11 +8,17 @@ output_dir: "{data_root}/{fabric}/params/merged"
 merged_file: nhm_snarea_curve_params.csv
 
 selection:
-  min_cells: 25
+  # min_cells: minimum SNODAS 1-km cells per HRU. The paper used 25 for ~74 km²
+  # CONUS HRUs; 15 suits finer/elevation-banded fabrics (Oregon: 25 dropped 49%).
+  min_cells: 15
   max_water_frac: 0.5
   min_seasonal_sca: 0.5
   max_constant_frac: 0.8
-  max_similarity: 0.15
+  # max_similarity is on the SCALE-FREE metric (mean |SDC-median| per point;
+  # see representative.similarity). Oregon distribution p50=0.085, p95=0.126;
+  # 0.10 rejects the noisiest ~25% that reach the gate. (Not the paper's 0.15,
+  # which was on the un-normalized sum.)
+  max_similarity: 0.10
 
 # Placeholder near-linear default (see Task 9). Override with the real NHM default
 # when staged. Must be 11 descending values in [0,1].
