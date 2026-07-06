@@ -1,0 +1,39 @@
+#!/bin/bash
+#SBATCH -p cpu
+#SBATCH -A impd
+#SBATCH --job-name=snodas_agg
+#SBATCH --output=logs/job_%A_%a.out
+#SBATCH --error=logs/job_%A_%a.err
+#SBATCH --time=04:00:00
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=4
+#SBATCH --mem=48G
+#
+# Array task: Stage 1 of the SNODAS -> snarea_curve pipeline. Aggregates daily
+# 1-km SNODAS SWE to one spatial HRU batch, emitting per-HRU daily mean SWE +
+# snow-covered-area fraction (scov) for that batch's extent only (the source
+# grid is clipped to the batch gdf's bounds before aggregating — see
+# aggregate_source()/subset_to_gdf_bounds() in
+# src/gfv2_params/aggregate/driver.py). Per-batch per-year NetCDFs land in
+# {data_root}/{fabric}/snodas/_batches/; run merge_snodas_aggregate.batch
+# afterok to combine them into the final {fabric}/snodas/snodas_agg_<year>.nc
+# files Stage 2 reads. gdptools grid->polygon weights are cached per-batch
+# under {data_root}/{fabric}/weights_agg/.
+#
+# Size the array from the fabric's spatial-batching manifest (same pattern as
+# create_depstor_zonal.batch / derive_zonal_params.batch):
+#   N=$(grep '^n_batches:' "$DATA_ROOT/$FABRIC/batches/manifest.yml" | awk '{print $2}')
+#   sbatch --array=0-$((N-1)) --export=ALL,FABRIC=oregon slurm_batch/derive_snodas_aggregate.batch
+# Optional year subset: append `--years 2010 2011` to the command below.
+
+cd "$SLURM_SUBMIT_DIR"
+BASE_CONFIG=${BASE_CONFIG:-configs/base_config.yml}
+FABRIC=${FABRIC:-oregon}
+
+pixi run --as-is python scripts/derive_aggregate.py \
+    --source snodas \
+    --fabric "$FABRIC" \
+    --config configs/aggregate/aggregate_sources.yml \
+    --base_config "$BASE_CONFIG" \
+    --mode aggregate \
+    --batch_id "$SLURM_ARRAY_TASK_ID"

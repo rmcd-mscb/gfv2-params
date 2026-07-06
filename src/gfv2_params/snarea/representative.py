@@ -1,4 +1,4 @@
-"""Median SDC, inter-annual similarity (Eq. 1), and representative-curve pick."""
+"""Median SDC, inter-annual similarity (scale-free Driscoll-Eq.-1 variant), representative pick."""
 
 from __future__ import annotations
 
@@ -11,13 +11,19 @@ def median_sdc(annual: np.ndarray) -> np.ndarray:
 
 
 def similarity(annual: np.ndarray, median: np.ndarray) -> float:
-    """Driscoll Eq. 1: Σ over years and points of |SDC − median| ÷ points.
+    """Mean per-point absolute deviation of the annual SDCs from their median.
 
     A per-HRU scalar; 0 = identical curves every year, larger = more inter-annual
-    variability. `points` is the number of curve points (11).
+    variability. This is a **scale-free** variant of Driscoll Eq. 1: the paper
+    summed the per-point distances over its FIXED nine seasons and divided only
+    by the number of points, but with a VARIABLE number of usable seasons per
+    HRU (as here) that sum grows with season count, so a fixed ``max_similarity``
+    threshold would select for poorly-sampled HRUs. Dividing by ``annual.size``
+    (points × n_seasons) — i.e. taking the mean — makes the value comparable
+    across HRUs regardless of how many seasons they have (see the 2026-07-06
+    Oregon investigation).
     """
-    points = annual.shape[1]
-    return float(np.sum(np.abs(annual - median)) / points)
+    return float(np.mean(np.abs(annual - median)))
 
 
 def select_representative(annual: np.ndarray, median: np.ndarray) -> np.ndarray:

@@ -22,12 +22,20 @@ _CURVE_COLS = [f"snarea_curve_{i}" for i in range(11)]
 
 
 def _seasons(daily: pd.DataFrame) -> list[np.ndarray]:
-    """Up to one annual SDC per calendar year; years where annual_sdc returns
-    None (no snow / never melts / too few points) are omitted, so
-    len(result) counts USABLE seasons, not calendar years.
+    """Up to one annual SDC per WATER YEAR (Oct 1 – Sep 30) in the frame.
+
+    Water-year framing (vs calendar year) keeps each snow season's accumulation
+    (Oct–Dec) and melt (Jan–Jul) in one window, so the annual peak is the spring
+    maximum — not a late-December snowfall event that a calendar-year ``argmax``
+    would mis-pick, producing a garbage 2–4 day "melt season" (see the 2026-07-06
+    Oregon investigation). Years where ``annual_sdc`` returns None (no snow /
+    never melts / too few points) are omitted, so ``len(result)`` counts usable
+    seasons, not water years. The USGS water year is labelled by its ending
+    calendar year, so Oct–Dec advance the label by one.
     """
+    water_year = daily.index.year + (daily.index.month >= 10).astype(int)
     out = []
-    for _year, grp in daily.groupby(daily.index.year):
+    for _wy, grp in daily.groupby(water_year):
         curve = annual_sdc(grp["swe"], grp["sca"])
         if curve is not None:
             out.append(curve)

@@ -9,6 +9,7 @@
 # by scripts/derive_aggregate.py's own recursive `_resolve` helper instead.
 output_dir: "{data_root}/{fabric}/snodas"
 weight_dir: "{data_root}/{fabric}/weights_agg"
+batch_dir: "{data_root}/{fabric}/batches"
 
 sources:
   - name: snodas

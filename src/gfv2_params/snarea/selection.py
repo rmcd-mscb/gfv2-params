@@ -18,11 +18,15 @@ _HALF_SWE_INDEX = int(np.where(np.isclose(SWE_LEVELS, 0.5))[0][0])  # = 5
 
 @dataclass(frozen=True)
 class SelectionParams:
-    min_cells: int = 25
+    # min_cells 15 (not the paper's 25, calibrated for ~74 km² CONUS HRUs) and
+    # max_similarity 0.10 on the SCALE-FREE similarity metric (mean per-point
+    # deviation, see representative.similarity) — recalibrated on Oregon; both
+    # config-overridable per fabric. See the 2026-07-06 investigation note.
+    min_cells: int = 15
     max_water_frac: float = 0.5
     min_seasonal_sca: float = 0.5
     max_constant_frac: float = 0.8
-    max_similarity: float = 0.15
+    max_similarity: float = 0.10
 
     def __post_init__(self):
         if self.min_cells < 0:

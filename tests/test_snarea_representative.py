@@ -1,6 +1,6 @@
 import numpy as np
 
-from gfv2_params.snarea.representative import median_sdc, similarity, select_representative
+from gfv2_params.snarea.representative import median_sdc, select_representative, similarity
 
 
 def test_median_elementwise():
@@ -14,11 +14,19 @@ def test_similarity_zero_for_identical():
     assert similarity(annual, med) == 0.0
 
 
-def test_similarity_positive_and_scaled_by_points():
+def test_similarity_is_mean_per_point_deviation():
     med = np.zeros(11)
-    annual = np.array([np.ones(11)])       # each of 11 points off by 1
-    # sum(|1-0|)=11 over 11 points/curve -> 11/11 = 1.0
-    assert similarity(annual, med) == 1.0
+    annual = np.array([np.full(11, 0.1)])   # every point off by 0.1
+    assert abs(similarity(annual, med) - 0.1) < 1e-12
+
+
+def test_similarity_is_scale_free_in_n_seasons():
+    # A uniform 0.1 per-point deviation must give 0.1 regardless of how many
+    # seasons — the fix for the metric scaling with n_seasons (Oregon 2026-07-06).
+    med = np.zeros(11)
+    for n in (1, 3, 20):
+        annual = np.full((n, 11), 0.1)
+        assert abs(similarity(annual, med) - 0.1) < 1e-12
 
 
 def test_select_representative_picks_closest_year():

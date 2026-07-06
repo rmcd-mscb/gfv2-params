@@ -1,0 +1,29 @@
+#!/bin/bash
+#SBATCH -p cpu
+#SBATCH -A impd
+#SBATCH --job-name=snarea_curve
+#SBATCH --output=logs/job_%j.out
+#SBATCH --error=logs/job_%j.err
+#SBATCH --time=02:00:00
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=4
+#SBATCH --mem=64G
+#
+# Stage 2 of the SNODAS -> snarea_curve pipeline: read the per-year aggregated
+# NetCDFs from Stage 1 (derive_snodas_aggregate.batch) and derive the per-HRU
+# PRMS snarea_curve parameter (11-point curve + hru_deplcrv + sdc_status) into
+# {data_root}/{fabric}/params/merged/nhm_snarea_curve_params.csv. Pure
+# pandas/numpy; depends only on Stage 1's output NCs + the cached weight CSV
+# (for per-HRU SNODAS cell counts).
+#
+# Run AFTER Stage 1 completes (chain it with --dependency=afterok:<stage1_id>):
+#   FABRIC=oregon sbatch slurm_batch/derive_snarea_curve.batch
+
+cd "$SLURM_SUBMIT_DIR"
+BASE_CONFIG=${BASE_CONFIG:-configs/base_config.yml}
+FABRIC=${FABRIC:-oregon}
+
+pixi run --as-is python scripts/derive_snarea_curve.py \
+    --fabric "$FABRIC" \
+    --config configs/snarea/snarea_curve.yml \
+    --base_config "$BASE_CONFIG"

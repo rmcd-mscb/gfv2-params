@@ -314,12 +314,17 @@ for the pattern.
 
 Derives the PRMS `snarea_curve` parameter (an 11-point areal snow-depletion
 curve) plus `hru_deplcrv` from daily SNODAS SWE, following the Driscoll, Hay &
-Bock (2017) method. Two fabric-independent stages, each a plain `pixi run`
-command (no SLURM wiring yet):
+Bock (2017) method. Two fabric-independent stages. Stage 1 runs as a SLURM
+array over the fabric's spatial batches (same pattern as the depstor/zonal
+parameter jobs), then a merge job; Stage 2 remains a plain `pixi run`:
 
 ```bash
-# Stage 1 — aggregate daily SNODAS SWE to the HRU fabric, one NC per calendar year
-pixi run python scripts/derive_aggregate.py --source snodas --fabric oregon
+# Stage 1 — aggregate daily SNODAS SWE to the HRU fabric, per spatial batch
+N=$(grep '^n_batches:' "{data_root}/oregon/batches/manifest.yml" | awk '{print $2}')
+AID=$(sbatch --parsable --array=0-$((N-1)) --export=ALL,FABRIC=oregon \
+    slurm_batch/derive_snodas_aggregate.batch)
+sbatch --dependency=afterok:$AID --export=ALL,FABRIC=oregon \
+    slurm_batch/merge_snodas_aggregate.batch
 
 # Stage 2 — derive per-HRU snarea_curve from the aggregated SWE/SCA
 pixi run python scripts/derive_snarea_curve.py --fabric oregon
@@ -328,11 +333,19 @@ pixi run python scripts/derive_snarea_curve.py --fabric oregon
 - **Inputs:** raw daily SNODAS SWE NetCDFs from the shared datastore (default
   `{data_root}/../nhf-datastore/snodas/daily` in
   [`configs/aggregate/aggregate_sources.yml`](configs/aggregate/aggregate_sources.yml);
-  overridable per-fabric via the profile's `snodas_dir` key).
-- **Stage 1 output:** `{data_root}/{fabric}/snodas/snodas_agg_<year>.nc` (dims
-  `time`/`<id_feature>`; vars `swe` area-weighted mean, `scov` snow-covered-area
-  fraction), plus a cached gdptools weight CSV under
-  `{data_root}/{fabric}/weights_agg/`.
+  overridable per-fabric via the profile's `snodas_dir` key), plus the fabric's
+  spatial batch geopackages (`{data_root}/{fabric}/batches/batch_<N>.gpkg`,
+  produced by `prepare_fabric`/Step 2).
+- **Stage 1 output:** one array task per batch writes
+  `{data_root}/{fabric}/snodas/_batches/snodas_batch<NNNN>_agg_<year>.nc`
+  (source grid clipped to that batch's extent before aggregating — see
+  `aggregate_source`/`subset_to_gdf_bounds` in
+  `src/gfv2_params/aggregate/driver.py`), plus a per-batch cached gdptools
+  weight CSV under `{data_root}/{fabric}/weights_agg/`. The merge job then
+  concatenates all batches per year into
+  `{data_root}/{fabric}/snodas/snodas_agg_<year>.nc` (dims `time`/`<id_feature>`;
+  vars `swe` area-weighted mean, `scov` snow-covered-area fraction) — the file
+  Stage 2 reads.
 - **Stage 2 output:**
   `{data_root}/{fabric}/params/merged/nhm_snarea_curve_params.csv` — one row per
   HRU with `snarea_curve_0..10`, `hru_deplcrv`, and `sdc_status`/`sca_class`
