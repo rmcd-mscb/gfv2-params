@@ -114,3 +114,24 @@ The near-zero derived count is fully explained by:
 Do 1–2 first, because water-year framing will lower the real per-point noise, so the
 `max_similarity` threshold should be set on the *corrected* distribution, not the
 current calendar-year one (median norm_sim 0.080).
+
+## RESOLUTION (implemented, branch `feat/snodas-lazy-batched-aggregation`)
+
+Fixes 1 (water-year framing, `795a266`) + 2 (scale-free similarity, `795a266`) + 3
+(threshold recalibration, `44a4201`) implemented with tests. Stage-2 re-run on the
+unchanged aggregated NCs:
+
+| sdc_status | before | after fixes 1+2 (old thresholds) |
+|---|---|---|
+| derived | 3 | **8,469 (50%)** |
+| default_dissimilar | 8,476 | **10** |
+| default_too_few_cells | 8,182 | 8,182 |
+| default_constant_sca / no_snow | 133 / 20 | 133 / 20 |
+
+- `n_seasons` median **16 → 21** (water-year framing recovers ~5 usable seasons/HRU).
+- New scale-free similarity: p10/50/90/95 = **0.055 / 0.085 / 0.117 / 0.126**.
+- **Chosen thresholds (domain sign-off): `min_cells=15`, `max_similarity=0.10`** →
+  ~54% derived (paper ~49% CONUS-wide). Both are config values, per-fabric overridable.
+  CONUS gfv2 (coarser HRUs) is unlikely to need different values but should be
+  re-checked at its own run.
+
