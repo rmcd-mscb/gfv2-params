@@ -54,6 +54,10 @@ def compute_or_load_weights(
         target_id=id_col,
         source_time_period=[period[0], period[1]],
     )
+    logger.info(
+        "Computing grid→polygon weights for %d HRUs (once; cached thereafter)...",
+        len(fabric_gdf),
+    )
     wg = WeightGen(user_data=user_data, method="serial", weight_gen_crs=WEIGHT_GEN_CRS)
     weights = wg.calculate_weights()
     if weights is None or len(weights) == 0:
@@ -77,6 +81,7 @@ def aggregate_variables(
     """Run AggGen once per declared variable; merge on the HRU id dimension."""
     per_var: list[xr.Dataset] = []
     for var in adapter.variables:
+        logger.info("    aggregating variable %r (%s)...", var, adapter.stat_method)
         user_data = UserCatData(
             source_ds=source_ds,
             source_crs=adapter.source_crs,
@@ -98,7 +103,10 @@ def aggregate_variables(
         )
         _gdf, ds = agg.calculate_agg()
         per_var.append(ds)
-    return xr.merge(per_var)
+    # compat="override": the per-variable results share identical coords (same
+    # target_gdf + period), so take-first is correct; set explicitly to adopt
+    # the future xarray default and silence the compat FutureWarning.
+    return xr.merge(per_var, compat="override")
 
 
 def _year_of(path: Path) -> int:
@@ -106,39 +114,6 @@ def _year_of(path: Path) -> int:
     if not m:
         raise ValueError(f"Cannot parse a 4-digit year from filename: {path.name}")
     return int(m.group(1))
-
-
-def subset_to_gdf_bounds(
-    ds: xr.Dataset,
-    gdf: gpd.GeoDataFrame,
-    source_crs,
-    x_coord: str,
-    y_coord: str,
-    margin_m: float = 2000.0,
-) -> xr.Dataset:
-    """Clip the source grid to the target polygons' bounding box (+ margin).
-
-    The target polygons are reprojected to the source-grid CRS and the grid is
-    sliced to their total bounds padded by ``margin_m`` (default ~2 cells at
-    1 km, so boundary cells the polygons partially overlap are retained for
-    area weighting). This is a **lazy** coordinate selection, so — applied
-    before ``pre_aggregate_hook`` — it stops a per-fabric/per-batch aggregation
-    from ever materializing the full source grid: the hook and weight
-    generation see only the target's extent. Selecting by the filtered
-    coordinate labels (not a slice) is order-agnostic, so a descending ``y``
-    axis is handled correctly.
-    """
-    minx, miny, maxx, maxy = gdf.to_crs(source_crs).total_bounds
-    x = ds[x_coord]
-    y = ds[y_coord]
-    xsel = x[(x >= minx - margin_m) & (x <= maxx + margin_m)]
-    ysel = y[(y >= miny - margin_m) & (y <= maxy + margin_m)]
-    if xsel.size == 0 or ysel.size == 0:
-        raise ValueError(
-            "Source grid does not overlap the target polygons' bounds "
-            f"(x in [{minx}, {maxx}], y in [{miny}, {maxy}]). Check CRS/extent."
-        )
-    return ds.sel({x_coord: xsel, y_coord: ysel})
 
 
 def aggregate_source(
@@ -161,22 +136,26 @@ def aggregate_source(
     output_dir.mkdir(parents=True, exist_ok=True)
 
     files = sorted(input_dir.glob(adapter.files_glob))
+    if years is not None:
+        files = [f for f in files if _year_of(f) in years]
     if not files:
         raise FileNotFoundError(f"No files match {input_dir / adapter.files_glob}")
 
+    logger.info(
+        "Aggregating %s: %d HRUs, %d year-file(s), vars=%s, stat=%s -> %s",
+        adapter.source_key, len(fabric_gdf), len(files),
+        list(adapter.variables), adapter.stat_method, output_dir,
+    )
+
     written: list[Path] = []
     weights: pd.DataFrame | None = None
-    for f in files:
+    for i, f in enumerate(files, start=1):
         year = _year_of(f)
-        if years is not None and year not in years:
-            continue
-        ds = xr.open_dataset(f)
-        # Clip to the target extent BEFORE the hook so neither the hook nor
-        # weight generation ever materializes the full source grid (the
-        # per-fabric/per-batch memory bound; see subset_to_gdf_bounds).
-        ds = subset_to_gdf_bounds(
-            ds, fabric_gdf, adapter.source_crs, adapter.x_coord, adapter.y_coord
-        )
+        # Load lazily (dask-backed) so the pre-aggregate hook builds a task
+        # graph instead of materializing the full source grid; gdptools
+        # UserCatData subsets the grid to the target extent before anything
+        # computes, which is what keeps memory bounded (see #166).
+        ds = xr.open_dataset(f, chunks="auto")
         if adapter.pre_aggregate_hook is not None:
             ds = adapter.pre_aggregate_hook(ds)
         period = _period_bounds(ds, adapter.time_coord)
@@ -184,9 +163,12 @@ def aggregate_source(
             weights = compute_or_load_weights(
                 adapter, ds, fabric_gdf, id_col, period, weight_file
             )
+        logger.info("[%d/%d] year %d: aggregating %s ...",
+                    i, len(files), year, list(adapter.variables))
         hru_ds = aggregate_variables(adapter, ds, fabric_gdf, id_col, weights, period)
         out = output_dir / f"{output_prefix}_agg_{year}.nc"
         hru_ds.to_netcdf(out)
         written.append(out)
-        logger.info("Aggregated %s -> %s", f.name, out.name)
+        logger.info("[%d/%d] year %d: wrote %s", i, len(files), year, out.name)
+    logger.info("Done: %d per-year file(s) -> %s", len(written), output_dir)
     return written

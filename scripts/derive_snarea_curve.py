@@ -95,13 +95,17 @@ def main() -> None:
     default_curve = np.asarray(cfg.get("default_curve", DEFAULT_SNAREA_CURVE), dtype=float)
     validate_default_curve(default_curve)
 
+    logger.info("Reading aggregated daily SWE/SCA from %s ...", nc_dir)
     daily = read_daily_by_hru(nc_dir, id_feature)
+    logger.info("Loaded daily series for %d HRUs; reading SNODAS cell counts ...", len(daily))
     cells = cells_from_weights(weight_file, id_feature)
     water: dict[int, float] = {}
     if args.water_csv:
         wdf = pd.read_csv(args.water_csv)
         water = dict(zip(wdf[id_feature], wdf["water_frac"]))
+        logger.info("Loaded water fraction for %d HRUs from %s", len(water), args.water_csv)
 
+    logger.info("Deriving representative snarea_curve for %d HRUs ...", len(daily))
     table = build_snarea_curve(daily, cells, water, id_feature, sel, default_curve)
     out = out_dir / cfg["merged_file"]
     table.to_csv(out, index=False)

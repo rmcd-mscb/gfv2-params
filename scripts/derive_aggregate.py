@@ -135,7 +135,12 @@ def main() -> None:
     src = next(s for s in cfg["sources"] if s["name"] == args.source)
     id_feature = require_config_key(cfg, "id_feature", "derive_aggregate")
 
+    batch_note = f" batch={args.batch_id}" if args.batch_id is not None else ""
+    logger.info("derive_aggregate: source=%s fabric=%s mode=%s%s",
+                args.source, args.fabric, args.mode, batch_note)
+
     if args.mode == "merge":
+        logger.info("Merging per-batch NetCDFs + consolidating weights ...")
         out = run_merge(Path(cfg["output_dir"]), src["output_prefix"], id_feature, logger)
         logger.info("Wrote %d merged per-year files to %s", len(out), cfg["output_dir"])
         consolidate_weights(Path(cfg["weight_dir"]), args.source, args.fabric, logger)
