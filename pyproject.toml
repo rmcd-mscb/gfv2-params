@@ -93,6 +93,11 @@ gdal = "*"
 rasterio = "*"
 geopandas = "*"
 pyproj = "*"
+# Bundles PROJ's datum-shift grids locally so proj4-activate.sh sets
+# PROJ_NETWORK=OFF; without it PROJ defaults ON and tries to fetch grids from
+# cdn.proj.org, which the HPC firewall blocks -> to_crs(4326) returns inf and
+# crashes (see scripts/derive_aggregate.py). conda-forge only (no pip equivalent).
+proj-data = "*"
 numba = "*"
 llvmlite = "*"
 richdem = "*"

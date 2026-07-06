@@ -8,6 +8,8 @@ a single named constant so the swap is one edit + config override.
 
 from __future__ import annotations
 
+import logging
+
 import numpy as np
 import pandas as pd
 
@@ -108,13 +110,21 @@ def build_snarea_curve(
     id_feature: str,
     params: SelectionParams,
     default_curve: np.ndarray,
+    logger: logging.Logger | None = None,
+    log_every: int = 25_000,
 ) -> pd.DataFrame:
-    rows = [
-        build_hru_record(
+    """Per-HRU derivation loop. Pass ``logger`` to emit progress every
+    ``log_every`` HRUs — the loop is silent otherwise, which reads as a hang at
+    CONUS scale (361k HRUs take minutes)."""
+    items = sorted(daily_by_hru.items())
+    n = len(items)
+    rows = []
+    for i, (hru_id, daily) in enumerate(items, start=1):
+        rows.append(build_hru_record(
             hru_id, daily, cells_by_hru.get(hru_id, 0),
             water_by_hru.get(hru_id, 0.0), params, default_curve,
-        )
-        for hru_id, daily in sorted(daily_by_hru.items())
-    ]
+        ))
+        if logger is not None and (i % log_every == 0 or i == n):
+            logger.info("  derived %d/%d HRUs (%.0f%%)", i, n, 100 * i / n)
     df = pd.DataFrame(rows).rename(columns={"hru_id": id_feature})
     return df

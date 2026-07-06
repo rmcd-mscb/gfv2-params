@@ -12,6 +12,7 @@ from pathlib import Path
 
 import geopandas as gpd
 import pandas as pd
+import pyproj
 
 from gfv2_params.aggregate import aggregate_source
 from gfv2_params.aggregate.snodas import SNODAS_ADAPTER
@@ -186,6 +187,21 @@ def main() -> None:
                      help="Spatial batch index (aggregate mode only); omit to run whole-fabric.")
     args = ap.parse_args()
     logger = configure_logging("derive_aggregate")
+
+    # Force PROJ's grid-free datum transform. conda-forge proj defaults
+    # PROJ_NETWORK=ON when proj-data isn't installed (see the env's
+    # proj4-activate.sh), so NAD83->WGS84 tries to fetch a datum-shift grid from
+    # cdn.proj.org — which the HPC firewall blocks, silently returning `inf` for
+    # points in an unavailable grid tile. That crashes gdptools' centroid
+    # reprojection (build_cf_dataset -> to_crs(4326)) for whole spatial batches
+    # (11/64 in the first CONUS gfv2 run). Even the grid-free "NAD83 to WGS 84 (1)"
+    # fallback is accurate to <=~1-2 m — irrelevant for the cosmetic CF lat/lon
+    # centroids; all SWE/SCA aggregation is in equal-area EPSG:5070. This runtime
+    # guard is pyproj-scoped belt-and-suspenders; the durable env-wide fix is the
+    # pinned `proj-data` pixi dep, which makes proj4-activate.sh set
+    # PROJ_NETWORK=OFF for every tool (GDAL included) — and, with the grids then
+    # local, the transform is actually sub-meter.
+    pyproj.network.set_network_enabled(False)
 
     cfg = load_config(Path(args.config), base_config_path=Path(args.base_config),
                        fabric=args.fabric)
