@@ -194,11 +194,13 @@ def main() -> None:
     # cdn.proj.org — which the HPC firewall blocks, silently returning `inf` for
     # points in an unavailable grid tile. That crashes gdptools' centroid
     # reprojection (build_cf_dataset -> to_crs(4326)) for whole spatial batches
-    # (11/64 in the first CONUS gfv2 run). The grid-free "NAD83 to WGS 84 (1)"
-    # transform is accurate to ~1-2 m — irrelevant for the cosmetic CF lat/lon
-    # centroids; all SWE/SCA aggregation is in equal-area EPSG:5070. Durable
-    # project-wide alternative: add `proj-data` to the pixi env (then the
-    # activation script sets PROJ_NETWORK=OFF automatically).
+    # (11/64 in the first CONUS gfv2 run). Even the grid-free "NAD83 to WGS 84 (1)"
+    # fallback is accurate to <=~1-2 m — irrelevant for the cosmetic CF lat/lon
+    # centroids; all SWE/SCA aggregation is in equal-area EPSG:5070. This runtime
+    # guard is pyproj-scoped belt-and-suspenders; the durable env-wide fix is the
+    # pinned `proj-data` pixi dep, which makes proj4-activate.sh set
+    # PROJ_NETWORK=OFF for every tool (GDAL included) — and, with the grids then
+    # local, the transform is actually sub-meter.
     pyproj.network.set_network_enabled(False)
 
     cfg = load_config(Path(args.config), base_config_path=Path(args.base_config),

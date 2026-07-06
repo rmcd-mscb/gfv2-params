@@ -753,18 +753,20 @@ cheap once weights exist. Stage 2 is a pure per-HRU pandas/numpy computation
 over the already-aggregated daily series — cheap per HRU, but its whole-fabric
 load is not: `read_daily_by_hru`'s `to_dataframe()` materializes ~21 years ×
 `n_hru` × daily rows at once (CONUS gfv2 ≈ 2.8 B rows, ~344 GB peak, ~31 min just
-to load). Run `derive_snarea_curve.batch` at **`--mem=384G`** for CONUS (64 GB
-OOMs; Oregon's 17k HRUs fit fine at the default). The load-phase and per-HRU
-derive-loop now emit progress logging so the long silent stretch is traceable.
+to load). `derive_snarea_curve.batch` therefore **defaults to `--mem=384G`**
+(64 GB OOMs on CONUS); Oregon and other small fabrics fit easily and can override
+down (`sbatch --mem=64G --time=02:00:00 …`). The load-phase and per-HRU
+derive-loop emit progress logging so the long silent stretch is traceable.
 
 **PROJ behind the HPC firewall.** conda-forge `proj` defaults `PROJ_NETWORK=ON`
 unless `proj-data` is installed; the firewall blocks `cdn.proj.org`, so gdptools'
 centroid `to_crs(4326)` returns `inf` and crashes whole Stage 1 batches (11/64 on
 the first CONUS gfv2 run — valid geometries, coordinates transform to `inf`).
 Two guards: `derive_aggregate.py` forces PROJ's grid-free transform
-(`pyproj.network.set_network_enabled(False)`; the ~1–2 m NAD83↔WGS84 shift is
-irrelevant for cosmetic CF centroids, all SWE/SCA math is in equal-area 5070),
-and `proj-data` is a pinned pixi dep so `proj4-activate.sh` sets
+(`pyproj.network.set_network_enabled(False)`; even the grid-free NAD83↔WGS84
+fallback is ≤~1–2 m — irrelevant for cosmetic CF centroids, and all SWE/SCA math
+is in equal-area 5070), and `proj-data` is a pinned pixi dep (grids local, so the
+transform is actually sub-meter) so `proj4-activate.sh` sets
 `PROJ_NETWORK=OFF` env-wide. Any other pipeline reprojecting to 4326 relies on
 the latter.
 
