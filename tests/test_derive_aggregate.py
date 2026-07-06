@@ -70,3 +70,37 @@ def test_run_merge_concatenates_batches_and_sorts(tmp_path):
         assert "scov" in merged.data_vars
     finally:
         merged.close()
+
+
+def test_consolidate_weights_concats_per_batch(tmp_path):
+    import logging
+
+    import pandas as pd
+
+    from scripts.derive_aggregate import consolidate_weights
+
+    wdir = tmp_path / "weights_agg"
+    wdir.mkdir()
+    # two disjoint-HRU per-batch weight tables
+    pd.DataFrame({"hru_id": [1, 1, 2], "wght": [0.1, 0.2, 0.9]}).to_csv(
+        wdir / "snodas_weights_oregon_batch0000.csv", index=False)
+    pd.DataFrame({"hru_id": [3, 4, 4], "wght": [0.5, 0.4, 0.6]}).to_csv(
+        wdir / "snodas_weights_oregon_batch0001.csv", index=False)
+
+    out = consolidate_weights(wdir, "snodas", "oregon", logging.getLogger("t"))
+    assert out == wdir / "snodas_weights_oregon.csv"
+    combined = pd.read_csv(out)
+    assert len(combined) == 6                                  # all rows preserved
+    assert sorted(combined["hru_id"].unique()) == [1, 2, 3, 4]  # both batches present
+
+
+def test_consolidate_weights_raises_when_no_batches(tmp_path):
+    import logging
+
+    import pytest
+
+    from scripts.derive_aggregate import consolidate_weights
+
+    (tmp_path / "weights_agg").mkdir()
+    with pytest.raises(FileNotFoundError, match="per-batch weight"):
+        consolidate_weights(tmp_path / "weights_agg", "snodas", "oregon", logging.getLogger("t"))

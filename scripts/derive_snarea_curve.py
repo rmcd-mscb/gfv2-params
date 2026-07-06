@@ -56,7 +56,7 @@ def read_daily_by_hru(nc_dir: Path, id_dim: str) -> dict[int, pd.DataFrame]:
     files = sorted(Path(nc_dir).glob("*_agg_*.nc"))
     if not files:
         raise FileNotFoundError(f"No aggregated NCs in {nc_dir}")
-    ds = xr.open_mfdataset(files, combine="by_coords")
+    ds = xr.open_mfdataset(files, combine="by_coords", data_vars="minimal")
     df = ds[["swe", "scov"]].to_dataframe().reset_index()
     df = df.rename(columns={"scov": "sca"})
     out: dict[int, pd.DataFrame] = {}

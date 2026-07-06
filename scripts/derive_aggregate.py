@@ -11,6 +11,7 @@ import re
 from pathlib import Path
 
 import geopandas as gpd
+import pandas as pd
 
 from gfv2_params.aggregate import aggregate_source
 from gfv2_params.aggregate.snodas import SNODAS_ADAPTER
@@ -89,6 +90,30 @@ def run_merge(output_dir: Path, output_prefix: str, id_feature: str, logger) -> 
     return written
 
 
+def consolidate_weights(weight_dir: Path, source: str, fabric: str, logger) -> Path:
+    """Concat per-batch weight CSVs into the single canonical weight file.
+
+    Batched aggregation (``--batch_id``) caches gdptools weights per batch as
+    ``{source}_weights_{fabric}_batch{NNNN}.csv``, but Stage 2's
+    ``cells_from_weights`` reads a single ``{source}_weights_{fabric}.csv``.
+    Batches cover disjoint HRUs, so a plain row-concat of the per-batch tables
+    reproduces the whole-fabric weight table (identical per-HRU cell counts).
+    Run as part of ``--mode merge`` so the canonical file exists before Stage 2.
+    """
+    weight_dir = Path(weight_dir)
+    canonical = weight_dir / f"{source}_weights_{fabric}.csv"
+    parts = sorted(weight_dir.glob(f"{source}_weights_{fabric}_batch*.csv"))
+    if not parts:
+        raise FileNotFoundError(
+            f"No per-batch weight CSVs in {weight_dir} matching "
+            f"{source}_weights_{fabric}_batch*.csv"
+        )
+    combined = pd.concat([pd.read_csv(p) for p in parts], ignore_index=True)
+    combined.to_csv(canonical, index=False)
+    logger.info("Consolidated %d per-batch weight files -> %s", len(parts), canonical.name)
+    return canonical
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--source", required=True, choices=sorted(ADAPTERS))
@@ -113,6 +138,7 @@ def main() -> None:
     if args.mode == "merge":
         out = run_merge(Path(cfg["output_dir"]), src["output_prefix"], id_feature, logger)
         logger.info("Wrote %d merged per-year files to %s", len(out), cfg["output_dir"])
+        consolidate_weights(Path(cfg["weight_dir"]), args.source, args.fabric, logger)
         return
 
     # snodas_dir may be overridden in the profile; fall back to the source entry.
