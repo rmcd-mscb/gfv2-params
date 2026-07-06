@@ -1,7 +1,15 @@
 import numpy as np
 import pytest
 
-from gfv2_params.snarea.library import _INTERIOR, CV_GRID, SWE_LEVELS, fit_cv, sdc_from_cv
+from gfv2_params.snarea.library import (
+    _INTERIOR,
+    CV_GRID,
+    SWE_LEVELS,
+    _to_prms_order,
+    fit_cv,
+    sdc_from_cv,
+    snarea_thresh_inches,
+)
 
 
 def test_swe_levels_descending_11pt():
@@ -53,3 +61,18 @@ def test_fit_cv_is_interior_driven():
 
     # They should be distinctly different (not confused by endpoints)
     assert fitted_low < fitted_high
+
+
+def test_snarea_thresh_mm_to_inches():
+    assert snarea_thresh_inches(254.0) == pytest.approx(10.0)
+    assert snarea_thresh_inches(0.0) == 0.0
+    assert snarea_thresh_inches(float("nan")) == 0.0
+    assert snarea_thresh_inches(-5.0) == 0.0
+
+
+def test_to_prms_order_is_reverse_and_involutive():
+    c = sdc_from_cv(0.6)
+    p = _to_prms_order(c)
+    assert p[0] == pytest.approx(c[-1])   # ascending: SCA@frac0 first
+    assert p[-1] == pytest.approx(c[0])
+    assert np.allclose(_to_prms_order(p), c)

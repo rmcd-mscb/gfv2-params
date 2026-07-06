@@ -12,6 +12,8 @@ from __future__ import annotations
 import numpy as np
 from scipy.stats import norm
 
+_MM_PER_INCH = 25.4
+
 # Descending, matching snarea/season.py SWE_LEVELS.
 SWE_LEVELS = np.round(np.arange(1.0, -1e-4, -0.1), 1)  # 1.0 .. 0.0, 11 values
 
@@ -59,3 +61,17 @@ def fit_cv(curve: np.ndarray, cv_grid: np.ndarray | None = None) -> float:
     lib = _library_matrix(grid)
     d = np.linalg.norm(lib[:, _INTERIOR] - np.asarray(curve)[_INTERIOR], axis=1)
     return float(grid[int(d.argmin())])
+
+
+def snarea_thresh_inches(peak_swe_mm: float) -> float:
+    """Per-HRU SWE scale in inches. 0.0 for no-snow / undefined (curve never
+    exercised there since pkwater_equiv is 0)."""
+    v = float(peak_swe_mm)
+    if not np.isfinite(v) or v <= 0.0:
+        return 0.0
+    return v / _MM_PER_INCH
+
+
+def _to_prms_order(curve: np.ndarray) -> np.ndarray:
+    """Repo descending (SWE 1.0->0.0) -> PRMS ascending frac_swe (0.0->1.0)."""
+    return np.asarray(curve)[::-1]
