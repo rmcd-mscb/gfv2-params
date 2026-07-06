@@ -15,6 +15,11 @@ from scipy.stats import norm
 # Descending, matching snarea/season.py SWE_LEVELS.
 SWE_LEVELS = np.round(np.arange(1.0, -1e-4, -0.1), 1)  # 1.0 .. 0.0, 11 values
 
+# CV search grid: 0.05..3.0 step 0.05 covers the validated range (median ~0.45,
+# up to ~1.2 CONUS) with headroom.
+CV_GRID = np.round(np.arange(0.05, 3.0001, 0.05), 2)
+_INTERIOR = slice(1, 10)  # endpoints (0, 10) are fixed 1.0/0.0 for every cv
+
 
 def sdc_from_cv(cv: float, mu: float = 1.0, n: int = 4000) -> np.ndarray:
     """11-point dimensionless SDC for a lognormal SWE pdf with coeff-of-var ``cv``.
@@ -41,3 +46,16 @@ def sdc_from_cv(cv: float, mu: float = 1.0, n: int = 4000) -> np.ndarray:
         x = np.concatenate([x, [1]])
         y = np.concatenate([y, [1]])
     return np.clip(np.interp(SWE_LEVELS, x, y, left=1.0, right=0.0), 0, 1)
+
+
+def _library_matrix(cv_grid: np.ndarray) -> np.ndarray:
+    """(len(cv_grid), 11) matrix of analytic curves — built once, reused."""
+    return np.vstack([sdc_from_cv(c) for c in cv_grid])
+
+
+def fit_cv(curve: np.ndarray, cv_grid: np.ndarray | None = None) -> float:
+    """Best-fit lognormal CV for an empirical 11-pt curve (min L2 over interior)."""
+    grid = CV_GRID if cv_grid is None else cv_grid
+    lib = _library_matrix(grid)
+    d = np.linalg.norm(lib[:, _INTERIOR] - np.asarray(curve)[_INTERIOR], axis=1)
+    return float(grid[int(d.argmin())])
