@@ -40,6 +40,7 @@ def _make_batch_nc(path: Path, hru_ids: list[int]) -> None:
         {
             "swe": (("time", "hru_id"), np.arange(len(time) * len(hru_ids)).reshape(len(time), len(hru_ids)).astype(float)),
             "scov": (("time", "hru_id"), np.zeros((len(time), len(hru_ids)))),
+            "crs": ((), 0),  # scalar CF grid-mapping var — must NOT broadcast to hru_id in merge
         },
         coords={"time": time, "hru_id": hru_ids},
     )
@@ -51,8 +52,9 @@ def test_run_merge_concatenates_batches_and_sorts(tmp_path):
 
     batches_dir = tmp_path / "_batches"
     batches_dir.mkdir()
-    _make_batch_nc(batches_dir / "snodas_batch0000_agg_2010.nc", [1, 2])
-    _make_batch_nc(batches_dir / "snodas_batch0001_agg_2010.nc", [3, 4])
+    # Reversed id order vs batch index so sortby is actually exercised.
+    _make_batch_nc(batches_dir / "snodas_batch0000_agg_2010.nc", [3, 4])
+    _make_batch_nc(batches_dir / "snodas_batch0001_agg_2010.nc", [1, 2])
 
     logger = logging.getLogger("test_run_merge")
 
@@ -65,11 +67,25 @@ def test_run_merge_concatenates_batches_and_sorts(tmp_path):
 
     merged = xr.open_dataset(out)
     try:
-        assert list(merged["hru_id"].values) == [1, 2, 3, 4]
+        assert list(merged["hru_id"].values) == [1, 2, 3, 4]   # sortby applied
         assert "swe" in merged.data_vars
         assert "scov" in merged.data_vars
+        assert merged["crs"].dims == ()   # scalar crs NOT broadcast (data_vars="minimal")
     finally:
         merged.close()
+
+
+def test_run_merge_raises_on_duplicate_hru(tmp_path):
+    import pytest
+
+    from scripts.derive_aggregate import run_merge
+
+    batches_dir = tmp_path / "_batches"
+    batches_dir.mkdir()
+    _make_batch_nc(batches_dir / "snodas_batch0000_agg_2010.nc", [1, 2])
+    _make_batch_nc(batches_dir / "snodas_batch0001_agg_2010.nc", [2, 3])  # HRU 2 overlaps
+    with pytest.raises(ValueError, match="Duplicate hru_id"):
+        run_merge(tmp_path, "snodas", "hru_id", logging.getLogger("t"))
 
 
 def test_consolidate_weights_concats_per_batch(tmp_path):
@@ -87,7 +103,7 @@ def test_consolidate_weights_concats_per_batch(tmp_path):
     pd.DataFrame({"hru_id": [3, 4, 4], "wght": [0.5, 0.4, 0.6]}).to_csv(
         wdir / "snodas_weights_oregon_batch0001.csv", index=False)
 
-    out = consolidate_weights(wdir, "snodas", "oregon", logging.getLogger("t"))
+    out = consolidate_weights(wdir, "snodas", "oregon", "hru_id", logging.getLogger("t"))
     assert out == wdir / "snodas_weights_oregon.csv"
     combined = pd.read_csv(out)
     assert len(combined) == 6                                  # all rows preserved
@@ -103,4 +119,23 @@ def test_consolidate_weights_raises_when_no_batches(tmp_path):
 
     (tmp_path / "weights_agg").mkdir()
     with pytest.raises(FileNotFoundError, match="per-batch weight"):
-        consolidate_weights(tmp_path / "weights_agg", "snodas", "oregon", logging.getLogger("t"))
+        consolidate_weights(tmp_path / "weights_agg", "snodas", "oregon", "hru_id",
+                            logging.getLogger("t"))
+
+
+def test_consolidate_weights_raises_on_cross_batch_overlap(tmp_path):
+    import logging
+
+    import pandas as pd
+    import pytest
+
+    from scripts.derive_aggregate import consolidate_weights
+
+    wdir = tmp_path / "weights_agg"
+    wdir.mkdir()
+    pd.DataFrame({"hru_id": [1, 2], "wght": [0.5, 0.5]}).to_csv(
+        wdir / "snodas_weights_oregon_batch0000.csv", index=False)
+    pd.DataFrame({"hru_id": [2, 3], "wght": [0.5, 0.5]}).to_csv(   # HRU 2 in both batches
+        wdir / "snodas_weights_oregon_batch0001.csv", index=False)
+    with pytest.raises(ValueError, match="appears in both"):
+        consolidate_weights(wdir, "snodas", "oregon", "hru_id", logging.getLogger("t"))

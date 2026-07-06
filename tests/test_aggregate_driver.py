@@ -96,3 +96,22 @@ def test_subset_to_gdf_bounds_raises_on_no_overlap():
     far = gpd.GeoDataFrame({"hru_id": [1]}, geometry=[box(1e6, 1e6, 1.1e6, 1.1e6)], crs="EPSG:5070")
     with pytest.raises(ValueError, match="does not overlap"):
         subset_to_gdf_bounds(ds, far, "EPSG:5070", "x", "y", margin_m=0.0)
+
+
+def test_aggregate_source_years_filter_no_match_raises(tmp_path):
+    # The years filter is applied before the "no files" guard, so a years=
+    # value matching nothing fails loud rather than silently writing nothing.
+    import pytest
+
+    _synthetic_grid(tmp_path)   # writes demo_daily_2010.nc
+    gdf = _two_polys()
+    adapter = SourceAdapter(
+        source_key="demo", variables=("swe",), files_glob="demo_daily_*.nc",
+        source_crs="EPSG:5070", x_coord="x", y_coord="y", time_coord="time",
+        stat_method="mean",
+    )
+    with pytest.raises(FileNotFoundError):
+        aggregate_source(
+            adapter, gdf, "hru_id", input_dir=tmp_path, output_dir=tmp_path / "out",
+            weight_file=tmp_path / "w.csv", output_prefix="demo", years=[2099],
+        )

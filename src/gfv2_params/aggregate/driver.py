@@ -1,9 +1,9 @@
-"""gdptools-backed aggregation driver: weights once, AggGen per variable/year.
+"""gdptools-backed aggregation driver: weights once, one multi-variable AggGen pass per year.
 
 Ports the aggregation core of nhf-spatial-targets' aggregate/_driver.py, trimmed
 to gfv2-params (no manifest/lineage/release). Weights depend only on grid∩fabric
 geometry, so they are computed once (from the first year's grid) and reused for
-every variable and every year.
+every year; all adapter variables are aggregated in a single AggGen call.
 """
 
 from __future__ import annotations
@@ -110,6 +110,13 @@ def aggregate_variables(
         weights=weights,
     )
     _gdf, ds = agg.calculate_agg()
+    missing = [v for v in adapter.variables if v not in ds.data_vars]
+    if missing:
+        raise RuntimeError(
+            f"AggGen returned no data for {missing}; expected every adapter "
+            f"variable {list(adapter.variables)} in the aggregated Dataset "
+            f"(got {list(ds.data_vars)})."
+        )
     return ds
 
 
@@ -131,17 +138,19 @@ def subset_to_gdf_bounds(
     """Clip the source grid to the target polygons' bounding box (+ margin).
 
     The target polygons are reprojected to the source-grid CRS and the grid is
-    sliced to their total bounds padded by ``margin_m`` (default ~2 cells at
-    1 km, so boundary cells the polygons partially overlap are retained for
-    area weighting). Selecting by the filtered coordinate labels (not a slice)
-    is order-agnostic, so a descending ``y`` axis is handled correctly.
+    sliced to their total bounds padded by ``margin_m`` (default 2000 m ≈ 2
+    cells on the SNODAS 1-km grid, so boundary cells the polygons partially
+    overlap are retained for area weighting — retune for a coarser/finer
+    source). Selecting by the filtered coordinate labels (not a slice) is
+    order-agnostic, so a descending ``y`` axis is handled correctly.
 
     Applied to a plain (non-dask) ``open_dataset`` result, this ``.sel`` is a
-    lazy index: the subsequent ``pre_aggregate_hook`` materializes ONLY the
-    target extent as an in-memory numpy array, once per year. gdptools then
-    sees an already-small, in-memory source, so its per-variable ``.load()``
-    is a no-op (no repeated chunk reads/decompression) — measurably faster than
-    handing gdptools a lazy full-grid source and letting it subset per variable.
+    lazy index, so whatever runs next materializes ONLY the target extent as an
+    in-memory numpy array once per year: the ``pre_aggregate_hook`` if the
+    adapter has one, otherwise gdptools' own per-variable ``.load()``. Either
+    way gdptools sees an already-small source, so its ``.load()`` does no
+    repeated chunk reads/decompression — measurably faster than handing gdptools
+    a lazy full-grid source and letting it subset per variable.
     """
     minx, miny, maxx, maxy = gdf.to_crs(source_crs).total_bounds
     x = ds[x_coord]
@@ -192,10 +201,10 @@ def aggregate_source(
     for i, f in enumerate(files, start=1):
         year = _year_of(f)
         # Clip the source grid to the target extent BEFORE the hook (lazy .sel
-        # index on a plain open_dataset). The hook then materializes only the
-        # target extent as an in-memory numpy array once, so neither the hook
-        # nor gdptools ever touches the full source grid, and gdptools' per-
-        # variable .load() reuses in-memory data instead of re-reading chunks.
+        # index on a plain open_dataset), so only the target extent is ever
+        # materialized as in-memory numpy — neither the hook (if any) nor
+        # gdptools touches the full source grid, and gdptools' per-variable
+        # .load() reuses in-memory data instead of re-reading chunks.
         ds = xr.open_dataset(f)
         ds = subset_to_gdf_bounds(
             ds, fabric_gdf, adapter.source_crs, adapter.x_coord, adapter.y_coord

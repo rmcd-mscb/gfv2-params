@@ -1,4 +1,4 @@
-"""Median SDC, inter-annual similarity (Eq. 1), and representative-curve pick."""
+"""Median SDC, inter-annual similarity (scale-free Driscoll-Eq.-1 variant), representative pick."""
 
 from __future__ import annotations
 

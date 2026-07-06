@@ -40,3 +40,11 @@ def test_classify():
     assert classify(lo) == "low"
     assert classify(hi) == "high"
     assert classify(mid) == "mid"
+
+
+def test_selection_params_recalibrated_defaults():
+    # Pin the Oregon-recalibrated defaults so an accidental revert to the
+    # paper's 25 / 0.15 is caught (see 2026-07-06 investigation).
+    p = SelectionParams()
+    assert p.min_cells == 15
+    assert p.max_similarity == 0.10
