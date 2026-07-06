@@ -13,6 +13,8 @@ for the fabric, acceptable for Oregon per spec §8.3).
 from __future__ import annotations
 
 import argparse
+import logging
+import time
 from pathlib import Path
 
 import numpy as np
@@ -46,23 +48,43 @@ def validate_default_curve(arr: np.ndarray) -> None:
         raise ValueError(f"default_curve must be non-increasing, got {arr}")
 
 
-def read_daily_by_hru(nc_dir: Path, id_dim: str) -> dict[int, pd.DataFrame]:
+def read_daily_by_hru(
+    nc_dir: Path, id_dim: str, logger: logging.Logger | None = None
+) -> dict[int, pd.DataFrame]:
     """Concatenate per-year NCs into one daily DataFrame per HRU (index=date).
 
     The aggregated NC's HRU dimension is named ``id_dim`` (Stage 1 aggregates
     with `target_id = id_feature`, so the NC id-dim equals the fabric's
     `id_feature` directly).
+
+    Pass ``logger`` to trace the load phases: at CONUS scale the
+    ``to_dataframe()`` materializes ~2.8B rows (years x HRUs x days) and can take
+    tens of minutes, which is silent (and looks like a hang) without this.
     """
     files = sorted(Path(nc_dir).glob("*_agg_*.nc"))
     if not files:
         raise FileNotFoundError(f"No aggregated NCs in {nc_dir}")
+    t0 = time.perf_counter()
+    if logger:
+        logger.info("Opening %d per-year NCs (lazy) ...", len(files))
     ds = xr.open_mfdataset(files, combine="by_coords", data_vars="minimal")
+    if logger:
+        logger.info(
+            "Materializing daily frame for %d HRUs x %d days "
+            "(the slow/large step at CONUS scale) ...",
+            ds.sizes.get(id_dim, 0), ds.sizes.get("time", 0),
+        )
     df = ds[["swe", "scov"]].to_dataframe().reset_index()
     df = df.rename(columns={"scov": "sca"})
+    if logger:
+        logger.info("  materialized %d rows in %.0fs; grouping into per-HRU series ...",
+                    len(df), time.perf_counter() - t0)
     out: dict[int, pd.DataFrame] = {}
     for hru_id, grp in df.groupby(id_dim):
         s = grp.set_index("time")[["swe", "sca"]].sort_index()
         out[int(hru_id)] = s
+    if logger:
+        logger.info("  built %d per-HRU series in %.0fs total", len(out), time.perf_counter() - t0)
     return out
 
 
@@ -96,7 +118,7 @@ def main() -> None:
     validate_default_curve(default_curve)
 
     logger.info("Reading aggregated daily SWE/SCA from %s ...", nc_dir)
-    daily = read_daily_by_hru(nc_dir, id_feature)
+    daily = read_daily_by_hru(nc_dir, id_feature, logger=logger)
     logger.info("Loaded daily series for %d HRUs; reading SNODAS cell counts ...", len(daily))
     cells = cells_from_weights(weight_file, id_feature)
     water: dict[int, float] = {}
@@ -106,7 +128,7 @@ def main() -> None:
         logger.info("Loaded water fraction for %d HRUs from %s", len(water), args.water_csv)
 
     logger.info("Deriving representative snarea_curve for %d HRUs ...", len(daily))
-    table = build_snarea_curve(daily, cells, water, id_feature, sel, default_curve)
+    table = build_snarea_curve(daily, cells, water, id_feature, sel, default_curve, logger=logger)
     out = out_dir / cfg["merged_file"]
     table.to_csv(out, index=False)
     logger.info("Wrote %d HRU curves -> %s", len(table), out)
