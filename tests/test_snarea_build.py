@@ -37,3 +37,35 @@ def test_no_snow_falls_back_to_default():
     assert rec["sdc_status"] == "default_no_snow"
     assert rec["snarea_curve_0"] == DEFAULT_SNAREA_CURVE[0]
     assert rec["snarea_curve_10"] == DEFAULT_SNAREA_CURVE[10]
+
+
+def test_seasons_uses_water_year_grouping():
+    # A real melt season (Jan-Feb 2021, peak Jan) plus a LARGER late-year
+    # accumulation (Nov-Dec 2021) that never melts. Calendar-year framing would
+    # argmax-pick the December spike in CY2021 and lose the real season (0
+    # curves); water-year framing keeps the Jan-Feb melt as WY2021 (1 usable
+    # season) and drops the Nov-Dec accumulation into WY2022.
+    import numpy as np
+
+    from gfv2_params.snarea.build import _seasons
+
+    idx = pd.date_range("2021-01-01", "2021-12-31", freq="D")
+    swe = pd.Series(0.0, index=idx)
+    sca = pd.Series(0.0, index=idx)
+    # Real season: accumulate Jan 1-20 (peak not on day 0), melt Jan 20 - Mar 10.
+    rise = (idx >= "2021-01-01") & (idx <= "2021-01-20")
+    swe[rise] = np.linspace(0.5, 5.0, int(rise.sum()))
+    sca[rise] = np.linspace(0.2, 1.0, int(rise.sum()))
+    melt = (idx > "2021-01-20") & (idx <= "2021-03-10")
+    swe[melt] = np.linspace(5.0, 0.0, int(melt.sum()))
+    sca[melt] = np.linspace(1.0, 0.0, int(melt.sum()))
+    # Larger late-year accumulation (never melts in-frame) -> would be the
+    # calendar-year argmax peak, but belongs to WY2022.
+    accum = idx >= "2021-11-01"
+    swe[accum] = np.linspace(0.5, 10.0, int(accum.sum()))
+    sca[accum] = np.linspace(0.1, 1.0, int(accum.sum()))
+    frame = pd.DataFrame({"swe": swe, "sca": sca})
+
+    seasons = _seasons(frame)
+    assert len(seasons) == 1          # the real Jan-Mar melt (WY2021), not the Dec spike
+    assert seasons[0][0] == 1.0       # normalized SDC starts at 1.0
