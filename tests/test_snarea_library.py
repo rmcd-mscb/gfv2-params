@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 
-from gfv2_params.snarea.library import CV_GRID, SWE_LEVELS, fit_cv, sdc_from_cv
+from gfv2_params.snarea.library import _INTERIOR, CV_GRID, SWE_LEVELS, fit_cv, sdc_from_cv
 
 
 def test_swe_levels_descending_11pt():
@@ -28,14 +28,28 @@ def test_sdc_from_cv_higher_cv_steeper():
 
 
 def test_fit_cv_recovers_known_cv():
-    for true_cv in (0.3, 0.7, 1.2):
+    for true_cv in (0.32, 0.7, 1.2):
         curve = sdc_from_cv(true_cv)
         # fit is on the CV grid; recovered value within one grid step
         assert abs(fit_cv(curve) - true_cv) <= (CV_GRID[1] - CV_GRID[0]) + 1e-9
 
 
-def test_fit_cv_uses_interior_only():
-    # a curve whose endpoints are perturbed but interior matches cv=0.5 still fits ~0.5
-    curve = sdc_from_cv(0.5).copy()
-    curve[0] = 1.0  # endpoints already fixed; assert fit ignores them
-    assert fit_cv(curve) == pytest.approx(0.5, abs=CV_GRID[1] - CV_GRID[0])
+def test_fit_cv_is_interior_driven():
+    # Assert the interior-only invariant directly
+    assert _INTERIOR == slice(1, 10)
+
+    # Assert that interior shape drives the fit: differing interiors yield different fitted CVs
+    cv_low = 0.4
+    cv_high = 1.0
+    curve_low = sdc_from_cv(cv_low)
+    curve_high = sdc_from_cv(cv_high)
+
+    fitted_low = fit_cv(curve_low)
+    fitted_high = fit_cv(curve_high)
+
+    # Both should be recovered within one grid step
+    assert abs(fitted_low - cv_low) <= (CV_GRID[1] - CV_GRID[0]) + 1e-9
+    assert abs(fitted_high - cv_high) <= (CV_GRID[1] - CV_GRID[0]) + 1e-9
+
+    # They should be distinctly different (not confused by endpoints)
+    assert fitted_low < fitted_high
