@@ -78,35 +78,39 @@ def aggregate_variables(
     weights: pd.DataFrame,
     period: tuple[str, str],
 ) -> xr.Dataset:
-    """Run AggGen once per declared variable; merge on the HRU id dimension."""
-    per_var: list[xr.Dataset] = []
-    for var in adapter.variables:
-        logger.info("    aggregating variable %r (%s)...", var, adapter.stat_method)
-        user_data = UserCatData(
-            source_ds=source_ds,
-            source_crs=adapter.source_crs,
-            source_x_coord=adapter.x_coord,
-            source_y_coord=adapter.y_coord,
-            source_t_coord=adapter.time_coord,
-            source_var=[var],
-            target_gdf=fabric_gdf,
-            target_crs=WEIGHT_GEN_CRS,
-            target_id=id_col,
-            source_time_period=[period[0], period[1]],
-        )
-        agg = AggGen(
-            user_data=user_data,
-            stat_method=adapter.stat_method,
-            agg_engine="serial",
-            agg_writer="none",
-            weights=weights,
-        )
-        _gdf, ds = agg.calculate_agg()
-        per_var.append(ds)
-    # compat="override": the per-variable results share identical coords (same
-    # target_gdf + period), so take-first is correct; set explicitly to adopt
-    # the future xarray default and silence the compat FutureWarning.
-    return xr.merge(per_var, compat="override")
+    """Aggregate all declared variables to the fabric in a single AggGen pass.
+
+    gdptools ``UserCatData``/``AggGen`` accept a *list* of source variables and
+    ``calculate_agg`` returns a Dataset with all of them, so we build one
+    ``UserCatData`` + one ``AggGen`` for the whole variable set. This replaces a
+    per-variable loop that built a separate ``UserCatData`` (re-running grid
+    checks, the spatial-subset dict, and weight prep) and re-subset/re-loaded
+    the source once per variable — wasteful, especially when one variable is
+    derived from another (e.g. SNODAS ``scov`` from ``swe``). One pass also
+    removes the ``xr.merge`` of per-variable results.
+    """
+    logger.info("    aggregating %s (%s)...", list(adapter.variables), adapter.stat_method)
+    user_data = UserCatData(
+        source_ds=source_ds,
+        source_crs=adapter.source_crs,
+        source_x_coord=adapter.x_coord,
+        source_y_coord=adapter.y_coord,
+        source_t_coord=adapter.time_coord,
+        source_var=list(adapter.variables),
+        target_gdf=fabric_gdf,
+        target_crs=WEIGHT_GEN_CRS,
+        target_id=id_col,
+        source_time_period=[period[0], period[1]],
+    )
+    agg = AggGen(
+        user_data=user_data,
+        stat_method=adapter.stat_method,
+        agg_engine="serial",
+        agg_writer="none",
+        weights=weights,
+    )
+    _gdf, ds = agg.calculate_agg()
+    return ds
 
 
 def _year_of(path: Path) -> int:
@@ -114,6 +118,42 @@ def _year_of(path: Path) -> int:
     if not m:
         raise ValueError(f"Cannot parse a 4-digit year from filename: {path.name}")
     return int(m.group(1))
+
+
+def subset_to_gdf_bounds(
+    ds: xr.Dataset,
+    gdf: gpd.GeoDataFrame,
+    source_crs,
+    x_coord: str,
+    y_coord: str,
+    margin_m: float = 2000.0,
+) -> xr.Dataset:
+    """Clip the source grid to the target polygons' bounding box (+ margin).
+
+    The target polygons are reprojected to the source-grid CRS and the grid is
+    sliced to their total bounds padded by ``margin_m`` (default ~2 cells at
+    1 km, so boundary cells the polygons partially overlap are retained for
+    area weighting). Selecting by the filtered coordinate labels (not a slice)
+    is order-agnostic, so a descending ``y`` axis is handled correctly.
+
+    Applied to a plain (non-dask) ``open_dataset`` result, this ``.sel`` is a
+    lazy index: the subsequent ``pre_aggregate_hook`` materializes ONLY the
+    target extent as an in-memory numpy array, once per year. gdptools then
+    sees an already-small, in-memory source, so its per-variable ``.load()``
+    is a no-op (no repeated chunk reads/decompression) — measurably faster than
+    handing gdptools a lazy full-grid source and letting it subset per variable.
+    """
+    minx, miny, maxx, maxy = gdf.to_crs(source_crs).total_bounds
+    x = ds[x_coord]
+    y = ds[y_coord]
+    xsel = x[(x >= minx - margin_m) & (x <= maxx + margin_m)]
+    ysel = y[(y >= miny - margin_m) & (y <= maxy + margin_m)]
+    if xsel.size == 0 or ysel.size == 0:
+        raise ValueError(
+            "Source grid does not overlap the target polygons' bounds "
+            f"(x in [{minx}, {maxx}], y in [{miny}, {maxy}]). Check CRS/extent."
+        )
+    return ds.sel({x_coord: xsel, y_coord: ysel})
 
 
 def aggregate_source(
@@ -151,11 +191,15 @@ def aggregate_source(
     weights: pd.DataFrame | None = None
     for i, f in enumerate(files, start=1):
         year = _year_of(f)
-        # Load lazily (dask-backed) so the pre-aggregate hook builds a task
-        # graph instead of materializing the full source grid; gdptools
-        # UserCatData subsets the grid to the target extent before anything
-        # computes, which is what keeps memory bounded (see #166).
-        ds = xr.open_dataset(f, chunks="auto")
+        # Clip the source grid to the target extent BEFORE the hook (lazy .sel
+        # index on a plain open_dataset). The hook then materializes only the
+        # target extent as an in-memory numpy array once, so neither the hook
+        # nor gdptools ever touches the full source grid, and gdptools' per-
+        # variable .load() reuses in-memory data instead of re-reading chunks.
+        ds = xr.open_dataset(f)
+        ds = subset_to_gdf_bounds(
+            ds, fabric_gdf, adapter.source_crs, adapter.x_coord, adapter.y_coord
+        )
         if adapter.pre_aggregate_hook is not None:
             ds = adapter.pre_aggregate_hook(ds)
         period = _period_bounds(ds, adapter.time_coord)
