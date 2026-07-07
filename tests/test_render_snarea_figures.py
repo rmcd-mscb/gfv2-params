@@ -4,6 +4,7 @@ The data-driven figures read pipeline outputs and are verified by visual
 inspection of the rendered PNGs, not unit tests. These two schematics take no
 data, so they are cheap to smoke-test in CI.
 """
+
 from pathlib import Path
 
 from scripts.render_snarea_figures import schematic_concept, schematic_pipeline
