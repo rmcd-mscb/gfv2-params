@@ -14,5 +14,6 @@ batch_dir: "{data_root}/{fabric}/batches"
 sources:
   - name: snodas
     # Shared raw datastore; a profile may override `snodas_dir`.
+    # The adapter emits swe_std as a sidecar (std_variables=("swe",)).
     snodas_dir: "{data_root}/../nhf-datastore/snodas/daily"
     output_prefix: snodas

@@ -34,6 +34,10 @@ def test_adapter_settings():
     assert SNODAS_ADAPTER.files_glob == "snodas_daily_*.nc"
 
 
+def test_snodas_adapter_declares_swe_std():
+    assert SNODAS_ADAPTER.std_variables == ("swe",)
+
+
 # --- End-to-end masked_mean / fill-exclusion regression -------------------
 # The unit test above pins the _snodas_hook contract (fill -> NaN, scov carries
 # the NaN mask). The test below drives the *whole* Stage-1 path
