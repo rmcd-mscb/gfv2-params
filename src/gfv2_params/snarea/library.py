@@ -10,12 +10,16 @@ _to_prms_order).
 from __future__ import annotations
 
 import numpy as np
+import pandas as pd
 from scipy.stats import norm
 
 _MM_PER_INCH = 25.4
 
 # Descending, matching snarea/season.py SWE_LEVELS.
 SWE_LEVELS = np.round(np.arange(1.0, -1e-4, -0.1), 1)  # 1.0 .. 0.0, 11 values
+
+# Curve column names for snarea_curve_0..10 (descending).
+CURVE_COLS = [f"snarea_curve_{i}" for i in range(11)]
 
 # CV search grid: 0.05..3.0 step 0.05 covers the validated range (median ~0.45,
 # up to ~1.2 CONUS) with headroom.
@@ -61,6 +65,48 @@ def fit_cv(curve: np.ndarray, cv_grid: np.ndarray | None = None) -> float:
     lib = _library_matrix(grid)
     d = np.linalg.norm(lib[:, _INTERIOR] - np.asarray(curve)[_INTERIOR], axis=1)
     return float(grid[int(d.argmin())])
+
+
+def build_library(
+    cv_values: np.ndarray, ndepl_cv: int, default_curve: np.ndarray
+) -> pd.DataFrame:
+    """Row 1 = reserved default curve; rows 2..(1+ndepl_cv) = equal-population CV
+    bins, each curve = sdc_from_cv(bin median CV). Curves are descending."""
+    cv = np.asarray(cv_values, dtype=float)
+    cv = cv[np.isfinite(cv)]
+    if cv.size == 0:
+        raise ValueError("build_library: no finite CV values to bin")
+    default_curve = np.asarray(default_curve, dtype=float)
+    if default_curve.shape != (11,):
+        raise ValueError(f"default_curve must be shape (11,), got {default_curve.shape}")
+
+    rows = [
+        {
+            "deplcrv_id": 1,
+            "curve_kind": "default",
+            "cv": np.nan,
+            **{c: float(default_curve[i]) for i, c in enumerate(CURVE_COLS)},
+        }
+    ]
+
+    # equal-population bins via quantile edges; label each point 0..ndepl_cv-1
+    edges = np.quantile(cv, np.linspace(0, 1, ndepl_cv + 1))
+    edges[0], edges[-1] = -np.inf, np.inf
+    labels = np.clip(np.digitize(cv, edges[1:-1]), 0, ndepl_cv - 1)
+    medians = sorted(
+        float(np.median(cv[labels == b])) for b in range(ndepl_cv) if (labels == b).any()
+    )
+    for k, m in enumerate(medians, start=2):
+        curve = sdc_from_cv(m)
+        rows.append(
+            {
+                "deplcrv_id": k,
+                "curve_kind": "cv_bin",
+                "cv": m,
+                **{c: float(curve[i]) for i, c in enumerate(CURVE_COLS)},
+            }
+        )
+    return pd.DataFrame(rows)
 
 
 def snarea_thresh_inches(peak_swe_mm: float) -> float:

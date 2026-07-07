@@ -3,9 +3,11 @@ import pytest
 
 from gfv2_params.snarea.library import (
     _INTERIOR,
+    CURVE_COLS,
     CV_GRID,
     SWE_LEVELS,
     _to_prms_order,
+    build_library,
     fit_cv,
     sdc_from_cv,
     snarea_thresh_inches,
@@ -76,3 +78,26 @@ def test_to_prms_order_is_reverse_and_involutive():
     assert p[0] == pytest.approx(c[-1])   # ascending: SCA@frac0 first
     assert p[-1] == pytest.approx(c[0])
     assert np.allclose(_to_prms_order(p), c)
+
+
+def test_build_library_default_plus_bins():
+    rng = np.linspace(0.2, 1.4, 500)   # spread of CVs
+    default = np.linspace(1.0, 0.0, 11)
+    lib = build_library(rng, ndepl_cv=8, default_curve=default)
+    assert len(lib) == 9                              # 1 default + 8 bins
+    assert list(lib["deplcrv_id"]) == list(range(1, 10))
+    assert lib.iloc[0]["curve_kind"] == "default"
+    assert np.isnan(lib.iloc[0]["cv"])
+    np.testing.assert_allclose(lib.iloc[0][CURVE_COLS].to_numpy(float), default)
+    assert (lib.iloc[1:]["curve_kind"] == "cv_bin").all()
+    # bin median CVs are increasing
+    assert np.all(np.diff(lib.iloc[1:]["cv"].to_numpy()) > 0)
+    # each cv_bin curve equals sdc_from_cv(its median cv)
+    row = lib.iloc[3]
+    np.testing.assert_allclose(row[CURVE_COLS].to_numpy(float), sdc_from_cv(row["cv"]), atol=1e-9)
+
+
+def test_build_library_equal_population_bins():
+    cv = np.arange(1000) / 1000.0 + 0.1   # uniform
+    lib = build_library(cv, ndepl_cv=5, default_curve=np.linspace(1, 0, 11))
+    assert len(lib) == 6
