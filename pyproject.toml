@@ -117,6 +117,35 @@ tqdm = "*"
 gdptools = ">=0.3.13"
 whitebox = "*"
 
+[tool.pixi.feature.marp.dependencies]
+# Marp slide-deck rendering toolchain (nodejs + marp-cli via npx). Kept in its
+# own feature (not dev/notebooks) so pipeline operators don't pay the nodejs +
+# chrome download (~250 MB) unless they render presentation decks. Two-step:
+#   pixi install -e marp          # nodejs (+ linux chrome system deps below)
+#   pixi run -e marp marp-setup   # downloads chrome-headless-shell via puppeteer
+# Chromium isn't on conda-forge, so we use puppeteer's chrome-headless-shell
+# (smaller, fewer system deps than full chrome — works on bare HPC).
+# python is declared here (not inherited) because the env is `no-default-feature`
+# (below) to stay light — render_deck.py uses only the stdlib, no geo stack.
+python = "3.12.*"
+nodejs = ">=20"
+
+[tool.pixi.feature.marp.target.linux-64.dependencies]
+# chrome-headless-shell on bare HPC needs libgbm (off-screen buffer alloc, used
+# even headless) and alsa-lib (chrome touches the audio subsystem on startup).
+libgbm = ">=1.0"
+alsa-lib = ">=1.2"
+
+[tool.pixi.feature.marp.target.linux-64.activation.env]
+# Chrome is a non-conda binary downloaded by marp-setup with no rpath into the
+# pixi env; prepend $CONDA_PREFIX/lib so it finds libgbm + alsa-lib. The
+# ${VAR:+:$VAR} guard avoids a trailing ':' (== "search cwd") when unset.
+LD_LIBRARY_PATH = "$CONDA_PREFIX/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+
+[tool.pixi.feature.marp.tasks]
+marp-setup = { cmd = "npx --yes puppeteer browsers install chrome-headless-shell", description = "One-shot: download chrome-headless-shell via puppeteer (works on bare HPC)" }
+render-deck = { cmd = "python scripts/render_deck.py", description = "Render a Marp .slides.md deck (PDF/HTML/server) via marp-cli" }
+
 [tool.pixi.pypi-dependencies]
 gfv2-params = { path = ".", editable = true }
 
@@ -175,6 +204,10 @@ notebooks = { features = ["notebooks"], solve-group = "default" }
 dev = { features = ["dev"], solve-group = "default" }
 docs = { features = ["docs"], solve-group = "default" }
 reference = { features = ["reference"], solve-group = "reference", no-default-feature = true }
+# Marp is nodejs + stdlib-python only (chrome pulled post-install by
+# `pixi run -e marp marp-setup`); no-default-feature keeps the heavy geo stack
+# out so operators only pay ~250 MB when they render decks. Own solve-group.
+marp = { features = ["marp"], solve-group = "marp", no-default-feature = true }
 all = { features = ["notebooks", "dev", "docs"], solve-group = "default" }
 
 [tool.isort]
