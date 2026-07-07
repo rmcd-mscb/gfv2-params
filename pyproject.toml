@@ -170,6 +170,10 @@ nbconvert = "*"  # headless notebook execution (scripts/render_figures.py)
 pytest = "*"
 pre-commit = "*"
 ruff = "*"
+# matplotlib-base is a test-time dep: tests/test_render_snarea_figures.py imports
+# scripts/render_snarea_figures.py (matplotlib at module import). Runtime figure
+# generation still uses the richer `notebooks` env; dev only needs it to import.
+matplotlib-base = "*"
 
 [tool.pixi.feature.docs.dependencies]
 mkdocs = "*"
