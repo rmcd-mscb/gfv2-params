@@ -105,6 +105,7 @@ def resolve_paths(fabric: str) -> dict:
     id_feature = require_config_key(cfg, "id_feature", "render_snarea_figures")
     data_root = require_config_key(cfg, "data_root", "render_snarea_figures")
     hru_gpkg = require_config_key(cfg, "hru_gpkg", "render_snarea_figures")
+    hru_layer = require_config_key(cfg, "hru_layer", "render_snarea_figures")
     merged = Path(data_root) / fabric / "params" / "merged"
     return {
         "id_feature": id_feature,
@@ -113,6 +114,7 @@ def resolve_paths(fabric: str) -> dict:
         "params_csv": merged / "nhm_snarea_curve_params.csv",
         "library_csv": merged / "nhm_snarea_curve_library.csv",
         "hru_gpkg": hru_gpkg,
+        "hru_layer": hru_layer,
     }
 
 
@@ -319,14 +321,40 @@ def fig_coverage(paths: dict, out_path: Path) -> None:
     plt.close(fig)
 
 
+def fig_deplcrv_map(paths: dict, out_path: Path) -> None:
+    """Map each HRU colored by its assigned library-curve index (hru_deplcrv)."""
+    import geopandas as gpd
+
+    idc = paths["id_feature"]
+    gdf = gpd.read_file(paths["hru_gpkg"], layer=paths["hru_layer"])
+    params = pd.read_csv(paths["params_csv"])[[idc, "hru_deplcrv"]]
+    merged = gdf.merge(params, on=idc, how="left")
+    fig, ax = plt.subplots(figsize=(11, 7))
+    merged.plot(
+        column="hru_deplcrv",
+        categorical=True,
+        legend=True,
+        cmap="tab10",
+        linewidth=0,
+        ax=ax,
+        legend_kwds={"title": "curve #", "fontsize": 8, "loc": "lower left"},
+        missing_kwds={"color": "#eee", "label": "no curve"},
+    )
+    ax.set_axis_off()
+    ax.set_title("Assigned snow-depletion curve per HRU (hru_deplcrv)")
+    fig.tight_layout()
+    fig.savefig(out_path, dpi=150)
+    plt.close(fig)
+
+
 # Data-free schematics (name -> callable(out_path)).
 SCHEMATICS = {
     "concept": schematic_concept,
     "pipeline": schematic_pipeline,
 }
 
-# Data figures needing only resolved `paths` (cheap CSV reads).
-PATHS_FIGURES = ("coverage", "cv_family", "empirical_vs_library")
+# Data figures needing only resolved `paths` (CSV reads, plus a gpkg for the map).
+PATHS_FIGURES = ("coverage", "cv_family", "empirical_vs_library", "deplcrv_map")
 
 # Data figures needing a picked HRU + water year (read the SNODAS NetCDFs).
 HRU_FIGURES = ("swe_sca_timeseries", "melt_extraction", "multiyear_median")
@@ -358,6 +386,7 @@ def main(argv=None) -> int:
                 "coverage": lambda o: fig_coverage(paths, o),
                 "cv_family": lambda o: fig_cv_family(paths, o),
                 "empirical_vs_library": lambda o: fig_empirical_vs_library(paths, o),
+                "deplcrv_map": lambda o: fig_deplcrv_map(paths, o),
             }
         )
         # Reading the SNODAS NetCDFs + picking an HRU is the expensive path;
