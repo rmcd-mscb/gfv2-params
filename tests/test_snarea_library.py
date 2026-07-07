@@ -101,3 +101,17 @@ def test_build_library_equal_population_bins():
     cv = np.arange(1000) / 1000.0 + 0.1   # uniform
     lib = build_library(cv, ndepl_cv=5, default_curve=np.linspace(1, 0, 11))
     assert len(lib) == 6
+
+
+def test_build_library_tied_cvs_still_produce_ndepl_cv_bins():
+    # fit_cv snaps CVs to a grid, so heavy ties are realistic; must NOT collapse.
+    cv = np.concatenate([np.full(1800, 0.45), np.linspace(0.2, 1.4, 200)])
+    lib = build_library(cv, ndepl_cv=8, default_curve=np.linspace(1, 0, 11))
+    assert len(lib) == 9                                  # 1 default + 8 cv bins, no collapse
+    assert (lib.iloc[1:]["curve_kind"] == "cv_bin").all()
+    assert list(lib["deplcrv_id"]) == list(range(1, 10))
+
+
+def test_build_library_raises_when_fewer_cvs_than_bins():
+    with pytest.raises(ValueError, match="at least ndepl_cv"):
+        build_library(np.array([0.4, 0.5, 0.6]), ndepl_cv=8, default_curve=np.linspace(1, 0, 11))

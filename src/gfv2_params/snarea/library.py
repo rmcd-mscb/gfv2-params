@@ -70,8 +70,11 @@ def fit_cv(curve: np.ndarray, cv_grid: np.ndarray | None = None) -> float:
 def build_library(
     cv_values: np.ndarray, ndepl_cv: int, default_curve: np.ndarray
 ) -> pd.DataFrame:
-    """Row 1 = reserved default curve; rows 2..(1+ndepl_cv) = equal-population CV
-    bins, each curve = sdc_from_cv(bin median CV). Curves are descending."""
+    """Row 1 = reserved default curve; rows 2..(1+ndepl_cv) = exactly ``ndepl_cv``
+    equal-population CV bins (guaranteed non-empty via rank-based assignment, so
+    ties in ``cv_values`` cannot collapse the bin count), each curve =
+    sdc_from_cv(bin median CV). Curves are descending. Raises ValueError if
+    fewer than ``ndepl_cv`` finite CV values are available."""
     cv = np.asarray(cv_values, dtype=float)
     cv = cv[np.isfinite(cv)]
     if cv.size == 0:
@@ -89,13 +92,18 @@ def build_library(
         }
     ]
 
-    # equal-population bins via quantile edges; label each point 0..ndepl_cv-1
-    edges = np.quantile(cv, np.linspace(0, 1, ndepl_cv + 1))
-    edges[0], edges[-1] = -np.inf, np.inf
-    labels = np.clip(np.digitize(cv, edges[1:-1]), 0, ndepl_cv - 1)
-    medians = sorted(
-        float(np.median(cv[labels == b])) for b in range(ndepl_cv) if (labels == b).any()
-    )
+    # Rank-based equal-population bins: tie-robust, guarantees ndepl_cv non-empty
+    # groups (quantile-edges + digitize can silently collapse bins under ties).
+    cv_sorted_idx = np.argsort(cv, kind="stable")  # ordinal: ties broken by position
+    n = cv.size
+    if n < ndepl_cv:
+        raise ValueError(
+            f"build_library: need at least ndepl_cv ({ndepl_cv}) finite CV values "
+            f"to form equal-population bins, got {n}"
+        )
+    labels = np.empty(n, dtype=int)
+    labels[cv_sorted_idx] = (np.arange(n) * ndepl_cv) // n  # 0..ndepl_cv-1, equal population
+    medians = [float(np.median(cv[labels == b])) for b in range(ndepl_cv)]  # ascending; each non-empty
     for k, m in enumerate(medians, start=2):
         curve = sdc_from_cv(m)
         rows.append(
