@@ -13,6 +13,7 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import xarray as xr
 from scipy.stats import norm
 
 _MM_PER_INCH = 25.4
@@ -255,3 +256,76 @@ def write_params_csv(params: pd.DataFrame, path) -> None:
 def write_validation_csv(report: dict, path) -> None:
     Path(path).parent.mkdir(parents=True, exist_ok=True)
     pd.DataFrame([report]).to_csv(path, index=False)
+
+
+def write_prms_netcdf(library: pd.DataFrame, params: pd.DataFrame, id_feature: str, path) -> None:
+    """PRMS/pyWatershed param file: snarea_curve flat ASCENDING (ndeplval=11*ndepl),
+    hru_deplcrv, snarea_thresh, all on nhru.
+
+    Convention verified against ``pywatershed.hydrology.prms_snow.PRMSSnow`` (Task 8
+    step 1): ``snarea_curve_2d = np.reshape(snarea_curve_flat, (ndepl, 11))`` (row-major),
+    row selected via ``snarea_curve_2d[hru_deplcrv - 1, :]`` (hru_deplcrv is 1-indexed, so
+    flat-array row order must follow ascending deplcrv_id starting at row 0 = id 1).
+    Within a row, tracing ``_calc_sca_deplcrv``: frac_swe=0.0 -> curve[0], frac_swe=0.5 ->
+    curve[5], frac_swe=1.0 -> curve[10] (also asserted "the maximum" at
+    ``snarea_curve[11 - 1]`` on new-snow reset) -> ascending frac_swe, frac 0.0 at index 0.
+    This matches ``_to_prms_order`` (repo descending -> ascending reverse).
+    """
+    lib_sorted = library.sort_values("deplcrv_id")
+    ndepl = len(lib_sorted)
+    flat = np.concatenate(
+        [_to_prms_order(r[CURVE_COLS].to_numpy(float)) for _, r in lib_sorted.iterrows()]
+    )
+    ds = xr.Dataset(
+        data_vars={
+            "snarea_curve": (
+                "ndeplval",
+                flat.astype("float64"),
+                {
+                    # long_name/units match pywatershed's canonical
+                    # parameters.yaml entry for snarea_curve.
+                    "long_name": "Snow area depletion curve values",
+                    "units": "1",
+                    "description": (
+                        "Flat, ascending frac_swe within each 11-point curve "
+                        "(index 0 = frac_swe 0.0, index 10 = frac_swe 1.0); curves "
+                        "concatenated in ascending deplcrv_id order"
+                    ),
+                },
+            ),
+            "hru_deplcrv": (
+                "nhru",
+                params["hru_deplcrv"].to_numpy(np.int32),
+                {
+                    # long_name matches pywatershed's canonical parameters.yaml
+                    # entry for hru_deplcrv; units "1" per CF (dimensionless index).
+                    "long_name": "Index number for snowpack areal depletion curve",
+                    "units": "1",
+                },
+            ),
+            "snarea_thresh": (
+                "nhru",
+                params["snarea_thresh"].to_numpy("float64"),
+                {
+                    # long_name/units match pywatershed's canonical
+                    # parameters.yaml entry for snarea_thresh ("inches", plural).
+                    "long_name": "Maximum threshold water equivalent for snow depletion",
+                    "units": "inches",
+                },
+            ),
+        },
+        coords={
+            id_feature: (
+                "nhru",
+                params[id_feature].to_numpy(),
+                {"long_name": "HRU identifier"},
+            )
+        },
+        attrs={
+            "ndepl": ndepl,
+            "Description": "SNODAS-derived CV/lognormal snarea_curve library",
+            "Conventions": "CF-1.6",
+        },
+    )
+    Path(path).parent.mkdir(parents=True, exist_ok=True)
+    ds.to_netcdf(path)

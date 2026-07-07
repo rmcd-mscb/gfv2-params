@@ -162,11 +162,19 @@ mkdocs-include-markdown-plugin = "*"
 "docs-build" = "mkdocs build"
 "docs-build-strict" = "mkdocs build --strict"
 
+[tool.pixi.feature.reference.dependencies]
+# pywatershed caps python <3.11 (as of 2.0.4), incompatible with the workspace's
+# python=3.12.* default feature -> isolated feature (no-default-feature) with its
+# own solve-group so it doesn't force-downgrade python for every other environment.
+python = "3.10.*"
+pywatershed = "*"
+
 [tool.pixi.environments]
 default = { features = [], solve-group = "default" }
 notebooks = { features = ["notebooks"], solve-group = "default" }
 dev = { features = ["dev"], solve-group = "default" }
 docs = { features = ["docs"], solve-group = "default" }
+reference = { features = ["reference"], solve-group = "reference", no-default-feature = true }
 all = { features = ["notebooks", "dev", "docs"], solve-group = "default" }
 
 [tool.isort]

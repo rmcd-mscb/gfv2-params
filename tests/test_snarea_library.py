@@ -1,6 +1,7 @@
 import numpy as np
 import pandas as pd
 import pytest
+import xarray as xr
 
 from gfv2_params.snarea.library import (
     _INTERIOR,
@@ -16,6 +17,7 @@ from gfv2_params.snarea.library import (
     snarea_thresh_inches,
     validate_and_calibrate,
     write_library_csv,
+    write_prms_netcdf,
 )
 
 
@@ -225,3 +227,25 @@ def test_write_csvs_roundtrip(tmp_path):
     p = tmp_path / "lib.csv"
     write_library_csv(lib, p)
     assert pd.read_csv(p).shape[0] == 9
+
+
+def test_write_prms_netcdf_structure_and_ascending_order(tmp_path):
+    lib = build_library(np.linspace(0.2, 1.4, 500), ndepl_cv=8, default_curve=np.linspace(1, 0, 11))
+    params = pd.DataFrame({
+        "nat_hru_id": [10, 11, 12],
+        "hru_deplcrv": np.array([2, 5, 1], dtype=np.int32),
+        "snarea_thresh": [10.0, 20.0, 0.0],
+    })
+    p = tmp_path / "snarea.nc"
+    write_prms_netcdf(lib, params, "nat_hru_id", p)
+    ds = xr.open_dataset(p)
+    ndepl = len(lib)
+    assert ds.sizes["ndeplval"] == 11 * ndepl
+    assert ds.sizes["nhru"] == 3
+    assert ds["hru_deplcrv"].dtype == np.int32
+    # first curve (default, deplcrv_id 1) ascending: index 0 == descending's last (0.0)
+    flat = ds["snarea_curve"].values
+    first_curve_ascending = flat[:11]
+    desc = lib[lib.deplcrv_id == 1][CURVE_COLS].to_numpy(float).ravel()
+    np.testing.assert_allclose(first_curve_ascending, desc[::-1])
+    assert first_curve_ascending[0] <= first_curve_ascending[-1]   # ascending SCA
