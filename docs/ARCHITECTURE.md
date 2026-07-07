@@ -382,3 +382,8 @@ dict at each step.
 - [`slurm_batch/HPC_REFERENCE.md`](../slurm_batch/HPC_REFERENCE.md) — per-stage detail, alternate paths, recovery, script→config map
 - [`docs/superpowers/INDEX.md`](superpowers/INDEX.md) — index of design specs, implementation plans, and reviews
 - [`docs/depstor_workflow.md`](depstor_workflow.md), [`docs/depstor_port_summary.md`](depstor_port_summary.md), [`docs/depstor_vpu01_validation_results.md`](depstor_vpu01_validation_results.md) — depstor pipeline reference (historical and current)
+
+> **Narrative overview:** see the slide deck
+> [`docs/presentations/2026-07-depression-storage-workflow.slides.md`](presentations/2026-07-depression-storage-workflow.slides.md)
+> and the pyWatershed parameter contract
+> [`docs/pywatershed_depression_storage_requirements.md`](pywatershed_depression_storage_requirements.md).
