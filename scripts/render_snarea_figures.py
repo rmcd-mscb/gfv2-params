@@ -372,33 +372,53 @@ def fig_coverage(paths: dict, out_path: Path) -> None:
     plt.close(fig)
 
 
+#: Above this HRU count the map switches from filled polygons to a centroid point
+#: cloud — a filled render of ~360k CONUS polygons is slow and memory-heavy, and
+#: at that density points read the same; small fabrics look better filled.
+_MAP_POINT_THRESHOLD = 50_000
+
+
 def fig_deplcrv_map(paths: dict, out_path: Path) -> None:
-    """Map each HRU colored by its assigned library-curve index (hru_deplcrv)."""
+    """Map each HRU by its assigned library-curve index (hru_deplcrv).
+
+    Filled polygons for small fabrics; a centroid point cloud once past
+    ``_MAP_POINT_THRESHOLD`` HRUs. Reads only the id column + geometry and colors
+    each curve with the shared palette so it matches fig_cv_family.
+    """
     import geopandas as gpd
     from matplotlib.colors import ListedColormap
+    from matplotlib.lines import Line2D
 
     idc = paths["id_feature"]
-    gdf = gpd.read_file(paths["hru_gpkg"], layer=paths["hru_layer"])
+    gdf = gpd.read_file(paths["hru_gpkg"], layer=paths["hru_layer"], columns=[idc])
     params = pd.read_csv(paths["params_csv"])[[idc, "hru_deplcrv"]]
-    merged = gdf.merge(params, on=idc, how="left")
-    # geopandas maps categories in sorted order to the colormap's entries; build
-    # an explicit ListedColormap keyed by curve number so each curve is the same
-    # color here as in fig_cv_family.
-    cats = sorted(int(v) for v in merged["hru_deplcrv"].dropna().unique())
-    cmap = ListedColormap([curve_color(c) for c in cats])
+    gdf = gdf.merge(params, on=idc, how="left")
+    cats = sorted(int(v) for v in gdf["hru_deplcrv"].dropna().unique())
+
     fig, ax = plt.subplots(figsize=(11, 7))
-    merged.plot(
-        column="hru_deplcrv",
-        categorical=True,
-        legend=True,
-        cmap=cmap,
-        linewidth=0,
-        ax=ax,
-        legend_kwds={"title": "curve #", "fontsize": 8, "loc": "lower left"},
-        missing_kwds={"color": "#eee", "label": "no curve"},
-    )
+    if len(gdf) > _MAP_POINT_THRESHOLD:
+        cent = gdf.geometry.representative_point()
+        assigned = gdf["hru_deplcrv"].notna().to_numpy()
+        x, y = cent.x.to_numpy(), cent.y.to_numpy()
+        if (~assigned).any():
+            ax.scatter(x[~assigned], y[~assigned], s=0.6, c="#ddd", linewidths=0, marker=".")
+        colors = [curve_color(int(c)) for c in gdf.loc[assigned, "hru_deplcrv"]]
+        ax.scatter(x[assigned], y[assigned], s=0.6, c=colors, linewidths=0, marker=".")
+        ax.set_aspect("equal")
+    else:
+        cmap = ListedColormap([curve_color(c) for c in cats])
+        gdf.plot(
+            column="hru_deplcrv",
+            categorical=True,
+            cmap=cmap,
+            linewidth=0,
+            ax=ax,
+            missing_kwds={"color": "#eee"},
+        )
     ax.set_axis_off()
     ax.set_title("Assigned snow-depletion curve per HRU (hru_deplcrv)")
+    handles = [Line2D([], [], marker="o", ls="", markersize=6, color=curve_color(c), label=str(c)) for c in cats]
+    ax.legend(handles=handles, title="curve #", fontsize=8, loc="lower left", ncol=2)
     fig.tight_layout()
     fig.savefig(out_path, dpi=150)
     plt.close(fig)
