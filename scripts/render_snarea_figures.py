@@ -25,7 +25,7 @@ import xarray as xr  # noqa: E402
 from gfv2_params.config import load_config, require_config_key  # noqa: E402
 from gfv2_params.snarea import representative as rep  # noqa: E402
 from gfv2_params.snarea import season  # noqa: E402
-from gfv2_params.snarea.library import CURVE_COLS  # noqa: E402
+from gfv2_params.snarea.library import CURVE_COLS, sdc_from_cv  # noqa: E402
 
 
 def schematic_concept(out_path: Path) -> None:
@@ -85,6 +85,33 @@ def schematic_pipeline(out_path: Path) -> None:
             )
     ax.set_xlim(0, 1)
     ax.set_ylim(0, 1)
+    fig.tight_layout()
+    fig.savefig(out_path, dpi=150)
+    plt.close(fig)
+
+
+def fig_cv_tail_curves(out_path: Path) -> None:
+    """Backup: lognormal SDC vs CV — curves cross below the linear default only
+    for CV > ~1 (data-free, purely analytic via sdc_from_cv)."""
+    fig, ax = plt.subplots(figsize=(7, 4.6))
+    # default_curve is linear 1.0..0.0 on SWE_LEVELS 1.0..0.0, i.e. the y=x line.
+    ax.plot(season.SWE_LEVELS, season.SWE_LEVELS, "k--", lw=2, label="linear default")
+    cmap = plt.get_cmap("plasma")
+    cvs = [0.5, 0.95, 1.5, 3.0]
+    for i, cv in enumerate(cvs):
+        ax.plot(
+            season.SWE_LEVELS,
+            sdc_from_cv(cv),
+            color=cmap(i / (len(cvs))),
+            lw=2.2,
+            label=f"CV={cv}",
+        )
+    ax.set_xlim(1, 0)
+    ax.set_ylim(0, 1.02)
+    ax.set_xlabel("Fraction of peak SWE remaining")
+    ax.set_ylabel("Snow-covered fraction")
+    ax.set_title("Lognormal curve vs CV — dips below linear only for CV > ~1")
+    ax.legend(fontsize=9)
     fig.tight_layout()
     fig.savefig(out_path, dpi=150)
     plt.close(fig)
@@ -377,14 +404,49 @@ def fig_deplcrv_map(paths: dict, out_path: Path) -> None:
     plt.close(fig)
 
 
+def fig_cv_binning(paths: dict, out_path: Path, ndepl_cv: int = 8) -> None:
+    """Backup: the calibrated sub-grid CV distribution split into equal-population
+    bins, each bin's median = one library curve. Shows why the top bin's
+    representative is ~0.95 even though a small tail exceeds CV=1."""
+    params = pd.read_csv(paths["params_csv"])
+    lib = pd.read_csv(paths["library_csv"])
+    cvcol = "cv_assign" if "cv_assign" in params.columns else "cv_subgrid"
+    cv = params[cvcol].dropna().to_numpy()
+    edges = np.quantile(cv, np.linspace(0, 1, ndepl_cv + 1))  # equal-population
+    bins = lib[lib["curve_kind"] == "cv_bin"].sort_values("deplcrv_id")
+    xmax = float(min(cv.max(), np.quantile(cv, 0.999)))
+
+    fig, ax = plt.subplots(figsize=(8.5, 4.6))
+    ax.hist(cv, bins=np.linspace(0, xmax, 61), color="#cdd9e5", edgecolor="white", zorder=1)
+    ymax = ax.get_ylim()[1]
+    for e in edges[1:-1]:  # interior equal-population bin edges
+        ax.axvline(e, color="#888", ls=":", lw=0.9, zorder=2)
+    for _, r in bins.iterrows():  # representative median per bin = a library curve
+        cid = int(r["deplcrv_id"])
+        ax.axvline(r["cv"], color=curve_color(cid), lw=2.2, zorder=3)
+        ax.text(
+            r["cv"], ymax * 0.99, str(cid), color=curve_color(cid), ha="center", va="top", fontsize=8, fontweight="bold"
+        )
+    ax.axvline(1.0, color="k", ls="--", lw=1.2, zorder=4)
+    ax.text(1.02, ymax * 0.6, f"CV>1: {(cv > 1).mean():.0%}\n(max {cv.max():.1f})", fontsize=9)
+    ax.set_xlim(0, xmax)
+    ax.set_xlabel(f"Sub-grid CV, calibrated ({cvcol})")
+    ax.set_ylabel("HRUs")
+    ax.set_title(f"CV distribution → {ndepl_cv} equal-population bins (vertical = bin median = library curve #)")
+    fig.tight_layout()
+    fig.savefig(out_path, dpi=150)
+    plt.close(fig)
+
+
 # Data-free schematics (name -> callable(out_path)).
 SCHEMATICS = {
     "concept": schematic_concept,
     "pipeline": schematic_pipeline,
+    "cv_tail_curves": fig_cv_tail_curves,
 }
 
 # Data figures needing only resolved `paths` (CSV reads, plus a gpkg for the map).
-PATHS_FIGURES = ("coverage", "cv_family", "empirical_vs_library", "deplcrv_map")
+PATHS_FIGURES = ("coverage", "cv_family", "empirical_vs_library", "deplcrv_map", "cv_binning")
 
 # Data figures needing a picked HRU + water year (read the SNODAS NetCDFs).
 HRU_FIGURES = ("swe_sca_timeseries", "melt_extraction", "multiyear_median")
@@ -417,6 +479,7 @@ def main(argv=None) -> int:
                 "cv_family": lambda o: fig_cv_family(paths, o),
                 "empirical_vs_library": lambda o: fig_empirical_vs_library(paths, o),
                 "deplcrv_map": lambda o: fig_deplcrv_map(paths, o),
+                "cv_binning": lambda o: fig_cv_binning(paths, o),
             }
         )
         # Reading the SNODAS NetCDFs + picking an HRU is the expensive path;

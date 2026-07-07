@@ -326,3 +326,47 @@ References: Driscoll, Hay & Bock (2017), <em>JAWRA</em> · Sexstone et al. (2020
 <em>Hydrological Processes</em> 34:2365–2380.
 Repo: <code>docs/ARCHITECTURE.md</code> (Part 2c) · <code>slurm_batch/RUNME.md</code> (Step 8).
 </span>
+
+---
+
+# Backup
+
+---
+
+## Backup — how many curves, and why 9?
+
+We split the calibrated sub-grid CV into **8 equal-population bins**; each bin's
+**median CV** becomes one library curve (+ 1 reserved default = 9).
+
+![](../figures/snarea/oregon/cv_binning.png)
+
+- Bins are narrow where HRUs cluster (low CV), wide in the sparse tail.
+- **pyWatershed does not cap the number of curves** — `ndepl` is a free dimension
+  (`hru_deplcrv` need only be ≤ `ndepl`). 9 is our `ndepl_cv` choice, not a limit.
+  More curves (or a dedicated tail bin) is a one-config change.
+
+---
+
+## Backup — the high-CV tail
+
+The lognormal curve only dips **below** the linear default for **CV > ~1** (steep
+early snow-cover loss when snow is very patchy). At the library's top CV (0.95)
+it sits essentially on the default.
+
+<div class="two">
+
+![](../figures/snarea/_schematics/cv_tail_curves.png)
+
+<div>
+
+- Only **~4–5%** of Oregon HRUs have CV > 1 (max ≈ 2.6).
+- Equal-population binning gives the top bin a median of 0.95, so those HRUs are
+  assigned curve 9 — a **milder** curve than their real melt-out.
+- That's the empirical-below-library gap seen on the CV≈0.94 reconstruction panel.
+
+</div>
+</div>
+
+<span class="footnote">
+Lever if the tail matters: raise <code>ndepl_cv</code> or add a dedicated high-CV bin.
+</span>
