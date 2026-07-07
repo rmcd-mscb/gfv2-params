@@ -265,19 +265,24 @@ Oregon library CVs: 0.16, 0.25, 0.30, 0.35, 0.45, 0.55, 0.65, 0.95 (+ default).
 
 <!--
 Coverage is honest: fine, elevation-banded HRUs often cover too few 1-km SNODAS
-cells. CONUS HRUs are larger, so the derived fraction is expected to be higher.
+cells. Oregon is snow-influenced throughout, so its derived fraction is higher
+than CONUS (next slide), where large snow-free regions fall back.
 -->
 
 ---
 
-## Results — spatial pattern
+## Results — CONUS (production)
 
-![](../figures/snarea/oregon/deplcrv_map.png)
+![](../figures/snarea/gfv2/deplcrv_map.png)
+
+- **361,471 HRUs** · **42% derived** — lower than Oregon because the South,
+  Gulf, and coasts have little or no seasonal snow (they take the default).
+- Spatially coherent: snow-free SE/coasts → default (curve 1); arid Great
+  Basin/SW → patchy, high-CV **curve 9 (CV = 1.2)**; humid interior → curve 7.
 
 <div class="caption">
-Each Oregon HRU colored by its assigned curve. The pattern is spatially coherent
-— low-elevation west (patchy, high-CV curves) differs from the interior.
-CONUS/gfv2 map to follow from the production run.
+One point per HRU centroid (~360k). The CONUS library's top bin is CV 1.2 — an
+actual below-linear curve, unlike Oregon's 0.95 (see backup).
 </div>
 
 ---
