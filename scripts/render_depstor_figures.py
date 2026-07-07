@@ -6,14 +6,16 @@ Makes four PNGs under ``docs/figures/depstor/``:
   NHD-network-connectivity split now used to decide dprst vs. on-stream.
 - ``pipeline_dag.png`` — the depstor builder DAG (inputs through PRMS params).
 - ``great_basin_before_after.png`` — VPU 16 (Great Basin) dprst/on-stream
-  classification before vs. after the geometric flow-through fix (#145):
-  endorheic waterbodies correctly retained as depression storage.
-- ``lower_miss_before_after.png`` — VPU 08 (Lower Mississippi) before vs.
-  after: ``drains_to_dprst`` over-extension into humid open-drainage terrain
-  removed.
+  classification (``dprst_binary.tif`` + ``onstream_binary.tif``) before vs.
+  after the geometric flow-through fix (#145): endorheic waterbodies correctly
+  retained as depression storage.
+- ``lower_miss_before_after.png`` — VPU 08 (Lower Mississippi) land-draining-
+  to-depression-storage footprint (``drains_to_dprst.tif`` presence) before
+  vs. after: the ``drains_to_dprst`` over-extension into humid open-drainage
+  terrain is removed (this is the over-extension showcase, so it maps
+  ``drains_to_dprst`` itself, not the waterbody-level ``dprst_binary``).
 
-The two before/after maps read CONUS-scale rasters (``dprst_binary.tif``,
-``onstream_binary.tif``) from both the current
+The two before/after maps read CONUS-scale rasters from both the current
 ``depstor_rasters/`` directory and the ``depstor_rasters_pre_flowthrough_
 2026-06-26/`` snapshot. The CONUS grid is ~16.9 billion cells (see
 CLAUDE.md's CONUS-memory-rule), so this script NEVER loads a full-grid
@@ -85,43 +87,93 @@ def read_window(path: Path, bbox: tuple[float, float, float, float], max_side: i
         return arr, ds.nodata
 
 
-def _dprst_onstream_category(dprst_path: Path, onstream_path: Path, bbox):
+def _dprst_onstream_category(depstor_dir: Path, bbox):
     """Return a 0/1/2 categorical array: land / dprst / on-stream, windowed to *bbox*."""
-    dprst, dprst_nodata = read_window(dprst_path, bbox)
-    onstream, _ = read_window(onstream_path, bbox)
+    dprst, dprst_nodata = read_window(depstor_dir / "dprst_binary.tif", bbox)
+    onstream, onstream_nodata = read_window(depstor_dir / "onstream_binary.tif", bbox)
     cat = np.zeros(dprst.shape, dtype=np.uint8)
-    cat[onstream != 255] = 2
+    cat[onstream != onstream_nodata] = 2
     cat[dprst != dprst_nodata] = 1
     return cat
 
 
-_CATEGORY_CMAP = ListedColormap(["#f0f0f0", "#3182bd", "#e6550d"])  # land, dprst, on-stream
-_CATEGORY_LEGEND = [
+def _drains_presence_category(depstor_dir: Path, bbox):
+    """Return a 0/1 array: land / drains-to-dprst, windowed to *bbox*.
+
+    ``drains_to_dprst.tif`` is HRU-id-valued (0 = the cell does not drain to a
+    depression; nonzero = the dprst HRU it drains to; ``nodata`` = off-fabric),
+    so "drains to a depression" is any valid, nonzero cell.
+    """
+    drains, nodata = read_window(depstor_dir / "drains_to_dprst.tif", bbox)
+    cat = np.zeros(drains.shape, dtype=np.uint8)
+    cat[(drains != nodata) & (drains != 0)] = 1
+    return cat
+
+
+_DPRST_CMAP = ListedColormap(["#f0f0f0", "#3182bd", "#e6550d"])  # land, dprst, on-stream
+_DPRST_LEGEND = [
     mpatches.Patch(color="#f0f0f0", label="land"),
     mpatches.Patch(color="#3182bd", label="depression storage (dprst)"),
     mpatches.Patch(color="#e6550d", label="on-stream waterbody"),
 ]
 
+_DRAINS_CMAP = ListedColormap(["#f0f0f0", "#3182bd"])  # land, drains-to-dprst
+_DRAINS_LEGEND = [
+    mpatches.Patch(color="#f0f0f0", label="land"),
+    mpatches.Patch(color="#3182bd", label="land draining to depression storage"),
+]
 
-def fig_before_after(region_name: str, bbox, out_name: str, change_note: str) -> Path:
-    """Draw a 2-panel (pre-fix | current) dprst/on-stream classification map."""
-    before = _dprst_onstream_category(PRE_FIX_DIR / "dprst_binary.tif", PRE_FIX_DIR / "onstream_binary.tif", bbox)
-    after = _dprst_onstream_category(CURRENT_DIR / "dprst_binary.tif", CURRENT_DIR / "onstream_binary.tif", bbox)
 
+def _draw_before_after(before, after, cmap, legend, vmax, region_name, subtitle, change_note, out_name):
+    """Draw and save a 2-panel (before | after) categorical map."""
     fig, axes = plt.subplots(1, 2, figsize=(11, 6))
     for ax, arr, title in zip(axes, (before, after), ("before", "after")):
-        ax.imshow(arr, cmap=_CATEGORY_CMAP, vmin=0, vmax=2, interpolation="nearest")
+        ax.imshow(arr, cmap=cmap, vmin=0, vmax=vmax, interpolation="nearest")
         ax.set_title(title)
         ax.set_xticks([])
         ax.set_yticks([])
-    fig.legend(handles=_CATEGORY_LEGEND, loc="lower center", ncol=3, frameon=False)
-    fig.suptitle(f"{region_name}: dprst / on-stream classification\n{change_note}")
+    fig.legend(handles=legend, loc="lower center", ncol=len(legend), frameon=False)
+    fig.suptitle(f"{region_name}: {subtitle}\n{change_note}")
     fig.tight_layout(rect=(0, 0.06, 1, 0.94))
 
     out_path = OUT / out_name
     fig.savefig(out_path, dpi=150)
     plt.close(fig)
     return out_path
+
+
+def fig_dprst_before_after(region_name: str, bbox, out_name: str, change_note: str) -> Path:
+    """2-panel dprst/on-stream classification map (before vs. after the flow-through fix)."""
+    before = _dprst_onstream_category(PRE_FIX_DIR, bbox)
+    after = _dprst_onstream_category(CURRENT_DIR, bbox)
+    return _draw_before_after(
+        before,
+        after,
+        _DPRST_CMAP,
+        _DPRST_LEGEND,
+        2,
+        region_name,
+        "dprst / on-stream classification",
+        change_note,
+        out_name,
+    )
+
+
+def fig_drains_before_after(region_name: str, bbox, out_name: str, change_note: str) -> Path:
+    """2-panel land-draining-to-dprst footprint map (before vs. after the flow-through fix)."""
+    before = _drains_presence_category(PRE_FIX_DIR, bbox)
+    after = _drains_presence_category(CURRENT_DIR, bbox)
+    return _draw_before_after(
+        before,
+        after,
+        _DRAINS_CMAP,
+        _DRAINS_LEGEND,
+        1,
+        region_name,
+        "land draining to depression storage",
+        change_note,
+        out_name,
+    )
 
 
 def fig_decision_schematic() -> Path:
@@ -271,17 +323,17 @@ def main() -> None:
     written = [
         fig_decision_schematic(),
         fig_pipeline_dag(),
-        fig_before_after(
+        fig_dprst_before_after(
             "Great Basin (VPU 16)",
             GREAT_BASIN,
             "great_basin_before_after.png",
             "endorheic waterbodies correctly retained as depression storage (issue #161)",
         ),
-        fig_before_after(
+        fig_drains_before_after(
             "Lower Mississippi (VPU 08)",
             LOWER_MISS,
             "lower_miss_before_after.png",
-            "drains_to_dprst over-extension into humid open-drainage terrain removed (#145)",
+            "drains_to_dprst over-extension removed by the through-flow reclassification (#145)",
         ),
     ]
     for p in written:
