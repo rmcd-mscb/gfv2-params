@@ -280,7 +280,10 @@ with `pixi run python ...` / `sbatch` when you want to inspect between stages.
 per year written; Stage 2 prints the `sdc_status` breakdown and writes the
 derived CSV; the Stage 3 job `COMPLETED` (`--mem=16G --time=00:30:00`),
 printing the `ndepl`/estimable/calibrated/reconstruction-error summary. See
-HPC_REFERENCE.md "Stage 10" for per-stage detail.
+HPC_REFERENCE.md "Stage 10" for per-stage detail. For a plain-English,
+figure-driven overview of the whole workflow (Driscoll/Sexstone methods and the
+pyWatershed products), see the Marp deck
+`docs/presentations/2026-07-snodas-snow-depletion-curves.slides.md`.
 
 ---
 
