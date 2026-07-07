@@ -231,6 +231,12 @@ Sample Oregon HRUs: empirical curve (blue) vs. the assigned library curve (orang
 after calibration. Mean reconstruction error ≈ 0.06 snow-covered-area units.
 </div>
 
+<span class="footnote">
+Method note: Sexstone et al. (2020) swept CV synthetically (0.1–2.0) over
+<em>simulated</em> SWE; here we drive the same lognormal-CV method with
+<em>observed</em> sub-grid CV from SNODAS (Driscoll's data source) — a hybrid of the two papers.
+</span>
+
 ---
 
 ## Stage 3 — from many curves to a few
