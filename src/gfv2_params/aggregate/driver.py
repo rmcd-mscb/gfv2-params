@@ -88,6 +88,10 @@ def aggregate_variables(
     the source once per variable — wasteful, especially when one variable is
     derived from another (e.g. SNODAS ``scov`` from ``swe``). One pass also
     removes the ``xr.merge`` of per-variable results.
+
+    An OPTIONAL second ``masked_std`` AggGen pass runs when
+    ``adapter.std_variables`` is non-empty, emitting ``{var}_std`` for each
+    named variable and reusing the same cached weights.
     """
     logger.info("    aggregating %s (%s)...", list(adapter.variables), adapter.stat_method)
     user_data = UserCatData(
@@ -117,6 +121,36 @@ def aggregate_variables(
             f"variable {list(adapter.variables)} in the aggregated Dataset "
             f"(got {list(ds.data_vars)})."
         )
+
+    if adapter.std_variables:
+        logger.info("    aggregating %s (masked_std)...", list(adapter.std_variables))
+        std_user = UserCatData(
+            source_ds=source_ds,
+            source_crs=adapter.source_crs,
+            source_x_coord=adapter.x_coord,
+            source_y_coord=adapter.y_coord,
+            source_t_coord=adapter.time_coord,
+            source_var=list(adapter.std_variables),
+            target_gdf=fabric_gdf,
+            target_crs=WEIGHT_GEN_CRS,
+            target_id=id_col,
+            source_time_period=[period[0], period[1]],
+        )
+        std_agg = AggGen(
+            user_data=std_user,
+            stat_method="masked_std",
+            agg_engine="serial",
+            agg_writer="none",
+            weights=weights,
+        )
+        _gdf, std_ds = std_agg.calculate_agg()
+        for v in adapter.std_variables:
+            if v not in std_ds.data_vars:
+                raise RuntimeError(
+                    f"masked_std pass produced no {v!r} (got {list(std_ds.data_vars)})"
+                )
+            ds[f"{v}_std"] = std_ds[v]
+
     return ds
 
 

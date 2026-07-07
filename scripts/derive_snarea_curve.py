@@ -2,7 +2,7 @@
 
 Reads the per-year aggregated NCs written by Stage 1 (`derive_aggregate.py`,
 `{data_root}/{fabric}/snodas/*_agg_*.nc`, dims `time`/`<id_feature>`, vars
-`swe`/`scov`), builds per-HRU SNODAS cell counts from the gdptools weight CSV,
+`swe`/`scov`/`swe_std`), builds per-HRU SNODAS cell counts from the gdptools weight CSV,
 and writes the merged snarea_curve param CSV via `build_snarea_curve`.
 
 Water fraction (selection criterion 4) is optional: if a per-HRU water-fraction
@@ -23,7 +23,7 @@ import xarray as xr
 
 from gfv2_params.config import load_config, require_config_key
 from gfv2_params.log import configure_logging
-from gfv2_params.snarea import DEFAULT_SNAREA_CURVE, build_snarea_curve
+from gfv2_params.snarea import DEFAULT_SNAREA_CURVE, build_snarea_curve, validate_default_curve
 from gfv2_params.snarea.selection import SelectionParams
 
 __all__ = [
@@ -32,20 +32,6 @@ __all__ = [
     "validate_default_curve",
     "main",
 ]
-
-
-def validate_default_curve(arr: np.ndarray) -> None:
-    """Validate a `default_curve` override: shape, value range, non-increasing.
-
-    Raises ValueError (not `assert`, which is stripped under `python -O`)
-    naming which check failed.
-    """
-    if arr.shape != (11,):
-        raise ValueError(f"default_curve must have shape (11,), got {arr.shape}")
-    if not np.all((arr >= 0.0) & (arr <= 1.0)):
-        raise ValueError(f"default_curve values must all be within [0.0, 1.0], got {arr}")
-    if not np.all(np.diff(arr) <= 1e-9):
-        raise ValueError(f"default_curve must be non-increasing, got {arr}")
 
 
 def read_daily_by_hru(
@@ -74,14 +60,21 @@ def read_daily_by_hru(
             "(the slow/large step at CONUS scale) ...",
             ds.sizes.get(id_dim, 0), ds.sizes.get("time", 0),
         )
-    df = ds[["swe", "scov"]].to_dataframe().reset_index()
+    missing = [v for v in ("swe", "scov", "swe_std") if v not in ds.data_vars]
+    if missing:
+        raise ValueError(
+            f"Aggregated NetCDFs in {nc_dir} are missing {missing}. Re-run Stage 1 "
+            "(scripts/derive_aggregate.py) — the SNODAS adapter now emits swe_std "
+            "(std_variables=('swe',)) — before running Stage 2."
+        )
+    df = ds[["swe", "scov", "swe_std"]].to_dataframe().reset_index()
     df = df.rename(columns={"scov": "sca"})
     if logger:
         logger.info("  materialized %d rows in %.0fs; grouping into per-HRU series ...",
                     len(df), time.perf_counter() - t0)
     out: dict[int, pd.DataFrame] = {}
     for hru_id, grp in df.groupby(id_dim):
-        s = grp.set_index("time")[["swe", "sca"]].sort_index()
+        s = grp.set_index("time")[["swe", "sca", "swe_std"]].sort_index()
         out[int(hru_id)] = s
     if logger:
         logger.info("  built %d per-HRU series in %.0fs total", len(out), time.perf_counter() - t0)

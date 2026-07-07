@@ -16,11 +16,30 @@ import pandas as pd
 from .representative import median_sdc, select_representative, similarity
 from .season import annual_sdc
 from .selection import SelectionParams, classify, passes_selection
+from .subgrid import representative_peak_stats
 
 # Placeholder: SCA declines linearly with normalized SWE (1.0 → 0.0).
 DEFAULT_SNAREA_CURVE = np.round(np.linspace(1.0, 0.0, 11), 4)
 
 _CURVE_COLS = [f"snarea_curve_{i}" for i in range(11)]
+
+
+def validate_default_curve(arr: np.ndarray) -> None:
+    """Validate a `default_curve` override: shape, value range, non-increasing.
+
+    Raises ValueError (not `assert`, which is stripped under `python -O`)
+    naming which check failed. Shared by the Stage 2 (derive_snarea_curve.py) and
+    Stage 3 (derive_snarea_library.py) drivers — lives here (not in either script)
+    because `scripts/` is not an importable package at runtime (only under
+    pytest's rootdir-on-sys.path), so a script-to-script import would break when
+    run directly via `python scripts/derive_snarea_library.py`.
+    """
+    if arr.shape != (11,):
+        raise ValueError(f"default_curve must have shape (11,), got {arr.shape}")
+    if not np.all((arr >= 0.0) & (arr <= 1.0)):
+        raise ValueError(f"default_curve values must all be within [0.0, 1.0], got {arr}")
+    if not np.all(np.diff(arr) <= 1e-9):
+        raise ValueError(f"default_curve must be non-increasing, got {arr}")
 
 
 def _seasons(daily: pd.DataFrame) -> list[np.ndarray]:
@@ -100,6 +119,13 @@ def build_hru_record(
         "n_seasons": n_seasons,
     }
     record.update({c: float(rep[i]) for i, c in enumerate(_CURVE_COLS)})
+
+    stats = (
+        representative_peak_stats(daily)
+        if "swe_std" in daily.columns
+        else {"cv_subgrid": float("nan"), "peak_swe_mm": float("nan"), "n_peak_years": 0}
+    )
+    record.update(stats)
     return record
 
 

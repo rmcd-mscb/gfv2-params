@@ -1,0 +1,21 @@
+#!/bin/bash
+#SBATCH -p cpu
+#SBATCH -A impd
+#SBATCH --job-name=snarea_library
+#SBATCH --output=logs/job_%j.out
+#SBATCH --error=logs/job_%j.err
+#SBATCH --time=00:30:00
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=2
+#SBATCH --mem=16G
+#
+# Stage 3: build the CV/lognormal snarea_curve library from the Stage 2 derived
+# CSV. Pure tabular — cheap. Re-runnable at any ndepl_cv without a daily reload.
+#   FABRIC=gfv2 sbatch slurm_batch/derive_snarea_library.batch
+
+cd "$SLURM_SUBMIT_DIR"
+BASE_CONFIG=${BASE_CONFIG:-configs/base_config.yml}
+FABRIC=${FABRIC:-oregon}
+
+pixi run --as-is python scripts/derive_snarea_library.py \
+    --fabric "$FABRIC" --config configs/snarea/snarea_library.yml --base_config "$BASE_CONFIG"

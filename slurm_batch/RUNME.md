@@ -26,7 +26,7 @@ in [HPC_REFERENCE.md](HPC_REFERENCE.md).
 7. **Step 6** — (optional) Merge NHM default parameter tables.
 8. **Step 7** — Render results figures headlessly.
 9. **Step 8** — (optional, fabric-independent) Derive snow depletion curves
-   (SNODAS → `snarea_curve`).
+   (SNODAS → `snarea_curve` curve library, 3 stages).
 
 ---
 
@@ -243,6 +243,7 @@ AID=$(sbatch --parsable --array=0-$((N-1)) --export=ALL,FABRIC=gfv2 \
 sbatch --dependency=afterok:$AID --export=ALL,FABRIC=gfv2 \
     slurm_batch/merge_snodas_aggregate.batch
 pixi run python scripts/derive_snarea_curve.py --fabric gfv2
+FABRIC=gfv2 sbatch slurm_batch/derive_snarea_library.batch
 ```
 
 **What it does:** Stage 1 aggregates daily SNODAS SWE to the HRU fabric as a
@@ -250,15 +251,27 @@ SLURM array over the fabric's spatial batches (`derive_snodas_aggregate.batch`,
 one array task per batch, source grid clipped to each batch's extent), then
 `merge_snodas_aggregate.batch` concatenates the per-batch per-year NetCDFs
 into one final `snodas_agg_<year>.nc` per calendar year (area-weighted mean
-SWE + snow-covered-area fraction via the gdptools-backed `aggregate` harness);
-Stage 2 derives the per-HRU `snarea_curve`/`hru_deplcrv` PRMS parameters from
-those daily series (Driscoll, Hay & Bock 2017 method). Fabric-independent —
-no code change to run against `gfv2`, `gfv2_vpu01`, or `oregon`. Stage 2 is
-still run directly (`pixi run python ...`), not via `sbatch`.
+SWE + snow-covered-area fraction, now also the per-cell SWE std dev `swe_std`
+sidecar used by Stage 2's sub-grid CV, via the gdptools-backed `aggregate`
+harness); Stage 2 derives per-HRU empirical depletion curves and sub-grid CV
+from those daily series (Driscoll, Hay & Bock 2017 selection method) and
+writes the intermediate `_intermediates/nhm_snarea_curve_derived.csv` (not yet
+the terminal params); Stage 3 (`derive_snarea_library.py`) builds the
+CV/lognormal curve library from that derived CSV — cheap, pure-tabular, no
+daily-SWE reload — and writes the terminal `nhm_snarea_curve_library.csv`,
+`nhm_snarea_curve_params.csv`, `nhm_snarea_curve_validation.csv`, and the
+pyWatershed `nhm_snarea_curve.nc`. Fabric-independent — no code change to run
+against `gfv2`, `gfv2_vpu01`, or `oregon`. Stage 2 is still run directly
+(`pixi run python ...`), not via `sbatch`. If Stage 1 was already run before
+`swe_std` was added, re-run it once (`derive_snodas_aggregate.batch` +
+`merge_snodas_aggregate.batch`) — the gdptools weight CSVs are cached, so the
+re-run is cheap.
 
 **Wait for:** the merge job `COMPLETED`, printing one `snodas_agg_<year>.nc`
 per year written; Stage 2 prints the `sdc_status` breakdown and writes the
-merged CSV. See HPC_REFERENCE.md "Stage 10" for per-stage detail.
+derived CSV; the Stage 3 job `COMPLETED` (`--mem=16G --time=00:30:00`),
+printing the `ndepl`/estimable/calibrated/reconstruction-error summary. See
+HPC_REFERENCE.md "Stage 10" for per-stage detail.
 
 ---
 
@@ -280,10 +293,14 @@ tail -n 200 logs/job_<JOBID>.err
 - `{data_root}/gfv2/params/merged/_intermediates/` — 10 per-fraction count
   CSVs (inputs to ratio derivation; `count` is NOT a [0, 1] fraction).
 - `docs/figures/gfv2/` — rendered PNG figures.
-- `{data_root}/gfv2/snodas/` — per-year aggregated SNODAS SWE/SCA NetCDFs
-  (Stage 1 of the snow depletion curve pipeline, optional Step 8).
-- `{data_root}/gfv2/params/merged/nhm_snarea_curve_params.csv` — per-HRU
-  `snarea_curve`/`hru_deplcrv` (Stage 2, optional Step 8).
+- `{data_root}/gfv2/snodas/` — per-year aggregated SNODAS SWE/SCA/`swe_std`
+  NetCDFs (Stage 1 of the snow depletion curve pipeline, optional Step 8).
+- `{data_root}/gfv2/params/merged/_intermediates/nhm_snarea_curve_derived.csv`
+  — per-HRU empirical curve + sub-grid CV (Stage 2, optional Step 8).
+- `{data_root}/gfv2/params/merged/nhm_snarea_curve_library.csv`,
+  `nhm_snarea_curve_params.csv` (`snarea_curve`/`hru_deplcrv`/`snarea_thresh`),
+  `nhm_snarea_curve_validation.csv`, and `nhm_snarea_curve.nc` (pyWatershed
+  parameter file) — Stage 3, optional Step 8.
 
 ---
 

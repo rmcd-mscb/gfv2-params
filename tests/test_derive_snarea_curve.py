@@ -25,10 +25,13 @@ def test_cells_from_weights(tmp_path):
 
 
 def test_read_daily_by_hru(tmp_path):
+    # swe_std is unconditionally emitted by Stage 1 (aggregate.snodas
+    # std_variables=("swe",)), so the fixture always includes it.
     idx = pd.date_range("2010-02-01", periods=3, freq="D")
     ds = xr.Dataset(
         {"swe": (("time", "hru_id"), np.array([[10, 5], [8, 4], [0, 0]], "float64")),
-         "scov": (("time", "hru_id"), np.array([[1, 1], [.8, .5], [0, 0]], "float64"))},
+         "scov": (("time", "hru_id"), np.array([[1, 1], [.8, .5], [0, 0]], "float64")),
+         "swe_std": (("time", "hru_id"), np.array([[2, 1], [1.5, .8], [0, 0]], "float64"))},
         coords={"time": idx, "hru_id": [1, 2]},
     )
     ds.to_netcdf(tmp_path / "snodas_agg_2010.nc")
@@ -36,6 +39,30 @@ def test_read_daily_by_hru(tmp_path):
     assert set(out) == {1, 2}
     assert list(out[1]["swe"].values) == [10, 8, 0]
     assert "sca" in out[1].columns          # scov renamed to sca
+
+
+def test_read_daily_by_hru_includes_swe_std(tmp_path):
+    idx = pd.date_range("2010-02-01", periods=3, freq="D")
+    ds = xr.Dataset(
+        {"swe": (("time", "hru_id"), np.array([[10, 5], [8, 4], [0, 0]], "float64")),
+         "scov": (("time", "hru_id"), np.array([[1, 1], [.8, .5], [0, 0]], "float64")),
+         "swe_std": (("time", "hru_id"), np.array([[2, 1], [1.5, .8], [0, 0]], "float64"))},
+        coords={"time": idx, "hru_id": [1, 2]},
+    )
+    ds.to_netcdf(tmp_path / "snodas_agg_2010.nc")
+    out = read_daily_by_hru(tmp_path, "hru_id")
+    assert "swe_std" in out[1].columns
+    assert list(out[1]["swe_std"].values) == [2, 1.5, 0]
+
+
+def test_read_daily_by_hru_missing_swe_std_raises(tmp_path):
+    t = pd.date_range("2011-01-01", periods=2)
+    ds = xr.Dataset({"swe": (("time", "hru_id"), np.array([[1.0], [2.0]])),
+                     "scov": (("time", "hru_id"), np.array([[1.0], [1.0]]))},
+                    coords={"time": t, "hru_id": [7]})
+    ds.to_netcdf(tmp_path / "snodas_agg_2011.nc")
+    with pytest.raises(ValueError, match="swe_std"):
+        read_daily_by_hru(tmp_path, "hru_id")
 
 
 def test_validate_default_curve_accepts_valid():

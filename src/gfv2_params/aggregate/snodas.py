@@ -34,4 +34,5 @@ SNODAS_ADAPTER = SourceAdapter(
     stat_method="masked_mean",
     pre_aggregate_hook=_snodas_hook,
     grid_variable="swe",
+    std_variables=("swe",),
 )

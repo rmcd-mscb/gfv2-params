@@ -115,3 +115,24 @@ def test_aggregate_source_years_filter_no_match_raises(tmp_path):
             adapter, gdf, "hru_id", input_dir=tmp_path, output_dir=tmp_path / "out",
             weight_file=tmp_path / "w.csv", output_prefix="demo", years=[2099],
         )
+
+
+def test_std_sidecar_emits_var_std(tmp_path):
+    import pytest
+
+    _synthetic_grid(tmp_path)
+    gdf = _two_polys()
+    adapter = SourceAdapter(
+        source_key="demo", variables=("swe",), files_glob="demo_daily_*.nc",
+        source_crs="EPSG:5070", x_coord="x", y_coord="y", time_coord="time",
+        stat_method="mean", std_variables=("swe",),
+    )
+    out = aggregate_source(
+        adapter, gdf, "hru_id", input_dir=tmp_path,
+        output_dir=tmp_path / "out", weight_file=tmp_path / "w.csv",
+        output_prefix="demo"
+    )
+    res = xr.open_dataset(out[0])
+    assert "swe" in res and "swe_std" in res
+    # day 0 left poly: cells all 1.0 -> std 0; (see _synthetic_grid values)
+    assert float(res["swe_std"].sel(hru_id=1).values[0]) == pytest.approx(0.0, abs=1e-6)

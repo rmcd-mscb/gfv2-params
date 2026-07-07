@@ -79,6 +79,7 @@ shells around the same builders. The four stages:
 | Part 2b zonal params | `scripts/derive_zonal_params.py` | `configs/zonal/zonal_params.yml` | `src/gfv2_params/zonal_runners/` |
 | Part 2c snow-depletion aggregation | `scripts/derive_aggregate.py` | `configs/aggregate/aggregate_sources.yml` | `src/gfv2_params/aggregate/` |
 | Part 2c snow-depletion curve build | `scripts/derive_snarea_curve.py` | `configs/snarea/snarea_curve.yml` | `src/gfv2_params/snarea/` |
+| Part 2c snow-depletion curve library | `scripts/derive_snarea_library.py` | `configs/snarea/snarea_library.yml` | `src/gfv2_params/snarea/library.py` |
 
 Orchestrators support `--step <name>` (one step), `--from <name>` (resume),
 and `--force` (rebuild outputs that already exist). The zonal orchestrator
@@ -101,19 +102,33 @@ contract:
   static rasters). Wraps gdptools `UserCatData`/`WeightGen`/`AggGen` behind a
   declarative `SourceAdapter` (`adapter.py`); `driver.py`'s `aggregate_source`
   caches the per-fabric weight matrix once and loops `AggGen` per year. The
-  current adapter, `snodas.py`, area-weights daily SNODAS SWE to `swe` (mean)
-  and derives `scov`/SCA (`masked_mean` of `swe > 0`, NaN-preserving over
-  fill/nodata cells) — feeds Part 2c Stage 2 below. New gridded time-series
+  current adapter, `snodas.py`, area-weights daily SNODAS SWE to `swe` (mean),
+  derives `scov`/SCA (`masked_mean` of `swe > 0`, NaN-preserving over
+  fill/nodata cells), and emits a `swe_std` sidecar (`std_variables=("swe",)`,
+  per-cell SWE std dev within the HRU) — feeds Part 2c Stage 2 below, whose
+  sub-grid CV needs `swe_std`. New gridded time-series
   sources (e.g. climate) plug in as a new `SourceAdapter`, not a new script.
 - [`src/gfv2_params/snarea/`](../src/gfv2_params/snarea/) — Part 2c Stage 2:
-  derives the PRMS `snarea_curve` (11-point areal snow-depletion curve) and
-  `hru_deplcrv` per HRU from the Stage 1 daily SWE/SCA, per Driscoll, Hay &
-  Bock (2017): per-calendar-year melt-season curve extraction (`season.py`),
-  median/similarity/representative-curve selection (`representative.py`), six
-  selection criteria + low/mid/high classification (`selection.py`), and
-  final per-HRU assembly with default-curve fallback (`build.py`). Design
-  spec: [`docs/superpowers/specs/2026-07-04-snodas-snarea-curve-design.md`](superpowers/specs/2026-07-04-snodas-snarea-curve-design.md);
+  derives the empirical PRMS `snarea_curve` (11-point areal snow-depletion
+  curve) and per-HRU sub-grid CV from the Stage 1 daily SWE/SCA/`swe_std`, per
+  Driscoll, Hay & Bock (2017): per-calendar-year melt-season curve extraction
+  (`season.py`), median/similarity/representative-curve selection
+  (`representative.py`), six selection criteria + low/mid/high classification
+  (`selection.py`), sub-grid CV from `swe_std` (`subgrid.py`), and final
+  per-HRU assembly with default-curve fallback (`build.py`) — writes the
+  intermediate derived CSV, not the terminal params. Design spec:
+  [`docs/superpowers/specs/2026-07-04-snodas-snarea-curve-design.md`](superpowers/specs/2026-07-04-snodas-snarea-curve-design.md);
   converted method paper: [`docs/Snow_Depletion_Curves.md`](Snow_Depletion_Curves.md).
+- [`src/gfv2_params/snarea/library.py`](../src/gfv2_params/snarea/library.py) —
+  Part 2c Stage 3 (`scripts/derive_snarea_library.py`): builds a physically-based
+  CV/lognormal `snarea_curve` library from the Stage 2 derived CSV (Sexstone,
+  Driscoll, Hay, Hammond & Barnhart 2020) — analytic curve-from-CV
+  (`sdc_from_cv`), CV fit to each empirical curve (`fit_cv`), calibration of
+  sub-grid CV against the empirical overlap (`validate_and_calibrate`),
+  equal-population CV-bin library (`build_library`), nearest-CV assignment
+  (`assign_deplcrv`), and the terminal params CSV + pyWatershed NetCDF writers.
+  Design spec:
+  [`docs/superpowers/specs/2026-07-06-snodas-snarea-curve-library-design.md`](superpowers/specs/2026-07-06-snodas-snarea-curve-library-design.md).
 
 Each `build(step_cfg, ctx, logger)` function produces named outputs that
 downstream steps can reach via the shared context. The orchestrator/builder

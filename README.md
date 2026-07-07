@@ -312,22 +312,28 @@ for the pattern.
 
 ## Snow depletion curves (SNODAS → snarea_curve)
 
-Derives the PRMS `snarea_curve` parameter (an 11-point areal snow-depletion
-curve) plus `hru_deplcrv` from daily SNODAS SWE, following the Driscoll, Hay &
-Bock (2017) method. Two fabric-independent stages. Stage 1 runs as a SLURM
-array over the fabric's spatial batches (same pattern as the depstor/zonal
-parameter jobs), then a merge job; Stage 2 remains a plain `pixi run`:
+Derives a PRMS `snarea_curve` library (CV/lognormal depletion curves) plus
+per-HRU `hru_deplcrv`/`snarea_thresh` from daily SNODAS SWE. Three
+fabric-independent stages: Stage 1/2 follow the Driscoll, Hay & Bock (2017)
+empirical method; Stage 3 fits each HRU to a physically-based lognormal-CV
+curve (Sexstone, Driscoll, Hay, Hammond & Barnhart 2020), calibrated against
+the Stage 2 empirical curves. Stage 1 runs as a SLURM array over the fabric's
+spatial batches (same pattern as the depstor/zonal parameter jobs), then a
+merge job; Stage 2 remains a plain `pixi run`; Stage 3 is a cheap `sbatch` job:
 
 ```bash
-# Stage 1 — aggregate daily SNODAS SWE to the HRU fabric, per spatial batch
+# Stage 1 — aggregate daily SNODAS SWE (+ swe_std) to the HRU fabric, per spatial batch
 N=$(grep '^n_batches:' "{data_root}/oregon/batches/manifest.yml" | awk '{print $2}')
 AID=$(sbatch --parsable --array=0-$((N-1)) --export=ALL,FABRIC=oregon \
     slurm_batch/derive_snodas_aggregate.batch)
 sbatch --dependency=afterok:$AID --export=ALL,FABRIC=oregon \
     slurm_batch/merge_snodas_aggregate.batch
 
-# Stage 2 — derive per-HRU snarea_curve from the aggregated SWE/SCA
+# Stage 2 — derive per-HRU empirical snarea_curve + sub-grid CV from the aggregated SWE/SCA
 pixi run python scripts/derive_snarea_curve.py --fabric oregon
+
+# Stage 3 — build the CV/lognormal curve library + per-HRU params from the Stage 2 output
+FABRIC=oregon sbatch slurm_batch/derive_snarea_library.batch
 ```
 
 - **Inputs:** raw daily SNODAS SWE NetCDFs from the shared datastore (default
@@ -344,18 +350,31 @@ pixi run python scripts/derive_snarea_curve.py --fabric oregon
   weight CSV under `{data_root}/{fabric}/weights_agg/`. The merge job then
   concatenates all batches per year into
   `{data_root}/{fabric}/snodas/snodas_agg_<year>.nc` (dims `time`/`<id_feature>`;
-  vars `swe` area-weighted mean, `scov` snow-covered-area fraction) — the file
-  Stage 2 reads.
-- **Stage 2 output:**
-  `{data_root}/{fabric}/params/merged/nhm_snarea_curve_params.csv` — one row per
-  HRU with `snarea_curve_0..10`, `hru_deplcrv`, and `sdc_status`/`sca_class`
-  diagnostics; HRUs failing the six Driscoll selection criteria fall back to a
-  configured default curve, flagged in `sdc_status`.
+  vars `swe` area-weighted mean, `scov` snow-covered-area fraction, `swe_std`
+  per-cell SWE std dev sidecar) — the file Stage 2 reads.
+- **Stage 2 output:** the intermediate
+  `{data_root}/{fabric}/params/merged/_intermediates/nhm_snarea_curve_derived.csv`
+  — one row per HRU with the empirical `snarea_curve_0..10`, `sdc_status`/
+  `sca_class` diagnostics, and `cv_subgrid` (from `swe_std`); HRUs failing the
+  six Driscoll selection criteria fall back to a configured default curve,
+  flagged in `sdc_status`. Not the terminal params — that's Stage 3.
+- **Stage 3 output**, all under `{data_root}/{fabric}/params/merged/`:
+  `nhm_snarea_curve_library.csv` (one row per `deplcrv_id` — the reserved
+  default curve plus `ndepl_cv` equal-population CV-bin curves),
+  `nhm_snarea_curve_params.csv` (one row per HRU: `hru_deplcrv`,
+  `snarea_thresh`, CV diagnostics, the assigned curve),
+  `nhm_snarea_curve_validation.csv` (calibration/reconstruction-error report),
+  and `nhm_snarea_curve.nc` — a pyWatershed-ready parameter file
+  (`snarea_curve`, `hru_deplcrv`, `snarea_thresh`).
 
 `--fabric` is resolved the same way as every other stage (CLI flag → `FABRIC`
 env var → `default_fabric`); swap in `--fabric gfv2` for the CONUS fabric.
-Design spec: [`docs/superpowers/specs/2026-07-04-snodas-snarea-curve-design.md`](docs/superpowers/specs/2026-07-04-snodas-snarea-curve-design.md);
-converted method paper: [`docs/Snow_Depletion_Curves.md`](docs/Snow_Depletion_Curves.md).
+Design specs:
+[`docs/superpowers/specs/2026-07-04-snodas-snarea-curve-design.md`](docs/superpowers/specs/2026-07-04-snodas-snarea-curve-design.md)
+(Stages 1/2) and
+[`docs/superpowers/specs/2026-07-06-snodas-snarea-curve-library-design.md`](docs/superpowers/specs/2026-07-06-snodas-snarea-curve-library-design.md)
+(Stage 3 library); converted method paper:
+[`docs/Snow_Depletion_Curves.md`](docs/Snow_Depletion_Curves.md).
 
 ## Viewing fabric results
 
