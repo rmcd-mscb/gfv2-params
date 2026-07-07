@@ -32,6 +32,7 @@ class SourceAdapter:
     stat_method: str = "mean"
     pre_aggregate_hook: Callable[[xr.Dataset], xr.Dataset] | None = field(default=None)
     grid_variable: str | None = None
+    std_variables: tuple[str, ...] = field(default=())
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "variables", tuple(self.variables))
@@ -47,4 +48,10 @@ class SourceAdapter:
         elif self.grid_variable not in self.variables:
             raise ValueError(
                 f"grid_variable {self.grid_variable!r} must be one of {self.variables}"
+            )
+        object.__setattr__(self, "std_variables", tuple(self.std_variables))
+        missing = [v for v in self.std_variables if v not in self.variables]
+        if missing:
+            raise ValueError(
+                f"std_variables {missing} must all be in variables {self.variables}"
             )
