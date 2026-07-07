@@ -25,6 +25,7 @@ import xarray as xr  # noqa: E402
 from gfv2_params.config import load_config, require_config_key  # noqa: E402
 from gfv2_params.snarea import representative as rep  # noqa: E402
 from gfv2_params.snarea import season  # noqa: E402
+from gfv2_params.snarea.library import CURVE_COLS  # noqa: E402
 
 
 def schematic_concept(out_path: Path) -> None:
@@ -235,12 +236,100 @@ def fig_multiyear_median(paths: dict, hru_id: int, out_path: Path) -> None:
     plt.close(fig)
 
 
-# Registry: name -> callable(out_path). Data-free schematics; data-driven
-# figures are resolved per fabric in main().
+def fig_cv_family(paths: dict, out_path: Path) -> None:
+    """The library's curves colored by CV — higher CV melts out more gradually."""
+    lib = pd.read_csv(paths["library_csv"]).sort_values("deplcrv_id")
+    bins = lib[lib["curve_kind"] == "cv_bin"]
+    cmap = plt.get_cmap("viridis")
+    cvmin, cvmax = bins["cv"].min(), bins["cv"].max()
+    fig, ax = plt.subplots(figsize=(7, 4.6))
+    for _, r in lib.iterrows():
+        curve = r[CURVE_COLS].to_numpy(float)
+        if r["curve_kind"] == "default":
+            ax.plot(season.SWE_LEVELS, curve, "k--", lw=2, label="reserved default")
+        else:
+            color = cmap((r["cv"] - cvmin) / (cvmax - cvmin + 1e-9))
+            ax.plot(season.SWE_LEVELS, curve, color=color, lw=2, label=f"CV={r['cv']:.2f}")
+    ax.set_xlabel("Fraction of peak SWE remaining")
+    ax.set_ylabel("Snow-covered fraction")
+    ax.set_xlim(1, 0)
+    ax.set_ylim(0, 1.02)
+    ax.set_title("Stage 3 — CV/lognormal curve library (Sexstone 2020)")
+    ax.legend(fontsize=8, ncol=2)
+    fig.tight_layout()
+    fig.savefig(out_path, dpi=150)
+    plt.close(fig)
+
+
+def fig_empirical_vs_library(paths: dict, out_path: Path, n_samples: int = 4) -> None:
+    """Sample HRUs: each HRU's empirical SDC vs the library curve it was assigned.
+
+    The assigned curve is the lognormal library curve after Stage 3 calibrates
+    sub-grid CV to the empirical CV, so this is the honest reconstruction check —
+    how faithfully the compact ~9-curve library reproduces the per-HRU empirical
+    curves (and what pyWatershed actually uses for that HRU). Samples span the
+    library's CV-bin range (the raw derived tail has degenerate outliers).
+    """
+    derived = pd.read_csv(paths["derived_csv"])
+    params = pd.read_csv(paths["params_csv"])
+    lib = pd.read_csv(paths["library_csv"])
+    idc = paths["id_feature"]
+    lo, hi = lib.loc[lib["curve_kind"] == "cv_bin", "cv"].agg(["min", "max"])
+    ok = derived[
+        (derived["sdc_status"] == "derived") & derived["cv_subgrid"].notna() & derived["cv_subgrid"].between(lo, hi)
+    ].sort_values("cv_subgrid")
+    sample_ids = ok.iloc[np.linspace(0, len(ok) - 1, n_samples).astype(int)][idc]
+    assigned = params.set_index(idc)
+    fig, axes = plt.subplots(1, n_samples, figsize=(3.2 * n_samples, 3.4), sharey=True)
+    axes = np.atleast_1d(axes)
+    for ax, hid in zip(axes, sample_ids):
+        row = ok.loc[ok[idc] == hid]
+        emp = row[CURVE_COLS].to_numpy(float)[0]
+        asg = assigned.loc[hid, CURVE_COLS].to_numpy(float)
+        cv = float(row["cv_subgrid"].iloc[0])
+        ax.plot(season.SWE_LEVELS, emp, "o-", color="#1f6fb4", ms=3, label="empirical")
+        ax.plot(season.SWE_LEVELS, asg, "-", color="#c8562b", lw=2, label="assigned library curve")
+        ax.set_xlim(1, 0)
+        ax.set_ylim(0, 1.02)
+        ax.set_title(f"sub-grid CV={cv:.2f}", fontsize=9)
+        ax.set_xlabel("frac. peak SWE")
+    axes[0].set_ylabel("Snow-covered fraction")
+    axes[0].legend(fontsize=8)
+    fig.suptitle("Stage 3 — empirical vs. assigned library curve (reconstruction check)")
+    fig.tight_layout()
+    fig.savefig(out_path, dpi=150)
+    plt.close(fig)
+
+
+def fig_coverage(paths: dict, out_path: Path) -> None:
+    """How many HRUs got a derived curve vs. a fallback, by sdc_status."""
+    df = pd.read_csv(paths["derived_csv"])
+    counts = df["sdc_status"].value_counts()
+    total = int(counts.sum())
+    fig, ax = plt.subplots(figsize=(7, 3.8))
+    counts.plot.bar(ax=ax, color="#4a90c2")
+    ax.set_ylabel("HRUs")
+    ax.set_title(f"Stage 2 curve coverage — {total:,} HRUs")
+    ax.set_xticklabels(counts.index, rotation=25, ha="right", fontsize=8)
+    for i, v in enumerate(counts):
+        ax.text(i, v, f"{v:,}\n({v / total:.0%})", ha="center", va="bottom", fontsize=8)
+    ax.margins(y=0.15)
+    fig.tight_layout()
+    fig.savefig(out_path, dpi=150)
+    plt.close(fig)
+
+
+# Data-free schematics (name -> callable(out_path)).
 SCHEMATICS = {
     "concept": schematic_concept,
     "pipeline": schematic_pipeline,
 }
+
+# Data figures needing only resolved `paths` (cheap CSV reads).
+PATHS_FIGURES = ("coverage", "cv_family", "empirical_vs_library")
+
+# Data figures needing a picked HRU + water year (read the SNODAS NetCDFs).
+HRU_FIGURES = ("swe_sca_timeseries", "melt_extraction", "multiyear_median")
 
 
 def main(argv=None) -> int:
@@ -256,29 +345,40 @@ def main(argv=None) -> int:
     args = p.parse_args(argv)
     args.output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Build the data-figure dispatch lazily: resolving paths / picking an HRU
-    # touches the filesystem, so only do it when a data figure is requested.
-    data_builders: dict = {}
-    requested = args.figures
-    wants_data = requested is None or any(f not in SCHEMATICS for f in requested)
-    if wants_data:
-        paths = resolve_paths(args.fabric)
-        hru = _pick_representative_hru(paths)
-        daily = read_hru_daily(paths["snodas_dir"], paths["id_feature"], hru)
-        wy = _best_water_year(daily)
-        print(f"representative HRU={hru}, water year={wy}")
-        data_builders = {
-            "swe_sca_timeseries": lambda o: fig_swe_sca_timeseries(paths, hru, wy, o),
-            "melt_extraction": lambda o: fig_melt_extraction(paths, hru, wy, o),
-            "multiyear_median": lambda o: fig_multiyear_median(paths, hru, o),
-        }
+    all_names = list(SCHEMATICS) + list(PATHS_FIGURES) + list(HRU_FIGURES)
+    names = args.figures or all_names
 
-    all_builders = {**SCHEMATICS, **data_builders}
-    names = requested or list(all_builders)
+    builders: dict = dict(SCHEMATICS)
+
+    # Resolve paths only if a data figure is requested (schematics need no data).
+    if any(n in PATHS_FIGURES or n in HRU_FIGURES for n in names):
+        paths = resolve_paths(args.fabric)
+        builders.update(
+            {
+                "coverage": lambda o: fig_coverage(paths, o),
+                "cv_family": lambda o: fig_cv_family(paths, o),
+                "empirical_vs_library": lambda o: fig_empirical_vs_library(paths, o),
+            }
+        )
+        # Reading the SNODAS NetCDFs + picking an HRU is the expensive path;
+        # only do it when an HRU-based figure is actually requested.
+        if any(n in HRU_FIGURES for n in names):
+            hru = _pick_representative_hru(paths)
+            daily = read_hru_daily(paths["snodas_dir"], paths["id_feature"], hru)
+            wy = _best_water_year(daily)
+            print(f"representative HRU={hru}, water year={wy}")
+            builders.update(
+                {
+                    "swe_sca_timeseries": lambda o: fig_swe_sca_timeseries(paths, hru, wy, o),
+                    "melt_extraction": lambda o: fig_melt_extraction(paths, hru, wy, o),
+                    "multiyear_median": lambda o: fig_multiyear_median(paths, hru, o),
+                }
+            )
+
     for name in names:
-        builder = all_builders.get(name)
+        builder = builders.get(name)
         if builder is None:
-            print(f"skip unknown figure: {name}")
+            print(f"skip unknown/unavailable figure: {name}")
             continue
         out = args.output_dir / f"{name}.png"
         builder(out)
