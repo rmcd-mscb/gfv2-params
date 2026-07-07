@@ -197,3 +197,8 @@ docs/figures/.cache/
 
 # Prettier pre-commit hook stages its cache here
 node_modules/
+
+# Rendered Marp deck artifacts (source .slides.md is tracked)
+docs/presentations/*.html
+docs/presentations/*.pdf
+docs/presentations/*.pptx

@@ -130,6 +130,11 @@ contract:
   Design spec:
   [`docs/superpowers/specs/2026-07-06-snodas-snarea-curve-library-design.md`](superpowers/specs/2026-07-06-snodas-snarea-curve-library-design.md).
 
+For a narrative/visual overview of the whole SNODAS → `snarea_curve` workflow
+(what a depletion curve is, the Driscoll/Sexstone methods, per-stage figures, and
+the pyWatershed products), see the Marp deck
+[`docs/presentations/2026-07-snodas-snow-depletion-curves.slides.md`](presentations/2026-07-snodas-snow-depletion-curves.slides.md).
+
 Each `build(step_cfg, ctx, logger)` function produces named outputs that
 downstream steps can reach via the shared context. The orchestrator/builder
 pattern, the `BUILDERS` dispatch dict, and the `BuildContext` dataclass are
