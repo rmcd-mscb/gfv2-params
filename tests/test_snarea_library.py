@@ -11,6 +11,7 @@ from gfv2_params.snarea.library import (
     _to_prms_order,
     assemble_params,
     assign_deplcrv,
+    build_from_derived,
     build_library,
     fit_cv,
     sdc_from_cv,
@@ -227,6 +228,40 @@ def test_write_csvs_roundtrip(tmp_path):
     p = tmp_path / "lib.csv"
     write_library_csv(lib, p)
     assert pd.read_csv(p).shape[0] == 9
+
+
+def test_build_from_derived_computes_cv_empirical_end_to_end():
+    rng = np.random.default_rng(0)
+    n = 300
+    cv = np.clip(rng.normal(0.5, 0.2, n), 0.1, 1.5)
+    curves = np.vstack([sdc_from_cv(c) for c in cv])   # each HRU's empirical curve
+    derived = pd.DataFrame({
+        "nat_hru_id": np.arange(1, n + 1),
+        "sdc_status": ["derived"] * n, "sca_class": ["high"] * n,
+        "similarity": 0.05, "n_seasons": 10,
+        "cv_subgrid": cv, "peak_swe_mm": 254.0, "n_peak_years": 10,
+        **{c: curves[:, i] for i, c in enumerate(CURVE_COLS)},
+    })
+    lib, params, report = build_from_derived(derived, "nat_hru_id", 8, np.linspace(1, 0, 11), "auto", 0.1)
+    assert len(lib) == 9
+    assert len(params) == n
+    assert set(params["hru_deplcrv"].unique()) <= set(range(2, 10))    # all estimable -> cv bins
+    # cv_empirical was COMPUTED (recovers each true CV within one grid step)
+    assert np.nanmax(np.abs(params["cv_empirical"].to_numpy() - cv)) <= 0.05 + 1e-9
+    assert report["calibrated"] is False   # cv_subgrid == implied empirical -> unbiased
+
+
+def test_build_from_derived_no_snow_uses_default():
+    derived = pd.DataFrame({
+        "nat_hru_id": [1, 2],
+        "sdc_status": ["derived", "default_no_snow"],
+        "sca_class": ["high", "high"], "similarity": [0.05, np.nan], "n_seasons": [10, 0],
+        "cv_subgrid": [0.5, np.nan], "peak_swe_mm": [254.0, 0.0], "n_peak_years": [10, 0],
+        **{c: [sdc_from_cv(0.5)[i], np.linspace(1, 0, 11)[i]] for i, c in enumerate(CURVE_COLS)},
+    })
+    lib, params, report = build_from_derived(derived, "nat_hru_id", 1, np.linspace(1, 0, 11), "off", 0.1)
+    assert params.loc[params.nat_hru_id == 2, "hru_deplcrv"].iloc[0] == 1     # no-snow -> default
+    assert params.loc[params.nat_hru_id == 2, "snarea_thresh"].iloc[0] == 0.0
 
 
 def test_write_prms_netcdf_structure_and_ascending_order(tmp_path):

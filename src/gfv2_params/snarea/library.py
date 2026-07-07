@@ -243,6 +243,40 @@ def assemble_params(derived, id_feature, cv_assign, cv_source, deplcrv, library)
     return out
 
 
+def build_from_derived(derived, id_feature, ndepl_cv, default_curve, calibrate="auto", bias_tol=0.1):
+    """Estimable = finite cv_subgrid. cv_empirical is fitted from each DERIVED HRU's
+    empirical curve (vectorized: library matrix built once). Calibrate cv_subgrid vs
+    cv_empirical on the derived overlap, bin, assign, assemble."""
+    derived = derived.reset_index(drop=True).copy()
+    n = len(derived)
+    cv_sub = derived["cv_subgrid"].to_numpy(float)
+
+    emp_curves = derived[CURVE_COLS].to_numpy(float)  # (n, 11)
+    is_derived = derived["sdc_status"].to_numpy() == "derived"
+    cv_emp = np.full(n, np.nan)
+    if is_derived.any():
+        lib = _library_matrix(CV_GRID)  # (ngrid, 11), built ONCE
+        dc = emp_curves[is_derived][:, _INTERIOR]  # (n_der, 9)
+        dists = np.linalg.norm(lib[None, :, _INTERIOR] - dc[:, None, :], axis=2)  # (n_der, ngrid)
+        cv_emp[is_derived] = CV_GRID[dists.argmin(axis=1)]
+    derived["cv_empirical"] = cv_emp
+    emp_for_cal = np.where(is_derived[:, None], emp_curves, np.nan)
+
+    cal, report = validate_and_calibrate(cv_sub, cv_emp, emp_for_cal, mode=calibrate, bias_tol=bias_tol)
+    cv_assign = np.where(np.isfinite(cal), cal, cv_emp)
+    cv_source = np.where(
+        np.isfinite(cal),
+        "subgrid_calibrated" if report["calibrated"] else "subgrid",
+        np.where(np.isfinite(cv_emp), "empirical", "default_no_snow"),
+    )
+    library = build_library(cv_assign[np.isfinite(cv_assign)], ndepl_cv, default_curve)
+    deplcrv = assign_deplcrv(cv_assign, library)
+    params = assemble_params(derived, id_feature, cv_assign, cv_source, deplcrv, library)
+    report["n_hru"] = n
+    report["n_estimable"] = int(np.isfinite(cv_assign).sum())
+    return library, params, report
+
+
 def write_library_csv(library: pd.DataFrame, path) -> None:
     Path(path).parent.mkdir(parents=True, exist_ok=True)
     library.to_csv(path, index=False)
