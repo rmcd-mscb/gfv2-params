@@ -1,6 +1,10 @@
 """Stage 3 driver: build the CV/lognormal snarea_curve library from the Stage 2
 derived CSV. Pure tabular — cheap, re-runnable at any ndepl_cv without reloading
-the daily SWE. Fabric-agnostic (paths from the profile via require_config_key)."""
+the daily SWE. Only ``id_feature`` comes from the base_config fabric profile via
+``require_config_key``; the step-config paths (``derived_csv``, ``output_dir``,
+output filenames) are read from ``snarea_library.yml`` with
+``{data_root}``/``{fabric}`` placeholders resolved by ``load_config`` (same
+pattern as the Stage 2 driver)."""
 
 from __future__ import annotations
 

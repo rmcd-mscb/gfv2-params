@@ -37,6 +37,7 @@ def sdc_from_cv(cv: float, mu: float = 1.0, n: int = 4000) -> np.ndarray:
     dimensionless curve (SCA vs SWE/peak) depends only on cv. Returns SCA at
     SWE_LEVELS (descending), clipped to [0,1], anchored (1.0 @ SWE=1, 0.0 @ SWE=0).
     """
+    cv = max(float(cv), 1e-4)   # cv->0 is a degenerate step curve; floor keeps z>0 (else /0 -> all-NaN into the PRMS file)
     z = np.sqrt(np.log(1 + cv * cv))          # ζ² = ln(1+CV²)
     lam = np.log(mu) - 0.5 * z * z            # λ  = ln(μ) − ζ²/2
     M = np.concatenate([[0.0], np.exp(np.linspace(np.log(mu) - 6 * z, np.log(mu) + 6 * z, n))])
@@ -173,7 +174,10 @@ def validate_and_calibrate(
         cv_subgrid: sub-grid coefficient of variation array (may contain NaN).
         cv_empirical: empirical CV values aligned by index (may contain NaN where not derived).
         emp_curves: (n, 11) empirical SDC curves, NaN rows where not derived.
-        mode: "auto" (conditional), "on" (force), or "off" (identity).
+        mode: "auto" (conditional), "on" (force — still subject to the same
+            >=2-derived-overlap and non-degenerate-distribution guard as
+            "auto"; with fewer than 2 usable overlap points it falls back to
+            identity), or "off" (identity).
         bias_tol: threshold for median CV bias to trigger calibration in auto mode.
 
     Returns:
@@ -207,11 +211,14 @@ def validate_and_calibrate(
         qs = np.linspace(0, 1, 101)
         x = np.quantile(sub_d, qs)
         y = np.quantile(emp_d, qs)
-        x, idx = np.unique(x, return_index=True)  # strictly increasing x for interp
+        x, idx = np.unique(x, return_index=True)   # strictly increasing x for interp
         y = y[idx]
-        finite = np.isfinite(cal)
-        cal[finite] = np.interp(cal[finite], x, y)
-        report["calibrated"] = True
+        if x.size >= 2:
+            finite = np.isfinite(cal)
+            cal[finite] = np.interp(cal[finite], x, y)
+            report["calibrated"] = True
+        else:
+            report["calibration_skip_reason"] = "degenerate_overlap_distribution"
     elif mode not in ("auto", "on", "off"):
         raise ValueError(f"calibrate mode must be auto|on|off, got {mode!r}")
 
@@ -311,6 +318,13 @@ def write_prms_netcdf(library: pd.DataFrame, params: pd.DataFrame, id_feature: s
     flat = np.concatenate(
         [_to_prms_order(r[CURVE_COLS].to_numpy(float)) for _, r in lib_sorted.iterrows()]
     )
+    ids = lib_sorted["deplcrv_id"].to_numpy()
+    if not np.array_equal(ids, np.arange(1, ndepl + 1)):
+        raise ValueError(f"library deplcrv_id must be contiguous 1..{ndepl}, got {ids.tolist()}")
+    if not np.isfinite(flat).all():
+        raise ValueError("snarea_curve has non-finite values — refusing to write the PRMS param file")
+    if not np.isfinite(params["snarea_thresh"].to_numpy(float)).all():
+        raise ValueError("snarea_thresh has non-finite values — refusing to write the PRMS param file")
     ds = xr.Dataset(
         data_vars={
             "snarea_curve": (

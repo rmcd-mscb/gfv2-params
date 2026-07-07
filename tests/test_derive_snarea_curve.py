@@ -55,6 +55,16 @@ def test_read_daily_by_hru_includes_swe_std(tmp_path):
     assert list(out[1]["swe_std"].values) == [2, 1.5, 0]
 
 
+def test_read_daily_by_hru_missing_swe_std_raises(tmp_path):
+    t = pd.date_range("2011-01-01", periods=2)
+    ds = xr.Dataset({"swe": (("time", "hru_id"), np.array([[1.0], [2.0]])),
+                     "scov": (("time", "hru_id"), np.array([[1.0], [1.0]]))},
+                    coords={"time": t, "hru_id": [7]})
+    ds.to_netcdf(tmp_path / "snodas_agg_2011.nc")
+    with pytest.raises(ValueError, match="swe_std"):
+        read_daily_by_hru(tmp_path, "hru_id")
+
+
 def test_validate_default_curve_accepts_valid():
     validate_default_curve(np.linspace(1.0, 0.0, 11))
 

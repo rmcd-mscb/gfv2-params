@@ -45,6 +45,14 @@ def test_sdc_from_cv_higher_cv_steeper():
     assert sdc_from_cv(1.5)[5] < sdc_from_cv(0.5)[5] < sdc_from_cv(0.1)[5]
 
 
+def test_sdc_from_cv_zero_cv_is_finite_step():
+    c = sdc_from_cv(0.0)
+    assert np.isfinite(c).all()
+    assert np.all(np.diff(c) <= 1e-9)          # monotone non-increasing
+    assert c[0] == pytest.approx(1.0) and c[-1] == pytest.approx(0.0)
+    assert c[5] > 0.9                            # ~step: SCA stays high until SWE~0
+
+
 def test_fit_cv_recovers_known_cv():
     for true_cv in (0.32, 0.7, 1.2):
         curve = sdc_from_cv(true_cv)
@@ -193,6 +201,16 @@ def test_calibration_invalid_mode_raises():
     with pytest.raises(ValueError):
         validate_and_calibrate(np.array([0.3, 0.5, 0.7]), np.full(n, np.nan),
                                np.full((n, 11), np.nan), mode="bogus")
+
+
+def test_calibration_degenerate_overlap_is_identity():
+    # all derived-overlap cv_subgrid identical -> quantile domain collapses -> must NOT calibrate
+    n = 50
+    emp = np.vstack([sdc_from_cv(0.6)] * n)
+    cal, report = validate_and_calibrate(np.full(n, 0.4), np.linspace(0.5, 0.9, n), emp,
+                                         mode="on", bias_tol=0.05)
+    assert report["calibrated"] is False
+    np.testing.assert_allclose(cal, np.full(n, 0.4))   # identity, not collapsed to a constant map
 
 
 def test_assemble_params_columns_and_assigned_curve(tmp_path):

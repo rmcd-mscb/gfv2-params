@@ -60,6 +60,13 @@ def read_daily_by_hru(
             "(the slow/large step at CONUS scale) ...",
             ds.sizes.get(id_dim, 0), ds.sizes.get("time", 0),
         )
+    missing = [v for v in ("swe", "scov", "swe_std") if v not in ds.data_vars]
+    if missing:
+        raise ValueError(
+            f"Aggregated NetCDFs in {nc_dir} are missing {missing}. Re-run Stage 1 "
+            "(scripts/derive_aggregate.py) — the SNODAS adapter now emits swe_std "
+            "(std_variables=('swe',)) — before running Stage 2."
+        )
     df = ds[["swe", "scov", "swe_std"]].to_dataframe().reset_index()
     df = df.rename(columns={"scov": "sca"})
     if logger:

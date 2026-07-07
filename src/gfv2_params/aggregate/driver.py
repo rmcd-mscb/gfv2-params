@@ -88,6 +88,10 @@ def aggregate_variables(
     the source once per variable — wasteful, especially when one variable is
     derived from another (e.g. SNODAS ``scov`` from ``swe``). One pass also
     removes the ``xr.merge`` of per-variable results.
+
+    An OPTIONAL second ``masked_std`` AggGen pass runs when
+    ``adapter.std_variables`` is non-empty, emitting ``{var}_std`` for each
+    named variable and reusing the same cached weights.
     """
     logger.info("    aggregating %s (%s)...", list(adapter.variables), adapter.stat_method)
     user_data = UserCatData(
