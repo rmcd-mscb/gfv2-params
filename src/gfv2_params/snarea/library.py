@@ -145,3 +145,70 @@ def assign_deplcrv(cv_assign: np.ndarray, library: pd.DataFrame) -> np.ndarray:
 def _to_prms_order(curve: np.ndarray) -> np.ndarray:
     """Repo descending (SWE 1.0->0.0) -> PRMS ascending frac_swe (0.0->1.0)."""
     return np.asarray(curve)[::-1]
+
+
+def _recon_error(cv: np.ndarray, emp_curves: np.ndarray) -> tuple[float, float]:
+    """Mean and p95 abs-SCA error of sdc_from_cv(cv) vs emp_curves (rows aligned)."""
+    ok = np.isfinite(cv) & np.isfinite(emp_curves).all(axis=1)
+    if not ok.any():
+        return float("nan"), float("nan")
+    approx = np.vstack([sdc_from_cv(c) for c in cv[ok]])
+    err = np.abs(approx - emp_curves[ok])
+    return float(err.mean()), float(np.percentile(err.max(axis=1), 95))
+
+
+def validate_and_calibrate(
+    cv_subgrid: np.ndarray,
+    cv_empirical: np.ndarray,
+    emp_curves: np.ndarray,
+    mode: str = "auto",
+    bias_tol: float = 0.1,
+) -> tuple[np.ndarray, dict]:
+    """Gate + monotone quantile-map calibration for sub-grid CV vs empirical CV.
+
+    Args:
+        cv_subgrid: sub-grid coefficient of variation array (may contain NaN).
+        cv_empirical: empirical CV values aligned by index (may contain NaN where not derived).
+        emp_curves: (n, 11) empirical SDC curves, NaN rows where not derived.
+        mode: "auto" (conditional), "on" (force), or "off" (identity).
+        bias_tol: threshold for median CV bias to trigger calibration in auto mode.
+
+    Returns:
+        (cv_calibrated_for_all_input, report_dict) where report_dict carries distribution
+        stats, reconstruction error before/after, and calibrated flag.
+    """
+    cv_subgrid = np.asarray(cv_subgrid, dtype=float)
+    cv_empirical = np.asarray(cv_empirical, dtype=float)
+    emp_curves = np.asarray(emp_curves, dtype=float)
+    derived = np.isfinite(cv_subgrid) & np.isfinite(cv_empirical)
+    sub_d, emp_d = cv_subgrid[derived], cv_empirical[derived]
+
+    report = {
+        "n_derived_overlap": int(derived.sum()),
+        "cv_subgrid_median": float(np.median(sub_d)) if derived.any() else float("nan"),
+        "cv_empirical_median": float(np.median(emp_d)) if derived.any() else float("nan"),
+        "calibrated": False,
+    }
+    report["recon_mean_before"], report["recon_p95_before"] = _recon_error(cv_subgrid, emp_curves)
+
+    bias = (
+        abs(report["cv_subgrid_median"] - report["cv_empirical_median"]) if derived.any() else 0.0
+    )
+    report["cv_median_bias"] = float(bias)
+
+    cal = cv_subgrid.copy()
+    if mode == "on" or (mode == "auto" and derived.sum() >= 2 and bias > bias_tol):
+        # monotone quantile map trained on the derived overlap
+        qs = np.linspace(0, 1, 101)
+        x = np.quantile(sub_d, qs)
+        y = np.quantile(emp_d, qs)
+        x, idx = np.unique(x, return_index=True)  # strictly increasing x for interp
+        y = y[idx]
+        finite = np.isfinite(cal)
+        cal[finite] = np.interp(cal[finite], x, y)
+        report["calibrated"] = True
+    elif mode not in ("auto", "on", "off"):
+        raise ValueError(f"calibrate mode must be auto|on|off, got {mode!r}")
+
+    report["recon_mean_after"], report["recon_p95_after"] = _recon_error(cal, emp_curves)
+    return cal, report

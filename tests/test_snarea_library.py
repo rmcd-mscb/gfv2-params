@@ -12,6 +12,7 @@ from gfv2_params.snarea.library import (
     fit_cv,
     sdc_from_cv,
     snarea_thresh_inches,
+    validate_and_calibrate,
 )
 
 
@@ -134,3 +135,32 @@ def test_assign_deplcrv_never_returns_default_for_finite_cv():
     lib = build_library(np.linspace(0.2, 1.4, 500), ndepl_cv=8, default_curve=np.linspace(1, 0, 11))
     out = assign_deplcrv(np.full(50, 0.45), lib)
     assert (out >= 2).all()
+
+
+def test_calibration_removes_synthetic_bias():
+    rng = np.linspace(0.3, 1.2, 400)
+    emp_curves = np.vstack([sdc_from_cv(c) for c in rng])
+    cv_empirical = rng.copy()
+    cv_subgrid = rng * 0.6  # biased low by construction
+    cal, report = validate_and_calibrate(cv_subgrid, cv_empirical, emp_curves, mode="auto", bias_tol=0.05)
+    assert report["calibrated"] is True
+    # after calibration the median bias vs empirical is much smaller
+    assert abs(np.median(cal) - np.median(cv_empirical)) < abs(
+        np.median(cv_subgrid) - np.median(cv_empirical)
+    )
+
+
+def test_no_calibration_when_unbiased():
+    rng = np.linspace(0.3, 1.2, 400)
+    emp_curves = np.vstack([sdc_from_cv(c) for c in rng])
+    cal, report = validate_and_calibrate(rng.copy(), rng.copy(), emp_curves, mode="auto", bias_tol=0.1)
+    assert report["calibrated"] is False
+    np.testing.assert_allclose(cal, rng)
+
+
+def test_calibration_off_is_identity():
+    rng = np.linspace(0.3, 1.2, 50)
+    emp = np.vstack([sdc_from_cv(c) for c in rng])
+    cal, report = validate_and_calibrate(rng * 0.5, rng, emp, mode="off")
+    np.testing.assert_allclose(cal, rng * 0.5)
+    assert report["calibrated"] is False
