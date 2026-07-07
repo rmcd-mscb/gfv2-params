@@ -164,3 +164,26 @@ def test_calibration_off_is_identity():
     cal, report = validate_and_calibrate(rng * 0.5, rng, emp, mode="off")
     np.testing.assert_allclose(cal, rng * 0.5)
     assert report["calibrated"] is False
+
+
+def test_calibration_mode_on_maps_even_when_unbiased():
+    rng = np.linspace(0.3, 1.2, 200)
+    emp = np.vstack([sdc_from_cv(c) for c in rng])
+    cal, report = validate_and_calibrate(rng.copy(), rng.copy(), emp, mode="on")
+    assert report["calibrated"] is True   # 'on' maps even with zero bias
+
+
+def test_calibration_mode_on_graceful_identity_when_no_overlap():
+    # cv_empirical all-NaN -> zero overlap; mode='on' must NOT crash, must be identity
+    n = 3
+    cal, report = validate_and_calibrate(
+        np.array([0.3, 0.5, 0.7]), np.full(n, np.nan), np.full((n, 11), np.nan), mode="on")
+    assert report["calibrated"] is False
+    np.testing.assert_allclose(cal, [0.3, 0.5, 0.7])
+
+
+def test_calibration_invalid_mode_raises():
+    n = 3
+    with pytest.raises(ValueError):
+        validate_and_calibrate(np.array([0.3, 0.5, 0.7]), np.full(n, np.nan),
+                               np.full((n, 11), np.nan), mode="bogus")

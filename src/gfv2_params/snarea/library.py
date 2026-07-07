@@ -192,12 +192,14 @@ def validate_and_calibrate(
     report["recon_mean_before"], report["recon_p95_before"] = _recon_error(cv_subgrid, emp_curves)
 
     bias = (
-        abs(report["cv_subgrid_median"] - report["cv_empirical_median"]) if derived.any() else 0.0
+        abs(report["cv_subgrid_median"] - report["cv_empirical_median"])
+        if derived.any()
+        else float("nan")
     )
     report["cv_median_bias"] = float(bias)
 
     cal = cv_subgrid.copy()
-    if mode == "on" or (mode == "auto" and derived.sum() >= 2 and bias > bias_tol):
+    if derived.sum() >= 2 and (mode == "on" or (mode == "auto" and bias > bias_tol)):
         # monotone quantile map trained on the derived overlap
         qs = np.linspace(0, 1, 101)
         x = np.quantile(sub_d, qs)
