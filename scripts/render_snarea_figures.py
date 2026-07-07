@@ -247,11 +247,18 @@ def fig_cv_family(paths: dict, out_path: Path) -> None:
     fig, ax = plt.subplots(figsize=(7, 4.6))
     for _, r in lib.iterrows():
         curve = r[CURVE_COLS].to_numpy(float)
+        cid = int(r["deplcrv_id"])
         if r["curve_kind"] == "default":
-            ax.plot(season.SWE_LEVELS, curve, "k--", lw=2, label="reserved default")
+            ax.plot(season.SWE_LEVELS, curve, "k--", lw=2, label=f"curve {cid} · default")
         else:
             color = cmap((r["cv"] - cvmin) / (cvmax - cvmin + 1e-9))
-            ax.plot(season.SWE_LEVELS, curve, color=color, lw=2, label=f"CV={r['cv']:.2f}")
+            ax.plot(
+                season.SWE_LEVELS,
+                curve,
+                color=color,
+                lw=2,
+                label=f"curve {cid} · CV={r['cv']:.2f}",
+            )
     ax.set_xlabel("Fraction of peak SWE remaining")
     ax.set_ylabel("Snow-covered fraction")
     ax.set_xlim(1, 0)
