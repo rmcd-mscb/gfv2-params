@@ -704,8 +704,22 @@ Stage 3 builds a CV/lognormal curve library from Stage 2's output (Sexstone,
 Driscoll, Hay, Hammond & Barnhart 2020; design spec
 [`docs/superpowers/specs/2026-07-06-snodas-snarea-curve-library-design.md`](../docs/superpowers/specs/2026-07-06-snodas-snarea-curve-library-design.md)).
 Stage 1 is a SLURM array over the fabric's spatial batches (same pattern as
-the depstor/zonal parameter jobs — see "Stage 4A" above), then a merge job;
-Stage 2 is still run directly with `pixi run`; Stage 3 is a cheap `sbatch` job:
+the depstor/zonal parameter jobs — see "Stage 4A" above), then a merge job,
+then Stage 2 (derive) and Stage 3 (library). The one-command recipe
+`submit_snarea_pipeline.sh` submits all four chained `--dependency=afterok`:
+
+```bash
+# Recommended: whole pipeline, one afterok chain, IDs printed. Sizes the
+# Stage-1 array from the manifest and picks Stage-2 --mem by fabric
+# (64G oregon / 384G CONUS default). DRYRUN=1 echoes the sbatch commands.
+DRYRUN=1 ./slurm_batch/submit_snarea_pipeline.sh <fabric>   # inspect
+./slurm_batch/submit_snarea_pipeline.sh <fabric>            # submit
+# Env: STAGE2_MEM / STAGE2_TIME override Stage 2 sizing; MAX_CONCURRENT sets
+# the Stage-1 array %K throttle (default 8); CLEAR_BATCHES=1 wipes
+# {fabric}/snodas/_batches/ first. Trailing args forward to every sbatch.
+```
+
+Manual per-stage commands (when you want to inspect between stages):
 
 ```bash
 # Stage 1 — aggregate daily SNODAS SWE to the HRU fabric, per spatial batch
@@ -714,13 +728,22 @@ FABRIC=<name>
 N=$(grep '^n_batches:' "$BATCHES/manifest.yml" | awk '{print $2}')
 AID=$(sbatch --parsable --array=0-$((N-1)) --export=ALL,FABRIC=$FABRIC \
     slurm_batch/derive_snodas_aggregate.batch)
-sbatch --dependency=afterok:$AID --export=ALL,FABRIC=$FABRIC \
-    slurm_batch/merge_snodas_aggregate.batch
+MID=$(sbatch --parsable --dependency=afterok:$AID --export=ALL,FABRIC=$FABRIC \
+    slurm_batch/merge_snodas_aggregate.batch)
 # Stage 2 — derive per-HRU empirical snarea_curve + sub-grid CV from the aggregated SWE/SCA
-pixi run python scripts/derive_snarea_curve.py --fabric <name>
+#   (--mem=384G CONUS default; override down for small fabrics, e.g. oregon:
+#    FABRIC=oregon sbatch --mem=64G --time=02:00:00 slurm_batch/derive_snarea_curve.batch)
+sbatch --dependency=afterok:$MID --export=ALL,FABRIC=$FABRIC \
+    slurm_batch/derive_snarea_curve.batch
 # Stage 3 — build the CV/lognormal curve library from the Stage 2 derived CSV
 FABRIC=<name> sbatch slurm_batch/derive_snarea_library.batch
 ```
+
+**Re-run Stage 1 (`swe_std`):** Stage 1 emits a per-HRU `swe_std` sidecar that
+Stage 3's CV needs. NetCDFs aggregated before it was added lack `swe_std`, so
+Stage 2 raises `ValueError("...missing swe_std... Re-run Stage 1...")`. The
+recipe always re-runs Stage 1; gdptools weights are cached (`weights_agg/`) so
+the re-run is a cheap extra `masked_std` AggGen pass, not a weight recompute.
 
 **Stage 1** (`src/gfv2_params/aggregate/`, config
 `configs/aggregate/aggregate_sources.yml`) wraps gdptools `UserCatData` /
@@ -950,7 +973,8 @@ sacct -j <JOBID> -o JobID,State,Elapsed,MaxRSS
 | `slurm_batch/build_depstor_rasters.batch` | `configs/depstor/depstor_rasters.yml` | `scripts/build_depstor_rasters.py` |
 | `slurm_batch/submit_zonal_params.sh` | `configs/zonal/zonal_params.yml` | `scripts/derive_zonal_params.py` (dispatches 10 params × zonal+merge, with ssflux's `build_weights` prereq chained automatically) |
 | `slurm_batch/submit_depstor_params.sh` | `configs/depstor/depstor_params.yml` | `scripts/derive_depstor_params.py` (dispatches 10 fractions × zonal+merge, then ratios via afterok) |
-| `slurm_batch/derive_snodas_aggregate.batch` + `merge_snodas_aggregate.batch` | `configs/aggregate/aggregate_sources.yml` | `scripts/derive_aggregate.py --source snodas` (Stage 1: gridded-time-series → HRU aggregation via `src/gfv2_params/aggregate/`; array over spatial batches + merge, no per-fraction submit wrapper yet) |
+| `slurm_batch/submit_snarea_pipeline.sh` | (chains the 4 batches below) | one-command recipe: Stage-1 array → merge → Stage-2 derive → Stage-3 library, all `--dependency=afterok`; sizes the array from the manifest, picks Stage-2 `--mem` by fabric. `DRYRUN=1` to echo the sbatch chain |
+| `slurm_batch/derive_snodas_aggregate.batch` + `merge_snodas_aggregate.batch` | `configs/aggregate/aggregate_sources.yml` | `scripts/derive_aggregate.py --source snodas` (Stage 1: gridded-time-series → HRU aggregation via `src/gfv2_params/aggregate/`; array over spatial batches + merge) |
 | `slurm_batch/derive_snarea_curve.batch` (or run directly with `pixi run`) | `configs/snarea/snarea_curve.yml` | `scripts/derive_snarea_curve.py` (Stage 2: per-HRU empirical curve + sub-grid CV → `_intermediates/nhm_snarea_curve_derived.csv` via `src/gfv2_params/snarea/`) |
 | `slurm_batch/derive_snarea_library.batch` | `configs/snarea/snarea_library.yml` | `scripts/derive_snarea_library.py` (Stage 3: CV/lognormal curve library + per-HRU `snarea_curve`/`hru_deplcrv`/`snarea_thresh` + pyWatershed `.nc` via `src/gfv2_params/snarea/library.py`) |
 

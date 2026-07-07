@@ -237,14 +237,25 @@ sbatch slurm_batch/render_figures.batch     # PNGs -> docs/figures/gfv2/
 ### 8 · (optional) Snow depletion curves (SNODAS → snarea_curve)
 
 ```bash
-N=$(grep '^n_batches:' "$BATCHES/manifest.yml" | awk '{print $2}')
-AID=$(sbatch --parsable --array=0-$((N-1)) --export=ALL,FABRIC=gfv2 \
-    slurm_batch/derive_snodas_aggregate.batch)
-sbatch --dependency=afterok:$AID --export=ALL,FABRIC=gfv2 \
-    slurm_batch/merge_snodas_aggregate.batch
-pixi run python scripts/derive_snarea_curve.py --fabric gfv2
-FABRIC=gfv2 sbatch slurm_batch/derive_snarea_library.batch
+# One-command recipe: submits all 4 jobs (Stage 1 array -> merge -> Stage 2
+# derive -> Stage 3 library) chained --dependency=afterok, and prints the IDs.
+# Sizes the Stage-1 array from the fabric manifest and picks a Stage-2 --mem by
+# fabric (64G for oregon, 384G CONUS default). Dry-run first with DRYRUN=1.
+DRYRUN=1 ./slurm_batch/submit_snarea_pipeline.sh gfv2   # inspect the chain
+./slurm_batch/submit_snarea_pipeline.sh gfv2            # submit it
+# oregon (small) validation run — Stage 2 auto-drops to --mem=64G:
+./slurm_batch/submit_snarea_pipeline.sh oregon
 ```
+
+**Re-run Stage 1 (do not skip it):** Stage 1 now emits the per-HRU `swe_std`
+sidecar feeding Stage 3's CV. Aggregated NetCDFs written before `swe_std` was
+added lack it, so Stage 2 raises `ValueError("...missing swe_std... Re-run
+Stage 1...")` until Stage 1 is re-run. The recipe always runs Stage 1, so
+just launch it; the gdptools weights are cached (`{fabric}/weights_agg/`) and
+reused, making the re-run a cheap extra `masked_std` pass, not a weight
+recompute. Export `CLEAR_BATCHES=1` to wipe `{fabric}/snodas/_batches/` first
+if you want to be extra safe. The manual per-stage commands are still available
+(see HPC_REFERENCE.md "Stage 10") when you want to inspect between stages.
 
 **What it does:** Stage 1 aggregates daily SNODAS SWE to the HRU fabric as a
 SLURM array over the fabric's spatial batches (`derive_snodas_aggregate.batch`,
@@ -261,11 +272,9 @@ CV/lognormal curve library from that derived CSV — cheap, pure-tabular, no
 daily-SWE reload — and writes the terminal `nhm_snarea_curve_library.csv`,
 `nhm_snarea_curve_params.csv`, `nhm_snarea_curve_validation.csv`, and the
 pyWatershed `nhm_snarea_curve.nc`. Fabric-independent — no code change to run
-against `gfv2`, `gfv2_vpu01`, or `oregon`. Stage 2 is still run directly
-(`pixi run python ...`), not via `sbatch`. If Stage 1 was already run before
-`swe_std` was added, re-run it once (`derive_snodas_aggregate.batch` +
-`merge_snodas_aggregate.batch`) — the gdptools weight CSVs are cached, so the
-re-run is cheap.
+against `gfv2`, `gfv2_vpu01`, or `oregon`. `submit_snarea_pipeline.sh` submits
+all four jobs (including Stage 2) as an afterok chain; run any stage directly
+with `pixi run python ...` / `sbatch` when you want to inspect between stages.
 
 **Wait for:** the merge job `COMPLETED`, printing one `snodas_agg_<year>.nc`
 per year written; Stage 2 prints the `sdc_status` breakdown and writes the
