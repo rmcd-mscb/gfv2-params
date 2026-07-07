@@ -9,6 +9,8 @@ _to_prms_order).
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 from scipy.stats import norm
@@ -214,3 +216,42 @@ def validate_and_calibrate(
 
     report["recon_mean_after"], report["recon_p95_after"] = _recon_error(cal, emp_curves)
     return cal, report
+
+
+_PARAM_DIAG_COLS = ["sdc_status", "sca_class", "similarity", "n_seasons", "n_peak_years", "peak_swe_mm"]
+
+
+def assemble_params(derived, id_feature, cv_assign, cv_source, deplcrv, library):
+    """One row per HRU: index + snarea_thresh + CVs + diagnostics + the ASSIGNED
+    library curve (descending, for QA / per-HRU detail — no separate 1:1 mode)."""
+    curve_by_id = {int(r.deplcrv_id): r[CURVE_COLS].to_numpy(float) for _, r in library.iterrows()}
+    assigned = np.vstack([curve_by_id[int(d)] for d in deplcrv])
+    out = pd.DataFrame({
+        id_feature: derived[id_feature].to_numpy(),
+        "hru_deplcrv": np.asarray(deplcrv, dtype=np.int32),
+        "snarea_thresh": [snarea_thresh_inches(v) for v in derived["peak_swe_mm"].to_numpy()],
+        "cv_assign": np.asarray(cv_assign, dtype=float),
+        "cv_subgrid": derived["cv_subgrid"].to_numpy(float),
+        "cv_empirical": derived["cv_empirical"].to_numpy(float),
+        "cv_source": np.asarray(cv_source, dtype=object),
+    })
+    for c in _PARAM_DIAG_COLS:
+        out[c] = derived[c].to_numpy()
+    for i, c in enumerate(CURVE_COLS):
+        out[c] = assigned[:, i]
+    return out
+
+
+def write_library_csv(library: pd.DataFrame, path) -> None:
+    Path(path).parent.mkdir(parents=True, exist_ok=True)
+    library.to_csv(path, index=False)
+
+
+def write_params_csv(params: pd.DataFrame, path) -> None:
+    Path(path).parent.mkdir(parents=True, exist_ok=True)
+    params.to_csv(path, index=False)
+
+
+def write_validation_csv(report: dict, path) -> None:
+    Path(path).parent.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame([report]).to_csv(path, index=False)

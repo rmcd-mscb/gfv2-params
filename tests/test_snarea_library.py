@@ -1,4 +1,5 @@
 import numpy as np
+import pandas as pd
 import pytest
 
 from gfv2_params.snarea.library import (
@@ -7,12 +8,14 @@ from gfv2_params.snarea.library import (
     CV_GRID,
     SWE_LEVELS,
     _to_prms_order,
+    assemble_params,
     assign_deplcrv,
     build_library,
     fit_cv,
     sdc_from_cv,
     snarea_thresh_inches,
     validate_and_calibrate,
+    write_library_csv,
 )
 
 
@@ -187,3 +190,38 @@ def test_calibration_invalid_mode_raises():
     with pytest.raises(ValueError):
         validate_and_calibrate(np.array([0.3, 0.5, 0.7]), np.full(n, np.nan),
                                np.full((n, 11), np.nan), mode="bogus")
+
+
+def test_assemble_params_columns_and_assigned_curve(tmp_path):
+    lib = build_library(np.linspace(0.2, 1.4, 500), ndepl_cv=8, default_curve=np.linspace(1, 0, 11))
+    derived = pd.DataFrame({
+        "nat_hru_id": [10, 11, 12],
+        "sdc_status": ["derived", "derived", "default_no_snow"],
+        "sca_class": ["high", "mid", "high"],
+        "similarity": [0.05, 0.09, np.nan],
+        "n_seasons": [12, 8, 0],
+        "cv_subgrid": [0.4, 0.9, np.nan],
+        "cv_empirical": [0.42, 0.88, np.nan],
+        "peak_swe_mm": [254.0, 508.0, 0.0],
+        "n_peak_years": [12, 8, 0],
+    })
+    cv_assign = np.array([0.4, 0.9, np.nan])
+    cv_source = np.array(["subgrid", "subgrid", "default_no_snow"])
+    deplcrv = assign_deplcrv(cv_assign, lib)
+    params = assemble_params(derived, "nat_hru_id", cv_assign, cv_source, deplcrv, lib)
+    assert list(params["nat_hru_id"]) == [10, 11, 12]
+    for col in ("hru_deplcrv", "snarea_thresh", "cv_assign", "cv_source", *CURVE_COLS):
+        assert col in params.columns
+    assert params.loc[params.nat_hru_id == 12, "hru_deplcrv"].iloc[0] == 1     # no-snow -> default
+    assert params.loc[params.nat_hru_id == 12, "snarea_thresh"].iloc[0] == 0.0
+    # assigned curve row matches the library curve for that hru's deplcrv
+    r = params.iloc[0]
+    librow = lib[lib.deplcrv_id == r["hru_deplcrv"]].iloc[0]
+    np.testing.assert_allclose(r[CURVE_COLS].to_numpy(float), librow[CURVE_COLS].to_numpy(float))
+
+
+def test_write_csvs_roundtrip(tmp_path):
+    lib = build_library(np.linspace(0.2, 1.4, 500), ndepl_cv=8, default_curve=np.linspace(1, 0, 11))
+    p = tmp_path / "lib.csv"
+    write_library_csv(lib, p)
+    assert pd.read_csv(p).shape[0] == 9
