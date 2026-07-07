@@ -98,6 +98,15 @@ def schematic_pipeline(out_path: Path) -> None:
 _SNAREA_STEP_CONFIG = "configs/snarea/snarea_curve.yml"
 _BASE_CONFIG = "configs/base_config.yml"
 
+#: Shared discrete palette so a curve number is the SAME color in the CV-family
+#: plot and the hru_deplcrv map. Curve N -> tab10 color N-1 (curve ids start at 1).
+_TAB10 = matplotlib.colormaps["tab10"].colors
+
+
+def curve_color(deplcrv_id: int):
+    """Fixed color for a library curve number, shared across figures."""
+    return _TAB10[(int(deplcrv_id) - 1) % len(_TAB10)]
+
 
 def resolve_paths(fabric: str) -> dict:
     """Resolve fabric-specific input paths via the base_config profile."""
@@ -239,19 +248,27 @@ def fig_multiyear_median(paths: dict, hru_id: int, out_path: Path) -> None:
 
 
 def fig_cv_family(paths: dict, out_path: Path) -> None:
-    """The library's curves colored by CV — higher CV melts out more gradually."""
+    """The library's curves, colored by curve number (shared with the deplcrv map).
+
+    Curves fan from low CV (holds full cover, then drops fast) to high CV (bare
+    patches appear early, gradual decline). The reserved default is dashed.
+    """
     lib = pd.read_csv(paths["library_csv"]).sort_values("deplcrv_id")
-    bins = lib[lib["curve_kind"] == "cv_bin"]
-    cmap = plt.get_cmap("viridis")
-    cvmin, cvmax = bins["cv"].min(), bins["cv"].max()
     fig, ax = plt.subplots(figsize=(7, 4.6))
     for _, r in lib.iterrows():
         curve = r[CURVE_COLS].to_numpy(float)
         cid = int(r["deplcrv_id"])
+        color = curve_color(cid)
         if r["curve_kind"] == "default":
-            ax.plot(season.SWE_LEVELS, curve, "k--", lw=2, label=f"curve {cid} · default")
+            ax.plot(
+                season.SWE_LEVELS,
+                curve,
+                color=color,
+                ls="--",
+                lw=2,
+                label=f"curve {cid} · default",
+            )
         else:
-            color = cmap((r["cv"] - cvmin) / (cvmax - cvmin + 1e-9))
             ax.plot(
                 season.SWE_LEVELS,
                 curve,
@@ -331,17 +348,23 @@ def fig_coverage(paths: dict, out_path: Path) -> None:
 def fig_deplcrv_map(paths: dict, out_path: Path) -> None:
     """Map each HRU colored by its assigned library-curve index (hru_deplcrv)."""
     import geopandas as gpd
+    from matplotlib.colors import ListedColormap
 
     idc = paths["id_feature"]
     gdf = gpd.read_file(paths["hru_gpkg"], layer=paths["hru_layer"])
     params = pd.read_csv(paths["params_csv"])[[idc, "hru_deplcrv"]]
     merged = gdf.merge(params, on=idc, how="left")
+    # geopandas maps categories in sorted order to the colormap's entries; build
+    # an explicit ListedColormap keyed by curve number so each curve is the same
+    # color here as in fig_cv_family.
+    cats = sorted(int(v) for v in merged["hru_deplcrv"].dropna().unique())
+    cmap = ListedColormap([curve_color(c) for c in cats])
     fig, ax = plt.subplots(figsize=(11, 7))
     merged.plot(
         column="hru_deplcrv",
         categorical=True,
         legend=True,
-        cmap="tab10",
+        cmap=cmap,
         linewidth=0,
         ax=ax,
         legend_kwds={"title": "curve #", "fontsize": 8, "loc": "lower left"},
