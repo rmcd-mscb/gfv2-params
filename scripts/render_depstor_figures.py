@@ -6,9 +6,11 @@ Makes four PNGs under ``docs/figures/depstor/``:
   NHD-network-connectivity split now used to decide dprst vs. on-stream.
 - ``pipeline_dag.png`` — the depstor builder DAG (inputs through PRMS params).
 - ``great_basin_before_after.png`` — VPU 16 (Great Basin) dprst/on-stream
-  classification (``dprst_binary.tif`` + ``onstream_binary.tif``) before vs.
-  after the geometric flow-through fix (#145): endorheic waterbodies correctly
-  retained as depression storage.
+  classification (``dprst_binary.tif`` + ``onstream_binary.tif``). The
+  pre_flowthrough→current snapshot spans the cumulative connectivity-grounding
+  fixes (#145 + #152 + #158/#159 + #161/#163); Great Basin specifically
+  showcases endorheic waterbodies kept as depression storage via the
+  Non-Network / Network-Flowline gate (#161/#163).
 - ``lower_miss_before_after.png`` — VPU 08 (Lower Mississippi) land-draining-
   to-depression-storage footprint (``drains_to_dprst.tif`` presence) before
   vs. after: the ``drains_to_dprst`` over-extension into humid open-drainage
@@ -100,9 +102,10 @@ def _dprst_onstream_category(depstor_dir: Path, bbox):
 def _drains_presence_category(depstor_dir: Path, bbox):
     """Return a 0/1 array: land / drains-to-dprst, windowed to *bbox*.
 
-    ``drains_to_dprst.tif`` is HRU-id-valued (0 = the cell does not drain to a
-    depression; nonzero = the dprst HRU it drains to; ``nodata`` = off-fabric),
-    so "drains to a depression" is any valid, nonzero cell.
+    ``drains_to_dprst.tif`` is a plain binary uint8 presence raster and is
+    HRU-agnostic (0 = the cell does not drain to any depression; 1 = it does;
+    ``nodata`` = off-fabric) — the separate ``drains_to_dprst_hru.tif`` is the
+    HRU-valued raster. So "drains to a depression" is any valid, nonzero cell.
     """
     drains, nodata = read_window(depstor_dir / "drains_to_dprst.tif", bbox)
     cat = np.zeros(drains.shape, dtype=np.uint8)
@@ -225,8 +228,8 @@ def fig_decision_schematic() -> Path:
     ax.text(
         0.5,
         0.08,
-        "Both COMID sources gate on Network-Flowline membership;\n"
-        "Playa forced dprst, Ice Mass excluded upstream (issue #161)",
+        "Both COMID sources gate on Network-Flowline membership (issue #161);\n"
+        "Playa forced dprst and Ice Mass excluded upstream are separate guardrails",
         ha="center",
         va="center",
         fontsize=8,
