@@ -126,13 +126,13 @@ not proximity.
 Ground the on-stream / depression-storage split in **hydrologic connection
 to the NHD stream network**, not distance or an unqualified flowpath.
 
-> A waterbody is *on-stream* only if a flowline that is provably part of the
-> routed stream network actually flows through it — in, out, or both.
-> Otherwise it stays depression storage.
+> A waterbody is depression storage **unless the routed stream network
+> actually connects it to the drainage system.** Proximity and cartographic
+> flowpaths don't count — a network connection does.
 
 Two independent ways to demonstrate that connection, **unioned**, both
-gated on the same network-membership test — covered over the next few
-slides.
+gated on the same network-membership test — the precise rule (what counts
+as connected, and what stays a closed sink) is on the next few slides.
 
 <!--
 "Network membership" = the flowline is in NHDPlus's Network-Flowline set
@@ -226,9 +226,10 @@ depression.
 
 ![](../figures/depstor/lower_miss_before_after.png)
 
-<span class="caption">Lower Mississippi: draining cells fell from ~203,744 to ~15,822
-(~92% reduction) once on-stream waterbodies barrier the D8 trace — matching the
-validated CONUS-wide 70% → 8.6% land-coverage story for `drains_to_dprst`.</span>
+<span class="caption">Lower Mississippi: land draining to depression storage, before vs. after the
+connectivity-grounding fixes (cumulative: through-flow reclassification, topology-aware
+source-lake promotion, on-stream barriers, Network-Flowline gate). Lower Miss basin
+~70% → 8.6%; CONUS-wide ~26% → 8.3%.</span>
 
 <div class="warn">
 The fix is in the <em>classifier</em> (barrier-aware routing), never a cap on
