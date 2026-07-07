@@ -126,6 +126,22 @@ def snarea_thresh_inches(peak_swe_mm: float) -> float:
     return v / _MM_PER_INCH
 
 
+def assign_deplcrv(cv_assign: np.ndarray, library: pd.DataFrame) -> np.ndarray:
+    """Nearest cv_bin curve (by CV) for finite CV; reserved default (id 1) for non-finite.
+    The default row is never a nearest-CV candidate."""
+    bins = library[library["curve_kind"] == "cv_bin"]
+    bin_ids = bins["deplcrv_id"].to_numpy()
+    bin_cvs = bins["cv"].to_numpy(dtype=float)
+    default_id = int(library[library["curve_kind"] == "default"]["deplcrv_id"].iloc[0])
+    cv = np.asarray(cv_assign, dtype=float)
+    out = np.full(cv.shape, default_id, dtype=np.int32)
+    finite = np.isfinite(cv)
+    if finite.any():
+        nearest = np.abs(cv[finite][:, None] - bin_cvs[None, :]).argmin(axis=1)
+        out[finite] = bin_ids[nearest]
+    return out
+
+
 def _to_prms_order(curve: np.ndarray) -> np.ndarray:
     """Repo descending (SWE 1.0->0.0) -> PRMS ascending frac_swe (0.0->1.0)."""
     return np.asarray(curve)[::-1]

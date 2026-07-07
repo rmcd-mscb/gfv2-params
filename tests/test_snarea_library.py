@@ -7,6 +7,7 @@ from gfv2_params.snarea.library import (
     CV_GRID,
     SWE_LEVELS,
     _to_prms_order,
+    assign_deplcrv,
     build_library,
     fit_cv,
     sdc_from_cv,
@@ -115,3 +116,21 @@ def test_build_library_tied_cvs_still_produce_ndepl_cv_bins():
 def test_build_library_raises_when_fewer_cvs_than_bins():
     with pytest.raises(ValueError, match="at least ndepl_cv"):
         build_library(np.array([0.4, 0.5, 0.6]), ndepl_cv=8, default_curve=np.linspace(1, 0, 11))
+
+
+def test_assign_deplcrv_nearest_bin_and_default():
+    lib = build_library(np.linspace(0.2, 1.4, 500), ndepl_cv=8, default_curve=np.linspace(1, 0, 11))
+    bin_cvs = lib.iloc[1:]["cv"].to_numpy()
+    cv_assign = np.array([bin_cvs[0], bin_cvs[-1], np.nan, float(bin_cvs.mean())])
+    out = assign_deplcrv(cv_assign, lib)
+    assert out[0] == 2                     # nearest first bin
+    assert out[1] == 9                     # nearest last bin
+    assert out[2] == 1                     # NaN -> reserved default
+    assert 2 <= out[3] <= 9                # some cv_bin, never the default
+    assert out.dtype.kind in ("i", "u")
+
+
+def test_assign_deplcrv_never_returns_default_for_finite_cv():
+    lib = build_library(np.linspace(0.2, 1.4, 500), ndepl_cv=8, default_curve=np.linspace(1, 0, 11))
+    out = assign_deplcrv(np.full(50, 0.45), lib)
+    assert (out >= 2).all()
