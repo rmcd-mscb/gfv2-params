@@ -4,8 +4,8 @@
 # only resolves {data_root}/{fabric} placeholders in top-level string values.
 snodas_agg_dir: "{data_root}/{fabric}/snodas"
 weight_file: "{data_root}/{fabric}/weights_agg/snodas_weights_{fabric}.csv"
-output_dir: "{data_root}/{fabric}/params/merged"
-merged_file: nhm_snarea_curve_params.csv
+output_dir: "{data_root}/{fabric}/params/merged/_intermediates"
+merged_file: nhm_snarea_curve_derived.csv
 
 selection:
   # min_cells: minimum SNODAS 1-km cells per HRU. The paper used 25 for ~74 km²

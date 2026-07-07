@@ -1,4 +1,6 @@
+import numpy as np
 import pandas as pd
+import pytest
 
 from gfv2_params.snarea.build import DEFAULT_SNAREA_CURVE, build_hru_record
 from gfv2_params.snarea.selection import SelectionParams
@@ -45,8 +47,6 @@ def test_seasons_uses_water_year_grouping():
     # argmax-pick the December spike in CY2021 and lose the real season (0
     # curves); water-year framing keeps the Jan-Feb melt as WY2021 (1 usable
     # season) and drops the Nov-Dec accumulation into WY2022.
-    import numpy as np
-
     from gfv2_params.snarea.build import _seasons
 
     idx = pd.date_range("2021-01-01", "2021-12-31", freq="D")
@@ -69,3 +69,28 @@ def test_seasons_uses_water_year_grouping():
     seasons = _seasons(frame)
     assert len(seasons) == 1          # the real Jan-Mar melt (WY2021), not the Dec spike
     assert seasons[0][0] == 1.0       # normalized SDC starts at 1.0
+
+
+def test_build_hru_record_has_subgrid_columns():
+    dates = pd.date_range("2010-10-01", "2011-09-30")
+    h = len(dates) // 2
+    swe = np.concatenate([np.linspace(0, 200, h), np.linspace(200, 0, len(dates) - h)])
+    daily = pd.DataFrame(
+        {"swe": swe, "sca": (swe > 0).astype(float), "swe_std": swe * 0.5}, index=dates
+    )
+    rec = build_hru_record(
+        hru_id=7, daily=daily, n_cells=50, water_frac=0.0,
+        params=SelectionParams(), default_curve=DEFAULT_SNAREA_CURVE,
+    )
+    for c in ("cv_subgrid", "peak_swe_mm", "n_peak_years"):
+        assert c in rec
+    assert rec["cv_subgrid"] == pytest.approx(0.5, abs=1e-6)
+
+
+def test_build_hru_record_defaults_subgrid_stats_without_swe_std():
+    rec = build_hru_record(
+        hru_id=3, daily=_daily_two_years(), n_cells=100, water_frac=0.0,
+        params=SelectionParams(), default_curve=DEFAULT_SNAREA_CURVE)
+    assert rec["n_peak_years"] == 0
+    assert np.isnan(rec["cv_subgrid"])
+    assert np.isnan(rec["peak_swe_mm"])

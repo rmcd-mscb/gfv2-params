@@ -74,14 +74,14 @@ def read_daily_by_hru(
             "(the slow/large step at CONUS scale) ...",
             ds.sizes.get(id_dim, 0), ds.sizes.get("time", 0),
         )
-    df = ds[["swe", "scov"]].to_dataframe().reset_index()
+    df = ds[["swe", "scov", "swe_std"]].to_dataframe().reset_index()
     df = df.rename(columns={"scov": "sca"})
     if logger:
         logger.info("  materialized %d rows in %.0fs; grouping into per-HRU series ...",
                     len(df), time.perf_counter() - t0)
     out: dict[int, pd.DataFrame] = {}
     for hru_id, grp in df.groupby(id_dim):
-        s = grp.set_index("time")[["swe", "sca"]].sort_index()
+        s = grp.set_index("time")[["swe", "sca", "swe_std"]].sort_index()
         out[int(hru_id)] = s
     if logger:
         logger.info("  built %d per-HRU series in %.0fs total", len(out), time.perf_counter() - t0)
