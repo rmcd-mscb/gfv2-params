@@ -417,7 +417,12 @@ def fig_cv_binning(paths: dict, out_path: Path, ndepl_cv: int = 8) -> None:
     xmax = float(min(cv.max(), np.quantile(cv, 0.999)))
 
     fig, ax = plt.subplots(figsize=(8.5, 4.6))
-    ax.hist(cv, bins=np.linspace(0, xmax, 61), color="#cdd9e5", edgecolor="white", zorder=1)
+    # Fixed 0.05-wide histogram bins: cv_assign is heavily clustered (the
+    # calibration quantile-map lands many HRUs on repeated values), so a finer
+    # bin resonates into a sawtooth. 0.05 smooths the display while still
+    # resolving the 8 bin medians (spaced ~0.05-0.10 apart).
+    hist_bins = np.arange(0, xmax + 0.05, 0.05)
+    ax.hist(cv, bins=hist_bins, color="#cdd9e5", edgecolor="white", zorder=1)
     ymax = ax.get_ylim()[1]
     for e in edges[1:-1]:  # interior equal-population bin edges
         ax.axvline(e, color="#888", ls=":", lw=0.9, zorder=2)
