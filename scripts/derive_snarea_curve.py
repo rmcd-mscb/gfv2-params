@@ -2,7 +2,7 @@
 
 Reads the per-year aggregated NCs written by Stage 1 (`derive_aggregate.py`,
 `{data_root}/{fabric}/snodas/*_agg_*.nc`, dims `time`/`<id_feature>`, vars
-`swe`/`scov`), builds per-HRU SNODAS cell counts from the gdptools weight CSV,
+`swe`/`scov`/`swe_std`), builds per-HRU SNODAS cell counts from the gdptools weight CSV,
 and writes the merged snarea_curve param CSV via `build_snarea_curve`.
 
 Water fraction (selection criterion 4) is optional: if a per-HRU water-fraction
@@ -23,7 +23,7 @@ import xarray as xr
 
 from gfv2_params.config import load_config, require_config_key
 from gfv2_params.log import configure_logging
-from gfv2_params.snarea import DEFAULT_SNAREA_CURVE, build_snarea_curve
+from gfv2_params.snarea import DEFAULT_SNAREA_CURVE, build_snarea_curve, validate_default_curve
 from gfv2_params.snarea.selection import SelectionParams
 
 __all__ = [
@@ -32,20 +32,6 @@ __all__ = [
     "validate_default_curve",
     "main",
 ]
-
-
-def validate_default_curve(arr: np.ndarray) -> None:
-    """Validate a `default_curve` override: shape, value range, non-increasing.
-
-    Raises ValueError (not `assert`, which is stripped under `python -O`)
-    naming which check failed.
-    """
-    if arr.shape != (11,):
-        raise ValueError(f"default_curve must have shape (11,), got {arr.shape}")
-    if not np.all((arr >= 0.0) & (arr <= 1.0)):
-        raise ValueError(f"default_curve values must all be within [0.0, 1.0], got {arr}")
-    if not np.all(np.diff(arr) <= 1e-9):
-        raise ValueError(f"default_curve must be non-increasing, got {arr}")
 
 
 def read_daily_by_hru(

@@ -11,9 +11,11 @@
 #
 # Stage 2 of the SNODAS -> snarea_curve pipeline: read the per-year aggregated
 # NetCDFs from Stage 1 (derive_snodas_aggregate.batch) and derive the per-HRU
-# PRMS snarea_curve parameter (11-point curve + hru_deplcrv + sdc_status) into
-# {data_root}/{fabric}/params/merged/nhm_snarea_curve_params.csv. Per-HRU math is
-# pure pandas/numpy, but the WHOLE-FABRIC load is not: read_daily_by_hru's
+# empirical curve + sub-grid CV (11-point curve + sdc_status + cv_subgrid) into
+# {data_root}/{fabric}/params/merged/_intermediates/nhm_snarea_curve_derived.csv
+# (the intermediate input to Stage 3, derive_snarea_library.batch — not the
+# terminal params). Per-HRU math is pure pandas/numpy, but the WHOLE-FABRIC
+# load is not: read_daily_by_hru's
 # to_dataframe() materializes ~n_years x n_hru x n_days rows at once (CONUS gfv2
 # ~2.8B rows, ~344 GB peak), so the default is sized for CONUS. Small fabrics
 # (e.g. oregon, ~17k HRUs) fit easily and can override down:

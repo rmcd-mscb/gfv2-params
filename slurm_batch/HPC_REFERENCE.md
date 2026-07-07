@@ -696,12 +696,16 @@ JupyterHub is the interactive alternative for exploratory inspection.
 
 ### Stage 10 — Snow depletion curves (SNODAS → snarea_curve)
 
-Two fabric-independent stages deriving the PRMS `snarea_curve`/`hru_deplcrv`
-parameters from daily SNODAS SWE (Driscoll, Hay & Bock 2017 method; design
-spec [`docs/superpowers/specs/2026-07-04-snodas-snarea-curve-design.md`](../docs/superpowers/specs/2026-07-04-snodas-snarea-curve-design.md)).
+Three fabric-independent stages deriving the PRMS `snarea_curve`/`hru_deplcrv`
+parameters from daily SNODAS SWE. Stage 1/2 use the empirical Driscoll, Hay &
+Bock (2017) method (design spec
+[`docs/superpowers/specs/2026-07-04-snodas-snarea-curve-design.md`](../docs/superpowers/specs/2026-07-04-snodas-snarea-curve-design.md));
+Stage 3 builds a CV/lognormal curve library from Stage 2's output (Sexstone,
+Driscoll, Hay, Hammond & Barnhart 2020; design spec
+[`docs/superpowers/specs/2026-07-06-snodas-snarea-curve-library-design.md`](../docs/superpowers/specs/2026-07-06-snodas-snarea-curve-library-design.md)).
 Stage 1 is a SLURM array over the fabric's spatial batches (same pattern as
 the depstor/zonal parameter jobs — see "Stage 4A" above), then a merge job;
-Stage 2 is still run directly with `pixi run`:
+Stage 2 is still run directly with `pixi run`; Stage 3 is a cheap `sbatch` job:
 
 ```bash
 # Stage 1 — aggregate daily SNODAS SWE to the HRU fabric, per spatial batch
@@ -712,8 +716,10 @@ AID=$(sbatch --parsable --array=0-$((N-1)) --export=ALL,FABRIC=$FABRIC \
     slurm_batch/derive_snodas_aggregate.batch)
 sbatch --dependency=afterok:$AID --export=ALL,FABRIC=$FABRIC \
     slurm_batch/merge_snodas_aggregate.batch
-# Stage 2 — derive per-HRU snarea_curve from the aggregated SWE/SCA
+# Stage 2 — derive per-HRU empirical snarea_curve + sub-grid CV from the aggregated SWE/SCA
 pixi run python scripts/derive_snarea_curve.py --fabric <name>
+# Stage 3 — build the CV/lognormal curve library from the Stage 2 derived CSV
+FABRIC=<name> sbatch slurm_batch/derive_snarea_library.batch
 ```
 
 **Stage 1** (`src/gfv2_params/aggregate/`, config
@@ -736,14 +742,41 @@ NetCDFs on the id_feature dim (sorted) into
 for. Per-batch parts stay in the `_batches/` subdir so Stage 2's top-level
 `*_agg_*.nc` glob only ever sees the merged files. Omitting `--batch_id`
 (direct `pixi run`, not via `sbatch`) still runs the old whole-fabric path
-against `hru_gpkg` for ad hoc/small-fabric use.
+against `hru_gpkg` for ad hoc/small-fabric use. The SNODAS adapter
+(`src/gfv2_params/aggregate/snodas.py`) sets `std_variables=("swe",)`, so every
+aggregated NC also carries a `swe_std` sidecar (per-cell SWE std dev within the
+HRU, masked/aggregated the same way as `swe`) — the input Stage 2's sub-grid CV
+needs. Re-run Stage 1 once against a fabric aggregated before `swe_std` was
+added; the per-batch gdptools weight CSVs are cached, so the re-run is cheap.
 
 **Stage 2** (`src/gfv2_params/snarea/`, config
 `configs/snarea/snarea_curve.yml`) reads the Stage 1 merged NetCDFs, builds
 per-HRU melt-season depletion curves, applies the six Driscoll selection
 criteria (HRUs that fail fall back to a configured default curve, flagged in
-`sdc_status`), and writes
-`{data_root}/{fabric}/params/merged/nhm_snarea_curve_params.csv`.
+`sdc_status`), computes each HRU's sub-grid SWE coefficient of variation
+(`cv_subgrid`, from the `swe_std`/`swe` ratio at peak SWE —
+`src/gfv2_params/snarea/subgrid.py`), and writes the **intermediate**
+`{data_root}/{fabric}/params/merged/_intermediates/nhm_snarea_curve_derived.csv`
+(not the terminal params — that is now Stage 3's job).
+
+**Stage 3** (`src/gfv2_params/snarea/library.py`, driver
+`scripts/derive_snarea_library.py`, config `configs/snarea/snarea_library.yml`,
+batch `derive_snarea_library.batch`) reads the Stage 2 derived CSV and builds a
+CV/lognormal curve library: fits each derived HRU's empirical curve to a
+lognormal CV (`fit_cv`), validates/calibrates `cv_subgrid` against that
+empirical CV on the overlap (monotone quantile-map, gated by median bias —
+`validate_and_calibrate`), bins the calibrated population into `ndepl_cv`
+equal-population CV bins plus one reserved default curve, and assigns each HRU
+its nearest-CV library curve. It is pure tabular pandas/numpy — no daily-SWE
+reload — so it is cheap (`--mem=16G --time=00:30:00`) and safely re-runnable at
+any `ndepl_cv` without redoing Stage 1/2. Outputs, all under
+`{data_root}/{fabric}/params/merged/`: `nhm_snarea_curve_library.csv` (one row
+per `deplcrv_id`), `nhm_snarea_curve_params.csv` (one row per HRU:
+`hru_deplcrv`, `snarea_thresh`, CV diagnostics, the assigned curve),
+`nhm_snarea_curve_validation.csv` (calibration report: reconstruction error
+before/after, bias, `n_estimable`), and `nhm_snarea_curve.nc` (the pyWatershed
+parameter file — `snarea_curve` flat ascending, `hru_deplcrv`,
+`snarea_thresh`).
 
 **Cost profile:** Stage 1's gdptools weight-generation (`WeightGen`, one
 polygon/cell intersection pass per batch) is the expensive step; each batch's
@@ -918,7 +951,8 @@ sacct -j <JOBID> -o JobID,State,Elapsed,MaxRSS
 | `slurm_batch/submit_zonal_params.sh` | `configs/zonal/zonal_params.yml` | `scripts/derive_zonal_params.py` (dispatches 10 params × zonal+merge, with ssflux's `build_weights` prereq chained automatically) |
 | `slurm_batch/submit_depstor_params.sh` | `configs/depstor/depstor_params.yml` | `scripts/derive_depstor_params.py` (dispatches 10 fractions × zonal+merge, then ratios via afterok) |
 | `slurm_batch/derive_snodas_aggregate.batch` + `merge_snodas_aggregate.batch` | `configs/aggregate/aggregate_sources.yml` | `scripts/derive_aggregate.py --source snodas` (Stage 1: gridded-time-series → HRU aggregation via `src/gfv2_params/aggregate/`; array over spatial batches + merge, no per-fraction submit wrapper yet) |
-| (run directly; no batch yet) | `configs/snarea/snarea_curve.yml` | `scripts/derive_snarea_curve.py` (Stage 2: per-HRU `snarea_curve`/`hru_deplcrv` via `src/gfv2_params/snarea/`) |
+| `slurm_batch/derive_snarea_curve.batch` (or run directly with `pixi run`) | `configs/snarea/snarea_curve.yml` | `scripts/derive_snarea_curve.py` (Stage 2: per-HRU empirical curve + sub-grid CV → `_intermediates/nhm_snarea_curve_derived.csv` via `src/gfv2_params/snarea/`) |
+| `slurm_batch/derive_snarea_library.batch` | `configs/snarea/snarea_library.yml` | `scripts/derive_snarea_library.py` (Stage 3: CV/lognormal curve library + per-HRU `snarea_curve`/`hru_deplcrv`/`snarea_thresh` + pyWatershed `.nc` via `src/gfv2_params/snarea/library.py`) |
 
 ### Part-2 workers (looped by the wrappers; also runnable by hand per Stage 4A)
 

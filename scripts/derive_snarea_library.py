@@ -12,7 +12,7 @@ import pandas as pd
 
 from gfv2_params.config import load_config, require_config_key
 from gfv2_params.log import configure_logging
-from gfv2_params.snarea import DEFAULT_SNAREA_CURVE
+from gfv2_params.snarea import DEFAULT_SNAREA_CURVE, validate_default_curve
 from gfv2_params.snarea.library import (
     build_from_derived,
     write_library_csv,
@@ -38,6 +38,7 @@ def main() -> None:
     calibrate = cfg.get("calibrate", "auto")
     bias_tol = float(cfg.get("calibrate_bias_tol", 0.1))
     default_curve = np.asarray(cfg.get("default_curve", DEFAULT_SNAREA_CURVE), dtype=float)
+    validate_default_curve(default_curve)
 
     logger.info("Reading Stage 2 derived table: %s", derived_csv)
     derived = pd.read_csv(derived_csv)

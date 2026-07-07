@@ -244,9 +244,10 @@ def assemble_params(derived, id_feature, cv_assign, cv_source, deplcrv, library)
 
 
 def build_from_derived(derived, id_feature, ndepl_cv, default_curve, calibrate="auto", bias_tol=0.1):
-    """Estimable = finite cv_subgrid. cv_empirical is fitted from each DERIVED HRU's
-    empirical curve (vectorized: library matrix built once). Calibrate cv_subgrid vs
-    cv_empirical on the derived overlap, bin, assign, assemble."""
+    """Estimable = finite cv_assign (calibrated subgrid, subgrid, or empirical fallback).
+    cv_empirical is fitted from each DERIVED HRU's empirical curve (vectorized: library
+    matrix built once). Calibrate cv_subgrid vs cv_empirical on the derived overlap,
+    bin, assign, assemble."""
     derived = derived.reset_index(drop=True).copy()
     n = len(derived)
     cv_sub = derived["cv_subgrid"].to_numpy(float)

@@ -6,9 +6,10 @@
 [`2026-07-04-snodas-snarea-curve-design.md`](2026-07-04-snodas-snarea-curve-design.md)
 ("Curve clustering / a reduced curve library"). That pipeline is MERGED (PR #165)
 and its per-HRU derived tables are on disk; this spec builds on them.
-**Method source:** Sexstone, Markstrom, Hay & others (2020), *Continental-scale
-snow-melt sensitivity to snow-depletion-curve representation*, Hydrological
-Processes 34, DOI 10.1002/hyp.13735. Local copy: [`docs/hyp.13735.pdf`](../../hyp.13735.pdf).
+**Method source:** Sexstone, Driscoll, Hay, Hammond & Barnhart (2020), *Runoff
+sensitivity to snow depletion curve representation within a continental scale
+hydrologic model*, Hydrological Processes 34:2365–2380, DOI 10.1002/hyp.13735.
+Local copy: [`docs/hyp.13735.pdf`](../../hyp.13735.pdf).
 Empirical derivation method (Stage 2, unchanged): Driscoll, Hay & Bock (2017),
 [`docs/Snow_Depletion_Curves.md`](../../Snow_Depletion_Curves.md).
 
@@ -377,7 +378,9 @@ memory update (`sdc_grouping_decision`, `snodas_snarea_curve_pipeline`).
 
 ## 11. References
 
-- Sexstone et al. (2020), *Hydrological Processes* 34, DOI 10.1002/hyp.13735 —
+- Sexstone, Driscoll, Hay, Hammond & Barnhart (2020), "Runoff sensitivity to
+  snow depletion curve representation within a continental scale hydrologic
+  model," *Hydrological Processes* 34:2365–2380, DOI 10.1002/hyp.13735 —
   [`docs/hyp.13735.pdf`](../../hyp.13735.pdf). Lognormal SDC(CV) closed form
   (eqs 1–5); `snarea_thresh` ≡ SWE₁₀₀; runoff sensitivity to SDC representation.
 - Driscoll, Hay & Bock (2017) — [`docs/Snow_Depletion_Curves.md`](../../Snow_Depletion_Curves.md).
