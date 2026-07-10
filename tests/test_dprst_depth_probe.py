@@ -40,3 +40,18 @@ def test_dprst_polygons_classification():
     assert comids == {11, 12}          # 11 off-stream, 12 playa forced
     assert 10 not in comids            # genuine on-stream LakePond removed
     assert 13 not in comids            # Ice Mass excluded entirely
+
+
+def test_resolution_class_assigns_1m_inside_footprint():
+    import geopandas as gpd
+    from shapely.geometry import Point, box
+
+    dprst = gpd.GeoDataFrame(
+        {"COMID": [1, 2], "geometry": [Point(0.5, 0.5).buffer(0.1), Point(9, 9).buffer(0.1)]},
+        crs="EPSG:5070",
+    )
+    wesm = gpd.GeoDataFrame(
+        {"workunit": ["A"], "geometry": [box(0, 0, 1, 1)]}, crs="EPSG:5070"
+    )
+    out = probe.resolution_class(dprst, wesm)
+    assert list(out.sort_values("COMID")["best_topo"]) == ["1m", "10m"]
