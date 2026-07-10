@@ -6,7 +6,9 @@ from __future__ import annotations
 
 import argparse
 import gc
+import math
 import subprocess
+import uuid
 from pathlib import Path
 
 import geopandas as gpd
@@ -15,12 +17,17 @@ import pandas as pd
 import pyogrio
 import rasterio
 import richdem as rd
+from osgeo import gdal
+from rasterio.enums import Resampling
+from rasterio.errors import RasterioIOError
 from rasterio.vrt import WarpedVRT
-from rasterio.warp import transform_geom
+from rasterio.warp import calculate_default_transform, transform_bounds, transform_geom
 from rasterio.windows import from_bounds
 
 from gfv2_params.depstor import load_connected_comids, select_connected_waterbodies
 from gfv2_params.nhd_ftypes import EXCLUDE_WATERBODY_FTYPES, FORCE_DPRST_FTYPES
+
+gdal.UseExceptions()
 
 
 def dprst_polygons(wb_gdf: gpd.GeoDataFrame, connected: set[int]) -> gpd.GeoDataFrame:
@@ -59,10 +66,39 @@ def resolution_class(
 
 # --- Windowed best-available-topo reader + depth-to-spill (Task 3) ---------
 
+# Both tile templates read over plain HTTPS (`/vsicurl/https://...`), NOT
+# `/vsis3/...`, despite `prd-tnm` being a public anonymous bucket. Verified
+# empirically 2026-07-10 (a second, distinct instance of the same class of
+# gotcha already hit for WESM.gpkg — see the module-level note near
+# WESM_HTTPS_URL below): on this HPC's network, opening a genuinely
+# *nonexistent* `/vsis3/...` key hangs indefinitely (30s+ timeout, no error)
+# instead of returning a 404 — reproduced directly with
+# `rasterio.open("/vsis3/prd-tnm/.../nonexistent.tif")`. A plain
+# `/vsicurl/https://prd-tnm.s3.amazonaws.com/...` GET/HEAD against the same
+# missing key returns a clean 404 in ~5s (`curl -I` returns in <1s; GDAL's
+# vsicurl layer is slower but still bounded). Both existing and missing keys
+# were verified to work correctly over `/vsicurl/`. This matters because 1 m
+# tile *existence* must be probed (`_existing_paths`, below) — a project's
+# footprint isn't rectangular, so some 10 km-grid candidates in a bbox are
+# expected to be genuinely missing, and `/vsis3/` would hang on exactly
+# those. `/vsis3/` is fine for a key already known to exist (used elsewhere
+# in this module's --audit path where existence isn't in question).
+
 # 1/3 arc-second (10 m) seamless national elevation tiles, 1x1 deg, named by
 # NW corner. Anonymous public bucket; see the `read_window` docstring.
-TILE13_S3_TEMPLATE = (
-    "/vsis3/prd-tnm/StagedProducts/Elevation/13/TIFF/current/{tile}/USGS_13_{tile}.tif"
+TILE13_HTTPS_TEMPLATE = (
+    "/vsicurl/https://prd-tnm.s3.amazonaws.com/"
+    "StagedProducts/Elevation/13/TIFF/current/{tile}/USGS_13_{tile}.tif"
+)
+
+# 3DEP 1 m project tiles (verified empirically 2026-07-10 against a real ND
+# project — see `read_window` docstring). Each WESM 1 m *project* publishes
+# many ~10 km UTM tiles under its own `TIFF/` prefix, named
+# USGS_1M_<zone>_x<E/10000>y<N/10000>_<project>.tif.
+TILE1M_HTTPS_TEMPLATE = (
+    "/vsicurl/https://prd-tnm.s3.amazonaws.com/"
+    "StagedProducts/Elevation/1m/Projects/{project}/TIFF/"
+    "USGS_1M_{zone:02d}_x{x}y{y}_{project}.tif"
 )
 
 
@@ -74,14 +110,26 @@ def depth_to_spill(dem: np.ndarray, nodata: float | None = None) -> np.ndarray:
     convention of "float64 fill, richdem not WBT" is kept for consistency
     with compute_dem_derivatives.py). Returned depth is float32, clipped to
     be non-negative, and zeroed at nodata cells.
+
+    ``nodata`` defaults to the ``-9999.0`` sentinel that `read_window` now
+    normalizes every source's real nodata to (issue #173 review fix — see
+    `read_window` docstring). The effective sentinel (explicit ``nodata`` if
+    given, else -9999.0) is used BOTH to tell richdem which cells to exclude
+    from the fill AND to zero those cells in the returned depth — previously
+    the zeroing only ran when a caller passed `nodata` explicitly, so the
+    realistic `read_window` -> `depth_to_spill(dem)` call (no explicit
+    `nodata` arg) left the zeroing dead code: a raw nodata void (e.g. a
+    source's real -999999) fed into richdem *without* being flagged as
+    no_data gets treated as an extremely low real elevation and filled up to
+    the surrounding rim, producing a huge spurious depth at every void cell.
     """
     a = np.asarray(dem, dtype=np.float64)
-    rda = rd.rdarray(a, no_data=(nodata if nodata is not None else -9999.0))
+    nd = -9999.0 if nodata is None else float(nodata)
+    rda = rd.rdarray(a, no_data=nd)
     filled = np.asarray(rd.FillDepressions(rda, in_place=False), dtype=np.float64)
     depth = filled - a
     depth[depth < 0] = 0.0
-    if nodata is not None:
-        depth[a == nodata] = 0.0
+    depth[a == nd] = 0.0
     return depth.astype(np.float32)
 
 
@@ -96,50 +144,176 @@ def volume_mean_depth(depth: np.ndarray, mask: np.ndarray, cell_area_m2: float):
 
 def _tile13_name(lon: float, lat: float) -> str:
     """1x1 deg 1/3 arc-second tile name from a point, e.g. n48w101 for a
-    point at lat 47.3, lon -100.6 (NW corner: north=ceil(lat), west=ceil(-lon))."""
+    point at lat 47.3, lon -100.6 (NW corner: north=ceil(lat), west=ceil(-lon)).
+
+    Verified empirically 2026-07-10: gdalinfo on
+    /vsis3/prd-tnm/StagedProducts/Elevation/13/TIFF/current/n48w104/USGS_13_n48w104.tif
+    has its NW corner at (-104.00056, 48.00056), i.e. tile n48w104 covers
+    lon in [-104, -103), lat in [47, 48) — matches this convention exactly.
+    """
     north = int(np.ceil(lat))
     west = int(np.ceil(-lon))
     return f"n{north:02d}w{west:03d}"
 
 
+def _utm_zone_epsg(lon: float) -> tuple[int, str]:
+    """NAD83 UTM zone + EPSG code for a CONUS (northern-hemisphere) longitude.
+
+    3DEP 1 m tiles are keyed to the natural UTM zone of their project area —
+    verified empirically: USGS_1M_13_x56y532_ND_3DEPProcessing_D22.tif (near
+    104W) opens as EPSG:26913 (NAD83 UTM zone 13N), matching
+    zone = floor((lon+180)/6)+1 = 13 and EPSG 26900+zone.
+    """
+    zone = int(math.floor((lon + 180.0) / 6.0)) + 1
+    return zone, f"EPSG:269{zone:02d}"
+
+
+def _1m_candidate_tiles(
+    project: str, bounds_utm: tuple[float, float, float, float], zone: int
+) -> list[str]:
+    """Enumerate /vsis3/ paths for the 3DEP 1 m tiles covering a UTM bbox.
+
+    Tiles sit on a 10 km x 10 km UTM grid (plus a small overlap buffer baked
+    into each tile's actual raster extent — see the module-level
+    TILE1M_HTTPS_TEMPLATE note). Verified empirically:
+    USGS_1M_13_x56y532_ND_3DEPProcessing_D22.tif has raster origin
+    (559994.0, 5320006.0) against a nominal 560000/5320000 UTM corner, i.e.
+    x = floor(easting / 10000) (the tile's west edge / 10000) and
+    y = ceil(northing / 10000) (the tile's north edge / 10000).
+    """
+    minx, miny, maxx, maxy = bounds_utm
+    x_lo, x_hi = int(math.floor(minx / 10_000)), int(math.floor(maxx / 10_000))
+    y_lo, y_hi = int(math.ceil(miny / 10_000)), int(math.ceil(maxy / 10_000))
+    return [
+        TILE1M_HTTPS_TEMPLATE.format(project=project, zone=zone, x=x, y=y)
+        for y in range(y_lo, y_hi + 1)
+        for x in range(x_lo, x_hi + 1)
+    ]
+
+
+def _existing_paths(candidates: list[str]) -> list[str]:
+    """Filter candidate `/vsicurl/` tile paths to those that actually open.
+
+    The 10 km UTM grid is a superset of the tiles a project actually
+    publishes (project footprints aren't rectangular), so each candidate is
+    probed with a real (cheap, COG-header-only) open; non-existent keys
+    raise `RasterioIOError` (a clean, bounded ~5 s 404 over `/vsicurl/`) and
+    are dropped rather than aborting the read. Candidates MUST be
+    `/vsicurl/https://...` paths, not `/vsis3/...` — see the module-level
+    note above TILE13_HTTPS_TEMPLATE for why a nonexistent `/vsis3/` key
+    hangs instead of erroring on this HPC's network.
+    """
+    found = []
+    for path in candidates:
+        try:
+            with rasterio.open(path):
+                found.append(path)
+        except RasterioIOError:
+            continue
+    return found
+
+
+def _native_resolution(src, dst_crs: str) -> tuple[float, float]:
+    """Source GSD reprojected into `dst_crs` units, for `WarpedVRT(resolution=...)`.
+
+    Without an explicit `resolution=`, GDAL's default-transform heuristic can
+    coarsen the output pixel size on reprojection; passing the true native
+    GSD (recomputed via `calculate_default_transform`, which handles both a
+    projected-metres 1 m UTM source and a geographic-degrees 10 m source
+    uniformly) keeps a 1 m tile ~1 m and a 10 m tile ~10 m once warped into
+    EPSG:5070 — see the "why nearest" note in `read_window`.
+    """
+    transform, _, _ = calculate_default_transform(
+        src.crs, dst_crs, src.width, src.height, *src.bounds
+    )
+    return abs(transform.a), abs(transform.e)
+
+
+def _resolve_1m_paths(geom, wesm_row, bounds_5070: tuple[float, float, float, float]) -> list[str]:
+    """Resolve the /vsis3/ 1 m source path(s) covering `geom` for `best_topo == "1m"`.
+
+    `wesm_row` accepts three shapes:
+      - a bare string: an already-resolved single raster path/VRT (caller override).
+      - a mapping with "s3_path": ditto, explicit single-source override.
+      - a mapping with "project" (the WESM `project` field, e.g.
+        "ND_3DEPProcessing_D22"): resolves the actual covering per-tile 1 m
+        COGs from S3 (the real per-project case — see module docstring note).
+    Returns an empty list if no covering tile exists (caller falls back to 10 m).
+    Must be called inside an active `rasterio.Env`.
+    """
+    if isinstance(wesm_row, str):
+        return [wesm_row]
+    if hasattr(wesm_row, "__getitem__"):
+        try:
+            explicit = wesm_row["s3_path"]
+        except (KeyError, IndexError):
+            explicit = None
+        if explicit:
+            return [explicit]
+        try:
+            project = wesm_row["project"]
+        except (KeyError, IndexError):
+            project = None
+        if project:
+            centroid_5070 = {"type": "Point", "coordinates": (geom.centroid.x, geom.centroid.y)}
+            centroid_4326 = transform_geom("EPSG:5070", "EPSG:4326", centroid_5070)
+            lon, lat = centroid_4326["coordinates"]
+            zone, utm_crs = _utm_zone_epsg(lon)
+            bounds_utm = transform_bounds("EPSG:5070", utm_crs, *bounds_5070, densify_pts=21)
+            candidates = _1m_candidate_tiles(project, bounds_utm, zone)
+            return _existing_paths(candidates)
+    raise ValueError(
+        "best_topo='1m' requires wesm_row to be a source path, or a mapping "
+        "with 's3_path' or 'project'"
+    )
+
+
 def read_window(geom, best_topo: str, wesm_row=None, rim_buffer_m: float = 200.0):
     """Windowed RAW-DEM read of geom bbox + rim from the best-available source.
 
-    best_topo == "1m": read the covering WESM project COG (path from wesm_row).
+    best_topo == "1m": resolve and read the covering 3DEP 1 m project tile(s)
+      (see `_resolve_1m_paths`); mosaics 2-4 tiles in-memory via `gdal.BuildVRT`
+      when the buffered window straddles a tile boundary. Falls back to the
+      10 m path if no covering tile exists.
     best_topo == "10m": read the seamless 1/3 arc-second tile from
       /vsis3/prd-tnm/StagedProducts/Elevation/13/TIFF/current/<tile>/USGS_13_<tile>.tif
-    Returns (dem float32, transform, crs). Reproject-on-read to EPSG:5070 (equal
-    area) so cell_area is uniform; never materialise beyond the window.
+    Returns (dem float32, transform, crs, source) — reprojected on read to
+    EPSG:5070 (equal area) so cell_area is uniform; never materialises beyond
+    the window. `source` is `{"requested": best_topo, "resolution": "1m"|"10m",
+    "paths": [...]}` — the resolution actually used (may differ from
+    `requested` on a 1m->10m fallback) and the source path(s) read, so the
+    caller has provenance for Phase 1 bucketing.
 
     `geom` is expected in EPSG:5070 — the CRS of the shipped dprst polygon set
     (`conus_waterbodies.gpkg`), which is also this function's `dst_crs`, so
     `rim_buffer_m` (metres) adds directly to `geom.bounds` with no reprojection.
     The 10 m tile grid is named by lon/lat, so only the centroid is reprojected
-    to EPSG:4326 (via `transform_geom`) to resolve the tile name.
+    to EPSG:4326 (via `transform_geom`) to resolve the tile name; the 1 m grid
+    is named by UTM easting/northing, so the buffered bbox is reprojected to
+    the project's natural UTM zone (`_utm_zone_epsg`) to resolve tile indices.
 
-    NOTE (2026-07-10 smoke test): unlike the 10 m floor, a WESM 1 m *project*
-    is not published as a single COG — S3 listing shows each project's `TIFF/`
-    directory holds many small per-tile GeoTIFFs (e.g.
-    `USGS_one_meter_x41y517_ND_KidderCO_2014.tif`, ~1 km tiles keyed by a
-    UTM-derived x/y index, not by polygon). `wesm_row` here is treated as
-    already carrying a single resolved raster path (e.g. a project VRT the
-    caller built via `gdalbuildvrt`); resolving the covering per-tile 1 m COG
-    (or building/caching a per-project VRT) from a raw WESM row is unimplemented
-    — flagged as a Phase-1 follow-up, not solved by this spike task.
+    Nearest-neighbour resampling (not bilinear): a hydro-flattened water
+    surface is exactly constant per USGS Lidar Base Specification breakline
+    enforcement, and Task 4's flatness detector depends on that constancy
+    surviving the read. Bilinear blends rim/bottom elevations across the
+    shoreline breakline and injects a false gradient into an exactly-constant
+    surface — defeating the detector before it runs. Nearest preserves the
+    raw per-pixel DEM value (a constant surface resampled nearest stays
+    constant) and also avoids blending real elevations with nodata at a tile
+    edge. Native GSD (`_native_resolution`) is preserved in the WarpedVRT
+    rather than falling back to GDAL's coarser auto-computed default.
+
+    Real-source nodata is normalized to the -9999.0 sentinel before return
+    (mirrors `compute_dem_derivatives._fix_dem_nodata`'s convention). Verified
+    empirically 2026-07-10: both the 1 m and 10 m 3DEP sources declare
+    `NoData Value=-999999`, not -9999 — feeding that raw sentinel into
+    `depth_to_spill` unnormalized (its no_data default is -9999.0) would
+    leave a real nodata void looking like an extremely low but "valid"
+    elevation, which richdem would then fill up to the surrounding rim,
+    producing a huge spurious depth at every void cell (tile edge / data gap
+    inside the window). Normalizing here makes `depth_to_spill`'s default
+    correct for the realistic `read_window` -> `depth_to_spill` call path.
     """
-    if best_topo == "1m":
-        if wesm_row is None:
-            raise ValueError("best_topo='1m' requires wesm_row with a source COG path")
-        src_path = wesm_row["s3_path"] if hasattr(wesm_row, "__getitem__") else wesm_row
-    elif best_topo == "10m":
-        centroid_5070 = {"type": "Point", "coordinates": (geom.centroid.x, geom.centroid.y)}
-        centroid_4326 = transform_geom("EPSG:5070", "EPSG:4326", centroid_5070)
-        lon, lat = centroid_4326["coordinates"]
-        tile = _tile13_name(lon, lat)
-        src_path = TILE13_S3_TEMPLATE.format(tile=tile)
-    else:
-        raise ValueError(f"unknown best_topo {best_topo!r}; expected '1m' or '10m'")
-
     minx, miny, maxx, maxy = geom.bounds
     minx -= rim_buffer_m
     miny -= rim_buffer_m
@@ -150,14 +324,54 @@ def read_window(geom, best_topo: str, wesm_row=None, rim_buffer_m: float = 200.0
         "AWS_NO_SIGN_REQUEST": "YES",
         "GDAL_DISABLE_READDIR_ON_OPEN": "EMPTY_DIR",
     }
+
     with rasterio.Env(**env_opts):
-        with rasterio.open(src_path) as src:
-            with WarpedVRT(src, crs="EPSG:5070", resampling=rasterio.enums.Resampling.bilinear) as vrt:
-                window = from_bounds(minx, miny, maxx, maxy, transform=vrt.transform)
-                dem = vrt.read(1, window=window)
-                transform = vrt.window_transform(window)
-                crs = vrt.crs
-    return dem.astype(np.float32), transform, crs
+        resolution_used = best_topo
+        paths: list[str] = []
+        if best_topo == "1m":
+            if wesm_row is None:
+                raise ValueError("best_topo='1m' requires wesm_row with a source project/path")
+            paths = _resolve_1m_paths(geom, wesm_row, (minx, miny, maxx, maxy))
+            if not paths:
+                resolution_used = "10m"  # no covering 1 m tile found; document the fallback
+        if best_topo == "10m" or (best_topo == "1m" and not paths):
+            centroid_5070 = {"type": "Point", "coordinates": (geom.centroid.x, geom.centroid.y)}
+            centroid_4326 = transform_geom("EPSG:5070", "EPSG:4326", centroid_5070)
+            lon, lat = centroid_4326["coordinates"]
+            tile = _tile13_name(lon, lat)
+            paths = [TILE13_HTTPS_TEMPLATE.format(tile=tile)]
+        elif best_topo not in ("1m", "10m"):
+            raise ValueError(f"unknown best_topo {best_topo!r}; expected '1m' or '10m'")
+
+        vsimem_vrt = None
+        try:
+            if len(paths) > 1:
+                vsimem_vrt = f"/vsimem/dprst_depth_probe_{uuid.uuid4().hex}.vrt"
+                gdal.BuildVRT(vsimem_vrt, paths)
+                open_path = vsimem_vrt
+            else:
+                open_path = paths[0]
+
+            with rasterio.open(open_path) as src:
+                resolution = _native_resolution(src, "EPSG:5070")
+                with WarpedVRT(
+                    src, crs="EPSG:5070", resampling=Resampling.nearest, resolution=resolution,
+                ) as vrt:
+                    window = from_bounds(minx, miny, maxx, maxy, transform=vrt.transform)
+                    dem = vrt.read(1, window=window).astype(np.float32)
+                    transform = vrt.window_transform(window)
+                    crs = vrt.crs
+                    nodata = vrt.nodata
+        finally:
+            if vsimem_vrt is not None:
+                gdal.Unlink(vsimem_vrt)
+
+    if nodata is not None:
+        void = np.isnan(dem) if math.isnan(nodata) else dem == np.float32(nodata)
+        dem[void] = -9999.0
+
+    source = {"requested": best_topo, "resolution": resolution_used, "paths": paths}
+    return dem, transform, crs, source
 
 
 # --- CONUS coverage audit (--audit) -----------------------------------------

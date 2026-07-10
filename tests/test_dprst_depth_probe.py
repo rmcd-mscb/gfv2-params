@@ -72,3 +72,25 @@ def test_depth_to_spill_and_mean_depth_on_synthetic_bowl():
     assert np.isclose(a, 9.0)          # 9 cells * 1 m^2
     assert np.isclose(v, 18.0)         # 9 cells * depth 2 * 1 m^2
     assert np.isclose(mean_d, 2.0)     # V/A
+
+
+def test_depth_to_spill_zeroes_nodata_void_no_spurious_depth():
+    # Same 3x3 pit as above, but with a nodata void planted at a corner
+    # (simulating a tile-edge / data-gap cell inside a real read_window
+    # window). A 9x9 grid (not 5x5) keeps the pit well clear of a richdem
+    # small-grid edge case where a border no_data cell can suppress the fill
+    # entirely on a tiny array; real read_window windows are hundreds of
+    # pixels wide, so this is representative of production shapes.
+    n = 9
+    dem = np.full((n, n), 10.0, dtype=np.float64)
+    c = n // 2
+    dem[c - 1 : c + 2, c - 1 : c + 2] = 8.0
+    dem[0, 0] = -9999.0  # nodata void
+
+    # Default nodata (None -> sentinel -9999.0), matching the realistic
+    # read_window -> depth_to_spill(dem) call path (no explicit nodata arg).
+    depth = probe.depth_to_spill(dem)
+
+    assert np.isclose(depth[0, 0], 0.0)       # void cell: no spurious fill-to-rim depth
+    assert np.isclose(depth[c, c], 2.0)       # real pit still computed correctly
+    assert np.isclose(depth[n - 1, n - 1], 0.0)  # untouched rim cell stays 0
