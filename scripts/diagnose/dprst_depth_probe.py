@@ -10,8 +10,14 @@ import subprocess
 from pathlib import Path
 
 import geopandas as gpd
+import numpy as np
 import pandas as pd
 import pyogrio
+import rasterio
+import richdem as rd
+from rasterio.vrt import WarpedVRT
+from rasterio.warp import transform_geom
+from rasterio.windows import from_bounds
 
 from gfv2_params.depstor import load_connected_comids, select_connected_waterbodies
 from gfv2_params.nhd_ftypes import EXCLUDE_WATERBODY_FTYPES, FORCE_DPRST_FTYPES
@@ -49,6 +55,109 @@ def resolution_class(
         {True: "1m", False: "10m"}
     )
     return out
+
+
+# --- Windowed best-available-topo reader + depth-to-spill (Task 3) ---------
+
+# 1/3 arc-second (10 m) seamless national elevation tiles, 1x1 deg, named by
+# NW corner. Anonymous public bucket; see the `read_window` docstring.
+TILE13_S3_TEMPLATE = (
+    "/vsis3/prd-tnm/StagedProducts/Elevation/13/TIFF/current/{tile}/USGS_13_{tile}.tif"
+)
+
+
+def depth_to_spill(dem: np.ndarray, nodata: float | None = None) -> np.ndarray:
+    """filled - raw over a RAW dem. float64 fill per the DEM-derivatives gotcha.
+
+    Never route through WhiteboxTools here (LZW+predictor=2 corruption gotcha
+    is a non-issue for richdem, which works on in-memory arrays, but the
+    convention of "float64 fill, richdem not WBT" is kept for consistency
+    with compute_dem_derivatives.py). Returned depth is float32, clipped to
+    be non-negative, and zeroed at nodata cells.
+    """
+    a = np.asarray(dem, dtype=np.float64)
+    rda = rd.rdarray(a, no_data=(nodata if nodata is not None else -9999.0))
+    filled = np.asarray(rd.FillDepressions(rda, in_place=False), dtype=np.float64)
+    depth = filled - a
+    depth[depth < 0] = 0.0
+    if nodata is not None:
+        depth[a == nodata] = 0.0
+    return depth.astype(np.float32)
+
+
+def volume_mean_depth(depth: np.ndarray, mask: np.ndarray, cell_area_m2: float):
+    """V = sum(depth*area), A = sum(area) over masked cells; mean = V/A (metres)."""
+    sel = depth[mask]
+    a = float(mask.sum()) * cell_area_m2
+    v = float(sel.sum()) * cell_area_m2
+    mean_d = v / a if a > 0 else 0.0
+    return v, a, mean_d
+
+
+def _tile13_name(lon: float, lat: float) -> str:
+    """1x1 deg 1/3 arc-second tile name from a point, e.g. n48w101 for a
+    point at lat 47.3, lon -100.6 (NW corner: north=ceil(lat), west=ceil(-lon))."""
+    north = int(np.ceil(lat))
+    west = int(np.ceil(-lon))
+    return f"n{north:02d}w{west:03d}"
+
+
+def read_window(geom, best_topo: str, wesm_row=None, rim_buffer_m: float = 200.0):
+    """Windowed RAW-DEM read of geom bbox + rim from the best-available source.
+
+    best_topo == "1m": read the covering WESM project COG (path from wesm_row).
+    best_topo == "10m": read the seamless 1/3 arc-second tile from
+      /vsis3/prd-tnm/StagedProducts/Elevation/13/TIFF/current/<tile>/USGS_13_<tile>.tif
+    Returns (dem float32, transform, crs). Reproject-on-read to EPSG:5070 (equal
+    area) so cell_area is uniform; never materialise beyond the window.
+
+    `geom` is expected in EPSG:5070 — the CRS of the shipped dprst polygon set
+    (`conus_waterbodies.gpkg`), which is also this function's `dst_crs`, so
+    `rim_buffer_m` (metres) adds directly to `geom.bounds` with no reprojection.
+    The 10 m tile grid is named by lon/lat, so only the centroid is reprojected
+    to EPSG:4326 (via `transform_geom`) to resolve the tile name.
+
+    NOTE (2026-07-10 smoke test): unlike the 10 m floor, a WESM 1 m *project*
+    is not published as a single COG — S3 listing shows each project's `TIFF/`
+    directory holds many small per-tile GeoTIFFs (e.g.
+    `USGS_one_meter_x41y517_ND_KidderCO_2014.tif`, ~1 km tiles keyed by a
+    UTM-derived x/y index, not by polygon). `wesm_row` here is treated as
+    already carrying a single resolved raster path (e.g. a project VRT the
+    caller built via `gdalbuildvrt`); resolving the covering per-tile 1 m COG
+    (or building/caching a per-project VRT) from a raw WESM row is unimplemented
+    — flagged as a Phase-1 follow-up, not solved by this spike task.
+    """
+    if best_topo == "1m":
+        if wesm_row is None:
+            raise ValueError("best_topo='1m' requires wesm_row with a source COG path")
+        src_path = wesm_row["s3_path"] if hasattr(wesm_row, "__getitem__") else wesm_row
+    elif best_topo == "10m":
+        centroid_5070 = {"type": "Point", "coordinates": (geom.centroid.x, geom.centroid.y)}
+        centroid_4326 = transform_geom("EPSG:5070", "EPSG:4326", centroid_5070)
+        lon, lat = centroid_4326["coordinates"]
+        tile = _tile13_name(lon, lat)
+        src_path = TILE13_S3_TEMPLATE.format(tile=tile)
+    else:
+        raise ValueError(f"unknown best_topo {best_topo!r}; expected '1m' or '10m'")
+
+    minx, miny, maxx, maxy = geom.bounds
+    minx -= rim_buffer_m
+    miny -= rim_buffer_m
+    maxx += rim_buffer_m
+    maxy += rim_buffer_m
+
+    env_opts = {
+        "AWS_NO_SIGN_REQUEST": "YES",
+        "GDAL_DISABLE_READDIR_ON_OPEN": "EMPTY_DIR",
+    }
+    with rasterio.Env(**env_opts):
+        with rasterio.open(src_path) as src:
+            with WarpedVRT(src, crs="EPSG:5070", resampling=rasterio.enums.Resampling.bilinear) as vrt:
+                window = from_bounds(minx, miny, maxx, maxy, transform=vrt.transform)
+                dem = vrt.read(1, window=window)
+                transform = vrt.window_transform(window)
+                crs = vrt.crs
+    return dem.astype(np.float32), transform, crs
 
 
 # --- CONUS coverage audit (--audit) -----------------------------------------

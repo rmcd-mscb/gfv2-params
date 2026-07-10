@@ -2,6 +2,7 @@ import importlib.util
 from pathlib import Path
 
 import geopandas as gpd
+import numpy as np
 from shapely.geometry import Point
 
 _spec = importlib.util.spec_from_file_location(
@@ -55,3 +56,19 @@ def test_resolution_class_assigns_1m_inside_footprint():
     )
     out = probe.resolution_class(dprst, wesm)
     assert list(out.sort_values("COMID")["best_topo"]) == ["1m", "10m"]
+
+
+def test_depth_to_spill_and_mean_depth_on_synthetic_bowl():
+    # 5x5 flat plateau at z=10 with a single 3x3 pit of depth 2 (z=8).
+    dem = np.full((5, 5), 10.0, dtype=np.float64)
+    dem[1:4, 1:4] = 8.0
+    depth = probe.depth_to_spill(dem)
+    # Filled restores the pit to the rim (10); depth = 2 in the pit, 0 on the rim.
+    assert np.isclose(depth[2, 2], 2.0)
+    assert np.isclose(depth[0, 0], 0.0)
+
+    mask = depth > 0            # the 3x3 pit
+    v, a, mean_d = probe.volume_mean_depth(depth, mask, cell_area_m2=1.0)
+    assert np.isclose(a, 9.0)          # 9 cells * 1 m^2
+    assert np.isclose(v, 18.0)         # 9 cells * depth 2 * 1 m^2
+    assert np.isclose(mean_d, 2.0)     # V/A
