@@ -102,6 +102,25 @@ TILE1M_HTTPS_TEMPLATE = (
 )
 
 
+def _normalize_nodata(
+    arr: np.ndarray, src_nodata: float | None, sentinel: float = -9999.0
+) -> np.ndarray:
+    """Return a float32 copy of `arr` with void cells mapped to `sentinel`.
+
+    A cell is void if it is NaN, or (when `src_nodata` is not None and not
+    itself NaN) if it equals `src_nodata`. All other cells are unchanged.
+    Pulled out of `read_window` (issue #173 review fix) so the realistic
+    nodata-normalization path — a real numeric source nodata (e.g. 3DEP's
+    -999999) alongside a NaN cell — is unit-testable without a live S3 read.
+    """
+    out = np.asarray(arr, dtype=np.float32).copy()
+    void = np.isnan(out)
+    if src_nodata is not None and not math.isnan(src_nodata):
+        void |= out == np.float32(src_nodata)
+    out[void] = sentinel
+    return out
+
+
 def depth_to_spill(dem: np.ndarray, nodata: float | None = None) -> np.ndarray:
     """filled - raw over a RAW dem. float64 fill per the DEM-derivatives gotcha.
 
@@ -366,9 +385,7 @@ def read_window(geom, best_topo: str, wesm_row=None, rim_buffer_m: float = 200.0
             if vsimem_vrt is not None:
                 gdal.Unlink(vsimem_vrt)
 
-    if nodata is not None:
-        void = np.isnan(dem) if math.isnan(nodata) else dem == np.float32(nodata)
-        dem[void] = -9999.0
+    dem = _normalize_nodata(dem, nodata)
 
     source = {"requested": best_topo, "resolution": resolution_used, "paths": paths}
     return dem, transform, crs, source

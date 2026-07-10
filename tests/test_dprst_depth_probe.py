@@ -94,3 +94,35 @@ def test_depth_to_spill_zeroes_nodata_void_no_spurious_depth():
     assert np.isclose(depth[0, 0], 0.0)       # void cell: no spurious fill-to-rim depth
     assert np.isclose(depth[c, c], 2.0)       # real pit still computed correctly
     assert np.isclose(depth[n - 1, n - 1], 0.0)  # untouched rim cell stays 0
+
+
+def test_normalize_nodata_maps_voids_to_sentinel():
+    # Realistic read_window shape: a real numeric source nodata (3DEP's
+    # -999999, not -9999) at one cell, a NaN void at another (e.g. a tile
+    # mosaic seam), and otherwise-valid data -- this is the exact branch
+    # flagged as untested (only reachable via a live S3 read before this
+    # extraction), since all prior smoke tests used 0 nodata.
+    n = 9
+    src_nodata = -999999.0
+    arr = np.full((n, n), 10.0, dtype=np.float64)
+    c = n // 2
+    arr[c - 1 : c + 2, c - 1 : c + 2] = 8.0  # a real 3x3 pit, depth 2
+    arr[0, 0] = src_nodata                   # real numeric nodata void
+    arr[0, 1] = np.nan                       # NaN void
+
+    normalized = probe._normalize_nodata(arr, src_nodata)
+
+    assert normalized.dtype == np.float32
+    assert normalized[0, 0] == -9999.0
+    assert normalized[0, 1] == -9999.0
+    assert np.isclose(normalized[c, c], 8.0)          # pit cell unchanged
+    assert np.isclose(normalized[n - 1, n - 1], 10.0)  # valid rim cell unchanged
+
+    # Chain into depth_to_spill (no explicit nodata -> default sentinel
+    # -9999.0) to prove the realistic read_window -> depth_to_spill path end
+    # to end without a live S3 read: both void cells produce zero depth, and
+    # the real pit is still filled correctly.
+    depth = probe.depth_to_spill(normalized)
+    assert np.isclose(depth[0, 0], 0.0)
+    assert np.isclose(depth[0, 1], 0.0)
+    assert np.isclose(depth[c, c], 2.0)
