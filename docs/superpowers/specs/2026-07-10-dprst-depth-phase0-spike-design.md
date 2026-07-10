@@ -24,7 +24,11 @@ parameter — "no-go, fall back to constant 49 in for FTYPE X" is a valid outcom
 - **S3 `prd-tnm` is reachable from this HPC** (the DPI middlebox permits AWS over
   HTTPS, unlike the PROJ CDN and `gh`). Verified with an anonymous
   `ListObjectsV2` against `StagedProducts/Elevation/1m/Projects/`. → windowed
-  `/vsis3/` COG reads work; **no bulk staging required**.
+  `/vsis3/` COG reads work; **no bulk staging required** (exception found in
+  Task 2: WESM.gpkg specifically cannot be opened over `/vsis3/` — a GDAL
+  GeoPackage driver bug — so the WESM metadata GeoPackage needs a one-time
+  local HTTPS download; per-project 1 m COG reads over `/vsis3/` are
+  unaffected).
 - `richdem`, `whitebox`, `rasterio`, `pyogrio` are all in the pixi env.
 - dprst inputs are all present:
   `{data_root}/input/nhd/conus_waterbodies.gpkg`,

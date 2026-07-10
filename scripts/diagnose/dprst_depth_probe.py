@@ -304,6 +304,13 @@ def run_audit(base: dict, logger, wesm_cache_dir: Path) -> pd.DataFrame:
     national = dprst.groupby("best_topo").agg(n=("COMID", "size"), area_km2=("area_km2", "sum"))
     national["pct_n"] = 100.0 * national["n"] / total_polys
     national["pct_area"] = 100.0 * national["area_km2"] / total_km2
+    logger.warning(
+        "1m%% figures below are a convex-hull UPPER BOUND: WESM multi-part "
+        "workunit footprints are collapsed to their convex hull before the "
+        "spatial join (see load_wesm_1m_footprints docstring), which can "
+        "only OVERSTATE 1m coverage, never understate it. True 1m coverage "
+        "may be lower.",
+    )
     for topo in ("1m", "10m"):
         if topo in national.index:
             row = national.loc[topo]
@@ -336,12 +343,11 @@ def main() -> None:
     parser.add_argument("--fabric", default=None,
                          help="Fabric name (overrides FABRIC env / default_fabric).")
     parser.add_argument(
-        "--out-dir", type=Path,
-        default=Path(
-            "/tmp/claude-21018/-caldera-hovenweep-projects-usgs-water-impd-nhgf-gfv2-params"
-            "/a0974587-ef53-4c14-82bd-a2c889179a89/scratchpad"
-        ),
-        help="Directory to write coverage_audit.csv into (default: this spike's scratchpad).",
+        "--out-dir", type=Path, required=True,
+        help="Directory to write coverage_audit.csv into. REQUIRED — also "
+             "doubles as the WESM.gpkg download cache dir (multi-GB "
+             "one-time download), so pick a path with enough free space; "
+             "there is no default.",
     )
     args = parser.parse_args()
 
@@ -351,7 +357,16 @@ def main() -> None:
     per_vpu = run_audit(base, logger, wesm_cache_dir=args.out_dir)
 
     out_csv = args.out_dir / "coverage_audit.csv"
-    per_vpu.to_csv(out_csv, index=False)
+    caveat = (
+        "# CAVEAT: 1m%/1m-count figures are a convex-hull UPPER BOUND — WESM "
+        "multi-part workunit footprints are collapsed to their convex hull "
+        "before the best_topo spatial join, which can only OVERSTATE 1m "
+        "coverage, never understate it. True 1m coverage may be lower. See "
+        "load_wesm_1m_footprints() in dprst_depth_probe.py.\n"
+    )
+    with open(out_csv, "w") as f:
+        f.write(caveat)
+        per_vpu.to_csv(f, index=False)
     logger.info("Wrote per-VPU coverage audit: %s (%d rows)", out_csv, len(per_vpu))
 
 
