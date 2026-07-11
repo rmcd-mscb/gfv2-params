@@ -810,24 +810,37 @@ def sample_per_ftype(
     return samples
 
 
-def _interior_values(dem: np.ndarray, transform, geom, sentinel: float = -9999.0) -> np.ndarray:
-    """Mask `dem` to cells whose centre lies inside `geom` (the raw,
-    unbuffered dprst polygon), dropping the surrounding rim-buffer terrain
-    `read_window` pulled in and any nodata sentinel cells.
+def _interior_mask(dem: np.ndarray, transform, geom, sentinel: float = -9999.0) -> np.ndarray:
+    """Boolean mask of `dem` cells whose centre lies inside `geom` (the raw,
+    unbuffered dprst polygon) and are not the nodata sentinel.
 
     `read_window`'s DEM window covers `geom.bounds` padded by `rim_buffer_m`
     on every side; rasterizing the *unbuffered* polygon geometry onto that
-    same transform is exactly "exclude the rim buffer, measure interior
-    flatness" — no separate erosion needed, the rim buffer only exists
-    outside `geom` in the first place.
+    same transform is exactly "exclude the rim buffer, keep only the
+    polygon interior" — no separate erosion needed, the rim buffer only
+    exists outside `geom` in the first place. Pulled out of `_interior_values`
+    (issue #173 Task 5) so `run_freeboard` can reuse the identical interior
+    definition Task 4's flatness detector uses, rather than re-deriving it —
+    `_interior_values` (below) is now a thin wrapper over this mask.
     """
     from rasterio.features import geometry_mask
 
     if dem.size == 0:
-        return np.empty(0, dtype=np.float64)
+        return np.zeros(dem.shape, dtype=bool)
     mask = geometry_mask([geom], out_shape=dem.shape, transform=transform, invert=True)
-    vals = dem[mask].astype(np.float64)
-    return vals[vals != sentinel]
+    mask &= dem != sentinel
+    return mask
+
+
+def _interior_values(dem: np.ndarray, transform, geom, sentinel: float = -9999.0) -> np.ndarray:
+    """Interior (non-rim-buffer, non-nodata) `dem` values as a flat float64 array.
+
+    See `_interior_mask` for the mask definition this wraps.
+    """
+    if dem.size == 0:
+        return np.empty(0, dtype=np.float64)
+    mask = _interior_mask(dem, transform, geom, sentinel)
+    return dem[mask].astype(np.float64)
 
 
 def analyze_flatness_sample(
@@ -994,14 +1007,218 @@ def run_flatness(
     return summary
 
 
+# --- Freeboard quantification over Task 4's detected-flat sample (--freeboard, Task 5) --
+
+
+def analyze_freeboard_sample(
+    flat_df: pd.DataFrame, dprst_lookup: gpd.GeoDataFrame, project: str, logger,
+) -> pd.DataFrame:
+    """Run `read_window` -> `depth_to_spill` -> interior mask -> `volume_mean_depth`
+    over every Task-4-detected-flat polygon and return one row per polygon.
+
+    `flat_df` is the `flat == True` slice of Task 4's `flatness_per_polygon.csv`
+    (COMID + FTYPE only — the cached CSV has no geometry); `dprst_lookup` is the
+    Task 4 ND dprst subset (`select_nd_project`'s return), indexed by COMID, used
+    only to recover each flat polygon's geometry. Mean freeboard = filled - raw
+    averaged over the polygon interior (`_interior_mask`, Task 4's helper) — the
+    above-water spill storage a hydro-flattened breakline surface hides above its
+    constant water-surface elevation.
+    """
+    rows = []
+    n_total = len(flat_df)
+    n_done = 0
+    for row in flat_df.itertuples(index=False):
+        comid = row.COMID
+        ftype = row.FTYPE
+        n_done += 1
+        if comid not in dprst_lookup.index:
+            logger.warning(
+                "  [%d/%d] COMID=%s: not found in the ND dprst subset — skipped",
+                n_done, n_total, comid,
+            )
+            continue
+        geom = dprst_lookup.loc[comid, "geometry"]
+        try:
+            dem, transform, crs, source = read_window(geom, "1m", wesm_row={"project": project})
+        except Exception as exc:  # noqa: BLE001 - log and skip, never abort the sample
+            logger.warning(
+                "  [%d/%d] FTYPE=%s COMID=%s: read_window failed (%s) — skipped",
+                n_done, n_total, ftype, comid, exc,
+            )
+            continue
+        mask = _interior_mask(dem, transform, geom)
+        n_interior = int(mask.sum())
+        if n_interior == 0:
+            logger.warning(
+                "  [%d/%d] FTYPE=%s COMID=%s: 0 interior cells after masking — skipped",
+                n_done, n_total, ftype, comid,
+            )
+            continue
+        depth = depth_to_spill(dem)
+        cell_area_m2 = abs(transform.a * transform.e)
+        v, a, mean_d = volume_mean_depth(depth, mask, cell_area_m2)
+        frac_wet = float((depth[mask] > 0).mean())
+        rows.append({
+            "COMID": comid,
+            "FTYPE": ftype,
+            "area_m2": a,
+            "mean_freeboard_m": mean_d,
+            "mean_freeboard_in": mean_d * 39.3701,
+            "frac_interior_wet": frac_wet,
+            "n_interior_cells": n_interior,
+            "resolution": source["resolution"],
+        })
+        if n_done % 25 == 0 or n_done == n_total:
+            logger.info(
+                "  [%d/%d] FTYPE=%s COMID=%s freeboard=%.3f in (frac_wet=%.2f)",
+                n_done, n_total, ftype, comid, mean_d * 39.3701, frac_wet,
+            )
+    return pd.DataFrame(rows)
+
+
+def _write_freeboard_cdf(result: pd.DataFrame, out_png: Path, logger) -> None:
+    """CDF of mean freeboard (inches) across detected-flat polygons — the
+    visual evidence for the Task 5 finding (routinely non-trivial vs ~0)."""
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    vals = np.sort(result["mean_freeboard_in"].to_numpy())
+    cdf = np.arange(1, len(vals) + 1) / len(vals)
+    fig, ax = plt.subplots(figsize=(8, 5))
+    ax.plot(vals, cdf, drawstyle="steps-post", color="#1f77b4")
+    ax.axvline(0.0, color="black", linestyle="--", linewidth=1, label="0 in (no freeboard)")
+    ax.set_xlabel("mean freeboard (in)")
+    ax.set_ylabel("cumulative fraction of detected-flat polygons")
+    ax.set_title(f"Freeboard CDF over hydro-flattened dprst polygons (n={len(vals)})")
+    ax.legend()
+    fig.tight_layout()
+    fig.savefig(out_png, dpi=150)
+    plt.close(fig)
+    logger.info("  wrote freeboard CDF: %s", out_png)
+
+
+def run_freeboard(
+    base: dict, logger, out_dir: Path, wesm_cache_dir: Path, limit: int | None = None,
+) -> pd.DataFrame:
+    """Issue #173 Task 5: quantify freeboard (filled - raw) over Task 4's
+    detected-flat (hydro-flattened) dprst polygon sample.
+
+    Reads the cached `flatness_per_polygon.csv` Task 4 wrote to `out_dir`
+    rather than recomputing the flatness sample from scratch — FAILS LOUD
+    if it is absent (that sample costs ~731 live /vsicurl/ reads, ~20 min;
+    `--freeboard` is a downstream analysis over its cached result, not a
+    standalone rerun). Filters to `flat == True` (~105/731 on the ND
+    project, issue #173 Task 4), reconstructs the identical ND dprst subset
+    + project (`select_nd_project`, same as Task 4) purely to recover each
+    flat COMID's geometry (the per-polygon CSV is COMID/FTYPE/stats only —
+    CSVs don't carry geometry), then runs `analyze_freeboard_sample` and
+    writes `freeboard_dist.csv` + `freeboard_cdf.png`.
+
+    `limit`, if given, caps the number of flat polygons analyzed (head of
+    the flat slice) — for smoke-testing the read/compute path cheaply
+    without paying for the full ~105-polygon read.
+    """
+    flat_csv = out_dir / "flatness_per_polygon.csv"
+    if not flat_csv.exists():
+        raise RuntimeError(
+            f"{flat_csv} not found — --freeboard reads Task 4's flatness sample "
+            "and does NOT recompute it (that sample costs ~731 live /vsicurl/ "
+            f"reads, ~20 min). Run `--flatness --out-dir {out_dir}` first, then "
+            "re-run --freeboard."
+        )
+    per_polygon = pd.read_csv(flat_csv)
+    if "flat" not in per_polygon.columns or "COMID" not in per_polygon.columns:
+        raise KeyError(
+            f"{flat_csv} is missing 'flat'/'COMID' columns — not a Task 4 "
+            "flatness_per_polygon.csv?"
+        )
+    flat_df = per_polygon[per_polygon["flat"].astype(bool)].copy()
+    if limit is not None:
+        flat_df = flat_df.head(limit)
+    n_flat = len(flat_df)
+    logger.info(
+        "Loaded %d detected-flat polygons from %s (of %d total sampled)%s",
+        n_flat, flat_csv, len(per_polygon),
+        f" [--limit {limit}]" if limit is not None else "",
+    )
+    if n_flat == 0:
+        raise RuntimeError(f"0 flat=True polygons in {flat_csv} — nothing to analyze")
+
+    dprst = load_conus_dprst(base, logger)
+    wesm_path = ensure_wesm_local(wesm_cache_dir, logger)
+    logger.info(
+        "Reselecting the ND 1m project + dprst subset (Task 4's select_nd_project) "
+        "to recover flat-polygon geometries ..."
+    )
+    project, nd_dprst = select_nd_project(dprst, wesm_path, logger)
+    del dprst
+    gc.collect()
+
+    if "COMID" not in nd_dprst.columns:
+        raise KeyError("ND dprst subset has no COMID column; cannot match Task 4's flat-polygon list")
+    lookup = nd_dprst.drop_duplicates(subset="COMID").set_index("COMID")
+
+    logger.info("Reading each detected-flat polygon at 1m + computing freeboard ...")
+    result = analyze_freeboard_sample(flat_df, lookup, project, logger)
+    n_ok = len(result)
+    logger.info("Freeboard reads completed: %d/%d flat polygons produced a usable result", n_ok, n_flat)
+    if result.empty:
+        raise RuntimeError("freeboard analysis produced 0 usable polygons")
+
+    med = float(result["mean_freeboard_in"].median())
+    p10 = float(np.percentile(result["mean_freeboard_in"], 10))
+    p90 = float(np.percentile(result["mean_freeboard_in"], 90))
+    logger.info(
+        "Freeboard distribution (inches) over detected-flat polygons: median=%.2f, "
+        "p10=%.2f, p90=%.2f (n=%d)",
+        med, p10, p90, n_ok,
+    )
+    if med < 1.0:
+        logger.info(
+            "*** Freeboard finding: median ~%.2f in is essentially ZERO — flattened "
+            "ponds are outlet-controlled; baseline depth_to_spill on the RAW rim does "
+            "NOT capture their storage, the terrain model must carry the submerged "
+            "volume ***",
+            med,
+        )
+    else:
+        logger.info(
+            "*** Freeboard finding: median ~%.2f in is NON-TRIVIAL — baseline "
+            "depth_to_spill already captures meaningful above-water spill storage for "
+            "flattened ponds ***",
+            med,
+        )
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out_csv = out_dir / "freeboard_dist.csv"
+    caveat = (
+        f"# Freeboard (filled - raw) over Task 4 detected-flat dprst polygons "
+        f"(issue #173 Task 5). Project={project}. n_flat_input={n_flat}"
+        + (f" (--limit {limit})" if limit is not None else "")
+        + f", n_usable={n_ok}. mean_freeboard = volume_mean_depth(depth_to_spill(dem)) "
+        "over the polygon interior (rim_buffer_m terrain and nodata excluded via "
+        "_interior_mask).\n"
+    )
+    with open(out_csv, "w") as f:
+        f.write(caveat)
+        result.to_csv(f, index=False)
+    logger.info("Wrote per-polygon freeboard distribution: %s", out_csv)
+
+    _write_freeboard_cdf(result, out_dir / "freeboard_cdf.png", logger)
+
+    return result
+
+
 def main() -> None:
     from gfv2_params.config import load_base_config
     from gfv2_params.log import configure_logging
 
     parser = argparse.ArgumentParser(description=__doc__)
     # Mutually-exclusive MODE group: exactly one investigation task per run.
-    # Tasks 5-7 (issue #173) add --freeboard/--hollister/--regression here as
-    # more mutually_exclusive_group() members — do not go back to a single
+    # Tasks 6-7 (issue #173) add --hollister/--regression here as more
+    # mutually_exclusive_group() members — do not go back to a single
     # `required=True` flag (that breaks the moment a second mode is added;
     # see Task 2 review carry-forward note).
     mode = parser.add_mutually_exclusive_group(required=True)
@@ -1010,6 +1227,11 @@ def main() -> None:
     mode.add_argument("--flatness", action="store_true",
                        help="Run the ND flatness-detector validation + SwampMarsh "
                             "verdict (Task 4, issue #173).")
+    mode.add_argument("--freeboard", action="store_true",
+                       help="Quantify freeboard (filled - raw) over Task 4's "
+                            "detected-flat dprst polygon sample (Task 5, issue #173). "
+                            "Requires flatness_per_polygon.csv already in --out-dir "
+                            "(run --flatness first).")
     parser.add_argument("--fabric", default=None,
                          help="Fabric name (overrides FABRIC env / default_fabric).")
     parser.add_argument(
@@ -1026,6 +1248,12 @@ def main() -> None:
              "per issue #173 Task 4). Uses fewer if a FTYPE has fewer "
              "polygons in the chosen project — never silently capped, "
              "always logged.",
+    )
+    parser.add_argument(
+        "--limit", type=int, default=None,
+        help="--freeboard only: cap the number of detected-flat polygons analyzed "
+             "(head of the flat slice) — for cheap smoke-testing; default: analyze "
+             "every flat=True polygon in flatness_per_polygon.csv.",
     )
     args = parser.parse_args()
 
@@ -1052,6 +1280,11 @@ def main() -> None:
         run_flatness(
             base, logger, out_dir=args.out_dir, wesm_cache_dir=args.out_dir,
             n_per_ftype=args.n_per_ftype,
+        )
+    elif args.freeboard:
+        run_freeboard(
+            base, logger, out_dir=args.out_dir, wesm_cache_dir=args.out_dir,
+            limit=args.limit,
         )
 
 
