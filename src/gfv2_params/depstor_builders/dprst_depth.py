@@ -58,13 +58,12 @@ from pathlib import Path
 import geopandas as gpd
 import pandas as pd
 
-from ..depstor import load_connected_comids
 from ..download.epa_ecoregions import ECO_ID_FIELD, ecoregion_of
 from ..dprst_depth.burn import burn_depth
 from ..dprst_depth.compute import run_batch
 from ..dprst_depth.fill import fill_flat, fit_ecoregion_models
 from ..dprst_depth.tiling import group_by_tile
-from ..dprst_depth.topo import dprst_polygons, resolution_class
+from ..dprst_depth.topo import load_fabric_dprst_polygons, resolution_class
 from .context import BuildContext
 
 # Columns computed by compute.run_batch/compute_polygon that survive the
@@ -85,22 +84,16 @@ OP_FLOW_THRES_VALUE = 1.0
 POLYGON_PROVENANCE_FILENAME = "dprst_depth_polygons.parquet"
 
 
-def _load_vector(path, layer, columns, logger):
-    """geopandas.read_file with the pyarrow-backed pyogrio engine, falling
-    back to fiona if pyarrow is unavailable (mirrors wbody_connectivity.py /
-    dprst_depth_probe.py's `_read_vector`)."""
-    try:
-        return gpd.read_file(path, layer=layer, columns=columns, use_arrow=True)
-    except ImportError:
-        logger.warning("PyArrow unavailable for vector load; falling back to fiona.")
-        return gpd.read_file(path, layer=layer, columns=columns)
-
-
 def _load_dprst_polygons(ctx: BuildContext, logger) -> gpd.GeoDataFrame:
-    """Reconstruct the shipped dprst polygon set (waterbody_gpkg + the
-    connected(WBAREACOMI) UNION flow-through COMID union -> topo.dprst_polygons).
+    """Reconstruct the fabric-clipped dprst polygon set.
 
-    Mirrors `scripts/diagnose/dprst_depth_probe.py`'s `load_conus_dprst`.
+    Validates the fabric-profile paths, then delegates the reconstruction +
+    fabric clip to `topo.load_fabric_dprst_polygons` — the SAME shared helper
+    the SLURM plan hook (`tiling.py::_load_and_tag_for_plan`) calls, so the
+    in-process builder path and the array/plan path can't diverge (both
+    reconstruct from `conus_waterbodies.gpkg` + the COMID union and clip to
+    the fabric's HRU extent — without that clip a regional fabric would
+    process the whole CONUS dprst set).
     """
     if ctx.waterbody_gpkg is None or ctx.waterbody_layer is None:
         raise KeyError(
@@ -120,33 +113,22 @@ def _load_dprst_polygons(ctx: BuildContext, logger) -> gpd.GeoDataFrame:
         )
     if not ctx.waterbody_gpkg.exists():
         raise FileNotFoundError(f"Waterbody gpkg not found: {ctx.waterbody_gpkg}")
+    if ctx.flowthrough_comids_table is not None and not ctx.flowthrough_comids_table.exists():
+        raise FileNotFoundError(
+            f"Flow-through COMID table not found: {ctx.flowthrough_comids_table}. "
+            f"Run `python -m gfv2_params.download.nhd_flowthrough` first, or "
+            f"remove `flowthrough_comids_table` from the profile."
+        )
 
-    connected = load_connected_comids(ctx.connected_comids_table)
-    n_wbareacomi = len(connected)
-    n_flowthrough = 0
-    if ctx.flowthrough_comids_table is not None:
-        if not ctx.flowthrough_comids_table.exists():
-            raise FileNotFoundError(
-                f"Flow-through COMID table not found: {ctx.flowthrough_comids_table}. "
-                f"Run `python -m gfv2_params.download.nhd_flowthrough` first, or "
-                f"remove `flowthrough_comids_table` from the profile."
-            )
-        flowthrough = load_connected_comids(ctx.flowthrough_comids_table)
-        n_flowthrough = len(flowthrough - connected)
-        connected = connected | flowthrough
-    logger.info(
-        "  connected COMIDs: %d WBAREACOMI + %d new flow-through = %d total",
-        n_wbareacomi, n_flowthrough, len(connected),
+    return load_fabric_dprst_polygons(
+        waterbody_gpkg=ctx.waterbody_gpkg,
+        waterbody_layer=ctx.waterbody_layer,
+        connected_comids_table=ctx.connected_comids_table,
+        flowthrough_comids_table=ctx.flowthrough_comids_table,
+        hru_gpkg=ctx.hru_gpkg,
+        hru_layer=ctx.hru_layer,
+        logger=logger,
     )
-
-    wb_gdf = _load_vector(
-        ctx.waterbody_gpkg, ctx.waterbody_layer, ["COMID", "FTYPE", "member_comid"], logger,
-    )
-    logger.info("  %d waterbody polygons loaded", len(wb_gdf))
-
-    dprst = dprst_polygons(wb_gdf, connected)
-    logger.info("  reconstructed dprst polygon set: %d polygons", len(dprst))
-    return dprst
 
 
 def _tag_polygons(dprst: gpd.GeoDataFrame, ctx: BuildContext, logger) -> tuple[gpd.GeoDataFrame, gpd.GeoDataFrame]:

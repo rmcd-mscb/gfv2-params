@@ -96,26 +96,55 @@ pixi run --as-is python -m gfv2_params.download.nhd_topology
 sbatch slurm_batch/download_nhd_flowlines.batch
 # Stage flow-through waterbody COMIDs (one-time, CONUS):
 sbatch slurm_batch/stage_nhd_flowthrough.batch
+# Stage WESM 1m footprints (one-time, CONUS; dprst_depth's best-available-topo tagging):
+pixi run --as-is python -m gfv2_params.download.wesm
 pixi run --as-is python scripts/clip_shared_to_fabric.py --fabric gfv2   # tiny VRT (login OK)
+
+# 3a. landmask FIRST, standalone — dprst_depth (3b, below) needs land_mask.tif
+# on disk before it can fill+burn, but must itself run BEFORE the rest of the
+# stack (3c) reaches the dprst_depth step (issue #173 — its in-process
+# fallback is a ~250-500 CORE-HOUR CONUS compute, i.e. unbounded wall-clock
+# on one core; see HPC_REFERENCE.md "Stage 2d'"):
+sbatch slurm_batch/build_depstor_rasters.batch --step landmask
+
+# 3b. dprst_depth's own SLURM array (plan -> array -> build -> mean_zonal ->
+# mean_finalize) -- wait for this to COMPLETE before 3c:
+BATCHES=$(pixi run --as-is python -c \
+  "import yaml;print(yaml.safe_load(open('configs/base_config.yml'))['data_root'])")/gfv2/batches
+slurm_batch/submit_dprst_depth.sh "$BATCHES" gfv2 configs/base_config.yml 150
+
+# 3c. the rest of the depstor raster stack (landmask + dprst_depth both
+# already exist -> skipped fast; imperv/waterbody/wbody_connectivity/dprst/
+# perv/hru_id/vpu_id/routing/routing_hru/drains_*/carea_map run normally):
 sbatch slurm_batch/build_depstor_rasters.batch
 ```
 
 **What it does:** clips the fabric-bounds FDR template, then builds the full
-depression-storage raster stack. The three NHD staging steps are one-time
-CONUS runs. `nhd_topology` stages the NHDPlus PlusFlowlineVAA network
-(`flowline_topology.parquet`) and **must run first**: both COMID steps gate
-on-stream promotion on Network-Flowline membership, so a waterbody NHD tagged
-only via Non-Network flowlines (closed-basin lakes) stays depression storage
-(issue #161). `nhd_flowlines` then stages WBAREACOMI-connected COMIDs and
-`nhd_flowthrough` adds flow-through COMIDs (both fail loud if the topology
-parquet is missing) — the two COMID sets are unioned by the
-`wbody_connectivity` builder. If you
-update either NHD staging COMID output after an initial build, rerun the
-depstor stack from `wbody_connectivity`
+depression-storage raster stack. The three NHD staging steps + the WESM stage
+are one-time CONUS runs. `nhd_topology` stages the NHDPlus PlusFlowlineVAA
+network (`flowline_topology.parquet`) and **must run first**: both COMID
+steps gate on-stream promotion on Network-Flowline membership, so a waterbody
+NHD tagged only via Non-Network flowlines (closed-basin lakes) stays
+depression storage (issue #161). `nhd_flowlines` then stages
+WBAREACOMI-connected COMIDs and `nhd_flowthrough` adds flow-through COMIDs
+(both fail loud if the topology parquet is missing) — the two COMID sets are
+unioned by the `wbody_connectivity` builder. If you update either NHD staging
+COMID output after an initial build, rerun the depstor stack from
+`wbody_connectivity`
 (`sbatch slurm_batch/build_depstor_rasters.batch --from wbody_connectivity --force`).
 
-**Wait for:** the job `COMPLETED`; `{fabric}/depstor_rasters/` holds the full
-stack (through `carea_map_t8/t156_binary.tif`).
+`dprst_depth` (3b) is split out of the single whole-stack job (3c) because its
+compute cost scales with the ~286k CONUS dprst **polygons** (one windowed DEM
+read each), not the CONUS grid — see `docs/ARCHITECTURE.md`'s "CONUS-scale
+COMPUTE" gotcha and `HPC_REFERENCE.md`'s "Stage 2d'" for the full DAG,
+sizing arithmetic, and recovery. `submit_dprst_depth.sh`'s stages produce
+`dprst_depth.tif`/`op_flow_thres_params.csv` (`{fabric}/depstor_rasters/`)
+*and* `nhm_dprst_depth_avg_params.csv` (`{fabric}/params/merged/`) — the
+latter does not go through Step 4's depstor-fractions loop below.
+
+**Wait for:** step 3a `COMPLETED`; step 3b's final job (`mean_finalize`)
+`COMPLETED`; then step 3c `COMPLETED`. `{fabric}/depstor_rasters/` holds the
+full stack (through `carea_map_t8/t156_binary.tif`).
 
 ---
 
@@ -301,9 +330,15 @@ tail -n 200 logs/job_<JOBID>.err
 
 - `{data_root}/gfv2/params/merged/` — final parameter CSVs, including the 6
   depstor ratios (`sro_to_dprst_perv`, `sro_to_dprst_imperv`, `carea_max`,
-  `smidx_coef`, `hru_percent_imperv`, `dprst_frac`).
+  `smidx_coef`, `hru_percent_imperv`, `dprst_frac`) and
+  `nhm_dprst_depth_avg_params.csv` (issue #173 — derived, NOT the pyWatershed
+  132 in default; see `docs/pywatershed_depression_storage_requirements.md`).
 - `{data_root}/gfv2/params/merged/_intermediates/` — 10 per-fraction count
   CSVs (inputs to ratio derivation; `count` is NOT a [0, 1] fraction).
+- `{data_root}/gfv2/depstor_rasters/dprst_depth.tif`,
+  `op_flow_thres_params.csv` — Step 3's `dprst_depth` step output (per-cell
+  V/A mean depth raster; `op_flow_thres_params.csv` is the constant-1.0
+  per-HRU CSV, not a `merged/` CSV — see Step 3).
 - `docs/figures/gfv2/` — rendered PNG figures.
 - `{data_root}/gfv2/snodas/` — per-year aggregated SNODAS SWE/SCA/`swe_std`
   NetCDFs (Stage 1 of the snow depletion curve pipeline, optional Step 8).

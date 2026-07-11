@@ -1,0 +1,49 @@
+#!/bin/bash
+#SBATCH -p cpu
+#SBATCH -A impd
+#SBATCH --job-name=dprst_depth_plan
+#SBATCH --output=logs/job_%j.out
+#SBATCH --error=logs/job_%j.err
+#SBATCH --time=01:00:00
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=2
+#SBATCH --mem=32G
+#
+# Stage 1 of the dprst_depth pipeline (issue #173 Task 9): reconstructs +
+# tags the CONUS dprst polygon set (best_topo via WESM, ecoregion via EPA
+# L3 -- same reconstruction depstor_builders/dprst_depth.py's builder uses),
+# builds the tile -> polygon work-list (tiling.group_by_tile), and bins it
+# into N_TILE_BATCHES SLURM-array batches (tiling.component_tile_batches --
+# greedy LPT bin-packing by polygon count, connected-component-safe so a
+# polygon spanning >1 tile never gets its tiles split across batches).
+# Persists both to {output_dir}/dprst_depth_batches/_plan/ for
+# run_dprst_depth_batch.batch's array tasks to read. Pure geometry + local
+# vector reads -- NO live S3/vsicurl (tile existence is a compute-time
+# concern, Task 4, not resolved here). --mem=32G covers the full CONUS
+# waterbody/WESM/ecoregions vector loads comfortably (these are vector
+# GeoDataFrames, not raster grids -- contrast the 384G full-grid depstor
+# builders).
+#
+# Submitted first by slurm_batch/submit_dprst_depth.sh; the array job
+# (stage 2) depends afterok on this one.
+#
+# Standalone:
+#   sbatch --export=ALL,BASE_CONFIG=configs/base_config.yml,FABRIC=gfv2,N_TILE_BATCHES=150 \
+#       slurm_batch/plan_dprst_depth_batches.batch
+# Dry-run/sizing check without submitting anything (prints the same summary,
+# still writes the plan artifacts -- run on the head node only if the fabric
+# is small, e.g. oregon; CONUS-scale should go through sbatch):
+#   pixi run python -m gfv2_params.dprst_depth.tiling --plan --fabric oregon --n-batches 20
+# See slurm_batch/RUNME.md and slurm_batch/HPC_REFERENCE.md for detail.
+
+cd "$SLURM_SUBMIT_DIR"
+BASE_CONFIG=${BASE_CONFIG:-configs/base_config.yml}
+FABRIC=${FABRIC:-gfv2}
+N_TILE_BATCHES=${N_TILE_BATCHES:-150}
+
+pixi run --as-is python -m gfv2_params.dprst_depth.tiling \
+    --plan \
+    --config configs/depstor/depstor_rasters.yml \
+    --base_config "$BASE_CONFIG" \
+    --fabric "$FABRIC" \
+    --n-batches "$N_TILE_BATCHES"

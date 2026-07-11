@@ -35,6 +35,28 @@ def test_dprst_polygons_classification():
     assert 13 not in comids            # Ice Mass excluded entirely
 
 
+def test_clip_dprst_to_fabric_drops_out_of_fabric_polygons(tmp_path):
+    import logging
+
+    from shapely.geometry import box
+
+    # 3 dprst polygons: two inside the fabric HRU footprint, one far outside.
+    dprst = gpd.GeoDataFrame(
+        {"COMID": [1, 2, 3]},
+        geometry=[box(0, 0, 1, 1), box(2, 2, 3, 3), box(100, 100, 101, 101)],
+        crs="EPSG:5070",
+    )
+    # A single HRU polygon covering only the first two.
+    hru = gpd.GeoDataFrame(
+        {"nat_hru_id": [1]}, geometry=[box(-1, -1, 4, 4)], crs="EPSG:5070"
+    )
+    hru_path = tmp_path / "hru.gpkg"
+    hru.to_file(hru_path, layer="nhru", driver="GPKG")
+
+    out = topo._clip_dprst_to_fabric(dprst, hru_path, "nhru", logging.getLogger("t"))
+    assert sorted(out["COMID"]) == [1, 2]  # the out-of-fabric COMID 3 is dropped
+
+
 def test_resolution_class_assigns_1m_inside_footprint():
     import geopandas as gpd
     from shapely.geometry import Point, box

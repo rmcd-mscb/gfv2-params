@@ -2,7 +2,7 @@ import geopandas as gpd
 import pytest
 from shapely.geometry import box
 
-from gfv2_params.dprst_depth.tiling import group_by_tile, tile_batches
+from gfv2_params.dprst_depth.tiling import component_tile_batches, group_by_tile, tile_batches
 
 
 def test_group_by_tile_and_batching():
@@ -80,3 +80,36 @@ def test_tile_batches_more_batches_than_tiles_yields_empty_batches():
     assert len(batches) == 5
     assert sum(len(b) for b in batches) == 2
     assert sum(1 for b in batches if b) == 2
+
+
+def test_component_tile_batches_keeps_multi_tile_polygon_co_batched():
+    # Polygon 1 spans tiles "a" and "b" (present in both groups); a plain
+    # tile_batches (Task 3) could legally place "a" and "b" in different
+    # batches, which would make compute.run_batch treat polygon 1 as
+    # single-tile in EACH batch and compute it twice from an incomplete
+    # window (Task 4's flagged concern). component_tile_batches must never
+    # split them, regardless of n_batches or how many other tiles exist.
+    groups = {
+        "a": [1, 2],
+        "b": [1, 3],
+        "c": [4],
+        "d": [5],
+        "e": [6],
+    }
+    for n_batches in (1, 2, 3, 5, 10):
+        batches = component_tile_batches(groups, n_batches=n_batches)
+        assert len(batches) == n_batches
+        assert sum(len(b) for b in batches) == len(groups)
+        assert {k for b in batches for k in b} == set(groups)
+        batch_of_a = next(i for i, b in enumerate(batches) if "a" in b)
+        batch_of_b = next(i for i, b in enumerate(batches) if "b" in b)
+        assert batch_of_a == batch_of_b
+
+
+def test_component_tile_batches_matches_tile_batches_when_no_sharing():
+    # No polygon spans two tiles -> every component is a singleton -> same
+    # partition tile_batches itself would produce.
+    groups = {"a": [1, 2, 3, 4], "b": [5], "c": [6], "d": [7]}
+    plain = tile_batches(groups, n_batches=2)
+    componentised = component_tile_batches(groups, n_batches=2)
+    assert {frozenset(b) for b in plain} == {frozenset(b) for b in componentised}

@@ -179,6 +179,8 @@ whether the depstor pipeline will be run for the fabric:
 | `flowthrough_comids_table` | — | — | Path to `input/nhd/flowthrough_waterbody_comids.parquet` — a second on-stream COMID set from flow-through topology: waterbodies that a **Network** conveyance flowline demonstrably enters AND exits (T1), or whose upstream end is inside the waterbody per authoritative NHDPlus routed-network direction (D1 — source/headwater lakes and split pass-through outflows), or that overlap an NHDArea conveyance polygon (T3). T1/D1 candidate flowlines are gated to Network Flowlines (in `flowline_topology.parquet`) so Non-Network closed-basin lines can't promote endorheic lakes (issue #161). Playa/Ice Mass waterbodies are dropped up front and never promoted onto the on-stream set (Playa because it's force-dprst; Ice Mass because it's excluded from the waterbody classification entirely — see the `waterbody` row below). Produced by `download/nhd_flowthrough.py`; unioned with `connected_comids_table` by `wbody_connectivity` before rasterizing (which also re-applies the `NEVER_ONSTREAM_FTYPES` guardrail to the unioned set, so it covers the WBAREACOMI path too). Optional (omitting it uses `connected_comids_table` only). |
 | `waterbody_gpkg` | — | ✓ | NHDPlus waterbodies; depstor's `waterbody` step **raises** if unset. If the layer has an `FTYPE` column, `waterbody` drops `EXCLUDE_WATERBODY_FTYPES` (`{"Ice Mass"}`) before rasterizing: a glacier/permanent ice mass is not depression storage, so its cells are left out of `wbody_binary`/`wbody_regions` entirely and fall back to land (perv/imperv via LULC), not dprst and not on-stream. Playa is unaffected here — it stays a normal waterbody clump and is force-dprst downstream by the `NEVER_ONSTREAM_FTYPES` guardrail in `wbody_connectivity`/`nhd_flowthrough`. |
 | `waterbody_layer` | — | ✓ | Layer name inside `waterbody_gpkg` |
+| `wesm_index` | — | ✓ | Path to `input/wesm/wesm_1m_footprints.gpkg` — pre-staged, 1m/QL1/QL2-qualifying USGS 3DEP WESM workunit footprints (a `project` column + geometry). Produced by `pixi run python -m gfv2_params.download.wesm` (issue #173). Consumed by the `dprst_depth` step's `topo.resolution_class` (best-available-topo tagging) and `tiling.group_by_tile` (1 m tile-key resolution); required for `dprst_depth`, not for any other depstor step. |
+| `ecoregions_gpkg` | — | ✓ | Path to `input/ecoregions/us_eco_l3.gpkg` — EPA Level III Ecoregions (see `gfv2_params.download.epa_ecoregions`). Used by the `dprst_depth` step's per-ecoregion regional-fill donor pool (`dprst_depth.fill.fit_ecoregion_models`); every fabric profile with a depstor-configured `dprst_depth` step already stages it (also listed as a shared, reusable input in `README.md`'s Stage 0). |
 
 For `template_raster`/`fdr_raster`, stage the clip with:
 
@@ -308,6 +310,19 @@ These are hard-won; violating them silently corrupts outputs.
   isolation, and mosaics); reproject with streaming `gdal.Warp`, not in-memory
   `rioxarray.reproject_match`; window per `STRIP_ROWS` like `carea_map`. See
   CLAUDE.md for the full gotcha.
+- **CONUS-scale COMPUTE (not memory): `dprst_depth` is per-polygon, not
+  per-cell — budget core-hours, not GB.** Every other depstor step's cost
+  scales with the CONUS grid (cells); `dprst_depth`'s cost scales with the
+  dprst polygon count (~286k) times one windowed DEM read each, ~250-500
+  core-hours run serially — small individually, but with no per-cell ceiling
+  to hit an OOM guard on, so nothing stops it from silently running for
+  weeks inside a single job unless it's fanned out. Its SLURM array bins by
+  elevation TILE (`tiling.group_by_tile`/`component_tile_batches`), not HRU
+  batch, and MUST run via `slurm_batch/submit_dprst_depth.sh` (or the
+  equivalent plan → array → build chain) before the ordinary
+  `build_depstor_rasters.batch` walk reaches the `dprst_depth` step — see the
+  "How to add a new pipeline step" exception above and
+  `slurm_batch/HPC_REFERENCE.md`'s "Stage 2d'".
 - **On-stream classification is the union of two COMID sources.** The
   `wbody_connectivity` builder loads both `connected_waterbody_comids.parquet`
   (WBAREACOMI artificial-path topology, staged by `download/nhd_flowlines.py`)
@@ -373,6 +388,30 @@ zonal param family):
 Do NOT add a new standalone script or a new YAML file. The
 orchestrator + builder + unified-config pattern is the only way new steps
 land.
+
+**Exception: a step whose in-process compute cost exceeds one SLURM job's
+wall-clock.** `dprst_depth` (issue #173) is the first depstor step whose
+`build()` cost — a windowed DEM read per dprst polygon, ~286k polygons
+CONUS-wide — is itself ~250-500 core-hours, too large to run serially inside
+`build_depstor_rasters.py`'s single job. The step is still a normal builder
+module + `BUILDERS`/`STEP_ORDER` registration + config block (Task 7), but
+its CONUS-scale compute is fanned out over its OWN SLURM array *ahead of*
+that job, keyed on the elevation TILE rather than the HRU batch every other
+array in this repo uses (`src/gfv2_params/dprst_depth/tiling.py`'s
+`group_by_tile`/`component_tile_batches`, `scripts/run_dprst_depth_batch.py`,
+`slurm_batch/submit_dprst_depth.sh`). `depstor_builders/dprst_depth.py`'s
+`build()` stays a normal, always-correct in-process fallback (small/test
+fabrics take that path automatically — no `batch_dir` populated); the array
+just pre-populates `{output_dir}/dprst_depth_batches/*.parquet` so the SAME
+`build()` call, when it runs as part of the ordinary
+`build_depstor_rasters.batch` walk, finds the work already done and
+concatenates instead of recomputing. A future step with a similar per-feature
+(not per-cell) compute-budget problem should follow this precedent — a
+dedicated plan/array/finalize SLURM DAG feeding the same builder's
+`build_dir`/`batch_dir`-style detection, not a change to the orchestrator's
+core sequential walk. See `slurm_batch/submit_dprst_depth.sh`'s header for
+the sizing arithmetic and `slurm_batch/HPC_REFERENCE.md`'s "Stage 2d'" for
+the full DAG + recovery.
 
 For a concrete trace of an existing parameter end-to-end, see
 [docs/ADDING_A_PARAMETER.md](ADDING_A_PARAMETER.md) — walks `--param elevation`

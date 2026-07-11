@@ -24,7 +24,7 @@ from rasterio.warp import calculate_default_transform, transform_bounds, transfo
 from rasterio.windows import from_bounds
 from scipy import ndimage
 
-from ..depstor import select_connected_waterbodies
+from ..depstor import load_connected_comids, select_connected_waterbodies
 from ..nhd_ftypes import EXCLUDE_WATERBODY_FTYPES, FORCE_DPRST_FTYPES
 
 gdal.UseExceptions()
@@ -43,6 +43,110 @@ def dprst_polygons(wb_gdf: gpd.GeoDataFrame, connected: set[int]) -> gpd.GeoData
     onstream = onstream[~onstream["FTYPE"].isin(FORCE_DPRST_FTYPES)]
     onstream_idx = set(onstream.index)
     return wb[~wb.index.isin(onstream_idx)].copy()
+
+
+def _read_vector_arrow(path, layer, columns, logger):
+    """`gpd.read_file` with the pyarrow-backed pyogrio engine, fiona fallback.
+
+    Mirrors `depstor_builders/dprst_depth.py`'s `_load_vector` and the plan
+    hook's own read idiom — kept here so the shared
+    `load_fabric_dprst_polygons` below (called by BOTH the builder and the
+    plan hook) reads vectors identically for both callers.
+    """
+    try:
+        return gpd.read_file(path, layer=layer, columns=columns, use_arrow=True)
+    except ImportError:
+        logger.warning("PyArrow unavailable for vector load; falling back to fiona.")
+        return gpd.read_file(path, layer=layer, columns=columns)
+
+
+def _clip_dprst_to_fabric(dprst, hru_gpkg, hru_layer, logger):
+    """Keep only dprst polygons that intersect the fabric's HRU geometry.
+
+    The dprst polygon set is reconstructed from the SHARED CONUS
+    `conus_waterbodies.gpkg` (every fabric profile points `waterbody_gpkg`
+    there), so without this clip a regional fabric (e.g. oregon) would
+    reconstruct and process the ENTIRE CONUS dprst set (~321k polygons),
+    not its own — defeating the "prove it on a small fabric first" workflow
+    and making a regional run cost the same as CONUS. Bbox-prefilter against
+    the HRU `total_bounds` (fast, drops the vast majority for a regional
+    fabric), then refine with a spatial-indexed `sjoin(predicate="intersects")`
+    against the HRU polygons themselves so only genuinely in-fabric polygons
+    survive. For the CONUS `gfv2` fabric the HRU bbox IS CONUS, so essentially
+    all polygons are (correctly) kept.
+    """
+    hru = _read_vector_arrow(hru_gpkg, hru_layer, None, logger)
+    if hru.crs is not None and dprst.crs is not None and hru.crs != dprst.crs:
+        hru = hru.to_crs(dprst.crs)
+
+    minx, miny, maxx, maxy = hru.total_bounds
+    pre = dprst.cx[minx:maxx, miny:maxy]
+    if len(pre) == 0:
+        logger.warning(
+            "  fabric clip: NO dprst polygons fall in the HRU bbox — check the "
+            "fabric/waterbody CRS alignment"
+        )
+        return pre.copy()
+
+    joined = gpd.sjoin(pre, hru[["geometry"]], how="inner", predicate="intersects")
+    kept_idx = joined.index.unique()
+    return dprst.loc[kept_idx].copy()
+
+
+def load_fabric_dprst_polygons(
+    waterbody_gpkg,
+    waterbody_layer,
+    connected_comids_table,
+    flowthrough_comids_table,
+    hru_gpkg,
+    hru_layer,
+    logger,
+) -> gpd.GeoDataFrame:
+    """Reconstruct the dprst polygon set and CLIP it to the fabric extent.
+
+    The single shared entry point used by BOTH the `dprst_depth` builder
+    (`depstor_builders/dprst_depth.py::_load_dprst_polygons`) and the plan
+    hook (`tiling.py::_load_and_tag_for_plan`), so the reconstruction + the
+    fabric clip can never diverge between the SLURM plan/array path and the
+    in-process builder path. Steps:
+
+      1. Union the connected(WBAREACOMI) COMID set with the optional
+         flow-through COMID set.
+      2. Load `conus_waterbodies.gpkg` and reconstruct the dprst polygon set
+         (`dprst_polygons`: drop on-stream, force-Playa-dprst, exclude Ice Mass).
+      3. Clip to the fabric's HRU geometry (`_clip_dprst_to_fabric`) — the
+         fix for the CONUS-scope bug (a regional fabric would otherwise
+         process the whole CONUS set).
+
+    Callers own their own presence/existence validation of the paths before
+    calling this (the builder raises fabric-profile-specific KeyErrors; the
+    plan hook raises its own) — this function assumes the paths are valid.
+    """
+    connected = load_connected_comids(connected_comids_table)
+    n_wbareacomi = len(connected)
+    n_flowthrough = 0
+    if flowthrough_comids_table is not None:
+        flowthrough = load_connected_comids(flowthrough_comids_table)
+        n_flowthrough = len(flowthrough - connected)
+        connected = connected | flowthrough
+    logger.info(
+        "  connected COMIDs: %d WBAREACOMI + %d new flow-through = %d total",
+        n_wbareacomi, n_flowthrough, len(connected),
+    )
+
+    wb_gdf = _read_vector_arrow(
+        waterbody_gpkg, waterbody_layer, ["COMID", "FTYPE", "member_comid"], logger,
+    )
+    logger.info("  %d waterbody polygons loaded", len(wb_gdf))
+
+    dprst = dprst_polygons(wb_gdf, connected)
+    logger.info("  reconstructed CONUS dprst set: %d polygons", len(dprst))
+
+    clipped = _clip_dprst_to_fabric(dprst, hru_gpkg, hru_layer, logger)
+    logger.info(
+        "  clipped to fabric: %d polygons (from %d CONUS)", len(clipped), len(dprst),
+    )
+    return clipped
 
 
 def resolution_class(
