@@ -235,6 +235,66 @@ median/IQR, not raw max, until this is fixed. **Verdict: viable for the
 hydro-flattened minority**, where §6 showed freeboard ≈ 0 and the terrain
 model must carry the submerged volume.
 
+> **Revised by follow-up validation below (§7a):** raw uncalibrated
+> Hollister is too weak to use directly for the flattened minority. See
+> ["Follow-up: Hollister validated against measured bathymetry"](#7a-follow-up-hollister-validated-against-measured-bathymetry-2026-07-11)
+> for the corrected method.
+
+## 7a. Follow-up: Hollister validated against measured bathymetry (2026-07-11)
+
+**Method.** §7's Hollister prototype had no ground truth to check against —
+LakePond polygons there were hydro-flattened, so the DEM itself is blind to
+real bed depth. This follow-up instead used the **non-hydro-flattened**
+polygons, where the raw 3DEP DEM captures the real lakebed and
+`depth_to_spill` gives ground-truth mean *and* max depth. Hollister's
+predicted max depth was compared against this measured max depth on the
+same n=367 non-flat, non-degenerate ND polygons (all 1 m). A nodata-in-ring
+bug in `lake_max_depth` (flagged as a known issue in §7) was fixed first
+(commit `9cf0fe3`) — before the fix, void cells in the shoreline ring
+inflated predictions to ~20,000 m RMSE.
+
+**Finding 1 — Hollister skill (predicted vs. measured max depth):**
+R²=0.173 (r=0.416), RMSE=7.1 m, with a **systematic +3.19 m median
+over-prediction**. Weak but non-zero correlation — the bias looks
+calibratable, and skill varies a lot by FTYPE: Reservoir R²=0.322 (a real
+signal), SwampMarsh R²=0.085, LakePond R²=0.037.
+
+**Finding 2 — empirical max→mean factor:** measured_mean/measured_max has
+median **0.529** (IQR [0.10, 0.83]) on this same sample — the §7 cone
+assumption (1/3 ≈ 0.333) falls within the IQR but sits low against the
+median.
+
+**Finding 3 — end-to-end Hollister→mean(cone) pipeline:** R²=0.059,
+RMSE=2.24 m — **poor**.
+
+**Figures:** `hollister_pred_vs_measured_max.png` (predicted vs. measured
+max depth, n=367) and `maxmean_factor_hist.png` (empirical mean/max factor
+distribution).
+
+![Hollister predicted vs. measured max depth](hollister_pred_vs_measured_max.png)
+
+![Empirical max-to-mean factor histogram](maxmean_factor_hist.png)
+
+**Table:** `dprst_depth_spike_data/hollister_validation.csv` (n=431 sampled,
+367 usable non-flat/non-degenerate).
+
+**Correction to the §7/§11 recommendation.** §7 proposed raw Hollister
+terrain-slope × cone(1/3) for the hydro-flattened minority. This validation
+shows that **raw, uncalibrated Hollister is too weak to use directly**
+end-to-end (R²≈0.06), and §8's depth–area regression is separately R²≈0 —
+so neither fallback candidate for the flattened minority is fit for
+purpose as originally proposed. The **revised method for the flat
+minority** is a **per-ecoregion regional fill**: the median measured V/A
+depth of non-flat polygons of the same FTYPE/ecoregion (floor = NHM 49 in
+calibrated median) — using the measurable majority as donors, the same
+logic as the playa-anchored regression idea in §8 but with a robust median
+instead of a fitted line. Hollister is retained only as an **optional
+per-ecoregion candidate**: a *calibrated* Hollister (fit a slope→depth
+coefficient and shape factor on that ecoregion's own measured non-flat
+polygons) may replace the median fill *only* where it beats the median
+null on cross-validated skill. This is **untestable on the single-ecoregion
+ND spike data** and is deferred to the multi-ecoregion Oregon Phase 1 run.
+
 ## 8. Evidence 6 — Depth–area regression (playa-anchored)
 
 **Method.** Fit log–log `depth ~ area` (and the equivalent V–A) power laws
@@ -286,6 +346,14 @@ Depth–area regression is **not** in the "method chosen" column for any
 FTYPE — §8 shows it is not predictive (R² 0.004–0.071 even stratified) and
 is demoted to informational-only; the constant is the true fallback tier.
 
+**Revision (§7a):** the "Hollister for the flattened X%" cells above are
+superseded by the [§7a follow-up](#7a-follow-up-hollister-validated-against-measured-bathymetry-2026-07-11) —
+raw Hollister validated poorly (end-to-end R²≈0.06) against measured
+bathymetry, so the flat-minority method is now a per-ecoregion measured
+regional-median fill (floor = NHM 49 in), with calibrated Hollister
+retained only as an optional per-ecoregion candidate that must beat the
+median null.
+
 ## 10. Projected CONUS bucketing
 
 Applying the ND PPR flattened rates and the coverage-audit resolution split
@@ -314,9 +382,14 @@ these percentages as CONUS truth.
 1. **Non-flat majority (~80–95% of polygons per FTYPE, §5)** → raw-DEM
    `depth_to_spill` volume/area gives real, measured depth.
 2. **Flattened minority** → freeboard ≈ 0 there (§6), so the raw DEM alone
-   is blind to their storage; Hollister terrain-slope max-depth × cone(1/3)
-   (§7) is plausible and order-of-magnitude consistent with the NHM
-   calibrated reference, and is the right tool for exactly this subset.
+   is blind to their storage. §7's original raw Hollister terrain-slope ×
+   cone(1/3) proposal is **revised by the [§7a follow-up](#7a-follow-up-hollister-validated-against-measured-bathymetry-2026-07-11)**:
+   validated against measured bathymetry, raw Hollister is too weak
+   end-to-end (R²≈0.06) to use directly. The corrected method is a
+   per-ecoregion measured regional-median fill (donor = non-flat polygons
+   of the same FTYPE/ecoregion, floor = NHM 49 in), with calibrated
+   Hollister as an optional per-ecoregion candidate only if it beats the
+   median null on cross-validated skill.
 3. **Constant (NHM median 49 in)** is the documented fallback tier for
    residual failures — **not** a fitted depth–area regression, which §8
    shows carries essentially no predictive power (R² 0.004–0.071) even
