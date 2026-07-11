@@ -45,16 +45,17 @@ area-weighted zonal → `{fabric}/params/merged/*.csv`). **Only the per-polygon 
 everything downstream is existing infrastructure.
 
 ### 0. Ecoregion layer — staged once as a shared, reusable input
-EPA Level III/IV Ecoregions of the conterminous US. **Not fabric-specific and reusable by other
-parameterizations**, so it is staged like the other shared inputs: a new `src/gfv2_params/download/epa_ecoregions.py`
-module (matching the `download/` pattern — `nhd_*`, `mrlc_impervious`, `copernicus_dem`) that pulls the
-layer and writes it to a shared location under `{data_root}/input/ecoregions/` (e.g. `us_eco_l3l4.gpkg`,
-EPSG:5070), path recorded in the shared config / base profile (not per-fabric). The dprst polygon →
-ecoregion assignment is a centroid spatial join done once during the fill stage.
-- **Source-reachability caveat:** only AWS S3 over HTTPS is confirmed reachable from this HPC (PROJ CDN,
-  `gh`, and `/vsis3/` GeoPackage all had issues). The EPA download host must be tested for reachability
-  the way S3 was; if the EPA server is DPI-blocked, resolve a reachable mirror (ScienceBase / an S3 copy)
-  or stage manually and point the config at it. The staging step must fail loud, not silently skip.
+EPA **Level III** Ecoregions of the conterminous US (77 regions — bigger, more robust donor pools per
+region than L4). **Not fabric-specific and reusable by other parameterizations**, so it is staged like
+the other shared inputs: a new `src/gfv2_params/download/epa_ecoregions.py` module (matching the
+`download/` pattern — `nhd_*`, `mrlc_impervious`, `copernicus_dem`) that pulls the layer and writes it to
+a shared location under `{data_root}/input/ecoregions/us_eco_l3.gpkg` (EPSG:5070), path recorded in the
+shared config / base profile (not per-fabric). The dprst polygon → ecoregion assignment is a centroid
+spatial join on `US_L3CODE` done once during the fill stage.
+- **Source (confirmed reachable, HTTP 200, ~28 MB):**
+  `https://dmap-prod-oms-edc.s3.us-east-1.amazonaws.com/ORD/Ecoregions/us/us_eco_l3.zip` — on AWS S3, so
+  it reaches this HPC over HTTPS (the one transport confirmed working). Staging must be idempotent and
+  fail loud on a non-200 (do not silently skip).
 
 ### 1. Config block — `configs/depstor/depstor_rasters.yml` (+ `depstor_params.yml` entry)
 3DEP paths (`{data_root}` placeholders / `/vsicurl/` S3 templates), WESM index path, rim buffer,

@@ -126,9 +126,9 @@ def stage_ecoregions(dest_dir: Path, logger) -> Path:
 
 - [ ] **Step 4: Run test to verify the join passes** — `pixi run -e dev pytest tests/test_epa_ecoregions.py -v` → PASS.
 
-- [ ] **Step 5: Resolve the download source + stage live**
+- [ ] **Step 5: Stage live from the confirmed S3 source**
 
-Probe reachability (mirror the S3 test): try the EPA host, ScienceBase, and any S3 mirror for the L3/L4 ecoregion layer; implement `stage_ecoregions`' body against the first reachable one; reproject to EPSG:5070; write the gpkg. Run `pixi run python -m gfv2_params.download.epa_ecoregions --dest {data_root}/input/ecoregions` and confirm a valid gpkg (CONUS extent, non-empty L3/L4 codes). Record the path in the shared/base config. If NO source is reachable from the HPC, STOP and report — the controller escalates (manual stage).
+Source (confirmed reachable, HTTP 200, ~28 MB, EPA Level III): `https://dmap-prod-oms-edc.s3.us-east-1.amazonaws.com/ORD/Ecoregions/us/us_eco_l3.zip`. On S3, so it reaches this HPC over HTTPS. Implement `stage_ecoregions` to download that zip, read the shapefile (`us_eco_l3.shp`, field `US_L3CODE`), reproject to EPSG:5070, and write `us_eco_l3.gpkg`. Idempotent (skip if present), fail loud on a non-200. Run `pixi run python -m gfv2_params.download.epa_ecoregions --dest {data_root}/input/ecoregions` → confirm a valid gpkg (CONUS extent, 77 non-empty `US_L3CODE` values). Record the path in the shared/base config.
 
 - [ ] **Step 6: Commit**
 

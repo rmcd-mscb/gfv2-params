@@ -132,7 +132,17 @@ sbatch slurm_batch/download_rpu_rasters.batch
 sbatch slurm_batch/download_nalcms.batch
 ```
 
-Both scripts are idempotent — already-downloaded files are skipped on resubmission.
+**Download EPA Level III Ecoregions** (~28 MB) — a shared, reusable input used by
+the `dprst_depth` builder (per-ecoregion depth fill) and available to other
+parameterizations. Source:
+[us_eco_l3.zip](https://dmap-prod-oms-edc.s3.us-east-1.amazonaws.com/ORD/Ecoregions/us/us_eco_l3.zip)
+(US EPA; on AWS S3, reachable from the HPC). Staged to `{data_root}/input/ecoregions/`:
+
+```bash
+pixi run python -m gfv2_params.download.epa_ecoregions --dest "$DATA_ROOT/input/ecoregions"
+```
+
+All download scripts are idempotent — already-downloaded files are skipped on resubmission.
 
 **Build the CONUS shared raster store (recommended):** once the downloads
 above are complete, the entire raster preparation DAG runs from one
