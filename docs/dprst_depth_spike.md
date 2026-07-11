@@ -142,7 +142,10 @@ range across the full 731-polygon sample, flat vs. natural, with the
 **Method.** Apply the validated detector to the 731-polygon per-FTYPE
 sample. This is the single highest-value number in the spike: SwampMarsh
 alone is 50.5% of CONUS dprst area, so its flattened rate dominates the
-overall risk assessment.
+overall risk assessment. (Per-FTYPE area shares — SwampMarsh 50.5%, LakePond
+36.6%, Playa 10.8%, Reservoir 1.9% — are from Issue #173's prior dprst-exposure
+measurement, not reproduced by this spike's CSVs; they are used here as
+fixed weights.)
 
 **Table:** `flatness_by_ftype.csv`
 
@@ -291,8 +294,8 @@ area split, weighted by each FTYPE's share of dprst area:
 
 | Method bucket | Approx. area share |
 |---|---:|
-| Raw-DEM measured depth (`depth_to_spill`, non-flat majority) | **~85–90%** of dprst area (weighted: SwampMarsh 78.3%×50.5% + LakePond 89.0%×36.6% + Playa 100%×10.8% + Reservoir 94.6%×1.9% ≈ 88%) |
-| Hollister terrain-slope (flattened minority, freeboard ≈ 0) | **~10–15%** of dprst area (the complement, weighted the same way ≈ 12%) |
+| Raw-DEM measured depth (`depth_to_spill`, non-flat majority) | **~85–90%** of dprst area (weighted: SwampMarsh 78.3%×50.5% + LakePond 89.0%×36.6% + Playa 100%×10.8% + Reservoir 94.6%×1.9% ≈ 85%) |
+| Hollister terrain-slope (flattened minority, freeboard ≈ 0) | **~10–15%** of dprst area (the complement, weighted the same way ≈ 15%) |
 | Constant fallback (49 in) | Small residual — polygons where even the 10 m floor read fails, or where Hollister's shoreline-ring slope is degenerate (flat surrounding terrain) |
 
 At 98.7–98.8% national 1 m coverage (§3, itself a convex-hull upper bound)
