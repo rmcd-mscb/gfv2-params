@@ -181,13 +181,34 @@ def volume_mean_depth(depth: np.ndarray, mask: np.ndarray, cell_area_m2: float):
 
 def lake_max_depth(dem: np.ndarray, polygon_mask: np.ndarray, transform) -> float:
     """Hollister/lakeMorpho-style: project the mean shoreline slope inward to the
-    lake's point of maximum distance-to-shore. Predicts MAX depth."""
+    lake's point of maximum distance-to-shore. Predicts MAX depth.
+
+    A ring cell (or a `np.gradient` neighbour of one) that sits on a
+    `read_window`-style `-9999.0` nodata void (or a non-finite value) must
+    never enter the slope calculation: a real elevation jumping to -9999
+    across one pixel produces a wildly inflated gradient and an absurd
+    `max_depth` (issue #173 T6 finding). Void cells are neutralized to NaN
+    before the gradient is taken (so a void neighbour poisons only its own
+    `np.gradient` output, via `np.nanmean`, not the whole ring), and the
+    ring itself is also stripped of any surviving void cells before
+    averaging.
+    """
+    sentinel = -9999.0
     cell = abs(transform.a) if transform.a else 1.0
     # mean terrain slope in a shoreline ring just outside the lake
     ring = ndimage.binary_dilation(polygon_mask, iterations=2) & ~polygon_mask
-    gy, gx = np.gradient(np.asarray(dem, float), cell)
+    dem_arr = np.asarray(dem, float)
+    void = (dem_arr == sentinel) | ~np.isfinite(dem_arr)
+    ring = ring & ~void
+    dem_clean = np.where(void, np.nan, dem_arr)
+    gy, gx = np.gradient(dem_clean, cell)
     slope = np.hypot(gx, gy)
-    mean_slope = float(slope[ring].mean()) if ring.any() else 0.0
+    ring_slope = slope[ring]
+    if not ring.any() or not np.isfinite(ring_slope).any():
+        return 0.0
+    mean_slope = float(np.nanmean(ring_slope))
+    if not np.isfinite(mean_slope):
+        return 0.0
     # max distance from any lake cell to the shore
     dist = ndimage.distance_transform_edt(polygon_mask) * cell
     return mean_slope * float(dist.max())

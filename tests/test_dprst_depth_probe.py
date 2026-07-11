@@ -158,3 +158,28 @@ def test_lake_max_depth_scales_with_surrounding_slope():
     # ~ slope(0.2) * radius(10) order of magnitude; positive, not absurd.
     assert 0.5 < d < 5.0
     assert np.isclose(probe.max_to_mean(3.0, shape="cone"), 1.0)
+
+
+def test_lake_max_depth_ignores_nodata_ring():
+    import numpy as np
+    from affine import Affine
+
+    # Same setup as test_lake_max_depth_scales_with_surrounding_slope, but
+    # plant a -9999 nodata void (a tile-edge gap read_window would produce)
+    # in the shoreline ring just outside the lake. Without excluding it,
+    # np.gradient jumps from a real elevation (~96-98) to -9999 across one
+    # pixel, producing a wildly inflated mean_slope and an absurd max_depth
+    # (issue #173 T6 finding) instead of the same bounded result as the
+    # void-free case.
+    n = 41
+    yy, xx = np.mgrid[0:n, 0:n]
+    r = np.hypot(xx - 20, yy - 20)
+    mask = r <= 10
+    dem = 100 - 0.2 * np.minimum(r, 20)
+    dem[mask] = dem[mask].min()
+    dem = dem.astype(np.float64)
+    # A ring cell (radius ~11, just outside mask) set to the nodata sentinel.
+    dem[20, 31] = -9999.0
+    d = probe.lake_max_depth(dem, mask, Affine.identity())
+    assert np.isfinite(d)
+    assert 0.5 < d < 5.0
