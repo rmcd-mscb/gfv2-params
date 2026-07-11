@@ -23,7 +23,7 @@ from rasterio.errors import RasterioIOError
 from rasterio.vrt import WarpedVRT
 from rasterio.warp import calculate_default_transform, transform_bounds, transform_geom
 from rasterio.windows import from_bounds
-from scipy import ndimage
+from scipy import ndimage, stats as scipy_stats
 
 from gfv2_params.depstor import load_connected_comids, select_connected_waterbodies
 from gfv2_params.nhd_ftypes import EXCLUDE_WATERBODY_FTYPES, FORCE_DPRST_FTYPES
@@ -1435,6 +1435,360 @@ def run_hollister(
     return result
 
 
+# --- Depth-area regression: ND non-flat V/A depths (--regression, Task 7) --
+#
+# The plan's Task 7 assumed a PLAYA-anchored large-area donor set (dry playas
+# expose bare bed, so their raw DEM is a genuine bathymetry reading at large
+# area). The ND Prairie Pothole study project has exactly ONE Playa polygon
+# (`select_nd_project`'s chosen project; see `flatness_by_ftype.csv`,
+# FTYPE=Playa n_sampled=1) — playas are an arid-West landform, not a Prairie
+# Pothole one. One point cannot fit or validate a regression, so this mode
+# does NOT attempt a playa-anchored fit. Instead it fits log(depth)~log(area)
+# on the ND sample's NON-FLAT polygons across all FLATNESS_FTYPES: Task 4
+# already showed hydro-flattening is a minority (SwampMarsh 21.7%, LakePond
+# 11.0%, Reservoir 5.4% flat — `flatness_by_ftype.csv`), so most polygons in
+# the existing `sample_per_ftype` sample carry a genuine bare-earth
+# `depth_to_spill` reading (unlike the flat majority, whose measured depth is
+# ~freeboard, i.e. near-zero and NOT a real bed depth — Task 5's finding).
+# The playa-anchored arid-West large-area extrapolation is DEFERRED to a
+# follow-up 1 m project with real playa coverage; this is a documented spike
+# scoping limitation, not a failed analysis.
+REGRESSION_MIN_N_FIT = 3
+
+# Recipient dprst polygon area range this regression would ultimately need to
+# extrapolate into (issue #173 Task 7 scoping note, full CONUS dprst
+# population) — used only to characterize extrapolation risk in the log/plot
+# below, never as fit data.
+RECIPIENT_AREA_M2_MEDIAN = 35_000.0
+RECIPIENT_AREA_M2_MAX = 2.8e9
+
+
+def analyze_regression_sample(
+    samples: dict[str, gpd.GeoDataFrame], project: str, logger,
+    flat_lookup: dict | None = None,
+) -> pd.DataFrame:
+    """Run `read_window` -> interior mask -> `depth_to_spill` ->
+    `volume_mean_depth` over every sampled polygon and return one row per
+    polygon, tagged flat/non-flat.
+
+    `flat_lookup` (COMID -> bool), if given, is Task 4's cached
+    `flatness_per_polygon.csv` classification — preferred over recomputing
+    `is_hydroflattened` so the flat/non-flat split matches the one already
+    validated and reported by `--flatness`. Falls back to computing
+    `is_hydroflattened` directly on this read's interior values (no extra
+    read cost — the DEM is already in hand) for any COMID not found in the
+    lookup (or when no lookup is supplied at all, e.g. a `--regression` run
+    with no prior `--flatness` run in `--out-dir`).
+    """
+    rows = []
+    n_total = sum(len(v) for v in samples.values())
+    n_done = 0
+    n_from_cache = 0
+    for ftype, sub in samples.items():
+        for _, row in sub.iterrows():
+            geom = row.geometry
+            comid = row["COMID"] if "COMID" in sub.columns else row.name
+            area_m2 = (
+                float(row["area_km2"]) * 1e6 if "area_km2" in sub.columns else geom.area
+            )
+            n_done += 1
+            try:
+                dem, transform, crs, source = read_window(geom, "1m", wesm_row={"project": project})
+            except Exception as exc:  # noqa: BLE001 - log and skip, never abort the sample
+                logger.warning(
+                    "  [%d/%d] FTYPE=%s COMID=%s: read_window failed (%s) — skipped",
+                    n_done, n_total, ftype, comid, exc,
+                )
+                continue
+            mask = _interior_mask(dem, transform, geom)
+            n_interior = int(mask.sum())
+            if n_interior == 0:
+                logger.warning(
+                    "  [%d/%d] FTYPE=%s COMID=%s: 0 interior cells after masking — skipped",
+                    n_done, n_total, ftype, comid,
+                )
+                continue
+            depth = depth_to_spill(dem)
+            cell_area_m2 = abs(transform.a * transform.e)
+            _, _, mean_d = volume_mean_depth(depth, mask, cell_area_m2)
+
+            if flat_lookup is not None and comid in flat_lookup:
+                flat = bool(flat_lookup[comid])
+                n_from_cache += 1
+            else:
+                flat = bool(is_hydroflattened(dem[mask])["flat"])
+
+            rows.append({
+                "COMID": comid,
+                "FTYPE": ftype,
+                "area_m2": area_m2,
+                "mean_depth_m": mean_d,
+                "flat": flat,
+                "n_interior_cells": n_interior,
+                "resolution": source["resolution"],
+            })
+            if n_done % 25 == 0 or n_done == n_total:
+                logger.info(
+                    "  [%d/%d] FTYPE=%s COMID=%s mean_depth=%.3f m area=%.1f m^2 flat=%s",
+                    n_done, n_total, ftype, comid, mean_d, area_m2, flat,
+                )
+    if flat_lookup is not None:
+        logger.info(
+            "  flat/non-flat classification reused from cached flatness_per_polygon.csv "
+            "for %d/%d polygons (remainder computed fresh)",
+            n_from_cache, len(rows),
+        )
+    return pd.DataFrame(rows)
+
+
+def _fit_loglog(df: pd.DataFrame, logger, label: str) -> dict | None:
+    """Least-squares fit of log10(mean_depth_m) ~ log10(area_m2).
+
+    Drops non-positive depth/area (log-undefined) before fitting. Returns
+    None (and logs a warning, never raises — this is a spike, an
+    under-populated stratum must not abort the run) if fewer than
+    `REGRESSION_MIN_N_FIT` usable rows remain.
+    """
+    d = df[(df["area_m2"] > 0) & (df["mean_depth_m"] > 0)]
+    if len(d) < REGRESSION_MIN_N_FIT:
+        logger.warning(
+            "  %s: only %d usable (positive-depth, positive-area) non-flat polygons "
+            "(< %d) — skipping this fit",
+            label, len(d), REGRESSION_MIN_N_FIT,
+        )
+        return None
+    x = np.log10(d["area_m2"].to_numpy())
+    y = np.log10(d["mean_depth_m"].to_numpy())
+    fit = scipy_stats.linregress(x, y)
+    result = {
+        "label": label,
+        "n": len(d),
+        "slope": float(fit.slope),
+        "intercept": float(fit.intercept),
+        "r2": float(fit.rvalue ** 2),
+        "area_m2_min": float(d["area_m2"].min()),
+        "area_m2_max": float(d["area_m2"].max()),
+    }
+    logger.info(
+        "  fit[%s]: n=%d slope=%.3f intercept=%.3f R^2=%.3f (area range %.1f-%.1e m^2)",
+        label, result["n"], result["slope"], result["intercept"], result["r2"],
+        result["area_m2_min"], result["area_m2_max"],
+    )
+    return result
+
+
+def _write_regression_scatter(
+    per_polygon: pd.DataFrame, fits: list[dict], out_png: Path, logger,
+) -> None:
+    """Log-log scatter of mean_depth_m vs area_m2 (flat vs non-flat markers)
+    with the fitted line(s) overlaid, plus the recipient area range marked
+    so the extrapolation gap from donor to recipient sizes is visible."""
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    fig, ax = plt.subplots(figsize=(9, 6))
+    nonflat = per_polygon[~per_polygon["flat"]]
+    flat = per_polygon[per_polygon["flat"]]
+    ax.scatter(
+        nonflat["area_m2"], nonflat["mean_depth_m"].clip(lower=1e-3),
+        alpha=0.5, s=14, color="#1f77b4", label=f"non-flat (n={len(nonflat)}, real bed depth)",
+    )
+    ax.scatter(
+        flat["area_m2"], flat["mean_depth_m"].clip(lower=1e-3),
+        alpha=0.4, s=14, color="#d62728", marker="x",
+        label=f"flat (n={len(flat)}, ~freeboard, NOT fit)",
+    )
+    colors = ["black", "#2ca02c", "#ff7f0e", "#9467bd", "#8c564b", "#17becf"]
+    for i, f in enumerate(fits):
+        xr = np.linspace(np.log10(f["area_m2_min"]), np.log10(f["area_m2_max"]), 50)
+        yr = f["slope"] * xr + f["intercept"]
+        ax.plot(
+            10 ** xr, 10 ** yr, color=colors[i % len(colors)], linewidth=2,
+            label=f"{f['label']}: slope={f['slope']:.2f} R^2={f['r2']:.2f} (n={f['n']})",
+        )
+    ax.axvline(RECIPIENT_AREA_M2_MEDIAN, color="gray", linestyle=":", linewidth=1)
+    ax.axvline(RECIPIENT_AREA_M2_MAX, color="gray", linestyle="--", linewidth=1)
+    ax.text(
+        RECIPIENT_AREA_M2_MEDIAN, 1e-3,
+        " recipient median", rotation=90, va="bottom", fontsize=7, color="gray",
+    )
+    ax.text(
+        RECIPIENT_AREA_M2_MAX, 1e-3, " recipient max", rotation=90, va="bottom",
+        fontsize=7, color="gray",
+    )
+    ax.set_xscale("log")
+    ax.set_yscale("log")
+    ax.set_xlabel("polygon area (m^2, log scale)")
+    ax.set_ylabel("mean depth V/A (m, log scale)")
+    ax.set_title("ND dprst depth-area regression (non-flat polygons)")
+    ax.legend(fontsize=8, loc="upper left")
+    fig.tight_layout()
+    fig.savefig(out_png, dpi=150)
+    plt.close(fig)
+    logger.info("  wrote depth-area regression scatter: %s", out_png)
+
+
+def run_regression(
+    base: dict, logger, out_dir: Path, wesm_cache_dir: Path,
+    n_per_ftype: int = 300, limit: int | None = None,
+) -> pd.DataFrame:
+    """Issue #173 Task 7: depth-area regression over the ND sample's
+    non-flat (real bed-depth) dprst polygons.
+
+    See the module-level note above `REGRESSION_MIN_N_FIT` for why this is
+    NOT the plan's playa-anchored large-area fit (the ND project has only 1
+    Playa polygon) — that extrapolation is deferred to an arid-West project.
+
+    Reconstructs the CONUS dprst set, picks the same ND 1m project Tasks
+    4-6 use (`select_nd_project`), samples up to `n_per_ftype` polygons per
+    FTYPE across all of `FLATNESS_FTYPES` (`sample_per_ftype` — the same
+    default sample Task 4 validated flatness on, so if `flatness_per_polygon
+    .csv` already exists in `out_dir` with matching FTYPEs/n_per_ftype/seed
+    its flat/non-flat labels are reused by COMID), measures V/A mean depth
+    per polygon (`depth_to_spill` -> `volume_mean_depth`), fits
+    log10(depth) ~ log10(area) via least squares on the non-flat subset
+    (overall AND per-FTYPE), and writes `depth_area_regression.csv` +
+    `depth_area_regression.png` to `out_dir`.
+    """
+    dprst = load_conus_dprst(base, logger)
+
+    wesm_path = ensure_wesm_local(wesm_cache_dir, logger)
+    logger.info("Selecting ND 1m project with densest dprst overlap ...")
+    project, nd_dprst = select_nd_project(dprst, wesm_path, logger)
+    del dprst
+    gc.collect()
+
+    logger.info("Sampling up to %d dprst polygons per FTYPE from project=%s ...", n_per_ftype, project)
+    samples = sample_per_ftype(nd_dprst, n_per_ftype, logger)
+    if limit is not None:
+        samples = {ftype: sub.head(limit) for ftype, sub in samples.items()}
+    n_total = sum(len(v) for v in samples.values())
+    logger.info(
+        "Total sample size across all FTYPEs: %d%s", n_total,
+        f" [--limit {limit}]" if limit is not None else "",
+    )
+    if n_total == 0:
+        raise RuntimeError("0 dprst polygons in the chosen ND project — nothing to analyze")
+
+    flat_lookup: dict | None = None
+    flat_csv = out_dir / "flatness_per_polygon.csv"
+    if flat_csv.exists():
+        cached = pd.read_csv(flat_csv)
+        if "COMID" in cached.columns and "flat" in cached.columns:
+            flat_lookup = dict(zip(cached["COMID"], cached["flat"].astype(bool)))
+            logger.info(
+                "Loaded cached flat/non-flat classification for %d polygons from %s "
+                "(Task 4's --flatness run) — reused by COMID where available",
+                len(flat_lookup), flat_csv,
+            )
+        else:
+            logger.warning(
+                "%s exists but is missing COMID/flat columns — ignoring, will compute "
+                "flatness fresh for every polygon", flat_csv,
+            )
+    else:
+        logger.info(
+            "No cached %s found — computing flat/non-flat classification fresh for "
+            "every sampled polygon (run --flatness first to reuse it instead)", flat_csv,
+        )
+
+    logger.info("Reading each sampled polygon at 1m + measuring V/A mean depth ...")
+    per_polygon = analyze_regression_sample(samples, project, logger, flat_lookup)
+    n_ok = len(per_polygon)
+    logger.info("Depth reads completed: %d/%d polygons produced a usable result", n_ok, n_total)
+    if per_polygon.empty:
+        raise RuntimeError("depth-area regression produced 0 usable polygons")
+
+    n_flat = int(per_polygon["flat"].sum())
+    n_nonflat = n_ok - n_flat
+    logger.info(
+        "%d/%d polygons non-flat (real bed depth, used for the fit); %d/%d flat "
+        "(~freeboard, excluded from the fit per Task 5's finding)",
+        n_nonflat, n_ok, n_flat, n_ok,
+    )
+    non_flat = per_polygon[~per_polygon["flat"]]
+
+    fits: list[dict] = []
+    overall = _fit_loglog(non_flat, logger, "overall (all FTYPEs)")
+    if overall is not None:
+        fits.append(overall)
+    per_ftype_fits: list[dict] = []
+    for ftype in sorted(non_flat["FTYPE"].unique()):
+        f = _fit_loglog(non_flat[non_flat["FTYPE"] == ftype], logger, f"FTYPE={ftype}")
+        if f is not None:
+            per_ftype_fits.append(f)
+    fits.extend(per_ftype_fits)
+
+    if not fits:
+        logger.warning(
+            "*** Depth-area regression verdict: UNDETERMINED — every stratum had "
+            "fewer than %d usable non-flat polygons; no fit could be produced ***",
+            REGRESSION_MIN_N_FIT,
+        )
+    else:
+        slopes = [f["slope"] for f in per_ftype_fits] or [fits[0]["slope"]]
+        slope_spread = max(slopes) - min(slopes)
+        r2s = [f["r2"] for f in per_ftype_fits]
+        single_law_plausible = (
+            len(per_ftype_fits) < 2
+            or (slope_spread <= 0.3 and (overall is None or overall["r2"] >= 0.2))
+        )
+        if single_law_plausible:
+            logger.info(
+                "*** Depth-area regression verdict: a SINGLE power law across FTYPEs is a "
+                "reasonable approximation (per-FTYPE slope spread=%.3f%s) — but see the "
+                "extrapolation caveat below before applying it CONUS-wide ***",
+                slope_spread,
+                f", overall R^2={overall['r2']:.2f}" if overall is not None else "",
+            )
+        else:
+            logger.warning(
+                "*** Depth-area regression verdict: STRATIFY by FTYPE — per-FTYPE slopes "
+                "diverge (spread=%.3f) and/or fits vary in quality (R^2 range %.2f-%.2f); "
+                "a single overall power law is NOT a good fit across FTYPEs ***",
+                slope_spread, min(r2s) if r2s else float("nan"), max(r2s) if r2s else float("nan"),
+            )
+        donor_min = min(f["area_m2_min"] for f in fits)
+        donor_max = max(f["area_m2_max"] for f in fits)
+        logger.warning(
+            "*** Extrapolation risk: donor (measured) area range is %.1f-%.1e m^2; the "
+            "recipient dprst population spans median~%.0f m^2 to max~%.1e m^2 — the "
+            "recipient MAX is ~%.0fx beyond the donor MAX. This regression is fit on "
+            "small ND Prairie Pothole depressions only; extrapolating its slope out to "
+            "km^2-scale depressions is UNVALIDATED. The plan's playa-anchored large-area "
+            "extrapolation (dry playas expose bare bed at large area) is DEFERRED to an "
+            "arid-West 1m project — the ND study area has only 1 Playa polygon, too few "
+            "to fit or validate that anchor here. ***",
+            donor_min, donor_max, RECIPIENT_AREA_M2_MEDIAN, RECIPIENT_AREA_M2_MAX,
+            RECIPIENT_AREA_M2_MAX / donor_max,
+        )
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out_csv = out_dir / "depth_area_regression.csv"
+    caveat = (
+        f"# Depth-area regression over ND dprst sample (issue #173 Task 7). "
+        f"Project={project}. n_sampled={n_total}"
+        + (f" (--limit {limit})" if limit is not None else "")
+        + f", n_usable={n_ok} ({n_nonflat} non-flat / {n_flat} flat). "
+        "mean_depth_m = volume_mean_depth(depth_to_spill(dem)) over the polygon interior "
+        "(_interior_mask). flat = is_hydroflattened verdict (cached from --flatness when "
+        "available, else computed fresh) -- flat polygons are EXCLUDED from all fits "
+        "(their measured depth is ~freeboard, not real bed depth; see Task 5). "
+        "PLAYA-ANCHORED large-area extrapolation is DEFERRED (only 1 Playa polygon in "
+        "the ND study area) -- see the run log for the full extrapolation-risk caveat.\n"
+    )
+    with open(out_csv, "w") as f:
+        f.write(caveat)
+        per_polygon.to_csv(f, index=False)
+    logger.info("Wrote per-polygon depth-area regression table: %s", out_csv)
+
+    _write_regression_scatter(per_polygon, fits, out_dir / "depth_area_regression.png", logger)
+
+    return per_polygon
+
+
 def main() -> None:
     from gfv2_params.config import load_base_config
     from gfv2_params.log import configure_logging
@@ -1460,30 +1814,39 @@ def main() -> None:
                        help="Hollister/lakeMorpho terrain-slope max-depth prototype + "
                             "max->mean conversion over an ND LakePond sample (Task 6, "
                             "issue #173).")
+    mode.add_argument("--regression", action="store_true",
+                       help="Depth-area regression (log10 depth ~ log10 area) over the "
+                            "ND sample's non-flat dprst polygons, overall + per-FTYPE "
+                            "(Task 7, issue #173). Playa-anchored large-area "
+                            "extrapolation is DEFERRED (only 1 Playa polygon in the ND "
+                            "study area) -- see the run log's extrapolation-risk caveat. "
+                            "Reuses flatness_per_polygon.csv from --out-dir if present.")
     parser.add_argument("--fabric", default=None,
                          help="Fabric name (overrides FABRIC env / default_fabric).")
     parser.add_argument(
         "--out-dir", type=Path, required=True,
         help="Output directory (coverage_audit.csv for --audit; "
              "flatness_by_ftype.csv/flatness_separability.png for --flatness; "
-             "hollister_sample.csv/hollister_maxdepth_vs_area.png for --hollister). "
+             "hollister_sample.csv/hollister_maxdepth_vs_area.png for --hollister; "
+             "depth_area_regression.csv/depth_area_regression.png for --regression). "
              "Also doubles as the WESM.gpkg download cache dir (multi-GB "
-             "one-time download, shared by both modes), so pick a path with "
+             "one-time download, shared by all modes), so pick a path with "
              "enough free space; there is no default.",
     )
     parser.add_argument(
         "--n-per-ftype", type=int, default=300,
-        help="--flatness/--hollister only: target sample size per FTYPE (default "
-             "300, per issue #173 Task 4; --hollister samples LakePond only). "
-             "Uses fewer if a FTYPE has fewer polygons in the chosen project — "
-             "never silently capped, always logged.",
+        help="--flatness/--hollister/--regression only: target sample size per FTYPE "
+             "(default 300, per issue #173 Task 4; --hollister samples LakePond only, "
+             "--regression samples all of FLATNESS_FTYPES). Uses fewer if a FTYPE has "
+             "fewer polygons in the chosen project — never silently capped, always "
+             "logged.",
     )
     parser.add_argument(
         "--limit", type=int, default=None,
-        help="--freeboard/--hollister only: cap the number of polygons analyzed "
-             "(head of the sample) — for cheap smoke-testing; default: analyze "
-             "the full sample (every flat=True polygon for --freeboard, every "
-             "sampled LakePond polygon for --hollister).",
+        help="--freeboard/--hollister/--regression only: cap the number of polygons "
+             "analyzed (head of the sample) — for cheap smoke-testing; default: "
+             "analyze the full sample (every flat=True polygon for --freeboard, every "
+             "sampled polygon per FTYPE for --hollister/--regression).",
     )
     args = parser.parse_args()
 
@@ -1518,6 +1881,11 @@ def main() -> None:
         )
     elif args.hollister:
         run_hollister(
+            base, logger, out_dir=args.out_dir, wesm_cache_dir=args.out_dir,
+            n_per_ftype=args.n_per_ftype, limit=args.limit,
+        )
+    elif args.regression:
+        run_regression(
             base, logger, out_dir=args.out_dir, wesm_cache_dir=args.out_dir,
             n_per_ftype=args.n_per_ftype, limit=args.limit,
         )
