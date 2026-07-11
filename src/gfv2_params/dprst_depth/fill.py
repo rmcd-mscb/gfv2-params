@@ -36,6 +36,21 @@ donors to trust even its own median:
 Every fallback step is logged; nothing is silently dropped, and the
 output guarantees no NaN and every depth > 0.
 
+A NON-flat row whose `dprst_depth_m` is NaN/non-positive (a compute-time
+read failure — both 1 m and 10 m sources unavailable, or a degenerate
+window; see Oregon validation Risk 2) is treated the SAME as a flat row
+for fill purposes: it is routed through the ladder above rather than
+falling straight to the constant floor, so it benefits from a real
+ecoregion/FTYPE donor pool when one exists.
+
+`fill_flat` also enforces the **physical cap** (`DEPTH_CAP_M`, 300 in —
+the NHM calibrated maximum, see Oregon validation Risk 1) on every
+settled depth, flat-filled or measured: `depth_to_spill` produces a
+heavy right tail (observed max 352 ft) on reservoir/valley polygons that
+fill to a high pour point, which is a DEM-fill artifact, not a physical
+surface-ponding depth. A measured row that gets capped is relabeled
+`"measured_capped"` so provenance records the clamp.
+
 Units: `dprst_depth_m` stays in METRES throughout this module (matching
 Task 4's compute output) — the inches conversion is Task 8's aggregation
 concern. `floor_in` is the one inches-flavoured input/knob (49 in, the
@@ -53,6 +68,7 @@ __all__ = [
     "M_TO_IN",
     "DEFAULT_SHAPE_FACTOR",
     "N_MIN_DEFAULT",
+    "DEPTH_CAP_M",
     "Model",
     "fit_ecoregion_models",
     "fill_flat",
@@ -62,6 +78,12 @@ logger = logging.getLogger(__name__)
 
 # 1 m = 39.3701 in (matches the brief's floor conversion exactly).
 M_TO_IN = 39.3701
+
+# Physical cap on dprst_depth_avg: the NHM calibrated maximum, 300 in
+# (#173 Oregon validation Risk 1 — `depth_to_spill` produces unphysical
+# outliers, observed max 352 ft, on reservoir/valley polygons that fill to
+# a high pour point). 300 / 39.3701 = 7.61998 m.
+DEPTH_CAP_M = 300.0 / M_TO_IN
 
 # Conical V/A assumption — same constant as `topo.max_to_mean("cone")`
 # (mean = max/3). Fixed a priori so the fitted `k` has a stable, comparable
@@ -302,26 +324,38 @@ def fill_flat(
     models: dict[tuple[str, str], Model],
     floor_in: float = 49.0,
 ) -> pd.DataFrame:
-    """Fill every flat/degenerate row's `dprst_depth_m` via the fallback ladder.
+    """Fill every flat/degenerate/read-failed row's `dprst_depth_m` via the
+    fallback ladder, then enforce the physical cap on every row.
 
-    Non-flat rows are untouched except `method` is (re)set to `"measured"`
-    (Task 4 already computed their real `dprst_depth_m`). For each flat
-    row, in order:
+    A row needs the ladder if it is flat (`flat == True`), OR (#173 FIX 2,
+    Oregon validation Risk 2) if it is NON-flat but its `dprst_depth_m` is
+    NaN/non-positive — a compute-time read failure (both 1 m and 10 m
+    sources unavailable, or a degenerate window), not genuine
+    hydro-flattening. Both cases walk the SAME ladder:
       1. its own `(ecoregion, FTYPE)` model (`models[(eco, ftype)]`);
       2. ecoregion-only median (`models[(eco, "__ALL__")]`);
       3. FTYPE-only median (`models[("__ALL__", ftype)]`);
       4. the constant floor (`floor_in`, converted to metres via
          `M_TO_IN` — kept in metres internally per this module's unit
          convention; inches conversion is Task 8's concern downstream).
-    `method` is set to `"calibrated_hollister"` only when step 1's model
-    actually used the row's own `hollister_max_m` (see `Model.predict`);
-    any median use — own-group, ecoregion-only, or FTYPE-only — is
-    `"regional_fill"`; step 4 is `"constant_floor"`.
+    A genuinely non-flat row with a valid depth is untouched except
+    `method` is (re)set to `"measured"` (Task 4 already computed its real
+    `dprst_depth_m`). `method` is set to `"calibrated_hollister"` only
+    when step 1's model actually used the row's own `hollister_max_m`
+    (see `Model.predict`); any median use — own-group, ecoregion-only, or
+    FTYPE-only — is `"regional_fill"`; step 4 is `"constant_floor"`.
 
-    GUARANTEES: no NaN in `dprst_depth_m` on return, every value > 0 (a
-    final defensive pass forces any leftover NaN/non-positive value to the
-    floor and logs it — this should never fire given the ladder above, but
-    a silent NaN in a PRMS parameter is worse than a logged floor value).
+    Every settled depth (measured or ladder-filled) is then clamped at
+    `DEPTH_CAP_M` (#173 FIX 1, Oregon validation Risk 1); a capped row
+    that was `"measured"` becomes `"measured_capped"` so provenance
+    records the clamp.
+
+    GUARANTEES: no NaN in `dprst_depth_m` on return, every value > 0 and
+    <= `DEPTH_CAP_M` (a final defensive pass forces any leftover
+    NaN/non-positive value to the floor and logs a WARNING — this should
+    never fire given the ladder above, since every flat/read-failure row
+    is now routed through it; a silent NaN in a PRMS parameter is worse
+    than a logged floor value).
     """
     if "dprst_depth_m" not in df.columns:
         raise KeyError("fill_flat: df missing 'dprst_depth_m'")
@@ -337,17 +371,25 @@ def fill_flat(
         out["method"] = out["method"].astype(object)
 
     flat_mask = out["flat"].fillna(False).astype(bool)
-    out.loc[~flat_mask, "method"] = "measured"
+    depth_col = out["dprst_depth_m"]
+    invalid_depth = depth_col.isna() | (depth_col <= 0)
+
+    # #173 FIX 2: a non-flat row with an invalid depth is a read failure,
+    # not flatness — fold it into the same "needs the ladder" set.
+    read_failure_mask = ~flat_mask & invalid_depth
+    needs_fill_mask = flat_mask | read_failure_mask
+
+    out.loc[~needs_fill_mask, "method"] = "measured"
 
     n_regional = 0
     n_calibrated = 0
-    n_floor = 0
+    n_floor_no_donor = 0
 
     has_eco = "ecoregion" in out.columns
     has_ftype = "ftype" in out.columns
     has_hollister = "hollister_max_m" in out.columns
 
-    for idx in out.index[flat_mask]:
+    for idx in out.index[needs_fill_mask]:
         eco = out.at[idx, "ecoregion"] if has_eco else None
         ftype = out.at[idx, "ftype"] if has_ftype else None
         hollister = out.at[idx, "hollister_max_m"] if has_hollister else float("nan")
@@ -371,31 +413,64 @@ def fill_flat(
                 n_regional += 1
         else:
             depth, method = floor_m, "constant_floor"
-            n_floor += 1
+            n_floor_no_donor += 1
             rung = "floor"
 
         out.at[idx, "dprst_depth_m"] = depth
         out.at[idx, "method"] = method
-        logger.debug("fill_flat: idx=%s eco=%s ftype=%s rung=%s method=%s depth_m=%.4f",
-                     idx, eco, ftype, rung, method, depth)
+        logger.debug(
+            "fill_flat: idx=%s eco=%s ftype=%s read_failure=%s rung=%s method=%s depth_m=%.4f",
+            idx, eco, ftype, bool(read_failure_mask.loc[idx]), rung, method, depth,
+        )
+
+    if n_floor_no_donor:
+        # Legitimate: the (ecoregion, FTYPE) group AND both coarser
+        # fallback rungs had zero measured donors, so there was nothing to
+        # take a median of — not a logic gap. INFO, not WARNING.
+        logger.info(
+            "fill_flat: %d polygon(s) floored (no measured donor in ecoregion/FTYPE)",
+            n_floor_no_donor,
+        )
 
     # Defensive final guard: never let a NaN or non-positive depth escape
-    # this function, even if the ladder above somehow missed a case.
+    # this function. After FIX 2 every flat/read-failure row was already
+    # routed through the ladder above, so this firing at all means a
+    # genuine, unexpected logic gap (e.g. a ladder model itself predicted a
+    # non-finite value) — keep this one a WARNING.
     bad = out["dprst_depth_m"].isna() | (out["dprst_depth_m"] <= 0)
     n_bad = int(bad.sum())
     if n_bad:
         logger.warning(
             "fill_flat: %d row(s) still NaN/non-positive after the fallback ladder — "
-            "forcing to the %.4f m floor (this should not happen; investigate upstream)",
+            "forcing to the %.4f m floor (unexpected — every flat/read-failure row "
+            "should have been caught by the ladder above; investigate upstream)",
             n_bad, floor_m,
         )
         out.loc[bad, "dprst_depth_m"] = floor_m
         out.loc[bad, "method"] = "constant_floor"
-        n_floor += n_bad
+
+    n_floor = n_floor_no_donor + n_bad
+
+    # #173 FIX 1: physical cap at the NHM calibrated maximum (300 in).
+    # Applied to the fully-settled column so it catches every path: a
+    # measured row directly, or a regional_fill/calibrated_hollister value
+    # derived from an over-cap donor/prediction.
+    over_cap = out["dprst_depth_m"] > DEPTH_CAP_M
+    n_capped = int(over_cap.sum())
+    if n_capped:
+        was_measured = over_cap & (out["method"] == "measured")
+        out.loc[over_cap, "dprst_depth_m"] = DEPTH_CAP_M
+        out.loc[was_measured, "method"] = "measured_capped"
+        logger.info(
+            "fill_flat: %d row(s) exceeded the %.4f m (%.0f in) physical cap — capped "
+            "(%d were 'measured' -> 'measured_capped')",
+            n_capped, DEPTH_CAP_M, DEPTH_CAP_M * M_TO_IN, int(was_measured.sum()),
+        )
 
     logger.info(
-        "fill_flat: %d flat rows filled (%d regional_fill, %d calibrated_hollister, "
-        "%d constant_floor; floor=%.4f m = %.1f in)",
-        int(flat_mask.sum()), n_regional, n_calibrated, n_floor, floor_m, floor_in,
+        "fill_flat: %d rows routed through the ladder (%d flat, %d non-flat read-failure; "
+        "%d regional_fill, %d calibrated_hollister, %d constant_floor; floor=%.4f m = %.1f in)",
+        int(needs_fill_mask.sum()), int(flat_mask.sum()), int(read_failure_mask.sum()),
+        n_regional, n_calibrated, n_floor, floor_m, floor_in,
     )
     return out

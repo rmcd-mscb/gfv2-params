@@ -40,7 +40,7 @@ import geopandas as gpd
 import numpy as np
 import pandas as pd
 
-from .fill import M_TO_IN
+from .fill import DEPTH_CAP_M, M_TO_IN
 
 __all__ = [
     "NO_DPRST_CELLS",
@@ -131,6 +131,23 @@ def finalize_depth_params(
             n_bad, floor_in,
         )
         depth_in = np.where(bad, floor_in, depth_in)
+
+    # #173 FIX 1 defensive backstop: an HRU's area-weighted mean cannot
+    # exceed 300 in if every contributing polygon is already capped by
+    # fill.fill_flat's DEPTH_CAP_M, but clamp + log defensively in case a
+    # future upstream path bypasses that per-polygon cap (e.g. a raster
+    # burned from an uncapped polygon set).
+    depth_cap_in = DEPTH_CAP_M * M_TO_IN
+    over_cap = depth_in > depth_cap_in
+    n_over_cap = int(np.sum(over_cap))
+    if n_over_cap:
+        logger.warning(
+            "finalize_depth_params: %d HRU(s) exceeded the %.1f in physical cap despite "
+            "per-polygon capping upstream -- clamping (investigate: fill.fill_flat's "
+            "DEPTH_CAP_M should make this impossible)",
+            n_over_cap, depth_cap_in,
+        )
+        depth_in = np.where(over_cap, depth_cap_in, depth_in)
 
     merged["dprst_depth_avg"] = depth_in
 

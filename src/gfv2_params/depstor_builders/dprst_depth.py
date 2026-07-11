@@ -39,13 +39,19 @@ design doc:
      smallest correct one, using the same `{id_feature}` column convention
      as every merged param CSV so a future generic mechanism (or Task 8's
      params.yml assembly) can consume it identically.
-  7. Persist the final per-polygon `(COMID, method, dprst_depth_m, geometry)`
-     table as a companion GeoParquet (`dprst_depth_polygons.parquet`, next to
-     `dprst_depth.tif`) — `burn_depth` only burns the numeric depth onto the
-     raster, discarding the per-polygon fill `method` label. Task 8's
+  7. Persist the final per-polygon provenance table — `COMID`, `method`,
+     `dprst_depth_m`, plus the diagnostic columns `resolution`, `ftype`,
+     `ecoregion`, `measured_max_m`, `hollister_max_m` (#173 Oregon
+     validation Risk 3: the original 3-column parquet couldn't support a
+     1 m/10 m split, FTYPE, or ecoregion breakdown at CONUS scale), and
+     `geometry` — as a companion GeoParquet (`dprst_depth_polygons.parquet`,
+     next to `dprst_depth.tif`). `burn_depth` only burns the numeric depth
+     onto the raster, discarding every other per-polygon column. Task 8's
      per-HRU aggregation (`dprst_depth.aggregate.area_weighted_provenance`)
      reads this companion file back to derive a per-HRU dominant-method
-     `dprst_depth_provenance` column without recomputing the polygon set.
+     `dprst_depth_provenance` column without recomputing the polygon set —
+     it only needs `method`/`geometry`, so the extra diagnostic columns are
+     additive and don't change that reader's behavior.
      A fixed filename (not config-driven, not registered in `ctx.paths` /
      the DAG's `_expected_outputs`) — it's a byproduct for the separate
      `derive_depstor_params.py` param driver, not a DAG dependency any other
@@ -266,19 +272,46 @@ def _write_op_flow_thres(ctx: BuildContext, out_path: Path, logger) -> Path:
     return out_path
 
 
-def _write_polygon_provenance(filled: gpd.GeoDataFrame, depth_path: Path, logger) -> Path:
-    """Persist `(COMID, method, dprst_depth_m, geometry)` next to `dprst_depth.tif`.
+# Diagnostic columns added on top of the core (COMID, method, dprst_depth_m,
+# geometry) provenance schema (#173 Oregon validation Risk 3) — resolution/
+# ftype/ecoregion/measured_max_m/hollister_max_m all survive on `filled`
+# after `_tag_polygons` (ftype/ecoregion) + `_compute_depths`/`_fill_and_join`
+# (resolution/measured_max_m/hollister_max_m via `_DEPTH_COLUMNS`), so no
+# extra computation is needed here — just don't drop them on the way out.
+_PROVENANCE_DIAGNOSTIC_COLUMNS = ["resolution", "ftype", "ecoregion", "measured_max_m", "hollister_max_m"]
 
-    See the module docstring (point 7) for why this exists: `burn_depth`
-    only burns `dprst_depth_m` onto the raster, so the per-polygon `method`
-    label (Task 5's fallback-ladder provenance) would otherwise be lost.
+
+def _write_polygon_provenance(filled: gpd.GeoDataFrame, depth_path: Path, logger) -> Path:
+    """Persist per-polygon provenance + diagnostics next to `dprst_depth.tif`.
+
+    Core columns are `COMID`, `method`, `dprst_depth_m`, `geometry` — see
+    the module docstring (point 7) for why this file exists at all
+    (`burn_depth` only burns `dprst_depth_m` onto the raster, so the
+    per-polygon fill `method` label would otherwise be lost). On top of
+    that, also persist `resolution`/`ftype`/`ecoregion`/`measured_max_m`/
+    `hollister_max_m` (#173 Oregon validation Risk 3) so a CONUS-scale
+    provenance analysis (1 m vs 10 m split, FTYPE/ecoregion breakdown,
+    measured-vs-Hollister comparison) doesn't require recomputing the
+    polygon set. `area_weighted_provenance` only reads `method`/`geometry`
+    back, so these extra columns are additive and don't change that
+    reader's behavior.
     """
     out_path = depth_path.parent / POLYGON_PROVENANCE_FILENAME
-    keep_cols = [c for c in ("COMID", "method", "dprst_depth_m", "geometry") if c in filled.columns]
+    core_cols = ["COMID", "method", "dprst_depth_m"]
+    keep_cols = [
+        c for c in core_cols + _PROVENANCE_DIAGNOSTIC_COLUMNS + ["geometry"] if c in filled.columns
+    ]
+    missing_diagnostics = [c for c in _PROVENANCE_DIAGNOSTIC_COLUMNS if c not in filled.columns]
+    if missing_diagnostics:
+        logger.warning(
+            "  polygon provenance: expected diagnostic column(s) %s missing from the "
+            "per-polygon frame — writing without them",
+            missing_diagnostics,
+        )
     gdf = gpd.GeoDataFrame(filled[keep_cols], geometry="geometry", crs=filled.crs)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     gdf.to_parquet(out_path)
-    logger.info("  polygon provenance: wrote %d rows -> %s", len(gdf), out_path)
+    logger.info("  polygon provenance: wrote %d rows (columns: %s) -> %s", len(gdf), keep_cols, out_path)
     return out_path
 
 

@@ -1,7 +1,7 @@
 import numpy as np
 import pandas as pd
 
-from gfv2_params.dprst_depth.fill import fill_flat, fit_ecoregion_models
+from gfv2_params.dprst_depth.fill import DEPTH_CAP_M, M_TO_IN, fill_flat, fit_ecoregion_models
 
 
 def test_fill_flat_uses_group_median_and_floor():
@@ -106,6 +106,58 @@ def test_fill_flat_fallback_ladder_ftype_only_rung():
     assert np.isfinite(row["dprst_depth_m"])
     assert row["dprst_depth_m"] > 0
     assert np.isclose(row["dprst_depth_m"], 2.0)  # median(1.0, 3.0) via FTYPE-only fallback
+
+
+def test_fill_flat_caps_unphysical_measured_depth_at_300in():
+    # #173 FIX 1 (Oregon validation Risk 1): a measured depth equivalent to
+    # 500 in (a depth_to_spill artifact on a high-pour-point polygon) must be
+    # clamped to the NHM calibrated max of 300 in exactly, and relabeled
+    # "measured_capped" so provenance records the clamp. A normal, in-range
+    # measured depth must be untouched.
+    over_cap_m = 500.0 / M_TO_IN
+    normal_m = 5.0 / M_TO_IN
+    df = pd.DataFrame({
+        "COMID": [1, 2],
+        "ftype": ["LakePond"] * 2,
+        "ecoregion": ["17"] * 2,
+        "dprst_depth_m": [over_cap_m, normal_m],
+        "hollister_max_m": [4.0, 1.0],
+        "flat": [False, False],
+    })
+    models = fit_ecoregion_models(df[~df.flat])
+    out = fill_flat(df, models, floor_in=49.0)
+
+    capped = out.set_index("COMID").loc[1]
+    assert capped["method"] == "measured_capped"
+    assert np.isclose(capped["dprst_depth_m"], DEPTH_CAP_M)
+    assert np.isclose(capped["dprst_depth_m"] * M_TO_IN, 300.0)
+
+    normal = out.set_index("COMID").loc[2]
+    assert normal["method"] == "measured"
+    assert np.isclose(normal["dprst_depth_m"], normal_m)
+
+
+def test_fill_flat_nan_measured_non_flat_uses_regional_ladder_not_floor():
+    # #173 FIX 2 (Oregon validation Risk 2): a NON-flat polygon whose
+    # depth_to_spill read failed (NaN dprst_depth_m) must be routed through
+    # the SAME regional-median fallback ladder as a flat row when its
+    # (ecoregion, FTYPE) group has measured donors -- NOT straight to the
+    # defensive constant_floor.
+    df = pd.DataFrame({
+        "COMID": [1, 2, 3],
+        "ftype": ["LakePond"] * 3,
+        "ecoregion": ["17"] * 3,
+        "dprst_depth_m": [1.0, 3.0, np.nan],
+        "hollister_max_m": [1.0, 3.0, np.nan],
+        "flat": [False, False, False],  # row 3 is NOT flat -- a read failure
+    })
+    donors = df[(df["flat"] == False) & df["dprst_depth_m"].notna()]  # noqa: E712
+    models = fit_ecoregion_models(donors)
+    out = fill_flat(df, models, floor_in=49.0)
+
+    row = out.set_index("COMID").loc[3]
+    assert row["method"] == "regional_fill"
+    assert np.isclose(row["dprst_depth_m"], 2.0)  # median(1.0, 3.0)
 
 
 def test_fill_flat_fallback_ladder_ecoregion_then_ftype():
