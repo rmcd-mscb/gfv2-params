@@ -22,52 +22,52 @@
 # do the division).
 
 defaults:
-  batch_dir:                  "{data_root}/{fabric}/batches"
-  target_layer:               nhru
+  batch_dir: "{data_root}/{fabric}/batches"
+  target_layer: nhru
   # id_feature comes from the active fabric profile in base_config.yml
   # (e.g. gfv2 -> nat_hru_id, oregon -> hru_id), injected at load time.
-  output_dir:                 "{data_root}/{fabric}/params"
-  merged_subdir:              merged
+  output_dir: "{data_root}/{fabric}/params"
+  merged_subdir: merged
   merged_intermediates_subdir: merged/_intermediates
-  categorical:                false
-  count_column:               count
+  categorical: false
+  count_column: count
 
 fractions:
   - name: perv_frac
     source_raster: "{data_root}/{fabric}/depstor_rasters/perv_binary.tif"
-    merged_file:   nhm_perv_frac_params.csv
+    merged_file: nhm_perv_frac_params.csv
 
   - name: imperv_frac
     source_raster: "{data_root}/{fabric}/depstor_rasters/imperv_binary.tif"
-    merged_file:   nhm_imperv_frac_params.csv
+    merged_file: nhm_imperv_frac_params.csv
 
   - name: dprst_frac
     source_raster: "{data_root}/{fabric}/depstor_rasters/dprst_binary.tif"
-    merged_file:   nhm_dprst_frac_params.csv
+    merged_file: nhm_dprst_frac_params.csv
 
   - name: drains_perv_frac
     source_raster: "{data_root}/{fabric}/depstor_rasters/drains_perv_binary.tif"
-    merged_file:   nhm_drains_perv_frac_params.csv
+    merged_file: nhm_drains_perv_frac_params.csv
 
   - name: drains_imperv_frac
     source_raster: "{data_root}/{fabric}/depstor_rasters/drains_imperv_binary.tif"
-    merged_file:   nhm_drains_imperv_frac_params.csv
+    merged_file: nhm_drains_imperv_frac_params.csv
 
   - name: onstream_storage_frac
     source_raster: "{data_root}/{fabric}/depstor_rasters/onstream_binary.tif"
-    merged_file:   nhm_onstream_storage_frac_params.csv
+    merged_file: nhm_onstream_storage_frac_params.csv
 
   - name: drains_to_dprst_frac
     source_raster: "{data_root}/{fabric}/depstor_rasters/drains_to_dprst.tif"
-    merged_file:   nhm_drains_to_dprst_frac_params.csv
+    merged_file: nhm_drains_to_dprst_frac_params.csv
 
   - name: carea_t8_frac
     source_raster: "{data_root}/{fabric}/depstor_rasters/carea_map_t8_binary.tif"
-    merged_file:   nhm_carea_t8_frac_params.csv
+    merged_file: nhm_carea_t8_frac_params.csv
 
   - name: carea_t156_frac
     source_raster: "{data_root}/{fabric}/depstor_rasters/carea_map_t156_binary.tif"
-    merged_file:   nhm_carea_t156_frac_params.csv
+    merged_file: nhm_carea_t156_frac_params.csv
 
   # Aggregating land_mask.tif (uint8 1=land, 255=nodata) gives the per-HRU
   # total pixel count needed as the denominator for hru_percent_imperv and
@@ -75,7 +75,26 @@ fractions:
   # other fraction above, so the count ratios are dimensionless.
   - name: hru_total
     source_raster: "{data_root}/{fabric}/depstor_rasters/land_mask.tif"
-    merged_file:   nhm_hru_total_count_params.csv
+    merged_file: nhm_hru_total_count_params.csv
+
+# Continuous (non-binary) rasters needing an area-weighted MEAN per HRU, not
+# a partial-pixel-coverage COUNT. `run_zonal`/`run_merge`/`run_ratios` above
+# only implement the binary count path (categorical=false over a uint8
+# 1/255 raster) — dprst_depth.tif is float32 metres, so this entry is a
+# Task 8 (#173) STUB: it reserves the name + source-raster wiring so Task 8
+# only needs to add the mean-specific aggregation mode (a new `run_mean` /
+# `--mode mean`, or an `aggregation: mean` branch in `run_zonal`), not
+# rediscover where the raster lives. NOT wired into derive_depstor_params.py
+# yet — do not point automation at this block until Task 8 lands.
+means:
+  - name: dprst_depth_avg
+    source_raster: "{data_root}/{fabric}/depstor_rasters/dprst_depth.tif"
+    merged_file: nhm_dprst_depth_avg_params.csv
+    # dprst_depth.tif is metres (dprst_depth's internal convention); PRMS
+    # dprst_depth_avg is inches — Task 8 must convert (M_TO_IN = 39.3701,
+    # see gfv2_params.dprst_depth.fill) when it implements the mean.
+    units_in_raster: metres
+    units_out: inches
 
 # Ratio derivations -- final PRMS parameters in {output_dir}/{merged_subdir}/.
 # numerator/denominator reference fraction `name`s above; derive_depstor_params
@@ -87,36 +106,36 @@ fractions:
 # no clamp is needed.
 ratios:
   - name: sro_to_dprst_perv
-    numerator:    drains_perv_frac
-    denominator:  perv_frac
+    numerator: drains_perv_frac
+    denominator: perv_frac
     clamp_to_one: false
-    output_file:  nhm_sro_to_dprst_perv_params.csv
+    output_file: nhm_sro_to_dprst_perv_params.csv
 
   - name: sro_to_dprst_imperv
-    numerator:    drains_imperv_frac
-    denominator:  imperv_frac
+    numerator: drains_imperv_frac
+    denominator: imperv_frac
     clamp_to_one: false
-    output_file:  nhm_sro_to_dprst_imperv_params.csv
+    output_file: nhm_sro_to_dprst_imperv_params.csv
 
   - name: carea_max
-    numerator:    carea_t8_frac
-    denominator:  perv_frac
+    numerator: carea_t8_frac
+    denominator: perv_frac
     clamp_to_one: true
-    output_file:  nhm_carea_max_params.csv
+    output_file: nhm_carea_max_params.csv
 
   - name: smidx_coef
-    numerator:    carea_t156_frac
-    denominator:  perv_frac
+    numerator: carea_t156_frac
+    denominator: perv_frac
     clamp_to_one: true
-    output_file:  nhm_smidx_coef_params.csv
+    output_file: nhm_smidx_coef_params.csv
 
   # imperv_count / hru_pixel_count -- per-HRU fraction of land area classified
   # as impervious. Bounded in [0, 1] by construction.
   - name: hru_percent_imperv
-    numerator:    imperv_frac
-    denominator:  hru_total
+    numerator: imperv_frac
+    denominator: hru_total
     clamp_to_one: false
-    output_file:  nhm_hru_percent_imperv_params.csv
+    output_file: nhm_hru_percent_imperv_params.csv
 
   # dprst_count / hru_pixel_count -- per-HRU fraction of land area classified
   # as depression storage. Bounded in [0, 1] by construction.
@@ -125,7 +144,7 @@ ratios:
   #   {merged_subdir}/nhm_dprst_frac_params.csv             <-- PRMS [0, 1] param
   #   {merged_intermediates_subdir}/nhm_dprst_frac_params.csv <-- count
   - name: dprst_frac
-    numerator:    dprst_frac
-    denominator:  hru_total
+    numerator: dprst_frac
+    denominator: hru_total
     clamp_to_one: false
-    output_file:  nhm_dprst_frac_params.csv
+    output_file: nhm_dprst_frac_params.csv

@@ -19,6 +19,14 @@ output_dir: "{data_root}/{fabric}/depstor_rasters"
 # every fabric profile. Override via the imperv step's `source` key if needed.
 imperv_source: "{data_root}/input/lulc/nlcd_annual_imperv/Annual_NLCD_FctImp_2015_CU_C1V1.tif"
 
+# dprst_depth (#173) compute knobs — generic tuning, not per-fabric inputs
+# (those, wesm_index/ecoregions_gpkg, live in the fabric profile in
+# base_config.yml alongside waterbody_gpkg/connected_comids_table).
+dprst_depth_floor_in: 49.0 # NHM calibrated dprst_depth_avg median fallback (in)
+dprst_rim_buffer_m: 200.0 # DEM window padding beyond each polygon's bbox (m)
+dprst_flatness_tol_m: 0.01 # hydro-flattening interior elevation-range tolerance (m)
+dprst_hollister_n_min: 5 # min donors/group before a calibrated-Hollister fit is attempted
+
 steps:
   - name: landmask
     output: land_mask.tif
@@ -46,6 +54,15 @@ steps:
 
   - name: hru_id
     output: hru_id.tif
+
+  - name: dprst_depth
+    # Task 9's SLURM array writes per-tile-batch parquets here; if this dir
+    # is missing/empty the builder falls back to an in-process compute
+    # (correct for a small/test fabric, not the CONUS-scale fan-out).
+    batch_dir: "{data_root}/{fabric}/depstor_rasters/dprst_depth_batches"
+    outputs:
+      dprst_depth: dprst_depth.tif
+      op_flow_thres: op_flow_thres_params.csv
 
   - name: vpu_id
     output: vpu_id.tif

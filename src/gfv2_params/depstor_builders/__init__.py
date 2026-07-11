@@ -14,7 +14,21 @@ These modules are thin orchestration wrappers around those helpers.
 
 from __future__ import annotations
 
-from . import carea_map, dprst, hru_id, imperv, landmask, perv, routing, routing_hru, same_hru_drains, vpu_id, waterbody, wbody_connectivity
+from . import (
+    carea_map,
+    dprst,
+    dprst_depth,
+    hru_id,
+    imperv,
+    landmask,
+    perv,
+    routing,
+    routing_hru,
+    same_hru_drains,
+    vpu_id,
+    waterbody,
+    wbody_connectivity,
+)
 from .context import BuildContext
 
 BUILDERS = {
@@ -25,6 +39,7 @@ BUILDERS = {
     "dprst":             dprst.build,
     "perv":              perv.build,
     "hru_id":            hru_id.build,
+    "dprst_depth":       dprst_depth.build,
     "routing":           routing.build,
     "routing_hru":       routing_hru.build,
     "drains_perv":       same_hru_drains.build,
@@ -49,6 +64,8 @@ BUILDERS = {
 #                         "onstream"               onstream_binary.tif
 #   perv               -> "perv"                   perv_binary.tif
 #   hru_id             -> "hru_id"                 hru_id.tif (int32, per-cell nat_hru_id)
+#   dprst_depth        -> "dprst_depth",            dprst_depth.tif (float32, per-cell V/A mean depth),
+#                         "op_flow_thres"           op_flow_thres_params.csv (constant 1.0 per HRU)
 #   routing            -> "drains_to_dprst"        drains_to_dprst.tif (in-process D8 kernel)
 #   routing_hru        -> "drains_to_dprst_hru"     drains_to_dprst_hru.tif (int32, per-cell nat_hru_id
 #                                                    of the reached depression; labeled D8 kernel)
@@ -65,6 +82,7 @@ STEP_ORDER = [
     "dprst",
     "perv",
     "hru_id",
+    "dprst_depth",
     "vpu_id",
     "routing",
     "routing_hru",

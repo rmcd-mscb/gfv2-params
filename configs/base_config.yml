@@ -56,6 +56,13 @@ fabrics:
     # joins dprst polygons to a region by centroid for the freeboard/Hollister
     # terrain-slope bathymetry regression.
     ecoregions_gpkg: "{data_root}/input/ecoregions/us_eco_l3.gpkg"
+    # Pre-staged, 1m/QL1/QL2-filtered WESM (Work Extent Spatial Metadata) 3DEP
+    # workunit footprint index — a "project" column + geometry, produced by
+    # scripts/diagnose/dprst_depth_probe.py's ensure_wesm_local +
+    # load_wesm_1m_footprints (download + onemeter_category filter + convex-
+    # hull footprint simplification). Drives dprst_depth (#173)'s best_topo
+    # tagging (topo.resolution_class).
+    wesm_index: "{data_root}/input/wesm/wesm_1m_footprints.gpkg"
     # HRU polygon fabric — authoritative land/domain mask for the depstor
     # builders. gfv2_params.depstor_builders.landmask rasterises this to
     # land_mask.tif (driven by scripts/build_depstor_rasters.py).
@@ -100,6 +107,7 @@ fabrics:
     # WBAREACOMI. Optional: absent -> WBAREACOMI-only behaviour.
     flowthrough_comids_table: "{data_root}/input/nhd/flowthrough_waterbody_comids.parquet"
     ecoregions_gpkg: "{data_root}/input/ecoregions/us_eco_l3.gpkg"
+    wesm_index: "{data_root}/input/wesm/wesm_1m_footprints.gpkg"
     hru_gpkg: "{data_root}/gfv2/fabric/gfv2_nhru_merged.gpkg"
     hru_layer: nhru
     id_feature: nat_hru_id
@@ -172,6 +180,7 @@ fabrics:
     # EPA Level III Ecoregions (shared CONUS input, see
     # gfv2_params.download.epa_ecoregions). Drives dprst_depth (#173).
     ecoregions_gpkg: "{data_root}/input/ecoregions/us_eco_l3.gpkg"
+    wesm_index: "{data_root}/input/wesm/wesm_1m_footprints.gpkg"
 
   tjc:
     # Small regional fabric inside VPU 12 (Texas-Gulf); pre-merged single gpkg
@@ -214,3 +223,4 @@ fabrics:
     # EPA Level III Ecoregions (shared CONUS input, see
     # gfv2_params.download.epa_ecoregions). Drives dprst_depth (#173).
     ecoregions_gpkg: "{data_root}/input/ecoregions/us_eco_l3.gpkg"
+    wesm_index: "{data_root}/input/wesm/wesm_1m_footprints.gpkg"
