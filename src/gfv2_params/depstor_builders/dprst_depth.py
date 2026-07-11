@@ -199,7 +199,12 @@ def _compute_depths(
             "  no per-batch parquet dir found (%s) — running compute in-process",
             batch_dir,
         )
-        groups = group_by_tile(dprst, wesm_gdf, rim_buffer_m=ctx.dprst_rim_buffer_m)
+        # Rim buffer (200 m) and flatness tol (0.01 m, used inside
+        # compute.run_batch's is_hydroflattened call) are the validated spike
+        # defaults (Phase 0/1) and are currently fixed at their function
+        # defaults; expose as config only when a task threads them through
+        # compute.run_batch/topo.read_window/topo.is_hydroflattened.
+        groups = group_by_tile(dprst, wesm_gdf)
         tile_keys = list(groups.keys())
         logger.info("  %d elevation tile(s) to read for %d polygons", len(tile_keys), len(dprst))
         tmp_parquet = ctx.output_dir / "_dprst_depth_inprocess.parquet"

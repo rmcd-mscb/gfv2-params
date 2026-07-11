@@ -46,16 +46,6 @@ class BuildContext:
     # trustworthy donor group (fill.fill_flat's floor_in, inches — 49 in is
     # the NHM calibrated dprst_depth_avg median).
     dprst_depth_floor_in: float = 49.0
-    # DEM window padding beyond each polygon's bbox (topo.read_window /
-    # tiling.group_by_tile's rim_buffer_m).
-    dprst_rim_buffer_m: float = 200.0
-    # Interior elevation-range tolerance for the hydro-flattening detector
-    # (topo.is_hydroflattened's tol_m). NOTE: compute._polygon_depth_from_dem
-    # calls is_hydroflattened with its own 0.01 default and does not yet
-    # accept an override, so this ctx field is currently inert (matches the
-    # hardcoded default) — a forward-compatible knob, not yet threaded
-    # through Tasks 1-6's compute core.
-    dprst_flatness_tol_m: float = 0.01
     # Minimum donor count per (ecoregion, FTYPE) group before fill.
     # fit_ecoregion_models attempts a CV-compared calibrated-Hollister fit
     # (fill.N_MIN_DEFAULT).

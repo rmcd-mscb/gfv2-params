@@ -23,8 +23,6 @@ imperv_source: "{data_root}/input/lulc/nlcd_annual_imperv/Annual_NLCD_FctImp_201
 # (those, wesm_index/ecoregions_gpkg, live in the fabric profile in
 # base_config.yml alongside waterbody_gpkg/connected_comids_table).
 dprst_depth_floor_in: 49.0 # NHM calibrated dprst_depth_avg median fallback (in)
-dprst_rim_buffer_m: 200.0 # DEM window padding beyond each polygon's bbox (m)
-dprst_flatness_tol_m: 0.01 # hydro-flattening interior elevation-range tolerance (m)
 dprst_hollister_n_min: 5 # min donors/group before a calibrated-Hollister fit is attempted
 
 steps:
