@@ -82,18 +82,18 @@ def _polygon_depth_from_dem(
     """Pure core: DEM window + interior mask -> depth stats for one polygon.
 
     Hydro-flattened water surfaces are published as an exactly-constant
-    breakline elevation (USGS Lidar Base Spec) — but that constancy is
-    indistinguishable, AT THE PIXEL LEVEL, from a genuine flat-bottomed
-    depression's own raw floor (both are `dem[interior_mask]` == one value
-    to within float precision). The two are only told apart by looking
-    beyond the polygon interior: a genuine depression's DEM window still
-    carries the surrounding rim's *different* elevation (real relief,
-    `read_window`'s rim buffer), whereas a truly degenerate/flat READ
-    (the whole window at one constant value, no relief anywhere) is the
-    hydro-flattened/untrustworthy case. So `is_hydroflattened` runs over
-    every valid (non-`nodata`) cell in the *whole* window, not just
-    `interior_mask` — the interior mask is reserved for what it actually
-    measures (V/A depth, max depth), not for the flatness verdict.
+    breakline elevation (USGS Lidar Base Spec): the Phase 0 spike validated
+    that the flatness verdict must be read off the POLYGON INTERIOR alone
+    (`interior_mask`-selected cells) — that's what produced the trustworthy
+    SwampMarsh 21.7% / LakePond 11% flattened fractions (a hydro-flattened
+    lake's interior reads EXACTLY 0.000 m range). Running the gate over the
+    rim-inclusive window instead is wrong: a real hydro-flattened lake
+    sitting in terrain with any surrounding relief would have a
+    window-range > tol and be misclassified non-flat, and we'd then
+    "measure" a depth off its flat water surface rather than its bed. A
+    perfectly-constant interior IS what hydro-flattening looks like — that
+    correctly reads flat=True; a genuine, non-flattened depression's floor
+    carries real (>1 cm) interior relief and correctly reads flat=False.
 
     `hollister_max_m` (Task 6's terrain-slope max-depth predictor) is
     ALWAYS computed, flat or not: Task 5 uses it both as calibration fit
@@ -112,9 +112,8 @@ def _polygon_depth_from_dem(
 
     hollister_max_m = float(lake_max_depth(dem, interior_mask, transform))
 
-    valid = dem[dem != nodata]
-    n_interior = int(interior_mask.sum())
-    flat = valid.size == 0 or n_interior == 0 or bool(is_hydroflattened(valid)["flat"])
+    interior_valid = dem[interior_mask & (dem != nodata)]
+    flat = interior_valid.size == 0 or bool(is_hydroflattened(interior_valid)["flat"])
 
     if flat:
         return {
