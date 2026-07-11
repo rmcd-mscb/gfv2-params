@@ -18,6 +18,7 @@ import richdem as rd
 from osgeo import gdal
 from rasterio.enums import Resampling
 from rasterio.errors import RasterioIOError
+from rasterio.features import geometry_mask
 from rasterio.vrt import WarpedVRT
 from rasterio.warp import calculate_default_transform, transform_bounds, transform_geom
 from rasterio.windows import from_bounds
@@ -209,6 +210,28 @@ def lake_max_depth(dem: np.ndarray, polygon_mask: np.ndarray, transform) -> floa
     # max distance from any lake cell to the shore
     dist = ndimage.distance_transform_edt(polygon_mask) * cell
     return mean_slope * float(dist.max())
+
+
+def _interior_mask(dem: np.ndarray, transform, geom, sentinel: float = -9999.0) -> np.ndarray:
+    """Boolean mask of `dem` cells whose centre lies inside `geom` (the raw,
+    unbuffered dprst polygon) and are not the nodata sentinel.
+
+    `read_window`'s DEM window covers `geom.bounds` padded by `rim_buffer_m`
+    on every side; rasterizing the *unbuffered* polygon geometry onto that
+    same transform is exactly "exclude the rim buffer, keep only the
+    polygon interior" — no separate erosion needed, the rim buffer only
+    exists outside `geom` in the first place.
+
+    Ported verbatim from the Phase 0 diagnostic probe
+    (`scripts/diagnose/dprst_depth_probe.py`, issue #173 Task 4) so the
+    probe and the Phase 1 builder (`compute.py`) share one validated
+    definition of "polygon interior" instead of two drifting copies.
+    """
+    if dem.size == 0:
+        return np.zeros(dem.shape, dtype=bool)
+    mask = geometry_mask([geom], out_shape=dem.shape, transform=transform, invert=True)
+    mask &= dem != sentinel
+    return mask
 
 
 def max_to_mean(max_depth: float, shape: str = "cone") -> float:

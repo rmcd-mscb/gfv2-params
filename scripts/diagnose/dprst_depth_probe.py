@@ -18,6 +18,7 @@ from scipy import stats as scipy_stats
 
 from gfv2_params.depstor import load_connected_comids
 from gfv2_params.dprst_depth.topo import (
+    _interior_mask,
     depth_to_spill,
     dprst_polygons,
     is_hydroflattened,
@@ -429,28 +430,6 @@ def sample_per_ftype(
         idx = rng.choice(sub.index.to_numpy(), size=n, replace=False)
         samples[ftype] = sub.loc[idx]
     return samples
-
-
-def _interior_mask(dem: np.ndarray, transform, geom, sentinel: float = -9999.0) -> np.ndarray:
-    """Boolean mask of `dem` cells whose centre lies inside `geom` (the raw,
-    unbuffered dprst polygon) and are not the nodata sentinel.
-
-    `read_window`'s DEM window covers `geom.bounds` padded by `rim_buffer_m`
-    on every side; rasterizing the *unbuffered* polygon geometry onto that
-    same transform is exactly "exclude the rim buffer, keep only the
-    polygon interior" — no separate erosion needed, the rim buffer only
-    exists outside `geom` in the first place. Pulled out of `_interior_values`
-    (issue #173 Task 5) so `run_freeboard` can reuse the identical interior
-    definition Task 4's flatness detector uses, rather than re-deriving it —
-    `_interior_values` (below) is now a thin wrapper over this mask.
-    """
-    from rasterio.features import geometry_mask
-
-    if dem.size == 0:
-        return np.zeros(dem.shape, dtype=bool)
-    mask = geometry_mask([geom], out_shape=dem.shape, transform=transform, invert=True)
-    mask &= dem != sentinel
-    return mask
 
 
 def _interior_values(dem: np.ndarray, transform, geom, sentinel: float = -9999.0) -> np.ndarray:

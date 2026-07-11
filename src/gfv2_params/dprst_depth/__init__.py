@@ -7,6 +7,7 @@ Phase 1 builder import a single copy.
 from __future__ import annotations
 
 from .topo import (
+    _interior_mask,
     _normalize_nodata,
     _tile13_name,
     depth_to_spill,
@@ -20,6 +21,7 @@ from .topo import (
 )
 
 __all__ = [
+    "_interior_mask",
     "_normalize_nodata",
     "_tile13_name",
     "depth_to_spill",
