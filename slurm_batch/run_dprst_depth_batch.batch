@@ -7,7 +7,7 @@
 #SBATCH --time=04:00:00
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=2
-#SBATCH --mem=24G
+#SBATCH --mem=64G
 #
 # Stage 2 of the dprst_depth pipeline (issue #173 Task 9): ONE array task
 # computes dprst_depth for ONE tile-batch (Task 3's work-list; fan-out unit
