@@ -83,6 +83,29 @@ analysed at the HRU level. **Action:** persist `resolution`, `FTYPE`, `ecoregion
 `measured_max_m`, `hollister_max_m` in the companion parquet for CONUS diagnostics
 (and richer provenance).
 
+## Post-fix re-validation (2026-07-11, commit 949fc41)
+
+The three fixes were applied and Oregon re-run (fill→burn→aggregate on the same
+compute parquet):
+
+| metric | before | after fix |
+|---|---|---|
+| max `dprst_depth_avg` | 4,224 in (352 ft) | **300.0 in** (NHM cap) |
+| `constant_floor` polygons | 98 | **0** (now regional-filled) |
+| provenance parquet columns | 3 | 9 (adds resolution/ftype/ecoregion/measured_max/hollister_max) |
+| NaN / ≤ 0 | 0 / 0 | 0 / 0 |
+
+Resolution split (per polygon): **74% 1 m / 26% 10 m**. Post-fix method mix:
+measured 2,784 · regional_fill 255 · **calibrated_hollister 71** · measured_capped 31.
+
+Two minor residuals (both handled; output valid, max = 300, no NaN):
+- The finalize backstop still clamped **11 HRUs** > 300 in — the per-polygon cap
+  did not fully propagate to the burned raster for a few HRUs. Output is correct
+  (clamped); the "should be impossible" path warrants a quick look before/at CONUS.
+- `calibrated_hollister` wins rose from ~1 to 71 polygons after the cap changed
+  the donor depths feeding the per-ecoregion fits — a positive for the calibration
+  idea, but confirm on CONUS the wins are sensible fits, not shallow-value overfits.
+
 ## Recommendation
 
 1. **Add the 300 in physical cap** (Risk 1) — required before CONUS; unphysical
