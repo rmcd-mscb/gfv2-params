@@ -51,6 +51,11 @@ fabrics:
     # by wbody_connectivity to catch through-flow swamps NHD never tagged with
     # WBAREACOMI. Optional: absent -> WBAREACOMI-only behaviour.
     flowthrough_comids_table: "{data_root}/input/nhd/flowthrough_waterbody_comids.parquet"
+    # EPA Level III Ecoregions (shared CONUS input, see
+    # gfv2_params.download.epa_ecoregions). The dprst_depth builder (#173)
+    # joins dprst polygons to a region by centroid for the freeboard/Hollister
+    # terrain-slope bathymetry regression.
+    ecoregions_gpkg: "{data_root}/input/ecoregions/us_eco_l3.gpkg"
     # HRU polygon fabric — authoritative land/domain mask for the depstor
     # builders. gfv2_params.depstor_builders.landmask rasterises this to
     # land_mask.tif (driven by scripts/build_depstor_rasters.py).
@@ -94,6 +99,7 @@ fabrics:
     # by wbody_connectivity to catch through-flow swamps NHD never tagged with
     # WBAREACOMI. Optional: absent -> WBAREACOMI-only behaviour.
     flowthrough_comids_table: "{data_root}/input/nhd/flowthrough_waterbody_comids.parquet"
+    ecoregions_gpkg: "{data_root}/input/ecoregions/us_eco_l3.gpkg"
     hru_gpkg: "{data_root}/gfv2/fabric/gfv2_nhru_merged.gpkg"
     hru_layer: nhru
     id_feature: nat_hru_id
@@ -163,6 +169,9 @@ fabrics:
     # Connected-waterbody COMIDs distilled from NHD WBAREACOMI artificial paths
     # (see gfv2_params.download.nhd_flowlines). Drives wbody_connectivity.
     connected_comids_table: "{data_root}/input/nhd/connected_waterbody_comids.parquet"
+    # EPA Level III Ecoregions (shared CONUS input, see
+    # gfv2_params.download.epa_ecoregions). Drives dprst_depth (#173).
+    ecoregions_gpkg: "{data_root}/input/ecoregions/us_eco_l3.gpkg"
 
   tjc:
     # Small regional fabric inside VPU 12 (Texas-Gulf); pre-merged single gpkg
@@ -202,3 +211,6 @@ fabrics:
     # Connected-waterbody COMIDs distilled from NHD WBAREACOMI artificial paths
     # (see gfv2_params.download.nhd_flowlines). Drives wbody_connectivity.
     connected_comids_table: "{data_root}/input/nhd/connected_waterbody_comids.parquet"
+    # EPA Level III Ecoregions (shared CONUS input, see
+    # gfv2_params.download.epa_ecoregions). Drives dprst_depth (#173).
+    ecoregions_gpkg: "{data_root}/input/ecoregions/us_eco_l3.gpkg"
