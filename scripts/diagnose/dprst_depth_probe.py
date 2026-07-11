@@ -23,7 +23,8 @@ from rasterio.errors import RasterioIOError
 from rasterio.vrt import WarpedVRT
 from rasterio.warp import calculate_default_transform, transform_bounds, transform_geom
 from rasterio.windows import from_bounds
-from scipy import ndimage, stats as scipy_stats
+from scipy import ndimage
+from scipy import stats as scipy_stats
 
 from gfv2_params.depstor import load_connected_comids, select_connected_waterbodies
 from gfv2_params.nhd_ftypes import EXCLUDE_WATERBODY_FTYPES, FORCE_DPRST_FTYPES
@@ -1789,6 +1790,422 @@ def run_regression(
     return per_polygon
 
 
+# --- Hollister validation: score vs raw-DEM bathymetry + empirical max->mean --
+# (--hollister-validation, issue #173 high-value follow-up)
+#
+# On a NON-hydro-flattened dprst polygon the raw 3DEP DEM captures the real
+# bed (Task 5's freeboard finding: a flattened surface is breakline-enforced
+# and constant, NOT the true bathymetry; a non-flat surface is unmodified
+# bare-earth). `depth_to_spill()` over such a polygon's interior is therefore
+# FULL measured bathymetry, not just above-water freeboard -- so on the SAME
+# polygons we can compute both Hollister's PREDICTED max depth
+# (`lake_max_depth`, Task 6) and the raw-DEM MEASURED max/mean depth
+# (`depth_to_spill`/`volume_mean_depth`, Task 7's helpers) and compare them
+# head-to-head. Tasks 6 and 7 never did this: Task 6 sampled LakePond only
+# and never measured a ground-truth max; Task 7 sampled all FTYPEs and
+# measured mean depth but never ran Hollister. This mode reuses every
+# read/mask/depth helper from both tasks -- no new sampling, masking, or
+# depth-computation logic.
+HOLLISTER_VALIDATION_MIN_N_FIT = 3
+
+
+def analyze_hollister_validation_sample(
+    samples: dict[str, gpd.GeoDataFrame], project: str, logger,
+    flat_lookup: dict | None = None,
+) -> pd.DataFrame:
+    """Run `read_window` -> interior mask -> `depth_to_spill` -> {measured
+    mean/max depth, Hollister predicted max depth} over every NON-FLAT
+    sampled polygon; return one row per usable polygon.
+
+    Flat/non-flat classification reuses Task 4's cached
+    `flatness_per_polygon.csv` by COMID where available (same reuse pattern
+    as `analyze_regression_sample`), else computes `is_hydroflattened` fresh
+    on this read's interior values. Flat polygons are skipped outright
+    (counted, not raised) -- their raw DEM is a breakline-enforced water
+    surface, not real bathymetry (Task 5), so neither side of this
+    comparison means anything on them. Polygons with `measured_max_m <= 0`
+    (no real bowl in the interior -- e.g. a hydrologically flat non-flagged
+    edge case) are also skipped, since both the mean/max ratio and any
+    Hollister comparison would be degenerate (division by zero / comparing
+    against a non-existent bed).
+    """
+    rows = []
+    n_total = sum(len(v) for v in samples.values())
+    n_done = 0
+    n_flat_skipped = 0
+    n_degenerate_skipped = 0
+    for ftype, sub in samples.items():
+        for _, row in sub.iterrows():
+            geom = row.geometry
+            comid = row["COMID"] if "COMID" in sub.columns else row.name
+            area_km2 = float(row["area_km2"]) if "area_km2" in sub.columns else geom.area / 1e6
+            n_done += 1
+            try:
+                dem, transform, crs, source = read_window(geom, "1m", wesm_row={"project": project})
+            except Exception as exc:  # noqa: BLE001 - log and skip, never abort the sample
+                logger.warning(
+                    "  [%d/%d] FTYPE=%s COMID=%s: read_window failed (%s) — skipped",
+                    n_done, n_total, ftype, comid, exc,
+                )
+                continue
+            mask = _interior_mask(dem, transform, geom)
+            n_interior = int(mask.sum())
+            if n_interior == 0:
+                logger.warning(
+                    "  [%d/%d] FTYPE=%s COMID=%s: 0 interior cells after masking — skipped",
+                    n_done, n_total, ftype, comid,
+                )
+                continue
+
+            if flat_lookup is not None and comid in flat_lookup:
+                flat = bool(flat_lookup[comid])
+            else:
+                flat = bool(is_hydroflattened(dem[mask])["flat"])
+            if flat:
+                n_flat_skipped += 1
+                continue
+
+            depth = depth_to_spill(dem)
+            cell_area_m2 = abs(transform.a * transform.e)
+            _, _, measured_mean_m = volume_mean_depth(depth, mask, cell_area_m2)
+            measured_max_m = float(depth[mask].max())
+            if measured_max_m <= 0:
+                n_degenerate_skipped += 1
+                logger.warning(
+                    "  [%d/%d] FTYPE=%s COMID=%s: measured_max_m=%.4f <= 0 (no real "
+                    "bowl) — skipped", n_done, n_total, ftype, comid, measured_max_m,
+                )
+                continue
+            hollister_max_m = lake_max_depth(dem, mask, transform)
+
+            rows.append({
+                "COMID": comid,
+                "FTYPE": ftype,
+                "area_km2": area_km2,
+                "measured_mean_m": measured_mean_m,
+                "measured_max_m": measured_max_m,
+                "hollister_max_m": hollister_max_m,
+                "measured_mean_over_max": measured_mean_m / measured_max_m,
+                "n_interior_cells": n_interior,
+                "resolution": source["resolution"],
+            })
+            if n_done % 25 == 0 or n_done == n_total:
+                logger.info(
+                    "  [%d/%d] FTYPE=%s COMID=%s measured_max=%.2f m hollister_max="
+                    "%.2f m measured_mean=%.2f m",
+                    n_done, n_total, ftype, comid, measured_max_m, hollister_max_m,
+                    measured_mean_m,
+                )
+    logger.info(
+        "  %d/%d polygons flat (skipped, no real bed depth); %d degenerate "
+        "(measured_max_m<=0, skipped); %d usable non-flat polygons",
+        n_flat_skipped, n_total, n_degenerate_skipped, len(rows),
+    )
+    return pd.DataFrame(rows)
+
+
+def _fit_skill(pred: np.ndarray, measured: np.ndarray) -> dict:
+    """Correlation/R^2, RMSE, and median signed bias of `pred` vs `measured`.
+
+    `linregress` here is used only for its Pearson `rvalue` (symmetric in
+    its two arguments, so which is x/y doesn't matter) -- this is a
+    predicted-vs-truth skill score, not a fitted conversion line to apply
+    elsewhere.
+    """
+    fit = scipy_stats.linregress(measured, pred)
+    rmse = float(np.sqrt(np.mean((pred - measured) ** 2)))
+    bias = float(np.median(pred - measured))
+    return {
+        "n": len(pred),
+        "r": float(fit.rvalue),
+        "r2": float(fit.rvalue ** 2),
+        "rmse": rmse,
+        "median_bias": bias,
+    }
+
+
+def _hollister_skill_stats(df: pd.DataFrame, logger) -> dict:
+    """Finding 1: is Hollister's predicted max depth a good predictor of the
+    raw-DEM measured max depth? Linear skill (r/R^2/RMSE/median bias) plus a
+    log10-log10 fit R^2, since a terrain-slope-x-distance estimate is a
+    multiplicative (not additive) model of depth."""
+    pred = df["hollister_max_m"].to_numpy()
+    measured = df["measured_max_m"].to_numpy()
+    stats = _fit_skill(pred, measured)
+    logger.info(
+        "  Hollister max-depth skill (n=%d): r=%.3f R^2=%.3f RMSE=%.3f m "
+        "median_bias=%+.3f m", stats["n"], stats["r"], stats["r2"], stats["rmse"],
+        stats["median_bias"],
+    )
+    pos = (pred > 0) & (measured > 0)
+    if int(pos.sum()) >= HOLLISTER_VALIDATION_MIN_N_FIT:
+        log_fit = scipy_stats.linregress(np.log10(measured[pos]), np.log10(pred[pos]))
+        stats["log10_r2"] = float(log_fit.rvalue ** 2)
+        stats["log10_n"] = int(pos.sum())
+        logger.info(
+            "  Hollister max-depth log10-log10 fit: R^2=%.3f (n=%d)",
+            stats["log10_r2"], stats["log10_n"],
+        )
+    else:
+        stats["log10_r2"] = float("nan")
+        stats["log10_n"] = int(pos.sum())
+        logger.warning(
+            "  Hollister max-depth log10-log10 fit: too few positive pairs (n=%d) "
+            "to fit", stats["log10_n"],
+        )
+
+    if stats["r2"] >= 0.5:
+        verdict = "Hollister IS a useful predictor of real max depth (R^2>=0.5)"
+    elif stats["r2"] >= 0.2:
+        verdict = "Hollister is a WEAK predictor of real max depth (0.2<=R^2<0.5)"
+    else:
+        verdict = "Hollister is a POOR predictor of real max depth (R^2<0.2)"
+    logger.info(
+        "*** Hollister skill verdict: %s (R^2=%.3f, median bias=%+.3f m, n=%d) ***",
+        verdict, stats["r2"], stats["median_bias"], stats["n"],
+    )
+    return stats
+
+
+def _maxmean_factor_stats(df: pd.DataFrame, logger) -> dict:
+    """Finding 2: the REAL (measured, Hollister-independent) mean/max shape
+    factor distribution -- to check against the assumed cone factor 1/3."""
+    ratio = df["measured_mean_over_max"].to_numpy()
+    cone_assumed = 1.0 / 3.0
+    median = float(np.median(ratio))
+    q1, q3 = float(np.percentile(ratio, 25)), float(np.percentile(ratio, 75))
+    stats = {"n": len(ratio), "median": median, "q1": q1, "q3": q3, "cone_assumed": cone_assumed}
+    logger.info(
+        "  Empirical mean/max depth factor (n=%d): median=%.3f IQR=[%.3f, %.3f] "
+        "(assumed cone factor = 1/3 = %.3f)", stats["n"], median, q1, q3, cone_assumed,
+    )
+    if q1 <= cone_assumed <= q3:
+        verdict = "1/3 cone assumption falls WITHIN the empirical IQR — reasonable default"
+    else:
+        verdict = (
+            f"1/3 cone assumption falls OUTSIDE the empirical IQR — Phase 1 should use "
+            f"the empirical median {median:.3f} instead"
+        )
+    logger.info("*** Max->mean factor verdict: %s ***", verdict)
+    return stats
+
+
+def _end_to_end_stats(df: pd.DataFrame, logger) -> dict:
+    """Finding 3: how well does the FULL Hollister->mean(cone) pipeline --
+    what Phase 1 would actually apply to flat polygons -- predict the real
+    (measured) mean depth?"""
+    predicted_mean = np.array([max_to_mean(m, "cone") for m in df["hollister_max_m"]])
+    measured_mean = df["measured_mean_m"].to_numpy()
+    stats = _fit_skill(predicted_mean, measured_mean)
+    logger.info(
+        "  End-to-end Hollister->mean(cone) pipeline skill (n=%d): r=%.3f R^2=%.3f "
+        "RMSE=%.3f m median_bias=%+.3f m", stats["n"], stats["r"], stats["r2"],
+        stats["rmse"], stats["median_bias"],
+    )
+    if stats["r2"] >= 0.5:
+        verdict = "the FULL Hollister->mean(cone) pipeline predicts real mean depth WELL"
+    elif stats["r2"] >= 0.2:
+        verdict = "the FULL Hollister->mean(cone) pipeline is a WEAK predictor of real mean depth"
+    else:
+        verdict = "the FULL Hollister->mean(cone) pipeline is a POOR predictor of real mean depth"
+    logger.info(
+        "*** End-to-end verdict: %s (R^2=%.3f, RMSE=%.3f m, n=%d) ***",
+        verdict, stats["r2"], stats["rmse"], stats["n"],
+    )
+    return stats
+
+
+def _write_hollister_validation_scatter(df: pd.DataFrame, out_png: Path, logger) -> None:
+    """Predicted (Hollister) vs measured (raw-DEM) max depth, with a 1:1
+    reference line -- the visual evidence for Finding 1."""
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    fig, ax = plt.subplots(figsize=(7, 7))
+    ax.scatter(
+        df["measured_max_m"], df["hollister_max_m"], alpha=0.5, s=16, color="#1f77b4",
+    )
+    lim = float(max(df["measured_max_m"].max(), df["hollister_max_m"].max())) * 1.05
+    lim = max(lim, 1e-3)
+    ax.plot([0, lim], [0, lim], color="black", linestyle="--", linewidth=1, label="1:1")
+    ax.set_xlim(0, lim)
+    ax.set_ylim(0, lim)
+    ax.set_aspect("equal")
+    ax.set_xlabel("measured max depth (m, raw-DEM depth_to_spill)")
+    ax.set_ylabel("Hollister predicted max depth (m)")
+    ax.set_title(f"Hollister predicted vs raw-DEM measured max depth (n={len(df)})")
+    ax.legend()
+    fig.tight_layout()
+    fig.savefig(out_png, dpi=150)
+    plt.close(fig)
+    logger.info("  wrote Hollister pred-vs-measured max-depth scatter: %s", out_png)
+
+
+def _write_maxmean_factor_hist(df: pd.DataFrame, out_png: Path, logger) -> None:
+    """Histogram of measured_mean/measured_max, with the assumed 1/3 cone
+    factor and the empirical median marked -- the visual evidence for
+    Finding 2."""
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    med = float(df["measured_mean_over_max"].median())
+    fig, ax = plt.subplots(figsize=(8, 5))
+    ax.hist(df["measured_mean_over_max"], bins=40, color="#1f77b4", alpha=0.8)
+    ax.axvline(1.0 / 3.0, color="black", linestyle="--", linewidth=1.5, label="assumed cone factor = 1/3")
+    ax.axvline(med, color="#d62728", linestyle="-", linewidth=1.5, label=f"empirical median = {med:.3f}")
+    ax.set_xlabel("measured mean / measured max depth")
+    ax.set_ylabel("polygon count")
+    ax.set_title(f"Empirical max->mean shape factor (n={len(df)})")
+    ax.legend()
+    fig.tight_layout()
+    fig.savefig(out_png, dpi=150)
+    plt.close(fig)
+    logger.info("  wrote max/mean factor histogram: %s", out_png)
+
+
+def run_hollister_validation(
+    base: dict, logger, out_dir: Path, wesm_cache_dir: Path,
+    n_per_ftype: int = 300, limit: int | None = None,
+) -> pd.DataFrame:
+    """Issue #173 follow-up: validate Hollister's terrain-slope max-depth
+    prediction against raw-DEM measured bathymetry on non-flat dprst
+    polygons, and empirically calibrate the max->mean shape factor.
+
+    See the module-level note above `HOLLISTER_VALIDATION_MIN_N_FIT` for why
+    this works: on a non-flat polygon the raw 3DEP DEM IS the real bed, so
+    the SAME polygon yields both a measured ground truth and a Hollister
+    prediction, letting the two be scored head-to-head for the first time.
+
+    Samples up to `n_per_ftype` polygons per FTYPE across all of
+    `FLATNESS_FTYPES` (LakePond is Hollister's target method, per Task 6,
+    but SwampMarsh/Playa/Reservoir are included and reported separately —
+    the caller-requested "focus on LakePond, include + report the rest").
+    Reuses Task 4's cached `flatness_per_polygon.csv` (from `out_dir`) to
+    keep only non-flat polygons where available, falls back to computing
+    `is_hydroflattened` fresh otherwise (mirrors `run_regression`'s reuse
+    pattern). Reports three findings via the logger: (1) Hollister max-depth
+    skill (linear + log10-log10 R^2, RMSE, median bias vs measured max), (2)
+    the empirical measured_mean/measured_max shape-factor distribution vs
+    the assumed 1/3 cone, and (3) the end-to-end Hollister->mean(cone)
+    pipeline skill against measured mean depth — what Phase 1 would actually
+    apply to flat polygons. Writes `hollister_validation.csv` +
+    `hollister_pred_vs_measured_max.png` + `maxmean_factor_hist.png`.
+    """
+    dprst = load_conus_dprst(base, logger)
+
+    wesm_path = ensure_wesm_local(wesm_cache_dir, logger)
+    logger.info("Selecting ND 1m project with densest dprst overlap ...")
+    project, nd_dprst = select_nd_project(dprst, wesm_path, logger)
+    del dprst
+    gc.collect()
+
+    logger.info("Sampling up to %d dprst polygons per FTYPE from project=%s ...", n_per_ftype, project)
+    samples = sample_per_ftype(nd_dprst, n_per_ftype, logger)
+    if limit is not None:
+        samples = {ftype: sub.head(limit) for ftype, sub in samples.items()}
+    n_total = sum(len(v) for v in samples.values())
+    logger.info(
+        "Total sample size across all FTYPEs: %d%s", n_total,
+        f" [--limit {limit}]" if limit is not None else "",
+    )
+    if n_total == 0:
+        raise RuntimeError("0 dprst polygons in the chosen ND project — nothing to analyze")
+
+    flat_lookup: dict | None = None
+    flat_csv = out_dir / "flatness_per_polygon.csv"
+    if flat_csv.exists():
+        cached = pd.read_csv(flat_csv)
+        if "COMID" in cached.columns and "flat" in cached.columns:
+            flat_lookup = dict(zip(cached["COMID"], cached["flat"].astype(bool)))
+            logger.info(
+                "Loaded cached flat/non-flat classification for %d polygons from %s "
+                "(Task 4's --flatness run) — reused by COMID where available",
+                len(flat_lookup), flat_csv,
+            )
+        else:
+            logger.warning(
+                "%s exists but is missing COMID/flat columns — ignoring, will compute "
+                "flatness fresh for every polygon", flat_csv,
+            )
+    else:
+        logger.info(
+            "No cached %s found — computing flat/non-flat classification fresh for "
+            "every sampled polygon (run --flatness first to reuse it instead)", flat_csv,
+        )
+
+    logger.info(
+        "Reading each sampled non-flat polygon at 1m + computing measured mean/max "
+        "depth + Hollister predicted max ..."
+    )
+    per_polygon = analyze_hollister_validation_sample(samples, project, logger, flat_lookup)
+    n_ok = len(per_polygon)
+    logger.info(
+        "Hollister-validation reads completed: %d/%d sampled polygons usable "
+        "(non-flat, non-degenerate)", n_ok, n_total,
+    )
+    if per_polygon.empty:
+        raise RuntimeError("Hollister-validation analysis produced 0 usable polygons")
+
+    logger.info("--- Finding 1: Hollister max-depth skill (predicted vs measured) ---")
+    skill = _hollister_skill_stats(per_polygon, logger)
+
+    logger.info("--- Finding 2: empirical measured_mean/measured_max shape factor ---")
+    factor = _maxmean_factor_stats(per_polygon, logger)
+
+    logger.info("--- Finding 3: end-to-end Hollister->mean(cone) pipeline skill ---")
+    end_to_end = _end_to_end_stats(per_polygon, logger)
+
+    logger.info("--- Per-FTYPE breakdown ---")
+    for ftype in sorted(per_polygon["FTYPE"].unique()):
+        sub = per_polygon[per_polygon["FTYPE"] == ftype]
+        ratio_med = float(sub["measured_mean_over_max"].median())
+        if len(sub) >= HOLLISTER_VALIDATION_MIN_N_FIT:
+            sub_skill = _fit_skill(sub["hollister_max_m"].to_numpy(), sub["measured_max_m"].to_numpy())
+            logger.info(
+                "  FTYPE=%-10s n=%4d Hollister R^2=%.3f RMSE=%.3f m mean/max median=%.3f",
+                ftype, len(sub), sub_skill["r2"], sub_skill["rmse"], ratio_med,
+            )
+        else:
+            logger.info(
+                "  FTYPE=%-10s n=%4d (< %d, too few to fit) mean/max median=%.3f",
+                ftype, len(sub), HOLLISTER_VALIDATION_MIN_N_FIT, ratio_med,
+            )
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out_csv = out_dir / "hollister_validation.csv"
+    caveat = (
+        f"# Hollister-vs-raw-DEM-bathymetry validation + empirical max->mean factor "
+        f"(issue #173 follow-up). Project={project}. n_sampled={n_total}"
+        + (f" (--limit {limit})" if limit is not None else "")
+        + f", n_usable={n_ok} (non-flat, measured_max_m>0). measured_mean_m/"
+        "measured_max_m = volume_mean_depth/max(depth_to_spill) over the polygon "
+        "interior (real bathymetry -- only valid on non-flat polygons, Task 5). "
+        "hollister_max_m = lake_max_depth() predicted max depth (Task 6). Hollister "
+        f"skill: R^2={skill['r2']:.3f} RMSE={skill['rmse']:.3f} m "
+        f"median_bias={skill['median_bias']:+.3f} m (log10-log10 R^2="
+        f"{skill['log10_r2']:.3f}, n={skill['log10_n']}). Empirical mean/max factor: "
+        f"median={factor['median']:.3f} IQR=[{factor['q1']:.3f}, {factor['q3']:.3f}] "
+        f"vs assumed cone=1/3={factor['cone_assumed']:.3f}. End-to-end "
+        f"Hollister->mean(cone) pipeline: R^2={end_to_end['r2']:.3f} "
+        f"RMSE={end_to_end['rmse']:.3f} m median_bias={end_to_end['median_bias']:+.3f} m.\n"
+    )
+    with open(out_csv, "w") as f:
+        f.write(caveat)
+        per_polygon.to_csv(f, index=False)
+    logger.info("Wrote per-polygon Hollister-validation table: %s", out_csv)
+
+    _write_hollister_validation_scatter(
+        per_polygon, out_dir / "hollister_pred_vs_measured_max.png", logger,
+    )
+    _write_maxmean_factor_hist(per_polygon, out_dir / "maxmean_factor_hist.png", logger)
+
+    return per_polygon
+
+
 def main() -> None:
     from gfv2_params.config import load_base_config
     from gfv2_params.log import configure_logging
@@ -1821,6 +2238,13 @@ def main() -> None:
                             "extrapolation is DEFERRED (only 1 Playa polygon in the ND "
                             "study area) -- see the run log's extrapolation-risk caveat. "
                             "Reuses flatness_per_polygon.csv from --out-dir if present.")
+    mode.add_argument("--hollister-validation", action="store_true",
+                       help="Score Hollister's predicted max depth against raw-DEM "
+                            "measured bathymetry on non-flat dprst polygons, and "
+                            "empirically calibrate the max->mean shape factor (issue "
+                            "#173 follow-up). Samples all of FLATNESS_FTYPES (focus on "
+                            "LakePond, reports others too). Reuses "
+                            "flatness_per_polygon.csv from --out-dir if present.")
     parser.add_argument("--fabric", default=None,
                          help="Fabric name (overrides FABRIC env / default_fabric).")
     parser.add_argument(
@@ -1828,25 +2252,28 @@ def main() -> None:
         help="Output directory (coverage_audit.csv for --audit; "
              "flatness_by_ftype.csv/flatness_separability.png for --flatness; "
              "hollister_sample.csv/hollister_maxdepth_vs_area.png for --hollister; "
-             "depth_area_regression.csv/depth_area_regression.png for --regression). "
+             "depth_area_regression.csv/depth_area_regression.png for --regression; "
+             "hollister_validation.csv/hollister_pred_vs_measured_max.png/"
+             "maxmean_factor_hist.png for --hollister-validation). "
              "Also doubles as the WESM.gpkg download cache dir (multi-GB "
              "one-time download, shared by all modes), so pick a path with "
              "enough free space; there is no default.",
     )
     parser.add_argument(
         "--n-per-ftype", type=int, default=300,
-        help="--flatness/--hollister/--regression only: target sample size per FTYPE "
-             "(default 300, per issue #173 Task 4; --hollister samples LakePond only, "
-             "--regression samples all of FLATNESS_FTYPES). Uses fewer if a FTYPE has "
-             "fewer polygons in the chosen project — never silently capped, always "
-             "logged.",
+        help="--flatness/--hollister/--regression/--hollister-validation only: target "
+             "sample size per FTYPE (default 300, per issue #173 Task 4; --hollister "
+             "samples LakePond only, --regression/--hollister-validation sample all of "
+             "FLATNESS_FTYPES). Uses fewer if a FTYPE has fewer polygons in the chosen "
+             "project — never silently capped, always logged.",
     )
     parser.add_argument(
         "--limit", type=int, default=None,
-        help="--freeboard/--hollister/--regression only: cap the number of polygons "
-             "analyzed (head of the sample) — for cheap smoke-testing; default: "
-             "analyze the full sample (every flat=True polygon for --freeboard, every "
-             "sampled polygon per FTYPE for --hollister/--regression).",
+        help="--freeboard/--hollister/--regression/--hollister-validation only: cap "
+             "the number of polygons analyzed (head of the sample) — for cheap "
+             "smoke-testing; default: analyze the full sample (every flat=True "
+             "polygon for --freeboard, every sampled polygon per FTYPE for the other "
+             "modes).",
     )
     args = parser.parse_args()
 
@@ -1886,6 +2313,11 @@ def main() -> None:
         )
     elif args.regression:
         run_regression(
+            base, logger, out_dir=args.out_dir, wesm_cache_dir=args.out_dir,
+            n_per_ftype=args.n_per_ftype, limit=args.limit,
+        )
+    elif args.hollister_validation:
+        run_hollister_validation(
             base, logger, out_dir=args.out_dir, wesm_cache_dir=args.out_dir,
             n_per_ftype=args.n_per_ftype, limit=args.limit,
         )
