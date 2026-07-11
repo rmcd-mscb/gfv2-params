@@ -23,6 +23,7 @@ from rasterio.errors import RasterioIOError
 from rasterio.vrt import WarpedVRT
 from rasterio.warp import calculate_default_transform, transform_bounds, transform_geom
 from rasterio.windows import from_bounds
+from scipy import ndimage
 
 from gfv2_params.depstor import load_connected_comids, select_connected_waterbodies
 from gfv2_params.nhd_ftypes import EXCLUDE_WATERBODY_FTYPES, FORCE_DPRST_FTYPES
@@ -175,6 +176,26 @@ def volume_mean_depth(depth: np.ndarray, mask: np.ndarray, cell_area_m2: float):
     v = float(sel.sum()) * cell_area_m2
     mean_d = v / a if a > 0 else 0.0
     return v, a, mean_d
+
+
+def lake_max_depth(dem: np.ndarray, polygon_mask: np.ndarray, transform) -> float:
+    """Hollister/lakeMorpho-style: project the mean shoreline slope inward to the
+    lake's point of maximum distance-to-shore. Predicts MAX depth."""
+    cell = abs(transform.a) if transform.a else 1.0
+    # mean terrain slope in a shoreline ring just outside the lake
+    ring = ndimage.binary_dilation(polygon_mask, iterations=2) & ~polygon_mask
+    gy, gx = np.gradient(np.asarray(dem, float), cell)
+    slope = np.hypot(gx, gy)
+    mean_slope = float(slope[ring].mean()) if ring.any() else 0.0
+    # max distance from any lake cell to the shore
+    dist = ndimage.distance_transform_edt(polygon_mask) * cell
+    return mean_slope * float(dist.max())
+
+
+def max_to_mean(max_depth: float, shape: str = "cone") -> float:
+    """dprst_depth_avg is MEAN (V/A). Conical basin: mean = max/3."""
+    factors = {"cone": 1.0 / 3.0, "paraboloid": 1.0 / 2.0, "cylinder": 1.0}
+    return max_depth * factors[shape]
 
 
 def _tile13_name(lon: float, lat: float) -> str:
@@ -1211,14 +1232,217 @@ def run_freeboard(
     return result
 
 
+# --- Hollister terrain-slope max-depth prototype (--hollister, Task 6) -----
+#
+# `lake_max_depth`/`max_to_mean` are geometry, not raster I/O — this section
+# is the plumbing that runs them over a real ND sample using the same
+# `select_nd_project`/`sample_per_ftype`/`read_window`/`_interior_mask`
+# helpers Tasks 4-5 already validated, rather than re-deriving sampling or
+# masking logic. Restricted to FTYPE=LakePond (issue #173 Task 6: "a
+# LakePond sample from the ND project") — SwampMarsh/Playa/Reservoir are out
+# of scope here.
+HOLLISTER_FTYPES = ("LakePond",)
+
+
+def analyze_hollister_sample(
+    samples: dict[str, gpd.GeoDataFrame], project: str, logger,
+) -> pd.DataFrame:
+    """Run `read_window` -> interior polygon mask -> `lake_max_depth` ->
+    `max_to_mean` over every sampled polygon and return one row per polygon.
+
+    `max_depth_m` is the Hollister/lakeMorpho terrain-slope-extension
+    estimate (mean shoreline-ring slope x max in-polygon distance-to-shore);
+    `mean_depth_m` is the conical V/A conversion (`max_to_mean(..., "cone")`,
+    factor 1/3) documented in the module docstring above `lake_max_depth`.
+    Polygon area is taken from the sampled GeoDataFrame's own `area_km2`
+    column (computed once, CONUS-wide, in `load_conus_dprst`) rather than
+    re-derived from the raster window, so it matches the shipped dprst area
+    exactly regardless of read/mask resolution.
+    """
+    rows = []
+    n_total = sum(len(v) for v in samples.values())
+    n_done = 0
+    for ftype, sub in samples.items():
+        for _, row in sub.iterrows():
+            geom = row.geometry
+            comid = row["COMID"] if "COMID" in sub.columns else row.name
+            area_km2 = float(row["area_km2"]) if "area_km2" in sub.columns else geom.area / 1e6
+            n_done += 1
+            try:
+                dem, transform, crs, source = read_window(geom, "1m", wesm_row={"project": project})
+            except Exception as exc:  # noqa: BLE001 - log and skip, never abort the sample
+                logger.warning(
+                    "  [%d/%d] FTYPE=%s COMID=%s: read_window failed (%s) — skipped",
+                    n_done, n_total, ftype, comid, exc,
+                )
+                continue
+            mask = _interior_mask(dem, transform, geom)
+            n_interior = int(mask.sum())
+            if n_interior == 0:
+                logger.warning(
+                    "  [%d/%d] FTYPE=%s COMID=%s: 0 interior cells after masking — skipped",
+                    n_done, n_total, ftype, comid,
+                )
+                continue
+            max_depth = lake_max_depth(dem, mask, transform)
+            mean_depth = max_to_mean(max_depth, shape="cone")
+            rows.append({
+                "COMID": comid,
+                "FTYPE": ftype,
+                "area_km2": area_km2,
+                "max_depth_m": max_depth,
+                "mean_depth_m": mean_depth,
+                "mean_depth_in": mean_depth * 39.3701,
+                "n_interior_cells": n_interior,
+                "resolution": source["resolution"],
+            })
+            if n_done % 5 == 0 or n_done == n_total:
+                logger.info(
+                    "  [%d/%d] FTYPE=%s COMID=%s max_depth=%.2f m mean_depth=%.1f in",
+                    n_done, n_total, ftype, comid, max_depth, mean_depth * 39.3701,
+                )
+    return pd.DataFrame(rows)
+
+
+def _write_hollister_scatter(result: pd.DataFrame, out_png: Path, logger) -> None:
+    """Scatter of max-depth (m) vs polygon area (km^2, log-x) — the visual
+    check that Hollister depth scales with lake size in a physically
+    plausible way (not e.g. clustered at one degenerate value)."""
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    fig, ax = plt.subplots(figsize=(8, 5))
+    ax.scatter(result["area_km2"], result["max_depth_m"], alpha=0.6, color="#1f77b4", s=20)
+    ax.set_xscale("log")
+    ax.set_xlabel("polygon area (km^2, log scale)")
+    ax.set_ylabel("Hollister max depth (m)")
+    ax.set_title(f"Hollister max depth vs polygon area (ND LakePond sample, n={len(result)})")
+    fig.tight_layout()
+    fig.savefig(out_png, dpi=150)
+    plt.close(fig)
+    logger.info("  wrote max-depth-vs-area scatter: %s", out_png)
+
+
+def run_hollister(
+    base: dict, logger, out_dir: Path, wesm_cache_dir: Path,
+    n_per_ftype: int = 300, limit: int | None = None,
+) -> pd.DataFrame:
+    """Issue #173 Task 6: Hollister/lakeMorpho terrain-slope max-depth
+    prototype over an ND LakePond sample, plus the max->mean conversion.
+
+    Reconstructs the CONUS dprst set, picks the same ND 1m project Tasks
+    4-5 use (`select_nd_project`), samples up to `n_per_ftype` LakePond
+    polygons (`sample_per_ftype`, `HOLLISTER_FTYPES`), reads each at 1 m
+    and computes `lake_max_depth` -> `max_to_mean` over the polygon
+    interior, and writes `hollister_sample.csv` +
+    `hollister_maxdepth_vs_area.png` to `out_dir`.
+
+    max->mean conversion: this spike has no field bathymetry survey for
+    these ND potholes to calibrate against, so the conical V/A relation
+    (mean = max/3, `max_to_mean(..., "cone")`) is used as the documented,
+    best-available assumption — the same simplifying geometry lakeMorpho
+    itself uses when no bathymetry is supplied (a cone is a reasonable
+    first-order shape for a glacially-scoured prairie pothole: steep sides,
+    a deep central low point, no flat bottom shelf). Both the max and the
+    derived mean distributions are reported (in inches) so a future task
+    with real bathymetry can recalibrate the factor without rerunning this
+    read.
+
+    `limit`, if given, caps the number of sampled LakePond polygons actually
+    read (head of the per-FTYPE sample) — mirrors `run_freeboard`'s `--limit`,
+    for cheap smoke-testing of the read/compute path.
+    """
+    dprst = load_conus_dprst(base, logger)
+
+    wesm_path = ensure_wesm_local(wesm_cache_dir, logger)
+    logger.info("Selecting ND 1m project with densest dprst overlap ...")
+    project, nd_dprst = select_nd_project(dprst, wesm_path, logger)
+    del dprst
+    gc.collect()
+
+    logger.info(
+        "Sampling up to %d LakePond dprst polygons from project=%s ...", n_per_ftype, project,
+    )
+    samples = sample_per_ftype(nd_dprst, n_per_ftype, logger, ftypes=HOLLISTER_FTYPES)
+    if limit is not None:
+        samples = {ftype: sub.head(limit) for ftype, sub in samples.items()}
+    n_total = sum(len(v) for v in samples.values())
+    logger.info(
+        "Total LakePond sample size: %d%s", n_total,
+        f" [--limit {limit}]" if limit is not None else "",
+    )
+    if n_total == 0:
+        raise RuntimeError("0 LakePond polygons in the chosen ND project — nothing to analyze")
+
+    logger.info("Reading each sampled LakePond polygon at 1m + computing Hollister max depth ...")
+    result = analyze_hollister_sample(samples, project, logger)
+    n_ok = len(result)
+    logger.info("Hollister reads completed: %d/%d polygons produced a usable result", n_ok, n_total)
+    if result.empty:
+        raise RuntimeError("Hollister analysis produced 0 usable polygons")
+
+    max_med = float(result["max_depth_m"].median())
+    max_p10 = float(np.percentile(result["max_depth_m"], 10))
+    max_p90 = float(np.percentile(result["max_depth_m"], 90))
+    mean_med_in = float(result["mean_depth_in"].median())
+    logger.info(
+        "Hollister max-depth distribution (m) over LakePond sample: median=%.2f, "
+        "p10=%.2f, p90=%.2f (n=%d)",
+        max_med, max_p10, max_p90, n_ok,
+    )
+    logger.info(
+        "Derived mean-depth (max/3 cone conversion) median: %.1f in (max-depth median "
+        "%.2f m = %.1f in)",
+        mean_med_in, max_med, max_med * 39.3701,
+    )
+    plausible = 0.1 <= max_med <= 10.0 and (result["max_depth_m"] >= 0).all()
+    if plausible:
+        logger.info(
+            "*** Hollister finding: max-depth magnitudes are PLAUSIBLE (a few metres, "
+            "non-negative) — consistent with prairie-pothole/lake depths, not degenerate ***",
+        )
+    else:
+        logger.warning(
+            "*** Hollister finding: max-depth magnitudes look IMPLAUSIBLE (median %.2f m, "
+            "or a negative value present) — inspect before trusting this factor ***",
+            max_med,
+        )
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out_csv = out_dir / "hollister_sample.csv"
+    caveat = (
+        f"# Hollister/lakeMorpho terrain-slope max-depth prototype over an ND LakePond "
+        f"sample (issue #173 Task 6). Project={project}. n_sampled={n_total}"
+        + (f" (--limit {limit})" if limit is not None else "")
+        + f", n_usable={n_ok}. max_depth_m = lake_max_depth() (mean shoreline-ring slope "
+        "x max in-polygon distance-to-shore, over the polygon interior via _interior_mask). "
+        "mean_depth_m = max_to_mean(max_depth_m, shape='cone') = max_depth_m / 3 -- "
+        "documented assumption (V/A of a cone), NOT field-calibrated in this spike; no "
+        "bathymetry survey was available to fit the factor empirically. Cross-check: NHM's "
+        "calibrated dprst_depth_avg median is ~49 in (docs/superpowers/... nhm_dprst_params_"
+        "are_calibrated) -- compare against mean_depth_in below, but this spike does not "
+        "block on matching it.\n"
+    )
+    with open(out_csv, "w") as f:
+        f.write(caveat)
+        result.to_csv(f, index=False)
+    logger.info("Wrote per-polygon Hollister sample: %s", out_csv)
+
+    _write_hollister_scatter(result, out_dir / "hollister_maxdepth_vs_area.png", logger)
+
+    return result
+
+
 def main() -> None:
     from gfv2_params.config import load_base_config
     from gfv2_params.log import configure_logging
 
     parser = argparse.ArgumentParser(description=__doc__)
     # Mutually-exclusive MODE group: exactly one investigation task per run.
-    # Tasks 6-7 (issue #173) add --hollister/--regression here as more
-    # mutually_exclusive_group() members — do not go back to a single
+    # Task 7 (issue #173) adds --regression here as another
+    # mutually_exclusive_group() member — do not go back to a single
     # `required=True` flag (that breaks the moment a second mode is added;
     # see Task 2 review carry-forward note).
     mode = parser.add_mutually_exclusive_group(required=True)
@@ -1232,28 +1456,34 @@ def main() -> None:
                             "detected-flat dprst polygon sample (Task 5, issue #173). "
                             "Requires flatness_per_polygon.csv already in --out-dir "
                             "(run --flatness first).")
+    mode.add_argument("--hollister", action="store_true",
+                       help="Hollister/lakeMorpho terrain-slope max-depth prototype + "
+                            "max->mean conversion over an ND LakePond sample (Task 6, "
+                            "issue #173).")
     parser.add_argument("--fabric", default=None,
                          help="Fabric name (overrides FABRIC env / default_fabric).")
     parser.add_argument(
         "--out-dir", type=Path, required=True,
         help="Output directory (coverage_audit.csv for --audit; "
-             "flatness_by_ftype.csv/flatness_separability.png for --flatness). "
+             "flatness_by_ftype.csv/flatness_separability.png for --flatness; "
+             "hollister_sample.csv/hollister_maxdepth_vs_area.png for --hollister). "
              "Also doubles as the WESM.gpkg download cache dir (multi-GB "
              "one-time download, shared by both modes), so pick a path with "
              "enough free space; there is no default.",
     )
     parser.add_argument(
         "--n-per-ftype", type=int, default=300,
-        help="--flatness only: target sample size per FTYPE (default 300, "
-             "per issue #173 Task 4). Uses fewer if a FTYPE has fewer "
-             "polygons in the chosen project — never silently capped, "
-             "always logged.",
+        help="--flatness/--hollister only: target sample size per FTYPE (default "
+             "300, per issue #173 Task 4; --hollister samples LakePond only). "
+             "Uses fewer if a FTYPE has fewer polygons in the chosen project — "
+             "never silently capped, always logged.",
     )
     parser.add_argument(
         "--limit", type=int, default=None,
-        help="--freeboard only: cap the number of detected-flat polygons analyzed "
-             "(head of the flat slice) — for cheap smoke-testing; default: analyze "
-             "every flat=True polygon in flatness_per_polygon.csv.",
+        help="--freeboard/--hollister only: cap the number of polygons analyzed "
+             "(head of the sample) — for cheap smoke-testing; default: analyze "
+             "the full sample (every flat=True polygon for --freeboard, every "
+             "sampled LakePond polygon for --hollister).",
     )
     args = parser.parse_args()
 
@@ -1285,6 +1515,11 @@ def main() -> None:
         run_freeboard(
             base, logger, out_dir=args.out_dir, wesm_cache_dir=args.out_dir,
             limit=args.limit,
+        )
+    elif args.hollister:
+        run_hollister(
+            base, logger, out_dir=args.out_dir, wesm_cache_dir=args.out_dir,
+            n_per_ftype=args.n_per_ftype, limit=args.limit,
         )
 
 

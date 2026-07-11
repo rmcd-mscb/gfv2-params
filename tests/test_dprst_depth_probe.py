@@ -135,3 +135,26 @@ def test_normalize_nodata_maps_voids_to_sentinel():
     assert np.isclose(depth[0, 0], 0.0)
     assert np.isclose(depth[0, 1], 0.0)
     assert np.isclose(depth[c, c], 2.0)
+
+
+def test_lake_max_depth_scales_with_surrounding_slope():
+    import numpy as np
+    from affine import Affine
+
+    # 41x41 grid, 1 m cells; circular lake radius ~10 in the centre.
+    n = 41
+    yy, xx = np.mgrid[0:n, 0:n]
+    r = np.hypot(xx - 20, yy - 20)
+    mask = r <= 10
+    # Terrain slopes 0.2 m/m toward the lake; lake cells flat (water surface).
+    # Cap the slope well past the mask radius (20, not 10) -- capping exactly
+    # at the mask radius makes dem[mask] = dem[mask].min() collapse the WHOLE
+    # array to one constant elevation (verified: np.unique(dem) == [98.]),
+    # since the region just outside the mask is then already flat too, and
+    # lake_max_depth would spuriously measure zero slope everywhere.
+    dem = 100 - 0.2 * np.minimum(r, 20)
+    dem[mask] = dem[mask].min()
+    d = probe.lake_max_depth(dem.astype(np.float64), mask, Affine.identity())
+    # ~ slope(0.2) * radius(10) order of magnitude; positive, not absurd.
+    assert 0.5 < d < 5.0
+    assert np.isclose(probe.max_to_mean(3.0, shape="cone"), 1.0)
