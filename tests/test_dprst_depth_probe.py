@@ -96,6 +96,15 @@ def test_depth_to_spill_zeroes_nodata_void_no_spurious_depth():
     assert np.isclose(depth[n - 1, n - 1], 0.0)  # untouched rim cell stays 0
 
 
+def test_is_hydroflattened_detects_constant_surface():
+    flat = np.full((20, 20), 512.30, dtype=np.float32)
+    natural = flat + np.linspace(0, 1.5, 400).reshape(20, 20).astype(np.float32)
+    assert probe.is_hydroflattened(flat)["flat"] is True
+    r = probe.is_hydroflattened(natural)
+    assert r["flat"] is False
+    assert r["range"] > 1.0
+
+
 def test_normalize_nodata_maps_voids_to_sentinel():
     # Realistic read_window shape: a real numeric source nodata (3DEP's
     # -999999, not -9999) at one cell, a NaN void at another (e.g. a tile

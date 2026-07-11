@@ -152,6 +152,22 @@ def depth_to_spill(dem: np.ndarray, nodata: float | None = None) -> np.ndarray:
     return depth.astype(np.float32)
 
 
+def is_hydroflattened(dem_in_polygon: np.ndarray, tol_m: float = 0.01) -> dict:
+    """A hydro-flattened water surface is breakline-enforced -> exactly constant.
+    Test interior range, not just variance."""
+    v = np.asarray(dem_in_polygon, dtype=np.float64)
+    v = v[np.isfinite(v)]
+    if v.size == 0:
+        return {"range": float("nan"), "std": float("nan"), "n_unique": 0, "flat": False}
+    rng = float(v.max() - v.min())
+    return {
+        "range": rng,
+        "std": float(v.std()),
+        "n_unique": int(np.unique(np.round(v, 3)).size),
+        "flat": rng < tol_m,
+    }
+
+
 def volume_mean_depth(depth: np.ndarray, mask: np.ndarray, cell_area_m2: float):
     """V = sum(depth*area), A = sum(area) over masked cells; mean = V/A (metres)."""
     sel = depth[mask]
@@ -563,9 +579,13 @@ def assign_vpu(
     return assigned
 
 
-def run_audit(base: dict, logger, wesm_cache_dir: Path) -> pd.DataFrame:
-    """Reconstruct the CONUS dprst polygon set, tag best-available topo
-    resolution and VPU, log the national split, and return the per-VPU table.
+def load_conus_dprst(base: dict, logger) -> gpd.GeoDataFrame:
+    """Reconstruct the shipped CONUS dprst polygon set (`wbody_connectivity`
+    -> `dprst`) with an `area_km2` column.
+
+    Shared by `run_audit` (Task 2) and `run_flatness` (Task 4) so both
+    measure the exact same shipped classification — pulled out of `run_audit`
+    verbatim (issue #173 Task 4), no behavioural change to the audit path.
     """
     from gfv2_params.config import require_config_key
 
@@ -573,8 +593,6 @@ def run_audit(base: dict, logger, wesm_cache_dir: Path) -> pd.DataFrame:
     waterbody_layer = require_config_key(base, "waterbody_layer", "dprst_depth_probe")
     connected_table = Path(require_config_key(base, "connected_comids_table", "dprst_depth_probe"))
     flowthrough_table = base.get("flowthrough_comids_table")
-    hru_gpkg = require_config_key(base, "hru_gpkg", "dprst_depth_probe")
-    hru_layer = require_config_key(base, "hru_layer", "dprst_depth_probe")
 
     connected = load_connected_comids(connected_table)
     n_wbareacomi = len(connected)
@@ -622,6 +640,21 @@ def run_audit(base: dict, logger, wesm_cache_dir: Path) -> pd.DataFrame:
             "dprst total area %.1f km^2 is >3x off the issue's reference figure "
             "%d km^2 — check inputs before trusting this audit.", total_km2, ref_km2,
         )
+    return dprst
+
+
+def run_audit(base: dict, logger, wesm_cache_dir: Path) -> pd.DataFrame:
+    """Reconstruct the CONUS dprst polygon set, tag best-available topo
+    resolution and VPU, log the national split, and return the per-VPU table.
+    """
+    from gfv2_params.config import require_config_key
+
+    hru_gpkg = require_config_key(base, "hru_gpkg", "dprst_depth_probe")
+    hru_layer = require_config_key(base, "hru_layer", "dprst_depth_probe")
+
+    dprst = load_conus_dprst(base, logger)
+    total_polys = len(dprst)
+    total_km2 = float(dprst["area_km2"].sum())
 
     wesm_path = ensure_wesm_local(wesm_cache_dir, logger)
     wesm = load_wesm_1m_footprints(logger, wesm_path)
@@ -673,41 +706,353 @@ def run_audit(base: dict, logger, wesm_cache_dir: Path) -> pd.DataFrame:
     return per_vpu
 
 
+# --- Flatness detector: ND validation + SwampMarsh verdict (--flatness, Task 4) --
+
+# North Dakota Prairie Pothole study area (issue #173 design doc: "Prairie
+# Pothole Region, North Dakota ... also Hay and others 2018 PRMS
+# depression-storage calibration site"). A generous state-level bbox in
+# EPSG:4326 (minx, miny, maxx, maxy) — used only to restrict the CONUS dprst
+# set and the WESM 1 m footprint index before picking a project, not as a
+# precise study-area boundary.
+ND_BBOX_4326 = (-104.05, 45.93, -96.55, 49.0)
+
+# The four FTYPEs the spike must settle a per-FTYPE flatness verdict for
+# (issue #173 design doc decision table). Order matters only for logging.
+FLATNESS_FTYPES = ("SwampMarsh", "LakePond", "Playa", "Reservoir")
+
+
+def select_nd_project(
+    dprst_gdf: gpd.GeoDataFrame, wesm_path: Path, logger, top_n_log: int = 5,
+) -> tuple[str, gpd.GeoDataFrame]:
+    """Pick the North Dakota Prairie Pothole 1 m WESM project with the
+    densest gfv2-dprst polygon overlap — NOT hardcoded (issue #173 design:
+    "chosen programmatically ... not hardcoded").
+
+    Restricts both the CONUS dprst polygon set and the WESM 1 m footprint
+    index to `ND_BBOX_4326`, spatial-joins dprst polygon centroids against
+    project footprints (real per-workunit geometry, not the audit path's
+    convex-hull simplification — this bbox-restricted read is cheap enough
+    to skip that optimization), and returns the project name with the most
+    contained centroids plus the dprst subset that falls in it. Logs the top
+    `top_n_log` candidates by overlap count so the choice is auditable, not
+    just "first project matching a name filter" (the shortcut Task 3's smoke
+    test used).
+    """
+    bbox_5070 = transform_bounds("EPSG:4326", "EPSG:5070", *ND_BBOX_4326, densify_pts=21)
+    nd_dprst = dprst_gdf.cx[bbox_5070[0]:bbox_5070[2], bbox_5070[1]:bbox_5070[3]]
+    logger.info(
+        "  %d/%d dprst polygons fall in the ND Prairie Pothole bbox",
+        len(nd_dprst), len(dprst_gdf),
+    )
+
+    bbox_4269 = transform_bounds("EPSG:4326", "EPSG:4269", *ND_BBOX_4326, densify_pts=21)
+    wesm_nd = gpd.read_file(
+        wesm_path, columns=["project", "onemeter_category"],
+        where="onemeter_category IN ('Meets', 'Meets with variance')",
+        bbox=bbox_4269,
+    )
+    logger.info("  %d 1m WESM workunit footprints intersect the ND bbox", len(wesm_nd))
+    wesm_nd = wesm_nd.to_crs(nd_dprst.crs)
+
+    pts = nd_dprst.set_geometry(nd_dprst.geometry.centroid)
+    hit = gpd.sjoin(pts, wesm_nd[["project", "geometry"]], how="inner", predicate="within")
+    hit = hit[~hit.index.duplicated(keep="first")]  # a centroid may land in >1 workunit footprint
+    counts = hit.groupby("project").size().sort_values(ascending=False)
+    if counts.empty:
+        raise RuntimeError(
+            "no 1m WESM project overlaps any dprst polygon centroid in the ND bbox "
+            f"{ND_BBOX_4326} — cannot pick a study project."
+        )
+    logger.info(
+        "  top ND 1m projects by dprst-polygon overlap:\n%s",
+        counts.head(top_n_log).to_string(),
+    )
+    chosen = str(counts.index[0])
+    logger.info(
+        "  chosen project (densest dprst overlap): %s (%d dprst polygons)",
+        chosen, int(counts.iloc[0]),
+    )
+    project_idx = hit.index[hit["project"] == chosen]
+    return chosen, nd_dprst.loc[project_idx].copy()
+
+
+def sample_per_ftype(
+    gdf: gpd.GeoDataFrame, n_per_ftype: int, logger,
+    ftypes: tuple[str, ...] = FLATNESS_FTYPES, seed: int = 173,
+) -> dict[str, gpd.GeoDataFrame]:
+    """Sample up to `n_per_ftype` dprst polygons per FTYPE, logging the exact
+    per-FTYPE sample size actually used. NEVER silently caps below what's
+    available — if a FTYPE has fewer than `n_per_ftype` polygons, every
+    available polygon is used and that is logged explicitly.
+    """
+    rng = np.random.default_rng(seed)
+    samples: dict[str, gpd.GeoDataFrame] = {}
+    for ftype in ftypes:
+        sub = gdf[gdf["FTYPE"] == ftype]
+        n_avail = len(sub)
+        if n_avail == 0:
+            logger.warning(
+                "  FTYPE=%s: 0 polygons available in the chosen project — skipped entirely",
+                ftype,
+            )
+            samples[ftype] = sub.iloc[0:0]
+            continue
+        n = min(n_per_ftype, n_avail)
+        if n_avail < n_per_ftype:
+            logger.info(
+                "  FTYPE=%s: only %d available (< target %d) — sampling all of them",
+                ftype, n_avail, n_per_ftype,
+            )
+        else:
+            logger.info("  FTYPE=%s: sampling %d of %d available", ftype, n, n_avail)
+        idx = rng.choice(sub.index.to_numpy(), size=n, replace=False)
+        samples[ftype] = sub.loc[idx]
+    return samples
+
+
+def _interior_values(dem: np.ndarray, transform, geom, sentinel: float = -9999.0) -> np.ndarray:
+    """Mask `dem` to cells whose centre lies inside `geom` (the raw,
+    unbuffered dprst polygon), dropping the surrounding rim-buffer terrain
+    `read_window` pulled in and any nodata sentinel cells.
+
+    `read_window`'s DEM window covers `geom.bounds` padded by `rim_buffer_m`
+    on every side; rasterizing the *unbuffered* polygon geometry onto that
+    same transform is exactly "exclude the rim buffer, measure interior
+    flatness" — no separate erosion needed, the rim buffer only exists
+    outside `geom` in the first place.
+    """
+    from rasterio.features import geometry_mask
+
+    if dem.size == 0:
+        return np.empty(0, dtype=np.float64)
+    mask = geometry_mask([geom], out_shape=dem.shape, transform=transform, invert=True)
+    vals = dem[mask].astype(np.float64)
+    return vals[vals != sentinel]
+
+
+def analyze_flatness_sample(
+    samples: dict[str, gpd.GeoDataFrame], project: str, logger, min_cells: int = 4,
+) -> pd.DataFrame:
+    """Run `read_window` -> interior mask -> `is_hydroflattened` over every
+    sampled polygon and return one row per polygon (per-FTYPE aggregation is
+    done by the caller from this table).
+    """
+    rows = []
+    n_total = sum(len(v) for v in samples.values())
+    n_done = 0
+    for ftype, sub in samples.items():
+        for _, row in sub.iterrows():
+            geom = row.geometry
+            comid = row["COMID"] if "COMID" in sub.columns else row.name
+            n_done += 1
+            try:
+                dem, transform, crs, source = read_window(geom, "1m", wesm_row={"project": project})
+            except Exception as exc:  # noqa: BLE001 - log and skip, never abort the sample
+                logger.warning("  [%d/%d] FTYPE=%s COMID=%s: read_window failed (%s) — skipped",
+                                n_done, n_total, ftype, comid, exc)
+                continue
+            vals = _interior_values(dem, transform, geom)
+            if vals.size < min_cells:
+                logger.warning(
+                    "  [%d/%d] FTYPE=%s COMID=%s: only %d interior cells (< %d) — skipped",
+                    n_done, n_total, ftype, comid, vals.size, min_cells,
+                )
+                continue
+            stats = is_hydroflattened(vals)
+            stats.update({
+                "COMID": comid, "FTYPE": ftype, "n_cells": int(vals.size),
+                "resolution": source["resolution"],
+            })
+            rows.append(stats)
+            if n_done % 25 == 0 or n_done == n_total:
+                logger.info("  [%d/%d] sampled so far (last: FTYPE=%s COMID=%s flat=%s range=%.4f)",
+                            n_done, n_total, ftype, comid, stats["flat"], stats["range"])
+    return pd.DataFrame(rows)
+
+
+def summarize_by_ftype(per_polygon: pd.DataFrame, logger) -> pd.DataFrame:
+    """Per-FTYPE flattened fraction + range/std/n_unique distributions —
+    the decision table input for the SwampMarsh verdict."""
+    if per_polygon.empty:
+        raise RuntimeError("flatness sample produced 0 usable polygons — cannot summarize")
+    agg = per_polygon.groupby("FTYPE").agg(
+        n_sampled=("COMID", "size"),
+        n_flat=("flat", "sum"),
+        pct_flat=("flat", "mean"),
+        range_median=("range", "median"),
+        range_p90=("range", lambda s: float(np.percentile(s, 90))),
+        std_median=("std", "median"),
+        n_unique_median=("n_unique", "median"),
+        pct_1m=("resolution", lambda s: float((s == "1m").mean())),
+    ).reset_index()
+    agg["pct_flat"] = 100.0 * agg["pct_flat"]
+    agg["pct_1m"] = 100.0 * agg["pct_1m"]
+    agg = agg.sort_values("FTYPE").reset_index(drop=True)
+    for _, r in agg.iterrows():
+        logger.info(
+            "  FTYPE=%-10s n=%4d flat=%5.1f%% (range median=%.4f m, p90=%.4f m) 1m-read=%.1f%%",
+            r["FTYPE"], int(r["n_sampled"]), r["pct_flat"], r["range_median"], r["range_p90"], r["pct_1m"],
+        )
+    return agg
+
+
+def _write_separability_histogram(per_polygon: pd.DataFrame, out_png: Path, logger) -> None:
+    """Log-scale histogram of interior elevation range, split flat vs
+    natural — the visual evidence that the detector cleanly separates
+    hydro-flattened (range ~ 0) from bare-earth (range >> tol_m) surfaces."""
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    fig, ax = plt.subplots(figsize=(8, 5))
+    flat_ranges = per_polygon.loc[per_polygon["flat"], "range"].clip(lower=1e-4)
+    natural_ranges = per_polygon.loc[~per_polygon["flat"], "range"].clip(lower=1e-4)
+    bins = np.logspace(-4, np.log10(max(per_polygon["range"].max(), 1.0) + 1e-6), 60)
+    ax.hist(flat_ranges, bins=bins, alpha=0.7, label=f"flat (n={len(flat_ranges)})", color="#1f77b4")
+    ax.hist(natural_ranges, bins=bins, alpha=0.7, label=f"natural (n={len(natural_ranges)})", color="#d62728")
+    ax.axvline(0.01, color="black", linestyle="--", linewidth=1, label="tol_m = 0.01 m")
+    ax.set_xscale("log")
+    ax.set_xlabel("interior elevation range (m, log scale)")
+    ax.set_ylabel("polygon count")
+    ax.set_title("Hydro-flattening detector separability (ND dprst sample)")
+    ax.legend()
+    fig.tight_layout()
+    fig.savefig(out_png, dpi=150)
+    plt.close(fig)
+    logger.info("  wrote separability histogram: %s", out_png)
+
+
+def run_flatness(
+    base: dict, logger, out_dir: Path, wesm_cache_dir: Path, n_per_ftype: int = 300,
+) -> pd.DataFrame:
+    """Issue #173 tasks 2+3: validate the flatness detector on a real ND
+    sample and settle the SwampMarsh hydro-flattening question.
+
+    Reconstructs the CONUS dprst set, restricts to the ND Prairie Pothole
+    bbox, programmatically picks the 1 m project with the densest overlap
+    (`select_nd_project`), samples up to `n_per_ftype` polygons per FTYPE
+    (`sample_per_ftype`), reads each at 1 m and tests interior flatness
+    (`analyze_flatness_sample`), and writes `flatness_by_ftype.csv` +
+    `flatness_separability.png` to `out_dir`. Returns the per-FTYPE summary.
+    """
+    dprst = load_conus_dprst(base, logger)
+
+    wesm_path = ensure_wesm_local(wesm_cache_dir, logger)
+    logger.info("Selecting ND 1m project with densest dprst overlap ...")
+    project, nd_dprst = select_nd_project(dprst, wesm_path, logger)
+    del dprst
+    gc.collect()
+
+    logger.info("Sampling up to %d dprst polygons per FTYPE from project=%s ...", n_per_ftype, project)
+    samples = sample_per_ftype(nd_dprst, n_per_ftype, logger)
+    n_total = sum(len(v) for v in samples.values())
+    logger.info("Total sample size across all FTYPEs: %d", n_total)
+
+    logger.info("Reading each sampled polygon at 1m + testing interior flatness ...")
+    per_polygon = analyze_flatness_sample(samples, project, logger)
+    logger.info(
+        "Flatness reads completed: %d/%d polygons produced a usable interior sample",
+        len(per_polygon), n_total,
+    )
+
+    summary = summarize_by_ftype(per_polygon, logger)
+
+    if "SwampMarsh" in summary["FTYPE"].to_numpy():
+        sm = summary.loc[summary["FTYPE"] == "SwampMarsh"].iloc[0]
+        logger.info(
+            "*** SwampMarsh verdict: %.1f%% of sampled polygons are hydro-flattened "
+            "(n=%d) — decides whether at-risk dprst area is ~89%% or ~38.5%% ***",
+            sm["pct_flat"], int(sm["n_sampled"]),
+        )
+    else:
+        logger.warning(
+            "*** SwampMarsh verdict: UNDETERMINED — 0 SwampMarsh polygons in the "
+            "chosen project's sample; cannot settle the headline question from this "
+            "ND project alone ***",
+        )
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out_csv = out_dir / "flatness_by_ftype.csv"
+    caveat = (
+        f"# ND Prairie Pothole flatness validation (issue #173 Task 4). "
+        f"Project={project}. Per-polygon sample: "
+        + ", ".join(f"{k}={len(v)}" for k, v in samples.items())
+        + ". flat = interior elevation range < 0.01 m (is_hydroflattened tol_m).\n"
+    )
+    with open(out_csv, "w") as f:
+        f.write(caveat)
+        summary.to_csv(f, index=False)
+    logger.info("Wrote per-FTYPE flatness summary: %s", out_csv)
+
+    per_polygon_csv = out_dir / "flatness_per_polygon.csv"
+    per_polygon.to_csv(per_polygon_csv, index=False)
+    logger.info("Wrote per-polygon flatness detail: %s", per_polygon_csv)
+
+    _write_separability_histogram(per_polygon, out_dir / "flatness_separability.png", logger)
+
+    return summary
+
+
 def main() -> None:
     from gfv2_params.config import load_base_config
     from gfv2_params.log import configure_logging
 
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--audit", action="store_true", required=True,
-                         help="Run the CONUS coverage audit (Task 2, issue #173).")
+    # Mutually-exclusive MODE group: exactly one investigation task per run.
+    # Tasks 5-7 (issue #173) add --freeboard/--hollister/--regression here as
+    # more mutually_exclusive_group() members — do not go back to a single
+    # `required=True` flag (that breaks the moment a second mode is added;
+    # see Task 2 review carry-forward note).
+    mode = parser.add_mutually_exclusive_group(required=True)
+    mode.add_argument("--audit", action="store_true",
+                       help="Run the CONUS coverage audit (Task 2, issue #173).")
+    mode.add_argument("--flatness", action="store_true",
+                       help="Run the ND flatness-detector validation + SwampMarsh "
+                            "verdict (Task 4, issue #173).")
     parser.add_argument("--fabric", default=None,
                          help="Fabric name (overrides FABRIC env / default_fabric).")
     parser.add_argument(
         "--out-dir", type=Path, required=True,
-        help="Directory to write coverage_audit.csv into. REQUIRED — also "
-             "doubles as the WESM.gpkg download cache dir (multi-GB "
-             "one-time download), so pick a path with enough free space; "
-             "there is no default.",
+        help="Output directory (coverage_audit.csv for --audit; "
+             "flatness_by_ftype.csv/flatness_separability.png for --flatness). "
+             "Also doubles as the WESM.gpkg download cache dir (multi-GB "
+             "one-time download, shared by both modes), so pick a path with "
+             "enough free space; there is no default.",
+    )
+    parser.add_argument(
+        "--n-per-ftype", type=int, default=300,
+        help="--flatness only: target sample size per FTYPE (default 300, "
+             "per issue #173 Task 4). Uses fewer if a FTYPE has fewer "
+             "polygons in the chosen project — never silently capped, "
+             "always logged.",
     )
     args = parser.parse_args()
 
     logger = configure_logging("dprst_depth_probe")
     base = load_base_config(fabric=args.fabric)
     args.out_dir.mkdir(parents=True, exist_ok=True)
-    per_vpu = run_audit(base, logger, wesm_cache_dir=args.out_dir)
 
-    out_csv = args.out_dir / "coverage_audit.csv"
-    caveat = (
-        "# CAVEAT: 1m%/1m-count figures are a convex-hull UPPER BOUND — WESM "
-        "multi-part workunit footprints are collapsed to their convex hull "
-        "before the best_topo spatial join, which can only OVERSTATE 1m "
-        "coverage, never understate it. True 1m coverage may be lower. See "
-        "load_wesm_1m_footprints() in dprst_depth_probe.py.\n"
-    )
-    with open(out_csv, "w") as f:
-        f.write(caveat)
-        per_vpu.to_csv(f, index=False)
-    logger.info("Wrote per-VPU coverage audit: %s (%d rows)", out_csv, len(per_vpu))
+    if args.audit:
+        per_vpu = run_audit(base, logger, wesm_cache_dir=args.out_dir)
+
+        out_csv = args.out_dir / "coverage_audit.csv"
+        caveat = (
+            "# CAVEAT: 1m%/1m-count figures are a convex-hull UPPER BOUND — WESM "
+            "multi-part workunit footprints are collapsed to their convex hull "
+            "before the best_topo spatial join, which can only OVERSTATE 1m "
+            "coverage, never understate it. True 1m coverage may be lower. See "
+            "load_wesm_1m_footprints() in dprst_depth_probe.py.\n"
+        )
+        with open(out_csv, "w") as f:
+            f.write(caveat)
+            per_vpu.to_csv(f, index=False)
+        logger.info("Wrote per-VPU coverage audit: %s (%d rows)", out_csv, len(per_vpu))
+    elif args.flatness:
+        run_flatness(
+            base, logger, out_dir=args.out_dir, wesm_cache_dir=args.out_dir,
+            n_per_ftype=args.n_per_ftype,
+        )
 
 
 if __name__ == "__main__":
