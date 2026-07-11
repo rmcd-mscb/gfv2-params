@@ -86,6 +86,28 @@ def test_fit_ecoregion_models_median_wins_when_not_linear():
     assert model.kind == "median"
 
 
+def test_fill_flat_fallback_ladder_ftype_only_rung():
+    # The flat row's own (eco, FTYPE) group has NO donors, and its ecoregion
+    # ("80") has no donors under ANY FTYPE either -> rungs 1 and 2 both miss.
+    # A different ecoregion ("17") does have donors under the SAME FTYPE
+    # ("LakePond") -> rung 3 (FTYPE-only, all ecoregions pooled) must supply
+    # the fill, exercising the ladder's 3rd rung in isolation.
+    df = pd.DataFrame({
+        "ftype": ["LakePond", "LakePond", "LakePond"],
+        "ecoregion": ["17", "17", "80"],
+        "dprst_depth_m": [1.0, 3.0, np.nan],
+        "hollister_max_m": [1.0, 3.0, np.nan],
+        "flat": [False, False, True],
+    })
+    models = fit_ecoregion_models(df[~df.flat])
+    out = fill_flat(df, models, floor_in=49.0)
+    row = out.iloc[2]
+    assert row["method"] == "regional_fill"
+    assert np.isfinite(row["dprst_depth_m"])
+    assert row["dprst_depth_m"] > 0
+    assert np.isclose(row["dprst_depth_m"], 2.0)  # median(1.0, 3.0) via FTYPE-only fallback
+
+
 def test_fill_flat_fallback_ladder_ecoregion_then_ftype():
     # No (eco,ftype) donors for the flat row's own group, but the SAME
     # ecoregion has donors under a different FTYPE -> eco-only median.

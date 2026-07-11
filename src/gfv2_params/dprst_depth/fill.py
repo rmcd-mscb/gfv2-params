@@ -132,16 +132,20 @@ def _fit_slope(x: np.ndarray, y: np.ndarray) -> float:
     return float(np.sum(x * y) / denom)
 
 
-def _cv_rmse(x: np.ndarray, y: np.ndarray, n_folds: int, rng: np.random.Generator, kind: str) -> float:
+def _cv_rmse(x: np.ndarray, y: np.ndarray, folds: list[np.ndarray], kind: str) -> float:
     """Honest K-fold CV RMSE: fit on train folds only, score on the held-out fold.
+
+    `folds` is a precomputed list of test-index arrays (from a SINGLE
+    `_kfold_splits` call in `_group_model`) — the caller must pass the SAME
+    `folds` for both the "median" and "slope" candidates on a given group so
+    the two are compared on identical train/test partitions (a paired
+    comparison), not each on its own independently-permuted split.
 
     `kind="median"` fits `np.median(y_train)`; `kind="slope"` fits
     `_fit_slope(x_train, y_train)` (the raw, undecomposed slope — folding
     `shape_factor` in or out doesn't change which model wins, so it's
     applied once at the end, not inside CV).
     """
-    n = len(y)
-    folds = _kfold_splits(n, min(n_folds, n), rng)
     sq_errors = []
     for i, test_idx in enumerate(folds):
         train_idx = np.concatenate([folds[j] for j in range(len(folds)) if j != i])
@@ -179,8 +183,14 @@ def _group_model(
     if n < n_min or len(x_valid) < n_min:
         return Model(kind="median", median_m=median_m, n_donors=n)
 
-    cv_rmse_med = _cv_rmse(x_valid, y_valid, n_folds, rng, "median")
-    cv_rmse_hol = _cv_rmse(x_valid, y_valid, n_folds, rng, "slope")
+    # Draw the fold assignment ONCE and reuse it for both candidates so the
+    # median-null and calibrated-Hollister CV RMSEs are a PAIRED comparison
+    # (same train/test partitions) rather than each scored on its own
+    # independently-permuted split — otherwise the winner on a borderline
+    # group can flip based on which candidate got the easier split.
+    folds = _kfold_splits(len(y_valid), min(n_folds, len(y_valid)), rng)
+    cv_rmse_med = _cv_rmse(x_valid, y_valid, folds, "median")
+    cv_rmse_hol = _cv_rmse(x_valid, y_valid, folds, "slope")
 
     if np.isfinite(cv_rmse_hol) and cv_rmse_hol < cv_rmse_med:
         slope = _fit_slope(x_valid, y_valid)
