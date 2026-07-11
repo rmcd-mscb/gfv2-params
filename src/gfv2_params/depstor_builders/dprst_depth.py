@@ -140,13 +140,14 @@ def _tag_polygons(dprst: gpd.GeoDataFrame, ctx: BuildContext, logger) -> tuple[g
         raise KeyError(
             "dprst_depth step needs `wesm_index` in the fabric profile: a "
             "pre-staged, 1m/QL1/QL2-filtered WESM workunit footprint index "
-            "(a 'project' column + geometry) — see "
-            "scripts/diagnose/dprst_depth_probe.py's ensure_wesm_local / "
-            "load_wesm_1m_footprints for the download + filtering this file "
-            "is expected to already reflect."
+            "(a 'project' column + geometry). Stage it first: "
+            "`pixi run python -m gfv2_params.download.wesm`."
         )
     if not ctx.wesm_index.exists():
-        raise FileNotFoundError(f"WESM index not found: {ctx.wesm_index}")
+        raise FileNotFoundError(
+            f"WESM index not found: {ctx.wesm_index}. Stage it first: "
+            "`pixi run python -m gfv2_params.download.wesm`."
+        )
     wesm_gdf = gpd.read_file(ctx.wesm_index)
 
     dprst = resolution_class(dprst, wesm_gdf)
