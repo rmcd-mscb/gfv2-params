@@ -29,6 +29,7 @@ import numpy as np
 import pandas as pd
 import pytest
 import rasterio
+import yaml
 from rasterio.transform import from_origin
 from shapely.geometry import box
 
@@ -43,6 +44,22 @@ from gfv2_params.dprst_depth.aggregate import (
 from gfv2_params.dprst_depth.fill import M_TO_IN
 
 _CRS = "EPSG:5070"
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+
+
+def test_provenance_filename_matches_config():
+    """`dprst_depth.POLYGON_PROVENANCE_FILENAME` (the constant the builder
+    actually writes the companion parquet as) and
+    `configs/depstor/depstor_params.yml`'s `means[dprst_depth_avg].
+    provenance_source` literal must name the same file, or `mean_finalize`
+    (scripts/derive_depstor_params.py) silently reads a stale/missing
+    provenance parquet. Guards against the two drifting independently."""
+    config_path = _REPO_ROOT / "configs" / "depstor" / "depstor_params.yml"
+    config = yaml.safe_load(config_path.read_text())
+    means = {m["name"]: m for m in config["means"]}
+    provenance_source = means["dprst_depth_avg"]["provenance_source"]
+
+    assert Path(provenance_source).name == dprst_depth.POLYGON_PROVENANCE_FILENAME
 
 
 def _L():

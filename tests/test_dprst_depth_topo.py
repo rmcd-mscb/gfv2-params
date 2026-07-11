@@ -57,6 +57,36 @@ def test_clip_dprst_to_fabric_drops_out_of_fabric_polygons(tmp_path):
     assert sorted(out["COMID"]) == [1, 2]  # the out-of-fabric COMID 3 is dropped
 
 
+def test_clip_dprst_to_fabric_reprojects_mismatched_hru_crs(tmp_path):
+    """dprst polygons in EPSG:5070, HRU fabric in a DIFFERENT CRS (EPSG:4326)
+    covering the same ground -- exercises the `hru.to_crs(dprst.crs)` branch
+    in `_clip_dprst_to_fabric`. Without that reprojection the bbox/sjoin
+    comparison would be nonsense (degrees vs metres) and the in-fabric
+    polygon would be wrongly dropped."""
+    import logging
+
+    from shapely.geometry import box
+
+    # One dprst polygon in EPSG:5070 (CONUS Albers), a small square near the
+    # Albers false-origin so its coordinates stay small and easy to reason
+    # about.
+    dprst = gpd.GeoDataFrame(
+        {"COMID": [1]}, geometry=[box(0, 0, 1, 1)], crs="EPSG:5070",
+    )
+    # The matching HRU footprint, expressed in EPSG:4326 (reprojected from
+    # the same 5070 box) -- a real cross-CRS fabric, not a same-CRS stand-in.
+    hru_5070 = gpd.GeoDataFrame(
+        {"nat_hru_id": [1]}, geometry=[box(-10, -10, 10, 10)], crs="EPSG:5070",
+    )
+    hru_4326 = hru_5070.to_crs("EPSG:4326")
+    hru_path = tmp_path / "hru.gpkg"
+    hru_4326.to_file(hru_path, layer="nhru", driver="GPKG")
+
+    out = topo._clip_dprst_to_fabric(dprst, hru_path, "nhru", logging.getLogger("t"))
+    assert sorted(out["COMID"]) == [1]  # kept: reprojection made the overlap visible
+    assert out.crs == dprst.crs
+
+
 def test_resolution_class_assigns_1m_inside_footprint():
     import geopandas as gpd
     from shapely.geometry import Point, box

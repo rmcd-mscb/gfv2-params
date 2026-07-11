@@ -100,6 +100,14 @@ def load_conus_dprst(base: dict, logger) -> gpd.GeoDataFrame:
     Shared by `run_audit` (Task 2) and `run_flatness` (Task 4) so both
     measure the exact same shipped classification — pulled out of `run_audit`
     verbatim (issue #173 Task 4), no behavioural change to the audit path.
+
+    NOTE: this calls `topo.dprst_polygons` directly and deliberately returns
+    the UNCLIPPED CONUS reconstruction (no fabric-bounds clip) — this is a
+    CONUS-wide diagnostic, not one of the two fabric-scoped callers
+    (`depstor_builders/dprst_depth.py` and `tiling.py`'s plan hook) that go
+    through `topo.load_fabric_dprst_polygons` instead. Don't assume all
+    dprst-polygon reconstruction sites in this repo are unified on the
+    fabric-clipped path.
     """
     from gfv2_params.config import require_config_key
 

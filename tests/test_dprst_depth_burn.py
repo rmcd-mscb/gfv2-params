@@ -86,7 +86,14 @@ def test_burn_depth_streams_by_strips_no_full_grid(tmp_path, monkeypatch):
         a = d.read(1)
         nodata = d.nodata
     burned = a[a != nodata]
-    assert burned.size > 0
+    # Exact expected count, not just "some cells burned": all_touched=False
+    # rasterize keeps a cell only if its pixel CENTER falls inside the
+    # polygon. Grid: from_origin(0, 10, 1, 1) -> col c center x = c+0.5, row
+    # r center y = 9.5-r. Polygon box(1,1,9,9) covers x,y in (1,9) at pixel
+    # centers, i.e. c=1..8 and r=1..8 (centers 1.5..8.5) -> an 8x8 = 64-cell
+    # block. This guards against strip-boundary off-by-ones that `> 0` would
+    # silently pass.
+    assert burned.size == 64
     assert np.allclose(burned, 3.0)
 
 

@@ -1,6 +1,6 @@
 """Drive every depstor aggregation step from configs/depstor/depstor_params.yml.
 
-Three modes:
+Five modes:
   --mode zonal --fraction <name> --batch_id <N>
         Array task: run gdptools exactextract for one fraction over one HRU
         batch (same pattern as scripts/derive_zonal_params.py --mode zonal,
@@ -8,11 +8,18 @@ Three modes:
   --mode merge --fraction <name>
         Combine per-batch CSVs for one fraction into the merged CSV.
   --mode ratios
-        Read every merged fraction CSV and produce the four PRMS Level-5
-        ratio CSVs (sro_to_dprst_perv, sro_to_dprst_imperv, carea_max,
-        smidx_coef) via gfv2_params.depstor_ratios.compute_ratio().
+        Read every merged fraction CSV and produce the PRMS Level-5 ratio
+        CSVs (sro_to_dprst_perv, sro_to_dprst_imperv, carea_max, smidx_coef,
+        hru_percent_imperv, dprst_frac) via
+        gfv2_params.depstor_ratios.compute_ratio().
+  --mode mean_zonal --mean <name> --batch_id <N>
+        Array task: per-HRU-batch exactextract MEAN (not a binary count) for
+        a continuous raster, e.g. dprst_depth.tif (#173 Task 8).
+  --mode mean_finalize --mean <name>
+        Concat the mean_zonal batch CSVs and finalize units/floor/provenance
+        via gfv2_params.dprst_depth.aggregate.finalize_depth_params().
 
-The slurm wrapper slurm_batch/submit_depstor_params.sh chains all three modes
+The slurm wrapper slurm_batch/submit_depstor_params.sh chains these modes
 into a single afterok DAG.
 """
 

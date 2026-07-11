@@ -10,8 +10,9 @@ this HPC; the epa.gov host itself is not verified reachable):
     https://dmap-prod-oms-edc.s3.us-east-1.amazonaws.com/ORD/Ecoregions/us/us_eco_l3.zip
     https://dmap-prod-oms-edc.s3.us-east-1.amazonaws.com/ORD/Ecoregions/us/us_eco_l4.zip
 
-Level III (77 CONUS regions, field US_L3CODE) is the default; Level IV is a
-finer alternative (field US_L4CODE) for sensitivity testing only.
+Level III (≈77-85 CONUS regions, field US_L3CODE; exact count varies by
+dataset vintage) is the default; Level IV is a finer alternative (field
+US_L4CODE) for sensitivity testing only.
 """
 
 from __future__ import annotations

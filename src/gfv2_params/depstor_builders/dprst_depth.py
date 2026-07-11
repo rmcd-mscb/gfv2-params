@@ -7,14 +7,16 @@ reconstruction of the shipped dprst polygon set) and the Phase 0/1 spike
 design doc:
 
   1. Reconstruct the dprst polygon set directly from `waterbody_gpkg` +
-     the connected(WBAREACOMI) union flow-through COMID tables
-     (`dprst_depth.topo.dprst_polygons`) — the SAME polygon-level
-     reconstruction the diagnostic uses. This does NOT read
+     the connected(WBAREACOMI) union flow-through COMID tables, CLIPPED to
+     the fabric's HRU extent (`dprst_depth.topo.load_fabric_dprst_polygons`
+     — the same reconstruction as `dprst_depth.topo.dprst_polygons` plus the
+     fabric-bounds clip, `topo._clip_dprst_to_fabric`, so a regional fabric
+     doesn't reprocess the whole CONUS dprst set). This does NOT read
      `dprst_binary.tif`; STEP_ORDER still places this step after `dprst`
      (for classification-consistency and convention) and after `landmask`/
      `hru_id`, but the runtime data dependency is `waterbody_gpkg` +
-     `connected_comids_table` (+ optional `flowthrough_comids_table`), not
-     the raster.
+     `connected_comids_table` (+ optional `flowthrough_comids_table`) +
+     `hru_gpkg`, not the raster.
   2. Tag `best_topo` (`topo.resolution_class`, needs `wesm_index`),
      `ecoregion` (`download.epa_ecoregions.ecoregion_of`, needs
      `ecoregions_gpkg`), and `ftype` (the `FTYPE` column, aliased lowercase

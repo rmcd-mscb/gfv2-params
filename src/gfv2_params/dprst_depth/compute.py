@@ -40,7 +40,6 @@ import numpy as np
 import pandas as pd
 import rasterio
 from rasterio.enums import Resampling
-from rasterio.errors import RasterioIOError
 from rasterio.vrt import WarpedVRT
 from rasterio.windows import from_bounds
 
@@ -328,7 +327,11 @@ def run_batch(
                         result["resolution"] = resolution
                         result["method"] = "flat_pending" if result["flat"] else "measured"
                         _emit(idx, result)
-            except RasterioIOError as exc:
+            except Exception as exc:  # noqa: BLE001 - log and skip the tile, never abort the batch
+                # Broadened beyond RasterioIOError: a corrupt COG, bad CRS, or
+                # any other tile-open failure must not kill the whole batch —
+                # its polygons still get a chance via the multi-tile fallback
+                # below (mirrors the per-polygon skip convention just above).
                 logger.warning(
                     "  tile=%s: failed to open (%s) — its %d single-tile polygon(s) skipped "
                     "this batch",

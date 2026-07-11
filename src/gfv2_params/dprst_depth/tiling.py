@@ -145,6 +145,10 @@ def group_by_tile(
                 continue
             idx = hit["dprst_idx"]
             geom = df_1m.geometry.loc[idx]
+            # hit.geometry here is the LEFT frame's (`windows`) rim-buffered
+            # envelope geometry, i.e. the polygon's search WINDOW -- not the
+            # WESM project footprint geometry (that was consumed by the sjoin
+            # predicate and dropped from the right side's output columns).
             for key in _1m_tile_keys(geom, str(project), hit.geometry.bounds, src_crs):
                 groups[key].add(idx)
             resolved.add(idx)
