@@ -102,6 +102,15 @@ def _find_fraction(config: dict, name: str) -> dict:
     raise ValueError(f"Fraction '{name}' not in config; available: {available}")
 
 
+def _find_mean(config: dict, name: str) -> dict:
+    means = config.get("means", [])
+    for spec in means:
+        if spec["name"] == name:
+            return spec
+    available = [s["name"] for s in means]
+    raise ValueError(f"Mean aggregation '{name}' not in config; available: {available}")
+
+
 def _merge_paths(config: dict) -> tuple[Path, Path]:
     """Return (intermediates_dir, ratios_dir).
 
@@ -182,6 +191,148 @@ def run_zonal(args, logger) -> None:
     )
     stats = zonal_gen.calculate_zonal(categorical=bool(defaults.get("categorical", False)))
     logger.info("Zonal complete. Shape: %s", stats.shape)
+
+
+def run_mean_zonal(args, logger) -> None:
+    """One `means` entry, one HRU batch. Continuous exactextract MEAN
+    (categorical=false) — same UserTiffData/ZonalGen flow as `run_zonal`
+    above, just against `config["means"]` instead of `config["fractions"]`
+    (a mean is always categorical=false regardless of `defaults.categorical`,
+    which only governs the binary-count fractions)."""
+    import geopandas as gpd
+    import rioxarray
+    from gdptools import UserTiffData, ZonalGen
+    from osgeo import gdal, osr
+
+    gdal.UseExceptions()
+    osr.UseExceptions()
+
+    config = _load_resolved_config(args)
+    defaults = config["defaults"]
+    spec = _find_mean(config, args.mean)
+
+    fabric = config["fabric"]
+    source_type = spec["name"]
+    raster_path = Path(spec["source_raster"])
+    batch_dir = Path(defaults["batch_dir"])
+    batch_gpkg = batch_dir / f"batch_{args.batch_id:04d}.gpkg"
+    output_dir = Path(defaults["output_dir"]) / source_type
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    if not raster_path.exists():
+        raise FileNotFoundError(f"Input raster not found: {raster_path}")
+    if not batch_gpkg.exists():
+        raise FileNotFoundError(f"Batch GPKG not found: {batch_gpkg}")
+
+    logger.info("=== mean zonal: %s (batch %d) ===", source_type, args.batch_id)
+    logger.info("Raster: %s", raster_path)
+    logger.info("Batch GPKG: %s", batch_gpkg)
+
+    nhru_gdf = gpd.read_file(batch_gpkg, layer=defaults["target_layer"])
+    logger.info("Loaded %s features", len(nhru_gdf))
+
+    ned_da = rioxarray.open_rasterio(raster_path, masked=True)
+    logger.info("Raster shape=%s crs=%s", ned_da.shape, ned_da.rio.crs)
+
+    file_prefix = f"base_nhm_{source_type}_{fabric}_batch_{args.batch_id:04d}_param"
+    data = UserTiffData(
+        source_var=source_type,
+        source_ds=ned_da,
+        source_crs=ned_da.rio.crs,
+        source_x_coord="x",
+        source_y_coord="y",
+        band=1,
+        bname="band",
+        target_gdf=nhru_gdf,
+        target_id=defaults["id_feature"],
+    )
+
+    zonal_gen = ZonalGen(
+        user_data=data,
+        zonal_engine="exactextract",
+        zonal_writer="csv",
+        out_path=output_dir,
+        file_prefix=file_prefix,
+        jobs=4,
+    )
+    stats = zonal_gen.calculate_zonal(categorical=False)
+    logger.info("Mean zonal complete. Shape: %s", stats.shape)
+
+
+def run_mean_finalize(args, logger) -> None:
+    """Merge per-batch mean-zonal CSVs for one `means` entry, then finalize:
+    metres -> inches, dprst_frac==0 HRUs -> the constant floor (never NaN),
+    plus an area-weighted `dprst_depth_provenance` column. Writes straight to
+    `{merged_subdir}/{merged_file}` — a mean needs no numerator/denominator
+    ratio step, unlike `run_ratios` above.
+    """
+    import geopandas as gpd
+
+    from gfv2_params.dprst_depth.aggregate import area_weighted_provenance, finalize_depth_params
+
+    config = _load_resolved_config(args)
+    defaults = config["defaults"]
+    spec = _find_mean(config, args.mean)
+
+    fabric = config["fabric"]
+    source_type = spec["name"]
+    id_feature = defaults["id_feature"]
+    floor_in = float(spec.get("floor_in", 49.0))
+    merged_file = spec["merged_file"]
+
+    input_dir = Path(defaults["output_dir"]) / source_type
+    _, ratios_dir = _merge_paths(config)  # merged/ -- same dir the ratio CSVs land in
+    ratios_dir.mkdir(parents=True, exist_ok=True)
+
+    if not input_dir.exists():
+        raise FileNotFoundError(f"Per-batch dir not found: {input_dir}")
+
+    pattern = f"base_nhm_{source_type}_{fabric}_batch_*_param.csv"
+    files = sorted(input_dir.glob(pattern))
+    if not files:
+        raise FileNotFoundError(f"No batch CSVs matched: {input_dir / pattern}")
+
+    logger.info("=== mean finalize: %s (%d batches) ===", source_type, len(files))
+
+    zonal_df = pd.concat([pd.read_csv(f) for f in files], ignore_index=True)
+    if id_feature not in zonal_df.columns:
+        raise ValueError(f"'{id_feature}' column missing in batch CSVs under {input_dir}")
+    dupes = zonal_df[zonal_df[id_feature].duplicated(keep=False)]
+    if len(dupes) > 0:
+        dupe_ids = sorted(dupes[id_feature].unique())
+        raise ValueError(
+            f"Duplicate {id_feature} values found ({len(dupe_ids)} IDs) in {source_type} "
+            f"batches. First 10: {dupe_ids[:10]}. Indicates overlapping batches."
+        )
+
+    hru_gpkg = Path(require_config_key(config, "hru_gpkg", "derive_depstor_params"))
+    hru_gdf = gpd.read_file(hru_gpkg, layer=defaults["target_layer"], columns=[id_feature])
+    hru_ids = hru_gdf[id_feature]
+
+    provenance_df = None
+    provenance_source = spec.get("provenance_source")
+    if provenance_source:
+        prov_path = Path(provenance_source)
+        if prov_path.exists():
+            polygons_gdf = gpd.read_parquet(prov_path)
+            provenance_df = area_weighted_provenance(polygons_gdf, hru_gdf, id_feature)
+        else:
+            logger.warning(
+                "  provenance_source configured but not found: %s -- "
+                "dprst_depth_provenance will be '%s' for every HRU with dprst cells",
+                prov_path, "unknown",
+            )
+
+    out_df = finalize_depth_params(
+        zonal_df, hru_ids, id_feature, floor_in=floor_in, provenance_df=provenance_df,
+    )
+    out_path = ratios_dir / merged_file
+    out_df.to_csv(out_path, index=False)
+    n_floor = int((out_df["dprst_depth_provenance"] == "no_dprst_cells").sum())
+    logger.info(
+        "  Wrote %d rows -> %s  (%d/%d HRUs floored at %.1f in — no dprst cells)",
+        len(out_df), out_path, n_floor, len(out_df), floor_in,
+    )
 
 
 def run_merge(args, logger) -> None:
@@ -318,21 +469,31 @@ def main():
     parser.add_argument("--config", required=True, help="Path to configs/depstor/depstor_params.yml")
     parser.add_argument("--base_config", default=None, help="Path to configs/base_config.yml")
     parser.add_argument("--fabric", default=None, help="Fabric name (overrides FABRIC env / default_fabric)")
-    parser.add_argument("--mode", required=True, choices=["zonal", "merge", "ratios"])
+    parser.add_argument(
+        "--mode", required=True,
+        choices=["zonal", "merge", "ratios", "mean_zonal", "mean_finalize"],
+    )
     parser.add_argument("--fraction", default=None, help="Fraction name (required for zonal/merge)")
-    parser.add_argument("--batch_id", type=int, default=None, help="Batch ID (zonal mode only)")
+    parser.add_argument("--mean", default=None, help="Mean-aggregation name (required for mean_zonal/mean_finalize)")
+    parser.add_argument("--batch_id", type=int, default=None, help="Batch ID (zonal/mean_zonal modes only)")
     args = parser.parse_args()
 
     if args.mode in {"zonal", "merge"} and not args.fraction:
         parser.error(f"--fraction is required for --mode {args.mode}")
-    if args.mode == "zonal" and args.batch_id is None:
-        parser.error("--batch_id is required for --mode zonal")
+    if args.mode in {"mean_zonal", "mean_finalize"} and not args.mean:
+        parser.error(f"--mean is required for --mode {args.mode}")
+    if args.mode in {"zonal", "mean_zonal"} and args.batch_id is None:
+        parser.error(f"--batch_id is required for --mode {args.mode}")
 
     logger = configure_logging(f"derive_depstor_params:{args.mode}")
     if args.mode == "zonal":
         run_zonal(args, logger)
     elif args.mode == "merge":
         run_merge(args, logger)
+    elif args.mode == "mean_zonal":
+        run_mean_zonal(args, logger)
+    elif args.mode == "mean_finalize":
+        run_mean_finalize(args, logger)
     else:
         run_ratios(args, logger)
 

@@ -39,6 +39,17 @@ design doc:
      smallest correct one, using the same `{id_feature}` column convention
      as every merged param CSV so a future generic mechanism (or Task 8's
      params.yml assembly) can consume it identically.
+  7. Persist the final per-polygon `(COMID, method, dprst_depth_m, geometry)`
+     table as a companion GeoParquet (`dprst_depth_polygons.parquet`, next to
+     `dprst_depth.tif`) — `burn_depth` only burns the numeric depth onto the
+     raster, discarding the per-polygon fill `method` label. Task 8's
+     per-HRU aggregation (`dprst_depth.aggregate.area_weighted_provenance`)
+     reads this companion file back to derive a per-HRU dominant-method
+     `dprst_depth_provenance` column without recomputing the polygon set.
+     A fixed filename (not config-driven, not registered in `ctx.paths` /
+     the DAG's `_expected_outputs`) — it's a byproduct for the separate
+     `derive_depstor_params.py` param driver, not a DAG dependency any other
+     depstor_rasters step consumes.
 """
 from __future__ import annotations
 
@@ -68,6 +79,10 @@ _DEPTH_COLUMNS = [
 # (docs/0b_TB_depr_stor.py:994: `op_flow_thres = [1] * nhru`), not a
 # raster-derived parameter.
 OP_FLOW_THRES_VALUE = 1.0
+
+# Fixed filename for the per-polygon provenance companion (see module
+# docstring point 7) — always written next to dprst_depth.tif.
+POLYGON_PROVENANCE_FILENAME = "dprst_depth_polygons.parquet"
 
 
 def _load_vector(path, layer, columns, logger):
@@ -269,6 +284,22 @@ def _write_op_flow_thres(ctx: BuildContext, out_path: Path, logger) -> Path:
     return out_path
 
 
+def _write_polygon_provenance(filled: gpd.GeoDataFrame, depth_path: Path, logger) -> Path:
+    """Persist `(COMID, method, dprst_depth_m, geometry)` next to `dprst_depth.tif`.
+
+    See the module docstring (point 7) for why this exists: `burn_depth`
+    only burns `dprst_depth_m` onto the raster, so the per-polygon `method`
+    label (Task 5's fallback-ladder provenance) would otherwise be lost.
+    """
+    out_path = depth_path.parent / POLYGON_PROVENANCE_FILENAME
+    keep_cols = [c for c in ("COMID", "method", "dprst_depth_m", "geometry") if c in filled.columns]
+    gdf = gpd.GeoDataFrame(filled[keep_cols], geometry="geometry", crs=filled.crs)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    gdf.to_parquet(out_path)
+    logger.info("  polygon provenance: wrote %d rows -> %s", len(gdf), out_path)
+    return out_path
+
+
 def build(step_cfg: dict, ctx: BuildContext, logger) -> dict:
     outputs = step_cfg["outputs"]
     depth_path = ctx.resolve_output(outputs["dprst_depth"])
@@ -290,5 +321,6 @@ def build(step_cfg: dict, ctx: BuildContext, logger) -> dict:
 
     burn_depth(filled, ctx.template_path, landmask_path, depth_path, logger)
     _write_op_flow_thres(ctx, op_flow_path, logger)
+    _write_polygon_provenance(filled, depth_path, logger)
 
     return {"dprst_depth": depth_path, "op_flow_thres": op_flow_path}

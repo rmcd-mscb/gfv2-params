@@ -20,17 +20,27 @@ route each polygon through.
 """
 from __future__ import annotations
 
+import importlib.util
 import logging
+from pathlib import Path
 
 import geopandas as gpd
 import numpy as np
 import pandas as pd
+import pytest
 import rasterio
 from rasterio.transform import from_origin
 from shapely.geometry import box
 
 from gfv2_params.depstor_builders import BUILDERS, dprst_depth
 from gfv2_params.depstor_builders.context import BuildContext
+from gfv2_params.dprst_depth.aggregate import (
+    NO_DPRST_CELLS,
+    UNKNOWN_PROVENANCE,
+    area_weighted_provenance,
+    finalize_depth_params,
+)
+from gfv2_params.dprst_depth.fill import M_TO_IN
 
 _CRS = "EPSG:5070"
 
@@ -208,6 +218,158 @@ def test_dprst_depth_build_end_to_end(tmp_path, monkeypatch):
         valid2 = out_arr2[0][out_arr2[0] != nodata]
         assert valid2.size > 0
         assert valid2.mean() > 0
+
+    # Task 8 (#173): the companion per-polygon provenance parquet must exist
+    # alongside dprst_depth.tif, carrying the fill `method` burn_depth itself
+    # discards. Polygon A (COMID 101, the real gradient pit) is non-flat ->
+    # "measured"; polygon B (COMID 102, hydro-flattened) falls back to its
+    # own (sparse, n_donors=1) ecoregion/FTYPE median -> "regional_fill".
+    prov_path = produced["dprst_depth"].parent / "dprst_depth_polygons.parquet"
+    assert prov_path.exists()
+    prov_gdf = gpd.read_parquet(prov_path)
+    assert set(prov_gdf["COMID"]) == {101, 102}
+    methods = prov_gdf.set_index("COMID")["method"]
+    assert methods.loc[101] == "measured"
+    assert methods.loc[102] == "regional_fill"
+    assert prov_gdf["dprst_depth_m"].notna().all()
+    assert (prov_gdf["dprst_depth_m"] > 0).all()
+
+
+# ---------------------------------------------------------------------------
+# Task 8 (#173): per-HRU aggregation -- finalize_depth_params (pure) +
+# area_weighted_provenance
+# ---------------------------------------------------------------------------
+
+
+def test_finalize_depth_params_converts_metres_to_inches_and_floors_missing(tmp_path):
+    """A small stand-in for a real exactextract `mean` column: HRU 1 has a
+    real area-weighted mean depth (metres); HRU 2 is entirely absent from
+    the zonal output (as a dprst_frac==0 HRU would be -- exactextract finds
+    no valid pixels and either omits the row or reports NaN, both handled
+    identically here since HRU 2 is passed in `hru_ids` but not `zonal_df`).
+    """
+    zonal_df = pd.DataFrame({"hru_id": [1], "mean": [2.0]})
+    provenance_df = pd.DataFrame({"hru_id": [1], "dprst_depth_provenance": ["measured"]})
+
+    out = finalize_depth_params(
+        zonal_df, hru_ids=[1, 2], id_feature="hru_id", floor_in=49.0, provenance_df=provenance_df,
+    )
+
+    # Round-trip through an actual CSV, per the task's "assert the CSV
+    # dprst_depth_avg equals..." validation shape.
+    out_csv = tmp_path / "nhm_dprst_depth_avg_params.csv"
+    out.to_csv(out_csv, index=False)
+    read_back = pd.read_csv(out_csv).set_index("hru_id")
+
+    assert not read_back["dprst_depth_avg"].isna().any()
+    assert read_back.loc[1, "dprst_depth_avg"] == pytest.approx(2.0 * M_TO_IN)
+    assert read_back.loc[1, "dprst_depth_provenance"] == "measured"
+
+    assert read_back.loc[2, "dprst_depth_avg"] == pytest.approx(49.0)
+    assert read_back.loc[2, "dprst_depth_provenance"] == NO_DPRST_CELLS
+
+
+def test_finalize_depth_params_nan_mean_also_gets_floor():
+    """An HRU explicitly present with mean=NaN (the more literal
+    dprst_frac==0 shape exactextract actually returns) must floor the same
+    way as one missing from zonal_df entirely."""
+    zonal_df = pd.DataFrame({"hru_id": [1, 2], "mean": [1.0, np.nan]})
+
+    out = finalize_depth_params(zonal_df, hru_ids=[1, 2], id_feature="hru_id", floor_in=49.0)
+
+    out = out.set_index("hru_id")
+    assert not out["dprst_depth_avg"].isna().any()
+    assert out.loc[1, "dprst_depth_avg"] == pytest.approx(1.0 * M_TO_IN)
+    assert out.loc[2, "dprst_depth_avg"] == pytest.approx(49.0)
+    assert out.loc[2, "dprst_depth_provenance"] == NO_DPRST_CELLS
+
+
+def test_finalize_depth_params_missing_provenance_marked_unknown():
+    """A valid mean with no matching provenance_df row (or no provenance_df
+    at all) must not be silently mislabeled as 'no_dprst_cells' -- it has
+    dprst cells, we just don't know the dominant method."""
+    zonal_df = pd.DataFrame({"hru_id": [1], "mean": [0.5]})
+
+    out = finalize_depth_params(zonal_df, hru_ids=[1], id_feature="hru_id", floor_in=49.0)
+
+    assert out.loc[0, "dprst_depth_provenance"] == UNKNOWN_PROVENANCE
+    assert out.loc[0, "dprst_depth_avg"] == pytest.approx(0.5 * M_TO_IN)
+
+
+def test_finalize_depth_params_requires_positive_floor():
+    zonal_df = pd.DataFrame({"hru_id": [1], "mean": [0.5]})
+    with pytest.raises(ValueError):
+        finalize_depth_params(zonal_df, hru_ids=[1], id_feature="hru_id", floor_in=0.0)
+
+
+def test_finalize_depth_params_missing_columns_raise():
+    with pytest.raises(KeyError):
+        finalize_depth_params(pd.DataFrame({"hru_id": [1]}), hru_ids=[1], id_feature="hru_id")
+    with pytest.raises(KeyError):
+        finalize_depth_params(pd.DataFrame({"mean": [1.0]}), hru_ids=[1], id_feature="hru_id")
+
+
+def test_area_weighted_provenance_dominant_by_area():
+    """Two dprst polygons intersect HRU 1 with different `method` labels and
+    different areas; the larger-area method wins. HRU 2 has no dprst overlap
+    at all and must be absent from the result (finalize_depth_params maps a
+    missing HRU to NO_DPRST_CELLS, not this function)."""
+    polygons_gdf = gpd.GeoDataFrame(
+        {
+            "method": ["measured", "constant_floor"],
+            # 40x40 = 1600 m^2 (bigger) vs 10x10 = 100 m^2 (smaller), both
+            # fully inside HRU 1.
+            "geometry": [box(0, 0, 40, 40), box(60, 60, 70, 70)],
+        },
+        crs=_CRS,
+    )
+    hru_gdf = gpd.GeoDataFrame(
+        {"hru_id": [1, 2], "geometry": [box(-10, -10, 110, 110), box(1000, 1000, 1010, 1010)]},
+        crs=_CRS,
+    )
+
+    out = area_weighted_provenance(polygons_gdf, hru_gdf, "hru_id")
+
+    out = out.set_index("hru_id")
+    assert list(out.index) == [1]
+    assert out.loc[1, "dprst_depth_provenance"] == "measured"
+
+
+def test_area_weighted_provenance_missing_method_column_raises():
+    polygons_gdf = gpd.GeoDataFrame({"geometry": [box(0, 0, 1, 1)]}, crs=_CRS)
+    hru_gdf = gpd.GeoDataFrame({"hru_id": [1], "geometry": [box(0, 0, 1, 1)]}, crs=_CRS)
+    with pytest.raises(KeyError):
+        area_weighted_provenance(polygons_gdf, hru_gdf, "hru_id")
+
+
+def test_area_weighted_provenance_empty_polygons_returns_empty():
+    polygons_gdf = gpd.GeoDataFrame({"method": [], "geometry": []}, crs=_CRS)
+    hru_gdf = gpd.GeoDataFrame({"hru_id": [1], "geometry": [box(0, 0, 1, 1)]}, crs=_CRS)
+    out = area_weighted_provenance(polygons_gdf, hru_gdf, "hru_id")
+    assert len(out) == 0
+    assert list(out.columns) == ["hru_id", "dprst_depth_provenance"]
+
+
+def test_derive_depstor_params_mean_modes_wired():
+    """Light import-check + CLI-wiring check for the mean_zonal/mean_finalize
+    modes added to scripts/derive_depstor_params.py (#173 Task 8) -- mirrors
+    tests/test_dprst_depth_probe.py's importlib pattern for loading a
+    scripts/*.py module directly."""
+    spec = importlib.util.spec_from_file_location(
+        "derive_depstor_params",
+        Path(__file__).resolve().parent.parent / "scripts" / "derive_depstor_params.py",
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    assert callable(module._find_mean)
+    assert callable(module.run_mean_zonal)
+    assert callable(module.run_mean_finalize)
+
+    config = {"means": [{"name": "dprst_depth_avg", "merged_file": "nhm_dprst_depth_avg_params.csv"}]}
+    assert module._find_mean(config, "dprst_depth_avg")["merged_file"] == "nhm_dprst_depth_avg_params.csv"
+    with pytest.raises(ValueError):
+        module._find_mean(config, "not_a_real_mean")
 
 
 def test_dprst_depth_skips_when_outputs_exist(tmp_path, monkeypatch):

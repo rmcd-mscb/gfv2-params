@@ -80,19 +80,33 @@ fractions:
 # Continuous (non-binary) rasters needing an area-weighted MEAN per HRU, not
 # a partial-pixel-coverage COUNT. `run_zonal`/`run_merge`/`run_ratios` above
 # only implement the binary count path (categorical=false over a uint8
-# 1/255 raster) — dprst_depth.tif is float32 metres, so this entry is a
-# Task 8 (#173) STUB: it reserves the name + source-raster wiring so Task 8
-# only needs to add the mean-specific aggregation mode (a new `run_mean` /
-# `--mode mean`, or an `aggregation: mean` branch in `run_zonal`), not
-# rediscover where the raster lives. NOT wired into derive_depstor_params.py
-# yet — do not point automation at this block until Task 8 lands.
+# 1/255 raster). `dprst_depth.tif` is float32 metres, so it is driven by the
+# separate `--mode mean_zonal` / `--mode mean_finalize` pair in
+# `derive_depstor_params.py` (#173 Task 8):
+#   `mean_zonal`    -- per-HRU-batch exactextract MEAN (categorical=false,
+#                      same UserTiffData/ZonalGen flow as `run_zonal` above),
+#                      writing per-batch CSVs to {output_dir}/dprst_depth_avg/.
+#   `mean_finalize` -- concat the batch CSVs, then
+#                      `gfv2_params.dprst_depth.aggregate.finalize_depth_params`:
+#                      metres -> inches (M_TO_IN = 39.3701), fill every
+#                      dprst_frac==0 HRU (NaN mean) with `floor_in`, and join
+#                      the `dprst_depth_provenance` column computed by
+#                      `aggregate.area_weighted_provenance` from
+#                      `provenance_source` (the per-polygon `method` labels
+#                      `depstor_builders/dprst_depth.py` persists next to
+#                      dprst_depth.tif) against the fabric's `hru_gpkg`.
+#                      Writes straight to {merged_subdir}/{merged_file} (no
+#                      ratio step — a mean needs no numerator/denominator).
 means:
   - name: dprst_depth_avg
     source_raster: "{data_root}/{fabric}/depstor_rasters/dprst_depth.tif"
+    provenance_source: "{data_root}/{fabric}/depstor_rasters/dprst_depth_polygons.parquet"
     merged_file: nhm_dprst_depth_avg_params.csv
-    # dprst_depth.tif is metres (dprst_depth's internal convention); PRMS
-    # dprst_depth_avg is inches — Task 8 must convert (M_TO_IN = 39.3701,
-    # see gfv2_params.dprst_depth.fill) when it implements the mean.
+    # NHM calibrated dprst_depth_avg median (inches) — same floor as
+    # context.BuildContext.dprst_depth_floor_in / fill.fill_flat's
+    # constant-floor fallback, applied here at the HRU grain for any HRU
+    # with zero dprst cells (exactextract mean == NaN).
+    floor_in: 49.0
     units_in_raster: metres
     units_out: inches
 
