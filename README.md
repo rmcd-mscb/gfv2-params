@@ -136,7 +136,10 @@ sbatch slurm_batch/download_nalcms.batch
 the `dprst_depth` builder (per-ecoregion depth fill) and available to other
 parameterizations. Source:
 [us_eco_l3.zip](https://dmap-prod-oms-edc.s3.us-east-1.amazonaws.com/ORD/Ecoregions/us/us_eco_l3.zip)
-(US EPA; on AWS S3, reachable from the HPC). Staged to `{data_root}/input/ecoregions/`:
+(US EPA; on AWS S3, reachable from the HPC). Level III (77 regions) is the default — larger, more robust
+per-region donor pools. A finer
+[Level IV alternative](https://dmap-prod-oms-edc.s3.us-east-1.amazonaws.com/ORD/Ecoregions/us/us_eco_l4.zip)
+is available for sensitivity testing (finer regions → sparser donors). Staged to `{data_root}/input/ecoregions/`:
 
 ```bash
 pixi run python -m gfv2_params.download.epa_ecoregions --dest "$DATA_ROOT/input/ecoregions"

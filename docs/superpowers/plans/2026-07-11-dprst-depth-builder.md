@@ -128,7 +128,7 @@ def stage_ecoregions(dest_dir: Path, logger) -> Path:
 
 - [ ] **Step 5: Stage live from the confirmed S3 source**
 
-Source (confirmed reachable, HTTP 200, ~28 MB, EPA Level III): `https://dmap-prod-oms-edc.s3.us-east-1.amazonaws.com/ORD/Ecoregions/us/us_eco_l3.zip`. On S3, so it reaches this HPC over HTTPS. Implement `stage_ecoregions` to download that zip, read the shapefile (`us_eco_l3.shp`, field `US_L3CODE`), reproject to EPSG:5070, and write `us_eco_l3.gpkg`. Idempotent (skip if present), fail loud on a non-200. Run `pixi run python -m gfv2_params.download.epa_ecoregions --dest {data_root}/input/ecoregions` → confirm a valid gpkg (CONUS extent, 77 non-empty `US_L3CODE` values). Record the path in the shared/base config.
+Source (confirmed reachable, HTTP 200, ~28 MB, EPA Level III): `https://dmap-prod-oms-edc.s3.us-east-1.amazonaws.com/ORD/Ecoregions/us/us_eco_l3.zip`. On S3, so it reaches this HPC over HTTPS. Implement `stage_ecoregions` to download that zip, read the shapefile (`us_eco_l3.shp`, field `US_L3CODE`), reproject to EPSG:5070, and write `us_eco_l3.gpkg`. Idempotent (skip if present), fail loud on a non-200. Accept an optional `--level {3,4}` arg — L3 is the default; the finer L4 alternative is `.../us/us_eco_l4.zip` (field `US_L4CODE`), for sensitivity testing only. Run `pixi run python -m gfv2_params.download.epa_ecoregions --dest {data_root}/input/ecoregions` → confirm a valid gpkg (CONUS extent, 77 non-empty `US_L3CODE` values). Record the path in the shared/base config.
 
 - [ ] **Step 6: Commit**
 
