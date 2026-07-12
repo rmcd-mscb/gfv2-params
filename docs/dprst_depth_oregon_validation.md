@@ -149,3 +149,12 @@ relax the gate's 20 pp threshold or compare against a realistic (non-upper-bound
 expectation so it doesn't false-alarm; (b) optionally tighten the WESM footprint (drop the
 convex-hull) so `best_topo` tagging matches achievable coverage. The 10 m fallback depths
 are valid; this only means ~40% of polygons are coarser-resolved than the optimistic tag implied.
+
+### Oregon re-run on the final builder (2026-07-12, all PR#177 fixes)
+Re-ran Oregon fully on the fixed builder (guard + `burn ⊆ dprst_binary`) so the validation
+artifact matches the shipped code. Result: **max 300 in, 0 NaN**; per-polygon method mix and
+1 m/10 m split are **identical** to the post-fix run (the giant-window guard is a **no-op for
+Oregon** — no polygon exceeds the ~14 km / 200 M-cell threshold). The only change is from the
+new `dprst_binary` burn-mask: the per-HRU mean is now taken over exactly the dprst cells,
+nudging the **dprst-bearing median 14.5 → 13.9 in** (p90 83.5 → 80.3) — small and in the
+expected direction. Oregon is now consistent with the CONUS product.
