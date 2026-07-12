@@ -70,7 +70,7 @@ from ..download.epa_ecoregions import ECO_ID_FIELD, ecoregion_of
 from ..dprst_depth.burn import burn_depth
 from ..dprst_depth.compute import run_batch
 from ..dprst_depth.fill import fill_flat, fit_ecoregion_models
-from ..dprst_depth.tiling import group_by_tile
+from ..dprst_depth.tiling import group_by_tile, guard_oversized_windows
 from ..dprst_depth.topo import load_fabric_dprst_polygons, resolution_class
 from .context import BuildContext
 
@@ -140,7 +140,17 @@ def _load_dprst_polygons(ctx: BuildContext, logger) -> gpd.GeoDataFrame:
 
 
 def _tag_polygons(dprst: gpd.GeoDataFrame, ctx: BuildContext, logger) -> tuple[gpd.GeoDataFrame, gpd.GeoDataFrame]:
-    """Tag `best_topo` (WESM), `ecoregion` (EPA L3), and `ftype` (FTYPE alias)."""
+    """Tag `best_topo` (WESM), `ecoregion` (EPA L3), and `ftype` (FTYPE alias).
+
+    `best_topo` also passes through `tiling.guard_oversized_windows` right
+    after `resolution_class` (issue #173 CONUS load-balance/OOM fix): a
+    polygon whose 1 m rim-buffered window would be enormous (a giant lake's
+    bbox) is retagged to 10 m before anything downstream (`group_by_tile`,
+    `compute.run_batch`'s actual `topo.read_window` call) ever sees it — the
+    SAME guard call the SLURM `--plan` hook makes
+    (`tiling.py::_load_and_tag_for_plan`), so the in-process builder path
+    and the array/plan path can't diverge on which polygons get downgraded.
+    """
     if ctx.wesm_index is None:
         raise KeyError(
             "dprst_depth step needs `wesm_index` in the fabric profile: a "
@@ -158,6 +168,7 @@ def _tag_polygons(dprst: gpd.GeoDataFrame, ctx: BuildContext, logger) -> tuple[g
     dprst = resolution_class(dprst, wesm_gdf)
     n_1m = int((dprst["best_topo"] == "1m").sum())
     logger.info("  best_topo: %d/%d polygons tagged 1m (rest 10m)", n_1m, len(dprst))
+    dprst = guard_oversized_windows(dprst, logger=logger)
 
     if ctx.ecoregions_gpkg is None:
         raise KeyError(

@@ -42,7 +42,15 @@ from .topo import (
     _utm_zone_epsg,
 )
 
-__all__ = ["group_by_tile", "tile_batches", "component_tile_batches"]
+__all__ = [
+    "group_by_tile",
+    "tile_batches",
+    "component_tile_batches",
+    "guard_oversized_windows",
+    "polygon_window_cost",
+    "MAX_1M_WINDOW_CELLS",
+    "BASE_POLYGON_OVERHEAD_CELLS",
+]
 
 
 def _tile13_key(geom, src_crs) -> str:
@@ -162,28 +170,43 @@ def group_by_tile(
     return {k: sorted(v) for k, v in groups.items()}
 
 
-def tile_batches(groups: dict[str, list[int]], n_batches: int) -> list[list[str]]:
+def tile_batches(
+    groups: dict[str, list[int]],
+    n_batches: int,
+    costs: dict[int, float] | None = None,
+) -> list[list[str]]:
     """Greedy bin-pack tile keys into `n_batches` roughly-equal-work SLURM batches.
 
-    Work is dominated by tile count x polygons-per-tile, not batch
-    cardinality, so tile keys are visited in descending polygon-count order
-    and each is assigned to whichever batch currently carries the least
-    summed polygon count (greedy longest-processing-time-first bin-packing)
-    — keeps the `n_batches` SLURM array tasks finishing around the same
-    time. Every tile key lands in exactly one batch. Always returns exactly
-    `n_batches` lists (some may be empty if there are fewer tile keys than
-    batches), matching a fixed-size SLURM array where an empty batch is a
-    no-op task.
+    A tile key's "load" is the SUM of its member polygons' weight. By
+    default (`costs=None`) that weight is 1 per polygon, i.e. plain polygon
+    COUNT — the original behavior. Pass `costs` (`{polygon_idx: cost}`,
+    typically `polygon_window_cost`'s output) to weight by estimated DEM
+    window read volume instead: count-based balancing lets a handful of
+    giant-lake polygons (huge windows) dominate one batch's wall-clock and
+    memory footprint even though every batch carries a similar polygon
+    COUNT (issue #173 CONUS run: batches 0-2 lagged badly and OOM'd at 24G).
+    Either way, tile keys are visited in descending load order and each is
+    assigned to whichever batch currently carries the least summed load
+    (greedy longest-processing-time-first bin-packing) — keeps the
+    `n_batches` SLURM array tasks finishing around the same time. Every tile
+    key lands in exactly one batch. Always returns exactly `n_batches` lists
+    (some may be empty if there are fewer tile keys than batches), matching
+    a fixed-size SLURM array where an empty batch is a no-op task.
     """
     if n_batches <= 0:
         raise ValueError(f"n_batches must be positive, got {n_batches}")
 
+    def _load(members: list[int]) -> float:
+        if costs is None:
+            return len(members)
+        return sum(costs.get(idx, 1.0) for idx in members)
+
     batches: list[list[str]] = [[] for _ in range(n_batches)]
-    loads = [0] * n_batches
-    for tile_key, members in sorted(groups.items(), key=lambda kv: len(kv[1]), reverse=True):
+    loads = [0.0] * n_batches
+    for tile_key, members in sorted(groups.items(), key=lambda kv: _load(kv[1]), reverse=True):
         i = min(range(n_batches), key=lambda b: loads[b])
         batches[i].append(tile_key)
-        loads[i] += len(members)
+        loads[i] += _load(members)
     return batches
 
 
@@ -233,12 +256,21 @@ def _tile_components(groups: dict[str, list[int]]) -> list[list[str]]:
     return list(components.values())
 
 
-def component_tile_batches(groups: dict[str, list[int]], n_batches: int) -> list[list[str]]:
+def component_tile_batches(
+    groups: dict[str, list[int]],
+    n_batches: int,
+    costs: dict[int, float] | None = None,
+) -> list[list[str]]:
     """`tile_batches`, but a multi-tile polygon's covering tiles never split across batches.
 
     Bin-packs connected COMPONENTS of tile keys (`_tile_components`), not
-    individual tile keys, by their combined polygon count -- same greedy LPT
-    heuristic `tile_batches` itself uses, just applied one level up.
+    individual tile keys, by their combined load -- same greedy LPT
+    heuristic `tile_batches` itself uses, just applied one level up. `costs`
+    is forwarded to `tile_batches` unchanged (`{polygon_idx: cost}`, e.g.
+    `polygon_window_cost`'s output) so a component's load is its polygons'
+    summed estimated window-read cost rather than raw polygon count -- see
+    `tile_batches`' docstring for why count-based balancing is insufficient
+    (issue #173).
 
     Measured on the real full-CONUS dprst polygon set (`--plan`, 2026-07-11,
     the ~321k-polygon `gfv2`-scale set): componentisation is NOT a rare edge
@@ -269,11 +301,160 @@ def component_tile_batches(groups: dict[str, list[int]], n_batches: int) -> list
         component_members[comp_id] = sorted(members)
         component_tiles[comp_id] = comp
 
-    component_batches = tile_batches(component_members, n_batches)
+    component_batches = tile_batches(component_members, n_batches, costs=costs)
     return [
         [tile_key for comp_id in batch for tile_key in component_tiles[comp_id]]
         for batch in component_batches
     ]
+
+
+# --- Giant-window guard + cost model (issue #173 CONUS load-balance/OOM fix) -
+
+# A polygon's rim-buffered bbox read at 1 m GSD: cell count == bbox area in
+# m^2 (1 m x 1 m cells), i.e. width_m * height_m. `topo.read_window`
+# materializes several same-shape buffers per window -- the float32 DEM
+# (`vrt.read`), `_normalize_nodata`'s float32 copy, and `depth_to_spill`'s
+# float64 richdem working copy + its float64 `filled` result (via
+# `rd.FillDepressions`) -- roughly 4 + 4 + 8 + 8 = 24 bytes/cell measured
+# generously; budgeting 20 bytes/cell as a slightly-conservative working
+# estimate against a 4 GiB per-window target gives:
+#
+#     4 GiB / 20 bytes/cell = 4 * 2**30 / 20 ~= 2.15e8 cells
+#
+# rounded down to a clean 200_000_000 (~200M) cells, i.e. a square window of
+# sqrt(200e6) ~= 14,142 m (~14 km) per side at 1 m GSD. That is generous for
+# any dprst polygon that legitimately warrants 1 m detail (a project's
+# actual water-surface footprint is typically far smaller than its bbox),
+# while reliably catching a truly giant lake, whose window at that point is
+# well past what a single SLURM array task's 24 GB budget can hold (richdem
+# alone needs a float64 copy at 8 bytes/cell -- 200M cells is already 1.6
+# GB just for that one buffer). A giant lake's MEAN depth (`dprst_depth_avg`
+# is a volume-weighted mean, not a per-cell product) does not need 1 m
+# resolution to compute correctly -- only its spatial DETAIL would benefit,
+# which this builder discards anyway (see `topo.volume_mean_depth`) -- so
+# downgrading to 10 m is a safe, cheap escape hatch: the SAME bbox+rim
+# window at 10 m GSD is `cells / 100`, i.e. 100x smaller, comfortably inside
+# budget.
+MAX_1M_WINDOW_CELLS = 200_000_000
+
+# Fixed per-polygon overhead folded into `polygon_window_cost`'s estimate so
+# a swarm of tiny polygons isn't modeled as free next to one huge one --
+# every polygon pays a raster-open + mask-rasterize + richdem-setup cost
+# roughly independent of its window size. The value is a deliberately
+# nonzero, order-of-magnitude floor (not calibrated against a wall-clock
+# profile); see `--plan`'s logged per-batch cost balance for the empirical
+# effect on the real CONUS polygon set.
+BASE_POLYGON_OVERHEAD_CELLS = 50_000
+
+
+def _window_bounds(dprst_gdf: gpd.GeoDataFrame, rim_m: float) -> tuple[pd.Series, pd.Series]:
+    """Rim-buffered window (width_m, height_m) per polygon, vectorized over `dprst_gdf`."""
+    bounds = dprst_gdf.geometry.bounds
+    width = (bounds["maxx"] - bounds["minx"]) + 2.0 * rim_m
+    height = (bounds["maxy"] - bounds["miny"]) + 2.0 * rim_m
+    return width, height
+
+
+def guard_oversized_windows(
+    dprst_gdf: gpd.GeoDataFrame,
+    max_1m_cells: int = MAX_1M_WINDOW_CELLS,
+    rim_m: float = 200.0,
+    logger=None,
+) -> gpd.GeoDataFrame:
+    """Retag a `best_topo=="1m"` polygon to `"10m"` if its 1 m window would be enormous.
+
+    `dprst_gdf` must already carry `best_topo` (`topo.resolution_class`
+    output). Estimates each polygon's 1 m-GSD rim-buffered window cell count
+    as `(bbox_width_m + 2*rim_m) * (bbox_height_m + 2*rim_m)` (1 m^2 per
+    cell, matching `topo.read_window`'s window == geometry bbox padded by
+    `rim_m`) and retags any `"1m"` polygon exceeding `max_1m_cells` to
+    `"10m"` -- see the `MAX_1M_WINDOW_CELLS` module constant for the memory-
+    budget arithmetic behind the default threshold. `"10m"`-tagged polygons
+    are left alone (their window is already 100x smaller at the same bbox).
+
+    Pure geometry -- no raster I/O. Must run AFTER `resolution_class` and
+    BEFORE `group_by_tile`/batching so every downstream consumer (the tile
+    grouping, the cost model below, and the actual `topo.read_window` call
+    in `compute.py`) agrees on the FINAL resolution. Called from both the
+    `--plan` SLURM-array hook (`_load_and_tag_for_plan`) and the in-process
+    builder's tag step (`depstor_builders/dprst_depth.py::_tag_polygons`) so
+    the two paths can't diverge on which polygons get downgraded.
+
+    Returns a copy of `dprst_gdf` with `best_topo` adjusted and a new
+    `oversized_1m` bool column (True for every polygon this guard retagged,
+    for provenance/diagnostics -- always False for polygons that were never
+    `"1m"` or whose window was within budget).
+    """
+    if "best_topo" not in dprst_gdf.columns:
+        raise KeyError(
+            "guard_oversized_windows requires dprst_gdf to already be tagged "
+            "by resolution_class() (missing 'best_topo')"
+        )
+
+    out = dprst_gdf.copy()
+    width, height = _window_bounds(out, rim_m)
+    est_1m_cells = width * height
+
+    is_1m = out["best_topo"] == "1m"
+    oversized = is_1m & (est_1m_cells > max_1m_cells)
+    out["oversized_1m"] = oversized
+
+    n_retag = int(oversized.sum())
+    if n_retag:
+        area_retagged_km2 = float(out.loc[oversized, "geometry"].area.sum()) / 1.0e6
+        out.loc[oversized, "best_topo"] = "10m"
+        if logger is not None:
+            logger.info(
+                "  guard_oversized_windows: retagged %d/%d 1m polygon(s) -> 10m "
+                "(estimated 1m window > %d cells at rim=%.0fm); %.1f km^2 total area retagged",
+                n_retag, int(is_1m.sum()), max_1m_cells, rim_m, area_retagged_km2,
+            )
+    elif logger is not None:
+        logger.info(
+            "  guard_oversized_windows: 0 polygon(s) retagged (all 1m windows within the "
+            "%d-cell budget)", max_1m_cells,
+        )
+
+    return out
+
+
+def polygon_window_cost(
+    dprst_gdf: gpd.GeoDataFrame,
+    rim_m: float = 200.0,
+    base_overhead_cells: float = BASE_POLYGON_OVERHEAD_CELLS,
+) -> dict[int, float]:
+    """Estimated per-polygon DEM-window read cost, in cell-count-equivalent units.
+
+    `dprst_gdf` must already carry its FINAL `best_topo` (i.e. after
+    `guard_oversized_windows`, not just raw `resolution_class` output) so
+    the cost reflects the resolution `topo.read_window` will actually read
+    at. Cost model, matching `topo.read_window`'s window geometry:
+
+      - `best_topo=="1m"`: the rim-buffered bbox read at 1 m GSD -- cost ==
+        `(bbox_width_m + 2*rim_m) * (bbox_height_m + 2*rim_m)` cells (same
+        arithmetic as `guard_oversized_windows`).
+      - `best_topo=="10m"`: the SAME bbox+rim window, but read from the 10 m
+        seamless tile -- cost == that same area / 100 (10 m x 10 m cells).
+
+    `+base_overhead_cells` is added to every polygon so tiny polygons aren't
+    modeled as free next to a huge one (see `BASE_POLYGON_OVERHEAD_CELLS`).
+
+    Pure geometry -- no raster I/O. Returns `{dprst_gdf index label: cost}`,
+    the shape `tile_batches`/`component_tile_batches`'s `costs` argument
+    expects (a tile's load is the sum of its member polygons' cost).
+    """
+    if "best_topo" not in dprst_gdf.columns:
+        raise KeyError(
+            "polygon_window_cost requires dprst_gdf to already be tagged by "
+            "resolution_class() (missing 'best_topo')"
+        )
+
+    width, height = _window_bounds(dprst_gdf, rim_m)
+    est_1m_cells = width * height
+    is_1m = dprst_gdf["best_topo"] == "1m"
+    cells = est_1m_cells.where(is_1m, est_1m_cells / 100.0)
+    cost = cells + base_overhead_cells
+    return cost.to_dict()
 
 
 # --- SLURM array plan/dry-run hook (Task 9, issue #173) --------------------
@@ -355,6 +536,7 @@ def _load_and_tag_for_plan(config: dict, logger) -> tuple[gpd.GeoDataFrame, gpd.
     dprst = resolution_class(dprst, wesm_gdf)
     n_1m = int((dprst["best_topo"] == "1m").sum())
     logger.info("  best_topo: %d/%d polygons tagged 1m (rest 10m)", n_1m, len(dprst))
+    dprst = guard_oversized_windows(dprst, logger=logger)
 
     eco_gdf = gpd.read_file(ecoregions_gpkg)
     dprst["ecoregion"] = ecoregion_of(dprst, eco_gdf, id_field=ECO_ID_FIELD)
@@ -372,14 +554,17 @@ def _plan(args) -> None:
     `batch_dir.glob("*.parquet")` scan for the array's own per-batch output):
 
       - `dprst_polygons_tagged.parquet` -- the full tagged dprst polygon set
-        (`COMID`, `FTYPE`, `best_topo`, `ecoregion`, geometry) so every array
-        task reads it once instead of re-deriving it from
-        waterbody_gpkg/WESM/ecoregions independently (n_batches redundant
-        reconstructions).
+        (`COMID`, `FTYPE`, `best_topo`, `ecoregion`, `oversized_1m`,
+        geometry -- `best_topo`/`oversized_1m` reflect
+        `guard_oversized_windows`'s post-guard FINAL resolution, not the raw
+        `resolution_class` tag) so every array task reads it once instead of
+        re-deriving it from waterbody_gpkg/WESM/ecoregions independently
+        (n_batches redundant reconstructions).
       - `batch_manifest.json` -- `{"n_batches", "n_polygons", "n_tiles",
         "tile_batches": [[tile_key, ...], ...]}`, one entry per SLURM array
-        index, from `component_tile_batches` (never splits a multi-tile
-        polygon's covering tiles across batches -- see `_tile_components`).
+        index, from `component_tile_batches`, COST-weighted via
+        `polygon_window_cost` (never splits a multi-tile polygon's covering
+        tiles across batches -- see `_tile_components`).
 
     Pure geometry + local vector reads only -- no live S3/vsicurl (see
     `_load_and_tag_for_plan`).
@@ -410,7 +595,8 @@ def _plan(args) -> None:
     dprst, wesm_gdf = _load_and_tag_for_plan(raw, logger)
 
     groups = group_by_tile(dprst, wesm_gdf)
-    batches = component_tile_batches(groups, args.n_batches)
+    costs = polygon_window_cost(dprst)
+    batches = component_tile_batches(groups, args.n_batches, costs=costs)
 
     n_polygons = len(dprst)
     n_tiles = len(groups)
@@ -419,6 +605,7 @@ def _plan(args) -> None:
     max_component_size = max((len(c) for c in components), default=0)
 
     loads = [sum(len(groups[tk]) for tk in b) for b in batches]
+    cost_loads = [sum(costs.get(idx, 0.0) for tk in b for idx in groups[tk]) for b in batches]
     nonempty = sum(1 for load in loads if load)
 
     logger.info(
@@ -432,9 +619,35 @@ def _plan(args) -> None:
     )
     if loads:
         logger.info(
-            "  per-batch polygon load: min=%d max=%d mean=%.1f (balance ratio max/mean=%.2f)",
+            "  per-batch polygon-COUNT load: min=%d max=%d mean=%.1f (balance ratio max/mean=%.2f)",
             min(loads), max(loads), sum(loads) / len(loads),
             (max(loads) / (sum(loads) / len(loads))) if sum(loads) else 0.0,
+        )
+    if cost_loads:
+        mean_cost = sum(cost_loads) / len(cost_loads)
+        logger.info(
+            "  per-batch estimated-COST load (window cells post giant-window guard, "
+            "+%d/polygon overhead): min=%.0f max=%.0f mean=%.1f (balance ratio max/mean=%.2f)",
+            BASE_POLYGON_OVERHEAD_CELLS, min(cost_loads), max(cost_loads), mean_cost,
+            (max(cost_loads) / mean_cost) if mean_cost else 0.0,
+        )
+        # A/B: what the SAME cost would look like under the OLD count-based
+        # packing (`costs=None`) — shows how much cost-weighting tightened the
+        # COST balance (bin-packing is cheap; the 6-min `group_by_tile` step
+        # above already ran once and is reused). Any residual COST imbalance
+        # under either packing is bounded below by the single largest
+        # un-splittable connected component (logged above) — cost-weighting
+        # cannot beat that structural atomicity, only balance around it.
+        count_batches = component_tile_batches(groups, args.n_batches, costs=None)
+        count_cost_loads = [
+            sum(costs.get(idx, 0.0) for tk in b for idx in groups[tk]) for b in count_batches
+        ]
+        mean_cc = sum(count_cost_loads) / len(count_cost_loads)
+        logger.info(
+            "  cost-weighting A/B: COST balance ratio max/mean=%.2f (cost-packed) vs %.2f "
+            "(count-packed) — lower is better",
+            (max(cost_loads) / mean_cost) if mean_cost else 0.0,
+            (max(count_cost_loads) / mean_cc) if mean_cc else 0.0,
         )
 
     # The 250-500 core-hour figure is the CONUS-scale estimate (~286k
@@ -456,7 +669,8 @@ def _plan(args) -> None:
 
     plan_dir.mkdir(parents=True, exist_ok=True)
     tagged_path = plan_dir / "dprst_polygons_tagged.parquet"
-    dprst[["COMID", "FTYPE", "best_topo", "ecoregion", "geometry"]].to_parquet(tagged_path)
+    tagged_cols = ["COMID", "FTYPE", "best_topo", "ecoregion", "oversized_1m", "geometry"]
+    dprst[tagged_cols].to_parquet(tagged_path)
     logger.info("  wrote tagged polygon set -> %s", tagged_path)
 
     manifest_path = plan_dir / "batch_manifest.json"
