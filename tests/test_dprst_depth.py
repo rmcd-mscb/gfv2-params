@@ -325,6 +325,34 @@ def test_finalize_depth_params_missing_provenance_marked_unknown():
     assert out.loc[0, "dprst_depth_avg"] == pytest.approx(0.5 * M_TO_IN)
 
 
+def test_finalize_depth_params_clamps_over_cap_mean():
+    """(#173 FIX 1 defensive backstop, PR#177 review gap) An HRU whose
+    area-weighted mean depth exceeds the 300 in physical cap — e.g. a future
+    upstream path that bypasses `fill.fill_flat`'s per-polygon
+    `DEPTH_CAP_M` clamp — must be clamped here too, not shipped as a
+    300+ in `dprst_depth_avg`. 10 m = 393.7 in, well past the 300 in cap.
+    This backstop fired on 11 HRUs in the real Oregon run."""
+    zonal_df = pd.DataFrame({"hru_id": [1], "mean": [10.0]})  # 10 m = 393.7 in > 300 cap
+    out = finalize_depth_params(zonal_df, hru_ids=[1], id_feature="hru_id", floor_in=49.0)
+    assert out.loc[0, "dprst_depth_avg"] == pytest.approx(300.0)
+
+
+def test_finalize_depth_params_bad_nonpositive_mean_floored():
+    """A present (non-null) but non-positive mean — the `bad` branch, which
+    guards against a value slipping through despite a non-null mean (should
+    never happen upstream, but a PRMS parameter must never be <= 0) — must
+    be forced to the floor, not left as a negative/zero
+    `dprst_depth_avg`. This is a DIFFERENT code path than the missing/NaN
+    mean case (`no_dprst`), which is already covered by
+    `test_finalize_depth_params_nan_mean_also_gets_floor`."""
+    zonal_df = pd.DataFrame({"hru_id": [1], "mean": [-2.0]})
+    out = finalize_depth_params(zonal_df, hru_ids=[1], id_feature="hru_id", floor_in=49.0)
+    assert out.loc[0, "dprst_depth_avg"] == pytest.approx(49.0)
+    # Distinct from NO_DPRST_CELLS: this HRU DID have a (bad) mean value, so
+    # it should not be mislabeled as having zero dprst cells.
+    assert out.loc[0, "dprst_depth_provenance"] != NO_DPRST_CELLS
+
+
 def test_finalize_depth_params_requires_positive_floor():
     zonal_df = pd.DataFrame({"hru_id": [1], "mean": [0.5]})
     with pytest.raises(ValueError):
@@ -423,3 +451,58 @@ def test_dprst_depth_skips_when_outputs_exist(tmp_path, monkeypatch):
     step_cfg = {"outputs": {"dprst_depth": "dprst_depth.tif", "op_flow_thres": "op_flow_thres_params.csv"}}
     produced = dprst_depth.build(step_cfg, ctx, _L())
     assert produced == {"dprst_depth": depth_out, "op_flow_thres": op_flow_out}
+
+
+# ---------------------------------------------------------------------------
+# PR#177 review gap: _compute_depths' CONUS parquet-ingestion branch (concat
+# pre-existing batch_dir/*.parquet + drop_duplicates(subset="COMID",
+# keep="first")) -- the real production path once the SLURM array
+# (tiling.py --plan) populates batch_dir, previously exercised only by the
+# in-process branch (test_dprst_depth_build_end_to_end, no batch_dir).
+# ---------------------------------------------------------------------------
+
+
+def test_compute_depths_ingests_and_dedupes_batch_parquets(tmp_path):
+    """Two per-batch parquets (Task 9's SLURM array output shape), one
+    COMID (555) present in both with DIFFERENT depths. `_compute_depths`
+    must concat + `drop_duplicates(subset='COMID', keep='first')`, so the
+    surviving row is whichever file sorts first (`sorted(batch_dir.glob(...))`
+    -- batch_000 before batch_001), and every other COMID passes through
+    untouched."""
+    batch_dir = tmp_path / "dprst_depth_batches"
+    batch_dir.mkdir()
+
+    pd.DataFrame({
+        "COMID": [555, 600],
+        "dprst_depth_m": [1.0, 2.0],
+        "measured_max_m": [1.5, 2.5],
+        "hollister_max_m": [1.2, 2.2],
+        "flat": [False, False],
+        "resolution": ["10m", "10m"],
+        "method": ["measured", "measured"],
+    }).to_parquet(batch_dir / "batch_000.parquet", index=False)
+
+    pd.DataFrame({
+        "COMID": [555, 700],
+        "dprst_depth_m": [99.0, 3.0],  # 555's depth here must NOT win
+        "measured_max_m": [99.5, 3.5],
+        "hollister_max_m": [99.2, 3.2],
+        "flat": [False, False],
+        "resolution": ["10m", "10m"],
+        "method": ["measured", "measured"],
+    }).to_parquet(batch_dir / "batch_001.parquet", index=False)
+
+    ctx = BuildContext(
+        fabric="t", template_path=tmp_path / "unused_template.tif", output_dir=tmp_path,
+        hru_gpkg=tmp_path / "unused_hru.gpkg", hru_layer="nhru",
+    )
+    step_cfg = {"batch_dir": str(batch_dir)}
+    empty_dprst = gpd.GeoDataFrame({"COMID": []}, geometry=[], crs="EPSG:5070")
+
+    out = dprst_depth._compute_depths(empty_dprst, wesm_gdf=None, ctx=ctx, step_cfg=step_cfg, logger=_L())
+
+    assert sorted(out["COMID"].tolist()) == [555, 600, 700]
+    by_comid = out.set_index("COMID")
+    assert by_comid.loc[555, "dprst_depth_m"] == pytest.approx(1.0)  # batch_000 kept (keep="first")
+    assert by_comid.loc[600, "dprst_depth_m"] == pytest.approx(2.0)
+    assert by_comid.loc[700, "dprst_depth_m"] == pytest.approx(3.0)

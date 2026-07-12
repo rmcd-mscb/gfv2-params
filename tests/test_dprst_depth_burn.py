@@ -118,6 +118,22 @@ def test_burn_depth_rejects_non_positive_depth(tmp_path):
         burn_depth(g, str(tmpl), str(lm), str(dm), str(out), logger=_L())
 
 
+def test_burn_depth_zero_polygons_all_nodata(tmp_path):
+    """(PR#177 review edge case) An empty polygon set (e.g. a fabric clip
+    with zero dprst polygons after the dprst-mask gate/land-mask
+    intersection) must still write a well-formed, all-nodata raster --
+    `sindex` is None for an empty GeoDataFrame, so every strip's `rasterize`
+    call must be skipped, not attempted with zero shapes."""
+    tmpl, lm, dm = _write_template_and_landmask(tmp_path)
+    g = gpd.GeoDataFrame({"dprst_depth_m": []}, geometry=[], crs="EPSG:5070")
+    out = tmp_path / "dprst_depth.tif"
+    burn_depth(g, str(tmpl), str(lm), str(dm), str(out), logger=_L())
+    with rasterio.open(out) as d:
+        a = d.read(1)
+        nodata = d.nodata
+    assert (a == nodata).all()
+
+
 def test_strip_rows_module_constant_is_sane():
     # STRIP_ROWS should be a positive, reasonably sized chunk (mirrors
     # carea_map's windowed-strip pattern) — not the full CONUS grid.

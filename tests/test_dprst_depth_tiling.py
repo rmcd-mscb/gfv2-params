@@ -34,6 +34,23 @@ def test_group_by_tile_requires_best_topo_column():
         group_by_tile(dprst, wesm)
 
 
+def test_group_by_tile_empty_dprst_gdf_returns_empty():
+    """(PR#177 review edge case) An empty (but correctly-tagged) dprst_gdf
+    -- e.g. a fabric clip with zero dprst polygons -- must return cleanly
+    (`{}`), not raise, so `tile_batches`/`component_tile_batches`
+    downstream see a well-formed empty work-list rather than crashing."""
+    dprst = gpd.GeoDataFrame({"COMID": [], "best_topo": []}, geometry=[], crs="EPSG:5070")
+    wesm = gpd.GeoDataFrame({"project": []}, geometry=[], crs="EPSG:5070")
+    groups = group_by_tile(dprst, wesm)
+    assert groups == {}
+
+    # tile_batches must still hand back exactly n_batches (empty) lists --
+    # the fixed-size SLURM array contract the docstring promises.
+    batches = tile_batches(groups, n_batches=3)
+    assert len(batches) == 3
+    assert all(b == [] for b in batches)
+
+
 def test_group_by_tile_1m_resolves_from_wesm_project_no_probe():
     # A single 1m-tagged polygon whose rim-buffered window falls inside a
     # WESM project footprint -> resolves candidate 3DEP 1m tile keys from
