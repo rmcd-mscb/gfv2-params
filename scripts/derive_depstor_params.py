@@ -313,7 +313,14 @@ def run_mean_finalize(args, logger) -> None:
         )
 
     hru_gpkg = Path(require_config_key(config, "hru_gpkg", "derive_depstor_params"))
-    hru_gdf = gpd.read_file(hru_gpkg, layer=defaults["target_layer"], columns=[id_feature])
+    # Fabric profile's `hru_layer` (matching topo._clip_dprst_to_fabric /
+    # dprst_depth._write_op_flow_thres's convention), NOT `defaults["target_layer"]`
+    # (#173 PR#177 review FIX 4b) -- `target_layer` is the per-BATCH gpkg
+    # layer name (a config default, currently "nhru" for every profile, but
+    # not guaranteed to match the master HRU gpkg's layer for a future
+    # fabric).
+    hru_layer = require_config_key(config, "hru_layer", "derive_depstor_params")
+    hru_gdf = gpd.read_file(hru_gpkg, layer=hru_layer, columns=[id_feature])
     hru_ids = hru_gdf[id_feature]
 
     provenance_df = None

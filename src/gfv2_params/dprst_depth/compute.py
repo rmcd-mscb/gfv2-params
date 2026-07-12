@@ -40,6 +40,7 @@ import numpy as np
 import pandas as pd
 import rasterio
 from rasterio.enums import Resampling
+from rasterio.errors import RasterioIOError
 from rasterio.vrt import WarpedVRT
 from rasterio.windows import from_bounds
 
@@ -264,8 +265,22 @@ def run_batch(
 
     Writes `out_parquet` (one row per computed polygon: `COMID`,
     `dprst_depth_m`, `measured_max_m`, `hollister_max_m`, `flat`,
-    `resolution`, `method`) and returns the same DataFrame. A read failure
-    for one polygon or tile is logged and skipped, never aborts the batch.
+    `resolution`, `method`) and returns the same DataFrame.
+
+    Failures are counted in two SEPARATE buckets so a systematic code bug
+    can't hide behind the expected rate of routine tile gaps (#173 PR#177
+    review FIX 2):
+      - `n_read_failure` — `RasterioIOError` (the documented "tile/window
+        absent" signal, see `topo.py`'s `_existing_paths`/`read_window`
+        notes) at either the tile-open or the windowed-read/compute site.
+        Logged at WARNING; expected at some baseline rate at CONUS scale.
+      - `n_compute_error` — anything else (`MemoryError`, `TypeError`,
+        `ValueError`, `AttributeError`, a pyproj/CRS error, ...). Logged at
+        ERROR with the offending tile/polygon id so a real bug is loud and
+        distinct from a routine read gap. Still `continue`s (one bad
+        polygon/tile must not abort a 1000-polygon batch), but the ERROR
+        log + the `n_compute_error` count in the final summary make it
+        visible — `n_compute_error` should be ~0 in a healthy run.
     """
     if "best_topo" not in dprst_gdf.columns:
         raise KeyError(
@@ -293,6 +308,8 @@ def run_batch(
     done: set = set()
     n_tile_reads = 0
     n_fallback = 0
+    n_read_failure = 0
+    n_compute_error = 0
 
     def _emit(idx, result: dict) -> None:
         if id_col is not None:
@@ -318,24 +335,51 @@ def run_batch(
                             dem, transform = _read_tile_window(vrt, geom)
                             interior_mask = _interior_mask(dem, transform, geom)
                             result = _polygon_depth_from_dem(dem, interior_mask, transform)
-                        except Exception as exc:  # noqa: BLE001 - log and skip, never abort the batch
+                        except RasterioIOError as exc:
+                            # Expected: the polygon's window falls outside
+                            # what this tile actually publishes (a routine
+                            # read gap), not a code bug.
+                            n_read_failure += 1
                             logger.warning(
-                                "  tile=%s idx=%s: per-polygon read/compute failed (%s) — skipped",
+                                "  tile=%s idx=%s: read failure (%s) — skipped",
                                 tile_key, idx, exc,
+                            )
+                            continue
+                        except Exception as exc:  # noqa: BLE001 - log loud, skip, never abort the batch
+                            # Unexpected: MemoryError/TypeError/ValueError/
+                            # AttributeError/pyproj-CRS-error/etc — a real
+                            # code bug, not a routine tile gap. ERROR (not
+                            # WARNING) so it can't hide behind the expected
+                            # read-failure rate.
+                            n_compute_error += 1
+                            logger.error(
+                                "  tile=%s idx=%s: UNEXPECTED compute error (%s: %s) — skipped",
+                                tile_key, idx, type(exc).__name__, exc,
                             )
                             continue
                         result["resolution"] = resolution
                         result["method"] = "flat_pending" if result["flat"] else "measured"
                         _emit(idx, result)
-            except Exception as exc:  # noqa: BLE001 - log and skip the tile, never abort the batch
-                # Broadened beyond RasterioIOError: a corrupt COG, bad CRS, or
-                # any other tile-open failure must not kill the whole batch —
-                # its polygons still get a chance via the multi-tile fallback
-                # below (mirrors the per-polygon skip convention just above).
+            except RasterioIOError as exc:
+                # Expected: the tile key doesn't exist (a routine 404/read
+                # gap) — its polygons still get a chance via the multi-tile
+                # fallback below.
+                n_read_failure += 1
                 logger.warning(
-                    "  tile=%s: failed to open (%s) — its %d single-tile polygon(s) skipped "
-                    "this batch",
+                    "  tile=%s: read failure opening tile (%s) — its %d single-tile "
+                    "polygon(s) skipped this batch",
                     tile_key, exc, len(single_tile_idxs),
+                )
+                continue
+            except Exception as exc:  # noqa: BLE001 - log loud, skip the tile, never abort the batch
+                # Unexpected: a corrupt COG, bad CRS, MemoryError, etc — a
+                # real code/data bug distinct from a routine tile-absent
+                # read failure. ERROR so it's loud.
+                n_compute_error += 1
+                logger.error(
+                    "  tile=%s: UNEXPECTED error opening tile (%s: %s) — its %d single-tile "
+                    "polygon(s) skipped this batch",
+                    tile_key, type(exc).__name__, exc, len(single_tile_idxs),
                 )
                 continue
             if n_tile_reads % 25 == 0:
@@ -352,10 +396,18 @@ def run_batch(
             wesm_row = {"project": project} if pd.notna(project) else None
             try:
                 result = compute_polygon(row.geometry, row["best_topo"], wesm_row=wesm_row)
-            except Exception as exc:  # noqa: BLE001 - log and skip, never abort the batch
+            except RasterioIOError as exc:
+                n_read_failure += 1
                 logger.warning(
-                    "  idx=%s: multi-tile fallback compute_polygon failed (%s) — skipped",
+                    "  idx=%s: multi-tile fallback read failure (%s) — skipped",
                     idx, exc,
+                )
+                continue
+            except Exception as exc:  # noqa: BLE001 - log loud, skip, never abort the batch
+                n_compute_error += 1
+                logger.error(
+                    "  idx=%s: multi-tile fallback UNEXPECTED compute error (%s: %s) — skipped",
+                    idx, type(exc).__name__, exc,
                 )
                 continue
             n_fallback += 1
@@ -365,8 +417,24 @@ def run_batch(
     if out_df.empty:
         out_df = _empty_batch_frame()
     out_df.to_parquet(out_parquet, index=False)
-    logger.info(
-        "run_batch: %d/%d polygons written (%d tile reads, %d multi-tile fallback) -> %s",
-        len(out_df), n_polygons, n_tile_reads, n_fallback, out_parquet,
+
+    success_fraction = len(out_df) / n_polygons if n_polygons else 1.0
+    summary_args = (
+        len(out_df), n_polygons, n_tile_reads, n_fallback,
+        n_read_failure, n_compute_error, out_parquet,
     )
+    summary_fmt = (
+        "run_batch: %d/%d polygons written (%d tile reads, %d multi-tile fallback, "
+        "n_read_failure=%d, n_compute_error=%d) -> %s"
+    )
+    # (#173 FIX 3) Completeness gate: a mass read-failure (S3 outage / HPC
+    # firewall regression) or ANY unexpected compute error must not ship
+    # silently at INFO — escalate the whole summary line so it's visible in
+    # a normal log scan.
+    if n_compute_error > 0:
+        logger.error(summary_fmt, *summary_args)
+    elif success_fraction < 0.90:
+        logger.warning(summary_fmt, *summary_args)
+    else:
+        logger.info(summary_fmt, *summary_args)
     return out_df

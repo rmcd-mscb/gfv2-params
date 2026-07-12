@@ -467,10 +467,27 @@ def fill_flat(
             n_capped, DEPTH_CAP_M, DEPTH_CAP_M * M_TO_IN, int(was_measured.sum()),
         )
 
+    # (#173 FIX 3) A mass read failure (S3 outage / HPC firewall regression
+    # — this project has hit this class before) must not ship silently at
+    # INFO. Escalate to WARNING once the read-failure fraction of the whole
+    # batch exceeds a small baseline (5%); the legitimate donor-less-floor
+    # count (n_floor_no_donor, logged separately above) stays INFO — that
+    # case is expected (no measured donor in a group), not a failure signal.
+    n_read_failure = int(read_failure_mask.sum())
+    n_total = len(out)
+    read_failure_fraction = n_read_failure / n_total if n_total else 0.0
+    log_fn = logger.warning if read_failure_fraction > 0.05 else logger.info
+    log_fn(
+        "fill_flat: %d/%d (%.1f%%) rows were non-flat read-failures routed through the "
+        "fallback ladder%s",
+        n_read_failure, n_total, 100 * read_failure_fraction,
+        " — exceeds the 5% baseline, investigate possible systemic read failure"
+        if read_failure_fraction > 0.05 else "",
+    )
     logger.info(
         "fill_flat: %d rows routed through the ladder (%d flat, %d non-flat read-failure; "
         "%d regional_fill, %d calibrated_hollister, %d constant_floor; floor=%.4f m = %.1f in)",
-        int(needs_fill_mask.sum()), int(flat_mask.sum()), int(read_failure_mask.sum()),
+        int(needs_fill_mask.sum()), int(flat_mask.sum()), n_read_failure,
         n_regional, n_calibrated, n_floor, floor_m, floor_in,
     )
     return out

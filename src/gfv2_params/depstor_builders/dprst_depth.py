@@ -238,6 +238,33 @@ def _compute_depths(
     return depth_df
 
 
+def _log_achieved_resolution(dprst: gpd.GeoDataFrame, merged: gpd.GeoDataFrame, logger) -> None:
+    """(#173 FIX 4a) Log the ACHIEVED `resolution` breakdown alongside the
+    already-logged INTENDED `best_topo` tag count, and WARN if they diverge
+    materially — catches a silent all-10m regression (e.g. every 1 m tile
+    read failing and falling through to the 10 m source without anyone
+    noticing, since `resolution` is set per-row by whatever source actually
+    got read, not by the `best_topo` tag alone).
+    """
+    total = len(merged)
+    if total == 0 or "resolution" not in merged.columns:
+        return
+    counts = merged["resolution"].value_counts(dropna=False)
+    logger.info("  achieved resolution breakdown: %s", counts.to_dict())
+
+    n_tagged_1m = int((dprst["best_topo"] == "1m").sum()) if "best_topo" in dprst.columns else 0
+    n_achieved_1m = int(counts.get("1m", 0))
+    pct_tagged = 100 * n_tagged_1m / total
+    pct_achieved = 100 * n_achieved_1m / total
+    if abs(pct_tagged - pct_achieved) > 20:
+        logger.warning(
+            "  achieved 1m coverage (%.1f%%, %d/%d) diverges from tagged-1m "
+            "(%.1f%%, %d/%d) by more than 20 percentage points — possible "
+            "silent 1m->10m regression, investigate",
+            pct_achieved, n_achieved_1m, total, pct_tagged, n_tagged_1m, total,
+        )
+
+
 def _fill_and_join(dprst: gpd.GeoDataFrame, depth_df: pd.DataFrame, ctx: BuildContext, logger) -> gpd.GeoDataFrame:
     """Join computed depths onto the polygon set and fill every flat/missing row."""
     keep_cols = [c for c in _DEPTH_COLUMNS if c in depth_df.columns]
@@ -245,10 +272,26 @@ def _fill_and_join(dprst: gpd.GeoDataFrame, depth_df: pd.DataFrame, ctx: BuildCo
     merged = gpd.GeoDataFrame(merged, geometry="geometry", crs=dprst.crs)
 
     n_computed = int(merged["dprst_depth_m"].notna().sum()) if "dprst_depth_m" in merged.columns else 0
+    n_total = len(merged)
     logger.info(
         "  %d/%d polygons have a computed depth (rest go through the fallback ladder)",
-        n_computed, len(merged),
+        n_computed, n_total,
     )
+
+    # (#173 FIX 3) Completeness gate: a mass read-failure (S3 outage / HPC
+    # firewall regression — this project has hit this class before, see
+    # proj_network_firewall_inf) would otherwise ship a mostly-floored
+    # product with only INFO-level breadcrumbs. Flag loudly, don't abort.
+    measured_fraction = n_computed / n_total if n_total else 1.0
+    if measured_fraction < 0.5:
+        logger.warning(
+            "  only %.1f%% (%d/%d) of polygons have a computed depth — "
+            "investigate: possible systemic read failure (S3 outage, HPC "
+            "network/firewall regression) rather than genuine hydro-flattening",
+            100 * measured_fraction, n_computed, n_total,
+        )
+
+    _log_achieved_resolution(dprst, merged, logger)
 
     non_flat = merged[(merged["flat"] == False) & merged["dprst_depth_m"].notna()]  # noqa: E712
     models = fit_ecoregion_models(non_flat, n_min=ctx.dprst_hollister_n_min)
@@ -333,6 +376,7 @@ def build(step_cfg: dict, ctx: BuildContext, logger) -> dict:
     depth_path = ctx.resolve_output(outputs["dprst_depth"])
     op_flow_path = ctx.resolve_output(outputs["op_flow_thres"])
     landmask_path = ctx.require("landmask")
+    dprst_mask_path = ctx.require("dprst")
 
     logger.info("--- dprst_depth ---")
     logger.info("  Depth out        : %s", depth_path)
@@ -347,7 +391,7 @@ def build(step_cfg: dict, ctx: BuildContext, logger) -> dict:
     depth_df = _compute_depths(dprst, wesm_gdf, ctx, step_cfg, logger)
     filled = _fill_and_join(dprst, depth_df, ctx, logger)
 
-    burn_depth(filled, ctx.template_path, landmask_path, depth_path, logger)
+    burn_depth(filled, ctx.template_path, landmask_path, dprst_mask_path, depth_path, logger)
     _write_op_flow_thres(ctx, op_flow_path, logger)
     _write_polygon_provenance(filled, depth_path, logger)
 

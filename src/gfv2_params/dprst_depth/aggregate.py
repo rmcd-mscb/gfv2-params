@@ -141,11 +141,17 @@ def finalize_depth_params(
     over_cap = depth_in > depth_cap_in
     n_over_cap = int(np.sum(over_cap))
     if n_over_cap:
+        # Log the OVERAGE MAGNITUDE alongside the count (#173 PR#177 review
+        # FIX 5) so float32-rounding noise just past the cap (e.g. 300.001
+        # in) is distinguishable at a glance from a real bug (e.g. 400+ in,
+        # which would mean the per-polygon cap was bypassed upstream).
+        max_over_cap_in = float(np.max(depth_in[over_cap]))
         logger.warning(
             "finalize_depth_params: %d HRU(s) exceeded the %.1f in physical cap despite "
-            "per-polygon capping upstream -- clamping (investigate: fill.fill_flat's "
-            "DEPTH_CAP_M should make this impossible)",
-            n_over_cap, depth_cap_in,
+            "per-polygon capping upstream (max observed %.4f in, %.4f in over cap) -- "
+            "clamping (investigate: fill.fill_flat's DEPTH_CAP_M should make this "
+            "impossible)",
+            n_over_cap, depth_cap_in, max_over_cap_in, max_over_cap_in - depth_cap_in,
         )
         depth_in = np.where(over_cap, depth_cap_in, depth_in)
 

@@ -16,7 +16,7 @@
 # persisted tagged polygon set + batch manifest (scripts/run_dprst_depth_batch.py)
 # -- no S3/WESM/waterbody re-derivation per task -- opens each of this
 # batch's tiles ONCE, and writes one per-batch parquet (Task 4's
-# compute.run_batch). --mem=24G: every task holds the FULL CONUS dprst
+# compute.run_batch). --mem=64G: every task holds the FULL CONUS dprst
 # polygon set in memory (compute.run_batch's own internal group_by_tile
 # recompute needs it) plus one open tile VRT window at a time -- a vector
 # GeoDataFrame + a single windowed raster read, not CONUS-grid-scale

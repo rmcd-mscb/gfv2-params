@@ -123,7 +123,18 @@ def _write_template_and_landmask(tmp_path):
         dtype="uint8", crs=_CRS, transform=transform, nodata=0,
     ) as d:
         d.write(np.ones((n, n), np.uint8), 1)
-    return tmpl, lm
+    # dprst_binary.tif convention (depstor_builders/dprst.py): 1 = dprst.
+    # All-dprst here so the FIX-1 mask gate is a no-op for these builder
+    # end-to-end tests (which only exercise the fill/compute/burn pipeline,
+    # not the dprst-mask carve itself — that's covered directly in
+    # test_dprst_depth_burn.py).
+    dm = tmp_path / "dprst_binary.tif"
+    with rasterio.open(
+        dm, "w", driver="GTiff", height=n, width=n, count=1,
+        dtype="uint8", crs=_CRS, transform=transform, nodata=255,
+    ) as d:
+        d.write(np.ones((n, n), np.uint8), 1)
+    return tmpl, lm, dm
 
 
 def _write_waterbody_gpkg(path):
@@ -186,7 +197,7 @@ def test_dprst_depth_build_end_to_end(tmp_path, monkeypatch):
 
     monkeypatch.setattr(rasterio, "open", _fake_open)
 
-    tmpl, lm = _write_template_and_landmask(tmp_path)
+    tmpl, lm, dm = _write_template_and_landmask(tmp_path)
 
     waterbody_gpkg = tmp_path / "waterbodies.gpkg"
     _write_waterbody_gpkg(waterbody_gpkg)
@@ -207,6 +218,7 @@ def test_dprst_depth_build_end_to_end(tmp_path, monkeypatch):
         wesm_index=wesm_index, ecoregions_gpkg=ecoregions_gpkg,
     )
     ctx.paths["landmask"] = lm
+    ctx.paths["dprst"] = dm
 
     step_cfg = {"outputs": {"dprst_depth": "dprst_depth.tif", "op_flow_thres": "op_flow_thres_params.csv"}}
     produced = dprst_depth.build(step_cfg, ctx, _L())
@@ -390,7 +402,7 @@ def test_derive_depstor_params_mean_modes_wired():
 
 
 def test_dprst_depth_skips_when_outputs_exist(tmp_path, monkeypatch):
-    tmpl, lm = _write_template_and_landmask(tmp_path)
+    tmpl, lm, dm = _write_template_and_landmask(tmp_path)
     depth_out = tmp_path / "dprst_depth.tif"
     op_flow_out = tmp_path / "op_flow_thres_params.csv"
     depth_out.write_bytes(b"placeholder")
@@ -406,6 +418,7 @@ def test_dprst_depth_skips_when_outputs_exist(tmp_path, monkeypatch):
         hru_gpkg=tmp_path / "hru.gpkg", hru_layer="nhru", id_feature="hru_id",
     )
     ctx.paths["landmask"] = lm
+    ctx.paths["dprst"] = dm
 
     step_cfg = {"outputs": {"dprst_depth": "dprst_depth.tif", "op_flow_thres": "op_flow_thres_params.csv"}}
     produced = dprst_depth.build(step_cfg, ctx, _L())

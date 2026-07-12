@@ -73,6 +73,7 @@ def burn_depth(
     dprst_gdf_with_depth: gpd.GeoDataFrame,
     template_path: str | Path,
     land_mask_path: str | Path,
+    dprst_mask_path: str | Path,
     out_tif: str | Path,
     logger: logging.Logger,
 ) -> Path:
@@ -81,8 +82,23 @@ def burn_depth(
     Streams by `STRIP_ROWS`-tall row-strips (never allocates a full-grid
     array): for each strip, only the polygons whose bounding box intersects
     the strip's bounding box are rasterized against that strip's window
-    transform, then masked to `land_mask_path` (value 1 = land, the repo-wide
-    `land_mask.tif` convention — see `depstor.read_land_mask`).
+    transform, then masked to BOTH `land_mask_path` (value 1 = land, the
+    repo-wide `land_mask.tif` convention — see `depstor.read_land_mask`) AND
+    `dprst_mask_path` (value 1 = dprst, the shipped `dprst_binary.tif` from
+    `depstor_builders/dprst.py`).
+
+    The `dprst_mask_path` gate exists because the shipped dprst classifier
+    (`dprst.py` -> `dprst_binary.tif`) uses raster CLUMP semantics —
+    touching waterbodies merge into one region, and the WHOLE clump is
+    excluded if any cell in it is on-stream — while this module's per-polygon
+    COMID reconstruction (`topo.load_fabric_dprst_polygons`) does not
+    reproduce that clumping/exclusion logic. Without this gate,
+    `dprst_depth.tif` could carry a burned depth on cells that
+    `dprst_binary.tif`/`dprst_frac` say are NOT dprst, breaking the contract
+    PRMS relies on (`dprst_frac * dprst_depth_avg`). Gating on the
+    intersection of both masks makes `dprst_depth.tif` a cell subset of
+    `dprst_binary.tif`'s dprst cells BY CONSTRUCTION, regardless of any
+    divergence between the two polygon reconstructions.
 
     Args:
         dprst_gdf_with_depth: GeoDataFrame with a `dprst_depth_m` column
@@ -92,6 +108,8 @@ def burn_depth(
         template_path: path to the fabric `template_raster` (defines output
             CRS/transform/shape).
         land_mask_path: path to `land_mask.tif`, aligned to `template_path`.
+        dprst_mask_path: path to `dprst_binary.tif` (the `dprst` step's
+            output, uint8, 1 = dprst), aligned to `template_path`.
         out_tif: output path for `dprst_depth.tif`.
         logger: logger for progress/summary messages.
 
@@ -101,8 +119,8 @@ def burn_depth(
     Raises:
         KeyError: if `dprst_gdf_with_depth` lacks `dprst_depth_m`.
         ValueError: if any depth is non-positive/non-finite, if the
-            GeoDataFrame has no CRS, or if `land_mask_path` isn't aligned to
-            the template grid.
+            GeoDataFrame has no CRS, or if `land_mask_path`/`dprst_mask_path`
+            isn't aligned to the template grid.
     """
     if "dprst_depth_m" not in dprst_gdf_with_depth.columns:
         raise KeyError("burn_depth: dprst_gdf_with_depth missing 'dprst_depth_m'")
@@ -133,18 +151,28 @@ def burn_depth(
 
     n_dropped = len(gdf) - len(valid)
     if n_dropped:
-        logger.warning(
-            "burn_depth: dropping %d row(s) with null/empty geometry or null depth",
-            n_dropped,
-        )
+        dropped = gdf.loc[~gdf.index.isin(valid.index)]
+        if "COMID" in dropped.columns:
+            sample = dropped["COMID"].head(20).tolist()
+            logger.warning(
+                "burn_depth: dropping %d row(s) with null/empty geometry or null depth "
+                "(first %d COMIDs: %s)",
+                n_dropped, len(sample), sample,
+            )
+        else:
+            logger.warning(
+                "burn_depth: dropping %d row(s) with null/empty geometry or null depth",
+                n_dropped,
+            )
 
     sindex = valid.sindex if len(valid) else None
 
     profile = _depth_profile(info)
     total_burned = 0
 
-    with rasterio.open(land_mask_path) as lm_src:
+    with rasterio.open(land_mask_path) as lm_src, rasterio.open(dprst_mask_path) as dprst_src:
         assert_raster_aligned(lm_src, info, "land_mask")
+        assert_raster_aligned(dprst_src, info, "dprst_mask")
 
         with rasterio.open(out_tif, "w", **profile) as dst:
             for row_off in range(0, info.height, STRIP_ROWS):
@@ -153,6 +181,8 @@ def burn_depth(
                 win_transform = rasterio.windows.transform(window, info.transform)
 
                 land_valid = lm_src.read(1, window=window) == 1
+                dprst_valid = dprst_src.read(1, window=window) == 1
+                keep = land_valid & dprst_valid
 
                 strip = np.full((h, info.width), DEPTH_NODATA, dtype=np.float32)
 
@@ -174,7 +204,7 @@ def burn_depth(
                             all_touched=False,
                         )
 
-                strip = np.where(land_valid, strip, DEPTH_NODATA).astype(np.float32, copy=False)
+                strip = np.where(keep, strip, DEPTH_NODATA).astype(np.float32, copy=False)
                 dst.write(strip, 1, window=window)
                 total_burned += int((strip != DEPTH_NODATA).sum())
 

@@ -12,7 +12,7 @@ def _L():
     return logging.getLogger("test_dprst_depth_burn")
 
 
-def _write_template_and_landmask(tmp_path, land_arr=None):
+def _write_template_and_landmask(tmp_path, land_arr=None, dprst_arr=None):
     tr = rasterio.transform.from_origin(0, 10, 1, 1)
     tmpl = tmp_path / "tmpl.tif"
     with rasterio.open(
@@ -29,15 +29,27 @@ def _write_template_and_landmask(tmp_path, land_arr=None):
         dtype="uint8", crs="EPSG:5070", transform=tr, nodata=0,
     ) as d:
         d.write(land_arr, 1)
-    return tmpl, lm
+
+    # dprst_binary.tif convention (depstor_builders/dprst.py): 1 = dprst.
+    # Default to "every cell is dprst" so existing tests (which only exercise
+    # the land-mask gate) are unaffected by the new dprst-mask gate.
+    dm = tmp_path / "dprst_binary.tif"
+    if dprst_arr is None:
+        dprst_arr = np.ones((10, 10), np.uint8)
+    with rasterio.open(
+        dm, "w", driver="GTiff", height=10, width=10, count=1,
+        dtype="uint8", crs="EPSG:5070", transform=tr, nodata=255,
+    ) as d:
+        d.write(dprst_arr, 1)
+    return tmpl, lm, dm
 
 
 def test_burn_depth_writes_polygon_values(tmp_path):
     # 10x10 template, 1 m cells; one polygon depth 2.0 over a 4x4 block
-    tmpl, lm = _write_template_and_landmask(tmp_path)
+    tmpl, lm, dm = _write_template_and_landmask(tmp_path)
     g = gpd.GeoDataFrame({"dprst_depth_m": [2.0]}, geometry=[box(2, 2, 6, 6)], crs="EPSG:5070")
     out = tmp_path / "dprst_depth.tif"
-    burn_depth(g, str(tmpl), str(lm), str(out), logger=_L())
+    burn_depth(g, str(tmpl), str(lm), str(dm), str(out), logger=_L())
     with rasterio.open(out) as d:
         a = d.read(1)
         nodata = d.nodata
@@ -45,10 +57,10 @@ def test_burn_depth_writes_polygon_values(tmp_path):
 
 
 def test_burn_depth_output_aligned_to_template(tmp_path):
-    tmpl, lm = _write_template_and_landmask(tmp_path)
+    tmpl, lm, dm = _write_template_and_landmask(tmp_path)
     g = gpd.GeoDataFrame({"dprst_depth_m": [1.5]}, geometry=[box(0, 0, 3, 3)], crs="EPSG:5070")
     out = tmp_path / "dprst_depth.tif"
-    burn_depth(g, str(tmpl), str(lm), str(out), logger=_L())
+    burn_depth(g, str(tmpl), str(lm), str(dm), str(out), logger=_L())
     with rasterio.open(tmpl) as t, rasterio.open(out) as d:
         assert d.width == t.width
         assert d.height == t.height
@@ -61,10 +73,10 @@ def test_burn_depth_output_aligned_to_template(tmp_path):
 def test_burn_depth_masks_to_land(tmp_path):
     # Land mask excludes the whole grid -> no burned cells should survive.
     land_arr = np.zeros((10, 10), np.uint8)
-    tmpl, lm = _write_template_and_landmask(tmp_path, land_arr=land_arr)
+    tmpl, lm, dm = _write_template_and_landmask(tmp_path, land_arr=land_arr)
     g = gpd.GeoDataFrame({"dprst_depth_m": [2.0]}, geometry=[box(2, 2, 6, 6)], crs="EPSG:5070")
     out = tmp_path / "dprst_depth.tif"
-    burn_depth(g, str(tmpl), str(lm), str(out), logger=_L())
+    burn_depth(g, str(tmpl), str(lm), str(dm), str(out), logger=_L())
     with rasterio.open(out) as d:
         a = d.read(1)
         nodata = d.nodata
@@ -78,10 +90,10 @@ def test_burn_depth_streams_by_strips_no_full_grid(tmp_path, monkeypatch):
     import gfv2_params.dprst_depth.burn as burn_mod
     monkeypatch.setattr(burn_mod, "STRIP_ROWS", 3)
 
-    tmpl, lm = _write_template_and_landmask(tmp_path)
+    tmpl, lm, dm = _write_template_and_landmask(tmp_path)
     g = gpd.GeoDataFrame({"dprst_depth_m": [3.0]}, geometry=[box(1, 1, 9, 9)], crs="EPSG:5070")
     out = tmp_path / "dprst_depth.tif"
-    burn_depth(g, str(tmpl), str(lm), str(out), logger=_L())
+    burn_depth(g, str(tmpl), str(lm), str(dm), str(out), logger=_L())
     with rasterio.open(out) as d:
         a = d.read(1)
         nodata = d.nodata
@@ -98,12 +110,12 @@ def test_burn_depth_streams_by_strips_no_full_grid(tmp_path, monkeypatch):
 
 
 def test_burn_depth_rejects_non_positive_depth(tmp_path):
-    tmpl, lm = _write_template_and_landmask(tmp_path)
+    tmpl, lm, dm = _write_template_and_landmask(tmp_path)
     g = gpd.GeoDataFrame({"dprst_depth_m": [0.0]}, geometry=[box(2, 2, 6, 6)], crs="EPSG:5070")
     out = tmp_path / "dprst_depth.tif"
     import pytest
     with pytest.raises(ValueError):
-        burn_depth(g, str(tmpl), str(lm), str(out), logger=_L())
+        burn_depth(g, str(tmpl), str(lm), str(dm), str(out), logger=_L())
 
 
 def test_strip_rows_module_constant_is_sane():
