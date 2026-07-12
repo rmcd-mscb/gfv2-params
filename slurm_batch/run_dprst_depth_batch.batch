@@ -4,7 +4,7 @@
 #SBATCH --job-name=dprst_depth_batch
 #SBATCH --output=logs/job_%A_%a.out
 #SBATCH --error=logs/job_%A_%a.err
-#SBATCH --time=04:00:00
+#SBATCH --time=12:00:00
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=2
 #SBATCH --mem=64G
@@ -20,7 +20,7 @@
 # polygon set in memory (compute.run_batch's own internal group_by_tile
 # recompute needs it) plus one open tile VRT window at a time -- a vector
 # GeoDataFrame + a single windowed raster read, not CONUS-grid-scale
-# (contrast the 384G full-grid depstor builders). --time=04:00:00 leaves
+# (contrast the 384G full-grid depstor builders). --time=12:00:00 (the pothole-belt mega-component batch runs >4h; a few long-pole batches need the headroom — the guard fixed OOM but not the intrinsic long-pole) leaves
 # margin under the 5 hr target even at 2x the per-batch estimate.
 #
 # Submitted by slurm_batch/submit_dprst_depth.sh (afterok the plan job,
