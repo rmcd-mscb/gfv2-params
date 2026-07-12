@@ -118,3 +118,34 @@ Two minor residuals (both handled; output valid, max = 300, no NaN):
 The calibrated-Hollister evaluation across Oregon's ecoregions is inconclusive on
 its own (1 win in a small fabric); CONUS's many ecoregions are where it gets a real
 test — this run confirms the *mechanism* fires correctly.
+
+## CONUS run (2026-07-12, contract-correct, all PR#177 fixes)
+
+Full CONUS `gfv2` run completed (3 pothole-belt long-pole batches took 5–8 h at the
+bumped 12 h wall limit; no OOM — the giant-window guard held; 147/150 batches ran
+in the first pass). Output: `gfv2/params/merged/nhm_dprst_depth_avg_params.csv`.
+
+- **361,471 HRUs; 0 NaN, 0 ≤ 0, max = 300.0 in (cap held).** dprst-bearing HRUs
+  (n = 78,620): **median 10.7 in**, p90 53.7 in. Shallower than the NHM *calibrated*
+  median (49 in) but within the 10–300 range and same order of magnitude — expected,
+  since ours is *measured* topographic depth (shallow potholes/wetlands) and theirs is
+  fitted to a runoff proxy.
+- **Method mix (per polygon, n = 279,391):** measured 249,278 (89.2%), regional_fill
+  19,975, **calibrated_hollister 9,328 (3.3%)**, measured_capped 810. Calibrated-Hollister
+  won its per-ecoregion CV comparison in ~1,943 HRUs across CONUS — the calibration idea
+  earns its place where the data supports it, at national scale.
+- **PR #177 fixes confirmed at scale:** `dprst_depth ⊆ dprst_binary` (burn masked); the
+  300 in cap fired on 810 polygons; the giant-window guard retagged 30; the narrowed
+  `except` produced **zero `n_compute_error`**; the parquet dedup dropped 83 overlapping
+  COMIDs; 1,611 unassigned-ecoregion polygons logged.
+
+### Follow-up surfaced by the new achieved-resolution gate
+The resolution-logging fix (PR #177) fired: **achieved 1 m coverage 58.6% (163,665/279,391)
+vs tagged-1 m 98.7%.** This is *not* a regression — the WESM 1 m footprint index is
+convex-hull-simplified (a documented upper bound; see the spike's coverage caveat), so
+many "1 m-tagged" polygons legitimately fall back to 10 m at read time where no actual
+1 m tile exists. 58.6% is closer to the *true* 1 m coverage. Two cheap follow-ups: (a)
+relax the gate's 20 pp threshold or compare against a realistic (non-upper-bound)
+expectation so it doesn't false-alarm; (b) optionally tighten the WESM footprint (drop the
+convex-hull) so `best_topo` tagging matches achievable coverage. The 10 m fallback depths
+are valid; this only means ~40% of polygons are coarser-resolved than the optimistic tag implied.
