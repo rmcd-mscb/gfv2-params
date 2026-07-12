@@ -35,7 +35,7 @@ class BuildContext:
     # --- dprst_depth (#173) inputs -----------------------------------------
     # Pre-staged, already 1m/QL1/QL2-filtered WESM workunit footprint index
     # (columns: at least "project" + geometry) — see
-    # scripts/diagnose/dprst_depth_probe.py's `ensure_wesm_local` /
+    # gfv2_params.dprst_depth.wesm_io's `ensure_wesm_local` /
     # `load_wesm_1m_footprints` for the download + filtering this path is
     # expected to already reflect. `topo.resolution_class` reads it directly.
     wesm_index: Path | None = None

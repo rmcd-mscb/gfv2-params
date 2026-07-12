@@ -23,9 +23,11 @@
 # CONUS has ~286k dprst polygons; reading a windowed DEM per polygon serially
 # costs ~250-500 core-hours (Task 3/9 design doc). The fan-out unit is the
 # elevation TILE, not the polygon: tiling.component_tile_batches bins the
-# tile -> polygon work-list into N_TILE_BATCHES roughly-equal-polygon-load
-# SLURM array tasks (greedy LPT bin-packing, connected-component-safe so a
-# polygon spanning >1 tile is never split across batches). With
+# tile -> polygon work-list into N_TILE_BATCHES roughly-equal-COST SLURM
+# array tasks (greedy LPT bin-packing weighted by estimated DEM-window-read
+# cost, not raw polygon count -- ~100x weight for 1m vs 10m polygons; see
+# tiling.polygon_window_cost / MAX_1M_WINDOW_CELLS -- connected-component-safe
+# so a polygon spanning >1 tile is never split across batches). With
 # N_TILE_BATCHES array tasks running CONCURRENTLY:
 #
 #     wall-clock (stage 2) ~= (250-500 core-hours) / N_TILE_BATCHES
@@ -47,8 +49,9 @@
 #   pixi run python -m gfv2_params.dprst_depth.tiling --plan \
 #       --fabric <fabric> --n-batches <N_TILE_BATCHES>
 #
-# It prints the per-batch polygon-load balance and the same core-hour ->
-# wall-clock projection as above, flagging if the projection exceeds 5 hr.
+# It prints the per-batch cost-load balance (estimated DEM-window-read cost,
+# not raw polygon count) and the same core-hour -> wall-clock projection as
+# above, flagging if the projection exceeds 5 hr.
 # -----------------------------------------------------------------------------
 
 set -euo pipefail

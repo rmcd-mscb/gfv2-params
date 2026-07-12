@@ -11,16 +11,24 @@ design doc:
      the fabric's HRU extent (`dprst_depth.topo.load_fabric_dprst_polygons`
      — the same reconstruction as `dprst_depth.topo.dprst_polygons` plus the
      fabric-bounds clip, `topo._clip_dprst_to_fabric`, so a regional fabric
-     doesn't reprocess the whole CONUS dprst set). This does NOT read
-     `dprst_binary.tif`; STEP_ORDER still places this step after `dprst`
-     (for classification-consistency and convention) and after `landmask`/
-     `hru_id`, but the runtime data dependency is `waterbody_gpkg` +
-     `connected_comids_table` (+ optional `flowthrough_comids_table`) +
-     `hru_gpkg`, not the raster.
-  2. Tag `best_topo` (`topo.resolution_class`, needs `wesm_index`),
-     `ecoregion` (`download.epa_ecoregions.ecoregion_of`, needs
-     `ecoregions_gpkg`), and `ftype` (the `FTYPE` column, aliased lowercase
-     to match `fill.py`'s column convention).
+     doesn't reprocess the whole CONUS dprst set). This reconstruction step
+     alone does NOT read `dprst_binary.tif` — its data dependency is
+     `waterbody_gpkg` + `connected_comids_table` (+ optional
+     `flowthrough_comids_table`) + `hru_gpkg`, not the raster. STEP_ORDER
+     places the overall `dprst_depth` step after `dprst` (for
+     classification-consistency and convention) and after `landmask`/
+     `hru_id`; since the e596de0 correctness fix, that ordering is also a
+     real runtime data dependency for the whole step, not just convention —
+     step 5's burn reads `dprst_binary.tif` directly (`ctx.require("dprst")`)
+     as a mask.
+  2. Tag `best_topo` (`topo.resolution_class`, needs `wesm_index`), then
+     retag any oversized 1m polygon to 10m (`tiling.guard_oversized_windows`
+     — a polygon whose 1m rim-buffered window would be enormous, e.g. a
+     giant lake's bbox, is downgraded before anything downstream ever reads
+     its window; the CONUS load-balance/OOM fix), then tag `ecoregion`
+     (`download.epa_ecoregions.ecoregion_of`, needs `ecoregions_gpkg`), and
+     `ftype` (the `FTYPE` column, aliased lowercase to match `fill.py`'s
+     column convention).
   3. Compute per-polygon depth stats — TWO paths, chosen by whether a
      per-batch parquet dir exists and is non-empty:
        - CONUS: load + concat the SLURM array's per-tile-batch parquets
@@ -31,8 +39,13 @@ design doc:
   4. Fill every flat/degenerate row (`fill.fit_ecoregion_models` +
      `fill.fill_flat`) so every polygon has a finite, positive
      `dprst_depth_m`.
-  5. Burn per-polygon depth onto the template grid, masked to
-     `land_mask.tif` (`burn.burn_depth`).
+  5. Burn per-polygon depth onto the template grid, gated on BOTH
+     `land_mask.tif` AND the shipped `dprst_binary.tif` (`ctx.require
+     ("dprst")`) (`burn.burn_depth`) — the intersection of both masks makes
+     `dprst_depth.tif` a cell subset of `dprst_binary.tif`'s dprst cells BY
+     CONSTRUCTION, so `dprst_depth_avg` stays consistent with `dprst_frac`
+     even though this module's per-polygon COMID reconstruction doesn't
+     reproduce `dprst.py`'s raster CLUMP semantics.
   6. Emit the PRMS `op_flow_thres` constant (always 1.0 — the ArcPy
      convention, `docs/0b_TB_depr_stor.py:994`) as a per-HRU CSV. No
      generic constant-scalar-param writer exists elsewhere in this repo

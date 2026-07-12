@@ -14,8 +14,10 @@
 # L3 -- same reconstruction depstor_builders/dprst_depth.py's builder uses),
 # builds the tile -> polygon work-list (tiling.group_by_tile), and bins it
 # into N_TILE_BATCHES SLURM-array batches (tiling.component_tile_batches --
-# greedy LPT bin-packing by polygon count, connected-component-safe so a
-# polygon spanning >1 tile never gets its tiles split across batches).
+# greedy LPT bin-packing by estimated DEM-window-read COST (~100x weight for
+# 1m vs 10m polygons; see tiling.polygon_window_cost / MAX_1M_WINDOW_CELLS),
+# not raw polygon count, connected-component-safe so a polygon spanning >1
+# tile never gets its tiles split across batches).
 # Persists both to {output_dir}/dprst_depth_batches/_plan/ for
 # run_dprst_depth_batch.batch's array tasks to read. Pure geometry + local
 # vector reads -- NO live S3/vsicurl (tile existence is a compute-time

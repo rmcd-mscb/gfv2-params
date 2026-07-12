@@ -53,8 +53,9 @@ fabrics:
     flowthrough_comids_table: "{data_root}/input/nhd/flowthrough_waterbody_comids.parquet"
     # EPA Level III Ecoregions (shared CONUS input, see
     # gfv2_params.download.epa_ecoregions). The dprst_depth builder (#173)
-    # joins dprst polygons to a region by centroid for the freeboard/Hollister
-    # terrain-slope bathymetry regression.
+    # joins dprst polygons to a region by centroid for the per-ecoregion
+    # regional-fill of dprst depth (median null / CV-selected
+    # calibrated-Hollister — see dprst_depth.fill).
     ecoregions_gpkg: "{data_root}/input/ecoregions/us_eco_l3.gpkg"
     # Pre-staged, 1m/QL1/QL2-filtered WESM (Work Extent Spatial Metadata) 3DEP
     # workunit footprint index — a "project" column + geometry. Stage with

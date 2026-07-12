@@ -3,7 +3,8 @@
 Reusable across parameterizations; not fabric-specific. Ecoregions provide the
 geoclimatic stratification the `dprst_depth` builder (issue #173) uses to join
 depression-storage polygons to a physiographic region by centroid, feeding the
-freeboard/Hollister terrain-slope bathymetry regression.
+per-ecoregion regional-fill of dprst depth (median null / CV-selected
+calibrated-Hollister — see dprst_depth.fill).
 
 Source: EPA's public S3-hosted ecoregion archive (reachable over HTTPS from
 this HPC; the epa.gov host itself is not verified reachable):

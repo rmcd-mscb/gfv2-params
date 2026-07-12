@@ -491,8 +491,10 @@ already staged for `gfv2`/`gfv2_dev`/`oregon`/`tjc` in
    via EPA L3), builds the tile → polygon work-list
    (`tiling.group_by_tile`), and bins it into `N_TILE_BATCHES`
    SLURM-array batches (`tiling.component_tile_batches` — greedy
-   longest-processing-time bin-packing by polygon count, connected-component
-   safe so a polygon spanning >1 tile is never split across batches).
+   longest-processing-time bin-packing by estimated DEM-window-read COST
+   (`tiling.polygon_window_cost`/`MAX_1M_WINDOW_CELLS`, ~100x weight for 1m
+   vs 10m polygons), not raw polygon count, connected-component safe so a
+   polygon spanning >1 tile is never split across batches).
    Writes `{fabric}/depstor_rasters/dprst_depth_batches/_plan/
    {dprst_polygons_tagged.parquet, batch_manifest.json}`. Pure geometry +
    local vector reads — no live S3/vsicurl.

@@ -1768,7 +1768,7 @@ def main() -> None:
             "multi-part workunit footprints are collapsed to their convex hull "
             "before the best_topo spatial join, which can only OVERSTATE 1m "
             "coverage, never understate it. True 1m coverage may be lower. See "
-            "load_wesm_1m_footprints() in dprst_depth_probe.py.\n"
+            "load_wesm_1m_footprints() in gfv2_params.dprst_depth.wesm_io.\n"
         )
         with open(out_csv, "w") as f:
             f.write(caveat)

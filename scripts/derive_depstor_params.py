@@ -19,8 +19,9 @@ Five modes:
         Concat the mean_zonal batch CSVs and finalize units/floor/provenance
         via gfv2_params.dprst_depth.aggregate.finalize_depth_params().
 
-The slurm wrapper slurm_batch/submit_depstor_params.sh chains these modes
-into a single afterok DAG.
+The slurm wrapper slurm_batch/submit_depstor_params.sh chains the
+zonal/merge/ratios modes into a single afterok DAG; mean_zonal/mean_finalize
+are chained separately by slurm_batch/submit_dprst_depth.sh.
 """
 
 import argparse
