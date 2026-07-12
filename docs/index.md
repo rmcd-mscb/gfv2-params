@@ -32,6 +32,8 @@ USGS HPC cluster.
   the depstor-pipeline consolidation (PR #72).
 - [VPU 01 validation](depstor_vpu01_validation_results.md) — pipeline
   validation results on the VPU 01 small-scale target.
+- [dprst_depth Phase 0 spike](dprst_depth_spike.md) — issue #173 go/no-go
+  investigation into deriving `dprst_depth_avg` from 3DEP topography.
 
 ## API reference
 

@@ -103,5 +103,6 @@ nav:
       - Depstor workflow: depstor_workflow.md
       - Depstor port summary: depstor_port_summary.md
       - VPU 01 validation: depstor_vpu01_validation_results.md
+      - dprst_depth Phase 0 spike (#173): dprst_depth_spike.md
   - API reference: api.md
   - Project conventions: conventions.md

@@ -1,0 +1,6 @@
+# ND Prairie Pothole flatness validation (issue #173 Task 4). Project=ND_3DEPProcessing_D22. Per-polygon sample: SwampMarsh=300, LakePond=300, Playa=1, Reservoir=130. flat = interior elevation range < 0.01 m (is_hydroflattened tol_m).
+FTYPE,n_sampled,n_flat,pct_flat,range_median,range_p90,std_median,n_unique_median,pct_1m
+LakePond,300,33,11.0,1.2824859619140625,3.8068847656250027,0.16624009857806932,919.0,100.0
+Playa,1,0,0.0,3.55401611328125,3.55401611328125,0.3800832730342949,2846.0,100.0
+Reservoir,130,7,5.384615384615385,2.3954925537109375,5.7611083984375,0.35081937685933207,1682.5,100.0
+SwampMarsh,300,65,21.666666666666668,2.257476806640625,6.057263183593751,0.2104651955010537,1727.0,100.0
