@@ -375,8 +375,13 @@ rejected; never substitute it.
 - `imperv_source` in `configs/depstor/depstor_rasters.yml` — NLCD fractional-impervious raster.
 
 **DAG order:** landmask → imperv / wbody_connectivity / waterbody → dprst → perv →
-vpu_id → routing → drains_perv / drains_imperv → carea_map. Selective re-runs
-via `--step <name>` or `--from <name>` passed through to the Python script.
+hru_id → dprst_depth → vpu_id → routing → routing_hru → drains_perv / drains_imperv →
+carea_map. Selective re-runs via `--step <name>` or `--from <name>` passed
+through to the Python script. `dprst_depth` (issue #173) is a CONUS-scale
+compute outlier in this DAG — see "Stage 2d'" below; it needs its own SLURM
+array run **before** a full unfiltered `build_depstor_rasters.batch`, or that
+job will attempt an unbounded in-process fallback compute at the `dprst_depth`
+step.
 
 **On-stream staging.** The `wbody_connectivity` builder unions two COMID
 parquets: `connected_waterbody_comids.parquet` (WBAREACOMI, from
@@ -453,6 +458,117 @@ FABRIC=gfv2_vpu01 sbatch --time=02:00:00 --mem=48G \
 # Resume from a specific step (e.g. after a routing crash):
 sbatch slurm_batch/build_depstor_rasters.batch --from routing --force
 ```
+
+---
+
+### Stage 2d' — `dprst_depth` (issue #173): its own SLURM array
+
+`dprst_depth` produces `dprst_depth.tif` + `op_flow_thres_params.csv`
+(`{fabric}/depstor_rasters/`) and, via a second driver, the per-HRU
+`nhm_dprst_depth_avg_params.csv` (`{fabric}/params/merged/`). Unlike every
+other depstor step, its cost scales with the ~286k CONUS dprst **polygons**
+(one windowed DEM read each, ~250-500 core-hours run serially), not the
+CONUS grid — see `docs/ARCHITECTURE.md`'s "CONUS-scale COMPUTE" gotcha.
+Run **before** `build_depstor_rasters.batch`'s unfiltered walk reaches
+`dprst_depth` in the DAG order (Stage 2d above), or that job attempts the
+in-process fallback, which for CONUS is effectively unbounded wall-clock on
+one core.
+
+**Inputs (per-fabric profile, in addition to Stage 2d's):** `wesm_index`
+(pre-staged 1m/QL1/QL2 WESM workunit footprints — `pixi run python -m
+gfv2_params.download.wesm`) and `ecoregions_gpkg` (EPA L3 Ecoregions —
+`pixi run python -m gfv2_params.download.epa_ecoregions`, Stage 0). Both are
+already staged for `gfv2`/`gfv2_dev`/`oregon`/`tjc` in
+`configs/base_config.yml`; `gfv2_vpu01` has neither (same reason it lacks
+`connected_comids_table` — its `wbs` waterbody layer has no COMID).
+
+**The 4-stage DAG (`slurm_batch/submit_dprst_depth.sh`):**
+
+1. **Plan** (`plan_dprst_depth_batches.batch`, 1 task) — reconstructs the
+   CONUS dprst polygon set, **clips it to the fabric's HRU extent** (same
+   shared `topo.load_fabric_dprst_polygons` the builder uses — see the
+   "Fabric clip" note below), tags it (`best_topo` via WESM, `ecoregion`
+   via EPA L3), builds the tile → polygon work-list
+   (`tiling.group_by_tile`), and bins it into `N_TILE_BATCHES`
+   SLURM-array batches (`tiling.component_tile_batches` — greedy
+   longest-processing-time bin-packing by estimated DEM-window-read COST
+   (`tiling.polygon_window_cost`/`MAX_1M_WINDOW_CELLS`, ~100x weight for 1m
+   vs 10m polygons), not raw polygon count, connected-component safe so a
+   polygon spanning >1 tile is never split across batches).
+   Writes `{fabric}/depstor_rasters/dprst_depth_batches/_plan/
+   {dprst_polygons_tagged.parquet, batch_manifest.json}`. Pure geometry +
+   local vector reads — no live S3/vsicurl.
+2. **Array** (`run_dprst_depth_batch.batch`, `0..N_TILE_BATCHES-1`, afterok
+   the plan) — one array task computes `dprst_depth` for ONE tile-batch
+   (`scripts/run_dprst_depth_batch.py` → `dprst_depth.compute.run_batch`),
+   writing `dprst_depth_batches/batch_XXXX.parquet`. **Deliberately not
+   concurrency-throttled** — the ≤5 hr CONUS target only holds if
+   `N_TILE_BATCHES` tasks actually run concurrently (see sizing below).
+3. **Build** (reuses `build_depstor_rasters.batch --step dprst_depth`,
+   afterok the array, `--mem=64G --time=02:00:00` override — dprst_depth's
+   own compute is vector-scale + a streamed row-strip burn, not a
+   full-CONUS-grid materialization, so it doesn't need the 384G/18h whole-DAG
+   default) — finds the populated `dprst_depth_batches/*.parquet`, fills
+   every flat/degenerate polygon (`fit_ecoregion_models`/`fill_flat`), burns
+   `dprst_depth.tif`, and writes `op_flow_thres_params.csv` +
+   `dprst_depth_polygons.parquet` (the per-polygon fill-method provenance
+   companion, Task 8).
+4. **Mean zonal + finalize** (`mean_zonal_dprst_depth.batch` array over the
+   fabric's HRU batches, afterok the build; then
+   `mean_finalize_dprst_depth.batch`, afterok the array) —
+   `derive_depstor_params.py --mode mean_zonal`/`mean_finalize --mean
+   dprst_depth_avg`: per-HRU exactextract MEAN of `dprst_depth.tif`, metres
+   → inches, floor every zero-dprst-cell HRU at the NHM calibrated median
+   (49 in, never NaN), join area-weighted dominant fill-method provenance →
+   `{fabric}/params/merged/nhm_dprst_depth_avg_params.csv`. No ratio step
+   (a mean needs no numerator/denominator, unlike the fraction params).
+
+```bash
+BATCHES={data_root}/{fabric}/batches   # HRU batch manifest — drives stage 4
+slurm_batch/submit_dprst_depth.sh "$BATCHES" gfv2 configs/base_config.yml 150
+```
+
+**Sizing (≤5 hr CONUS target, stages 1-2):** `N_TILE_BATCHES` (4th positional
+arg, default 150) trades array width for wall-clock:
+`wall-clock ≈ (250-500 core-hours) / N_TILE_BATCHES` — 150 batches ≈
+1.7-3.3 hr, comfortable margin under 5 hr even with imperfect load balance.
+Dry-run the exact per-batch balance and projected wall-clock for a candidate
+`N_TILE_BATCHES` before submitting (pure geometry — no live S3; safe on the
+head node for a small fabric, but see the note below about `oregon`):
+
+```bash
+pixi run python -m gfv2_params.dprst_depth.tiling --plan \
+    --fabric gfv2 --n-batches 150
+```
+
+> **Fabric clip.** Every fabric profile's `waterbody_gpkg` points at the
+> shared CONUS `conus_waterbodies.gpkg`, so the dprst polygon set is
+> reconstructed CONUS-wide (~321k polygons) and then **clipped to the
+> fabric's HRU extent** (`topo.load_fabric_dprst_polygons` →
+> `_clip_dprst_to_fabric`: HRU-bbox prefilter + `sjoin(predicate="intersects")`
+> against the HRU polygons) — the SAME shared helper both the plan hook and
+> the builder call, so the two can't diverge. A regional fabric therefore
+> plans/processes only its own dprst polygons (e.g. `oregon` → ~3,100, not
+> 321k; the plan runs in ~8-15 s), while `gfv2` (whose HRU extent IS CONUS)
+> correctly keeps essentially all of them. The plan's projected wall-clock
+> scales the CONUS core-hour estimate by the fabric's actual polygon count,
+> so a regional dry run reports a sane sub-hour projection rather than
+> inheriting the CONUS figure.
+
+**Recovery:**
+
+- A failed/timed-out array task (stage 2) only owns its own
+  `batch_XXXX.parquet` — resubmit just that index:
+  `sbatch --array=<idx> --export=ALL,BASE_CONFIG=...,FABRIC=... slurm_batch/run_dprst_depth_batch.batch`.
+- Re-running the plan step (stage 1) is idempotent and cheap relative to the
+  array — it only rewrites `_plan/*`, never touches the per-batch parquets.
+- If `dprst_depth.tif`/`op_flow_thres_params.csv` need a full rebuild (e.g.
+  after a WESM/ecoregion re-stage), pass `--force`:
+  `sbatch slurm_batch/build_depstor_rasters.batch --step dprst_depth --force`
+  (re-run stages 1-2 first if the polygon set itself changed).
+- `mean_zonal`/`mean_finalize` (stage 4) only depend on `dprst_depth.tif`
+  already existing — safe to re-run standalone any time after stage 3
+  completes, without re-running stages 1-3.
 
 ---
 
@@ -596,7 +712,13 @@ merge (+ ratios) jobs, chained via `afterok`:
 ```bash
 slurm_batch/submit_zonal_params.sh   $BATCHES $FABRIC $BASE_CONFIG   # all 10 zonal params
 slurm_batch/submit_depstor_params.sh $BATCHES $FABRIC $BASE_CONFIG   # 10 fractions + ratios
+slurm_batch/submit_dprst_depth.sh    $BATCHES $FABRIC $BASE_CONFIG   # dprst_depth_avg (its own array — see Stage 2d')
 ```
+
+`nhm_dprst_depth_avg_params.csv` is **not** produced by `submit_depstor_params.sh`
+— it has its own tile-batch SLURM array (a `means:` aggregation, not a
+`fractions:`/`ratios:` one) and lives entirely in `submit_dprst_depth.sh`;
+see "Stage 2d'" above for its 4-stage DAG and sizing.
 
 `submit_zonal_params.sh` auto-detects ssflux's `depends_on: build_weights`:
 submits `build_zonal_weights.batch` first and chains the ssflux array on its
@@ -973,6 +1095,7 @@ sacct -j <JOBID> -o JobID,State,Elapsed,MaxRSS
 | `slurm_batch/build_depstor_rasters.batch` | `configs/depstor/depstor_rasters.yml` | `scripts/build_depstor_rasters.py` |
 | `slurm_batch/submit_zonal_params.sh` | `configs/zonal/zonal_params.yml` | `scripts/derive_zonal_params.py` (dispatches 10 params × zonal+merge, with ssflux's `build_weights` prereq chained automatically) |
 | `slurm_batch/submit_depstor_params.sh` | `configs/depstor/depstor_params.yml` | `scripts/derive_depstor_params.py` (dispatches 10 fractions × zonal+merge, then ratios via afterok) |
+| `slurm_batch/submit_dprst_depth.sh` | `configs/depstor/depstor_rasters.yml` + `configs/depstor/depstor_params.yml` | plan → array → build → mean_zonal → mean_finalize, 5 jobs chained afterok (issue #173; see Stage 2d'). `python -m gfv2_params.dprst_depth.tiling --plan` is the dry-run/sizing hook for stage 1 |
 | `slurm_batch/submit_snarea_pipeline.sh` | (chains the 4 batches below) | one-command recipe: Stage-1 array → merge → Stage-2 derive → Stage-3 library, all `--dependency=afterok`; sizes the array from the manifest, picks Stage-2 `--mem` by fabric. `DRYRUN=1` to echo the sbatch chain |
 | `slurm_batch/derive_snodas_aggregate.batch` + `merge_snodas_aggregate.batch` | `configs/aggregate/aggregate_sources.yml` | `scripts/derive_aggregate.py --source snodas` (Stage 1: gridded-time-series → HRU aggregation via `src/gfv2_params/aggregate/`; array over spatial batches + merge) |
 | `slurm_batch/derive_snarea_curve.batch` (or run directly with `pixi run`) | `configs/snarea/snarea_curve.yml` | `scripts/derive_snarea_curve.py` (Stage 2: per-HRU empirical curve + sub-grid CV → `_intermediates/nhm_snarea_curve_derived.csv` via `src/gfv2_params/snarea/`) |
@@ -988,6 +1111,10 @@ sacct -j <JOBID> -o JobID,State,Elapsed,MaxRSS
 | `slurm_batch/create_depstor_zonal.batch` | `submit_depstor_params.sh` | `configs/depstor/depstor_params.yml` | `scripts/derive_depstor_params.py --mode zonal --fraction $FRACTION` |
 | `slurm_batch/merge_depstor_fraction.batch` | `submit_depstor_params.sh` | `configs/depstor/depstor_params.yml` | `scripts/derive_depstor_params.py --mode merge --fraction $FRACTION` |
 | `slurm_batch/derive_depstor_ratios.batch` | `submit_depstor_params.sh` | `configs/depstor/depstor_params.yml` | `scripts/derive_depstor_params.py --mode ratios` |
+| `slurm_batch/plan_dprst_depth_batches.batch` | `submit_dprst_depth.sh` | `configs/depstor/depstor_rasters.yml` | `python -m gfv2_params.dprst_depth.tiling --plan` |
+| `slurm_batch/run_dprst_depth_batch.batch` | `submit_dprst_depth.sh` | `configs/depstor/depstor_rasters.yml` | `scripts/run_dprst_depth_batch.py --batch_id $SLURM_ARRAY_TASK_ID` |
+| `slurm_batch/mean_zonal_dprst_depth.batch` | `submit_dprst_depth.sh` | `configs/depstor/depstor_params.yml` | `scripts/derive_depstor_params.py --mode mean_zonal --mean dprst_depth_avg` |
+| `slurm_batch/mean_finalize_dprst_depth.batch` | `submit_dprst_depth.sh` | `configs/depstor/depstor_params.yml` | `scripts/derive_depstor_params.py --mode mean_finalize --mean dprst_depth_avg` |
 
 ### Stage 3 / fabric-prep batches
 

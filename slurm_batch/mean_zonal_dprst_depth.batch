@@ -1,0 +1,41 @@
+#!/bin/bash
+#SBATCH -p cpu
+#SBATCH -A impd
+#SBATCH --job-name=dprst_depth_mean_zonal
+#SBATCH --output=logs/job_%A_%a.out
+#SBATCH --error=logs/job_%A_%a.err
+#SBATCH --time=02:00:00
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=2
+#SBATCH --mem=32G
+#
+# Stage 4a of the dprst_depth pipeline (issue #173 Task 8/9): array task,
+# exactextract MEAN of dprst_depth.tif over ONE HRU batch
+# (`derive_depstor_params.py --mode mean_zonal --mean dprst_depth_avg`).
+# Same array/batch_id convention and --mem as create_depstor_zonal.batch --
+# just keyed on --mean instead of --fraction (a continuous mean, always
+# categorical=false, not a binary-count fraction).
+#
+# Submitted by slurm_batch/submit_dprst_depth.sh, afterok the dprst_depth
+# fill+burn build job (stage 3). Array size is the FABRIC's HRU batch count
+# (from {fabric}/batches/manifest.yml) -- NOT the tile-batch count from
+# stages 1-2, which is a separate, unrelated batching.
+#
+# Standalone (after {output_dir}/dprst_depth.tif exists):
+#   N=$(grep '^n_batches:' "<batches_dir>/manifest.yml" | awk '{print $2}')
+#   sbatch --array=0-$((N-1))%4 \
+#       --export=ALL,BASE_CONFIG=configs/base_config.yml,FABRIC=gfv2 \
+#       slurm_batch/mean_zonal_dprst_depth.batch
+# See slurm_batch/RUNME.md Stage 4A / slurm_batch/HPC_REFERENCE.md.
+
+cd "$SLURM_SUBMIT_DIR"
+BASE_CONFIG=${BASE_CONFIG:-configs/base_config.yml}
+FABRIC=${FABRIC:-gfv2}
+
+pixi run --as-is python scripts/derive_depstor_params.py \
+    --config configs/depstor/depstor_params.yml \
+    --base_config "$BASE_CONFIG" \
+    --fabric "$FABRIC" \
+    --mode mean_zonal \
+    --mean dprst_depth_avg \
+    --batch_id "$SLURM_ARRAY_TASK_ID"

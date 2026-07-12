@@ -132,7 +132,31 @@ sbatch slurm_batch/download_rpu_rasters.batch
 sbatch slurm_batch/download_nalcms.batch
 ```
 
-Both scripts are idempotent — already-downloaded files are skipped on resubmission.
+**Download EPA Level III Ecoregions** (~28 MB) — a shared, reusable input used by
+the `dprst_depth` builder (per-ecoregion depth fill) and available to other
+parameterizations. Source:
+[us_eco_l3.zip](https://dmap-prod-oms-edc.s3.us-east-1.amazonaws.com/ORD/Ecoregions/us/us_eco_l3.zip)
+(US EPA; on AWS S3, reachable from the HPC). Level III (77 regions) is the default — larger, more robust
+per-region donor pools. A finer
+[Level IV alternative](https://dmap-prod-oms-edc.s3.us-east-1.amazonaws.com/ORD/Ecoregions/us/us_eco_l4.zip)
+is available for sensitivity testing (finer regions → sparser donors). Staged to `{data_root}/input/ecoregions/`:
+
+```bash
+pixi run python -m gfv2_params.download.epa_ecoregions --dest "$DATA_ROOT/input/ecoregions"
+```
+
+**Stage USGS 3DEP WESM 1m-footprint index** (~4 MB filtered) — the
+best-available-topography index the `dprst_depth` builder (issue #173) uses
+to pick 1 m vs. 10 m elevation source per dprst polygon. Downloads and
+caches the full WESM.gpkg (~3.6 GB) once, then filters to
+1m/QL1/QL2-qualifying workunit footprints and reprojects to EPSG:5070.
+Staged to `{data_root}/input/wesm/`:
+
+```bash
+pixi run python -m gfv2_params.download.wesm --dest "$DATA_ROOT/input/wesm"
+```
+
+All download scripts are idempotent — already-downloaded files are skipped on resubmission.
 
 **Build the CONUS shared raster store (recommended):** once the downloads
 above are complete, the entire raster preparation DAG runs from one
@@ -173,7 +197,13 @@ ways to run Part 2 (they produce identical outputs):
   BATCHES={data_root}/{fabric}/batches
   slurm_batch/submit_zonal_params.sh   $BATCHES {fabric} configs/base_config.yml
   slurm_batch/submit_depstor_params.sh $BATCHES {fabric} configs/base_config.yml
+  slurm_batch/submit_dprst_depth.sh    $BATCHES {fabric} configs/base_config.yml
   ```
+
+  `submit_dprst_depth.sh` (issue #173) must be run **before** an unfiltered
+  `build_depstor_rasters.batch`, since `dprst_depth`'s in-process fallback is
+  a ~250-500 core-hour CONUS compute — see `slurm_batch/RUNME.md` Step 3 and
+  `slurm_batch/HPC_REFERENCE.md` "Stage 2d'".
 
 See [Zonal-pass parameter pipeline](#zonal-pass-parameter-pipeline) below
 for the design notes, and `slurm_batch/HPC_REFERENCE.md` **Stage 4A/4B** for the
@@ -267,13 +297,22 @@ unified configs:
 
 - [`scripts/build_depstor_rasters.py`](scripts/build_depstor_rasters.py)
   + [`configs/depstor/depstor_rasters.yml`](configs/depstor/depstor_rasters.yml)
-  → 10-step raster DAG via
+  → 14-step raster DAG via
   [`src/gfv2_params/depstor_builders/`](src/gfv2_params/depstor_builders/).
+  One step, `dprst_depth` (issue #173), is a CONUS-scale compute outlier —
+  its cost scales with the ~286k dprst **polygons**, not the grid, so it has
+  its own SLURM array, run separately from (and before) this orchestrator's
+  unfiltered walk reaches it — see below.
 - [`scripts/derive_depstor_params.py`](scripts/derive_depstor_params.py)
   + [`configs/depstor/depstor_params.yml`](configs/depstor/depstor_params.yml)
-  → 10 fractions + 6 PRMS Level-5 ratios. The slurm wrapper
+  → 10 fractions + 6 PRMS Level-5 ratios, plus the `dprst_depth_avg` mean.
+  The slurm wrapper
   [`slurm_batch/submit_depstor_params.sh`](slurm_batch/submit_depstor_params.sh)
-  chains 10 zonal arrays → 10 merges → 1 ratios job via `afterok`.
+  chains 10 zonal arrays → 10 merges → 1 ratios job via `afterok`;
+  [`slurm_batch/submit_dprst_depth.sh`](slurm_batch/submit_dprst_depth.sh)
+  drives `dprst_depth` end-to-end on its own (tile-batch array → raster
+  fill+burn → per-HRU mean → `nhm_dprst_depth_avg_params.csv`) — see
+  `slurm_batch/HPC_REFERENCE.md` "Stage 2d'" for the full DAG and sizing.
 
 See [`docs/depstor_workflow.md`](docs/depstor_workflow.md) and
 [`docs/depstor_port_summary.md`](docs/depstor_port_summary.md) for the

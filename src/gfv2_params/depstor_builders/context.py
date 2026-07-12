@@ -32,6 +32,24 @@ class BuildContext:
     twi_raster: Path | None = None
     vpu: str | None = None  # single-VPU fabric's VPU label (e.g. "17"); None = use fabric `vpu` attr
     imperv_source: Path | None = None
+    # --- dprst_depth (#173) inputs -----------------------------------------
+    # Pre-staged, already 1m/QL1/QL2-filtered WESM workunit footprint index
+    # (columns: at least "project" + geometry) — see
+    # gfv2_params.dprst_depth.wesm_io's `ensure_wesm_local` /
+    # `load_wesm_1m_footprints` for the download + filtering this path is
+    # expected to already reflect. `topo.resolution_class` reads it directly.
+    wesm_index: Path | None = None
+    # EPA Level III Ecoregions (see gfv2_params.download.epa_ecoregions) —
+    # already staged in every fabric profile in base_config.yml.
+    ecoregions_gpkg: Path | None = None
+    # Constant-floor fallback for a flat/degenerate dprst polygon with no
+    # trustworthy donor group (fill.fill_flat's floor_in, inches — 49 in is
+    # the NHM calibrated dprst_depth_avg median).
+    dprst_depth_floor_in: float = 49.0
+    # Minimum donor count per (ecoregion, FTYPE) group before fill.
+    # fit_ecoregion_models attempts a CV-compared calibrated-Hollister fit
+    # (fill.N_MIN_DEFAULT).
+    dprst_hollister_n_min: int = 5
     paths: dict[str, Path] = field(default_factory=dict)
     force: bool = False
 

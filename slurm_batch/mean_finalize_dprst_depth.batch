@@ -1,0 +1,45 @@
+#!/bin/bash
+#SBATCH -p cpu
+#SBATCH -A impd
+#SBATCH --job-name=dprst_depth_mean_finalize
+#SBATCH --output=logs/job_%j.out
+#SBATCH --error=logs/job_%j.err
+#SBATCH --time=02:00:00
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=2
+#SBATCH --mem=64G
+#
+# Stage 4b of the dprst_depth pipeline (issue #173 Task 8/9): merges the
+# per-HRU-batch mean-zonal CSVs, converts metres -> inches, floors every
+# zero-dprst-cell HRU at the NHM calibrated median (never NaN), and joins
+# the area-weighted dominant fill-method provenance column
+# (`derive_depstor_params.py --mode mean_finalize --mean dprst_depth_avg`) ->
+# {output_dir}/merged/nhm_dprst_depth_avg_params.csv. No ratio step (unlike
+# the fraction params) -- a mean needs no numerator/denominator.
+#
+# Submitted by slurm_batch/submit_dprst_depth.sh, afterok the mean_zonal
+# array (stage 4a) -- the final job in the dprst_depth DAG.
+#
+# --mem=64G --time=02:00:00 (#173 PR#177 review FIX 4c): when `provenance_source`
+# is configured, this step runs `aggregate.area_weighted_provenance`'s
+# `gpd.overlay` (intersection) between the dprst polygon set and the FULL HRU
+# fabric -- at CONUS scale that's ~286k dprst polygons x ~361k HRUs. The
+# original 16G/30min budget was Oregon-scale only and was never exercised at
+# CONUS scale.
+#
+# Standalone (after every mean_zonal array task has COMPLETED -- check
+# `squeue`; there is no afterok if run by hand):
+#   sbatch --export=ALL,BASE_CONFIG=configs/base_config.yml,FABRIC=gfv2 \
+#       slurm_batch/mean_finalize_dprst_depth.batch
+# See slurm_batch/RUNME.md Stage 4A / slurm_batch/HPC_REFERENCE.md.
+
+cd "$SLURM_SUBMIT_DIR"
+BASE_CONFIG=${BASE_CONFIG:-configs/base_config.yml}
+FABRIC=${FABRIC:-gfv2}
+
+pixi run --as-is python scripts/derive_depstor_params.py \
+    --config configs/depstor/depstor_params.yml \
+    --base_config "$BASE_CONFIG" \
+    --fabric "$FABRIC" \
+    --mode mean_finalize \
+    --mean dprst_depth_avg

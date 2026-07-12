@@ -1,0 +1,47 @@
+#!/bin/bash
+#SBATCH -p cpu
+#SBATCH -A impd
+#SBATCH --job-name=dprst_depth_batch
+#SBATCH --output=logs/job_%A_%a.out
+#SBATCH --error=logs/job_%A_%a.err
+#SBATCH --time=12:00:00
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=2
+#SBATCH --mem=64G
+#
+# Stage 2 of the dprst_depth pipeline (issue #173 Task 9): ONE array task
+# computes dprst_depth for ONE tile-batch (Task 3's work-list; fan-out unit
+# is the elevation TILE, not the polygon -- see submit_dprst_depth.sh's
+# header for the full <=5 hr sizing arithmetic). Reads the plan step's
+# persisted tagged polygon set + batch manifest (scripts/run_dprst_depth_batch.py)
+# -- no S3/WESM/waterbody re-derivation per task -- opens each of this
+# batch's tiles ONCE, and writes one per-batch parquet (Task 4's
+# compute.run_batch). --mem=64G: every task holds the FULL CONUS dprst
+# polygon set in memory (compute.run_batch's own internal group_by_tile
+# recompute needs it) plus one open tile VRT window at a time -- a vector
+# GeoDataFrame + a single windowed raster read, not CONUS-grid-scale
+# (contrast the 384G full-grid depstor builders). --time=12:00:00 (the pothole-belt mega-component batch runs >4h; a few long-pole batches need the headroom — the guard fixed OOM but not the intrinsic long-pole) leaves
+# margin under the 5 hr target even at 2x the per-batch estimate.
+#
+# Submitted by slurm_batch/submit_dprst_depth.sh (afterok the plan job,
+# stage 1). Array size ($N_TILE_BATCHES) MUST match the plan step's
+# --n-batches -- submit_dprst_depth.sh always uses the same value for both.
+#
+# Standalone (after the plan step has already run):
+#   N=$(python -c "import json; print(json.load(open('<output_dir>/dprst_depth_batches/_plan/batch_manifest.json'))['n_batches'])")
+#   sbatch --array=0-$((N-1)) \
+#       --export=ALL,BASE_CONFIG=configs/base_config.yml,FABRIC=gfv2 \
+#       slurm_batch/run_dprst_depth_batch.batch
+# See slurm_batch/RUNME.md and slurm_batch/HPC_REFERENCE.md for detail +
+# recovery (a failed/timed-out array task can be resubmitted individually --
+# it only (re)writes its own batch_XXXX.parquet).
+
+cd "$SLURM_SUBMIT_DIR"
+BASE_CONFIG=${BASE_CONFIG:-configs/base_config.yml}
+FABRIC=${FABRIC:-gfv2}
+
+pixi run --as-is python scripts/run_dprst_depth_batch.py \
+    --config configs/depstor/depstor_rasters.yml \
+    --base_config "$BASE_CONFIG" \
+    --fabric "$FABRIC" \
+    --batch_id "$SLURM_ARRAY_TASK_ID"

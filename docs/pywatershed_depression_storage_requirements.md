@@ -17,8 +17,10 @@ prior transcript.
 
 ## Bucket 1 — spatial params, we produce
 
-These vary per-HRU and come from zonal statistics against CONUS source
-rasters; the depstor pipeline computes and emits all six.
+These vary per-HRU; the depstor pipeline computes and emits all seven —
+six from zonal statistics against CONUS source rasters, plus
+`dprst_depth_avg` (issue #173, **updated 2026-07-11**), which is now a
+**derived** per-HRU parameter, not the pyWatershed constant default.
 
 | Param | pyWatershed default | units | Our product |
 |---|---|---|---|
@@ -28,33 +30,53 @@ rasters; the depstor pipeline computes and emits all six.
 | `carea_max` | 0.6 | decimal fraction | `nhm_carea_max_params.csv` |
 | `smidx_coef` | 0.005 | decimal fraction | `nhm_smidx_coef_params.csv` |
 | `hru_percent_imperv` | 0.0 | decimal fraction | `nhm_hru_percent_imperv_params.csv` |
+| `dprst_depth_avg` | 132.0 | inches | `nhm_dprst_depth_avg_params.csv` |
 
 **CSV schema:** each file is two columns, `nat_hru_id,<param>`; the join key
-across all `merged/` outputs is `nat_hru_id`. These six were rebuilt **Jul 5
-2026** from the fully-grounded classifier (the dprst/on-stream union +
+across all `merged/` outputs is `nat_hru_id`. The first six were rebuilt
+**Jul 5 2026** from the fully-grounded classifier (the dprst/on-stream union +
 same-HRU-restricted `sro_to_dprst_*`; see `docs/ARCHITECTURE.md` and the
 project's dprst-classifier history for provenance).
+
+`dprst_depth_avg` is **not** a 132 in constant — it is measured per-polygon
+V/A mean depth off the DEM (`dprst_depth.tif`, exact-metre bathymetry read
+where the surface isn't hydro-flattened) area-weighted to each HRU, with a
+per-ecoregion calibrated-Hollister regional fill for flat/degenerate
+polygons and a **49 in** NHM-calibrated-median floor (not 132 in) for HRUs
+with zero dprst cells — see
+[`docs/superpowers/specs/2026-07-10-dprst-depth-phase0-spike-design.md`](superpowers/specs/2026-07-10-dprst-depth-phase0-spike-design.md)
+and issue #173. Production runs need `slurm_batch/submit_dprst_depth.sh`
+(its own SLURM array — see `slurm_batch/HPC_REFERENCE.md` "Stage 2d'";
+CONUS-scale in-process compute is ~250-500 core-hours, too large for a
+single job).
 
 ## Bucket 2 — constant defaults, legacy `0b` emitted
 
 These are scalar (non-spatial) parameters. The legacy `0b_TB_depr_stor.py`
 pipeline emitted them as fixed constants; pyWatershed's built-in defaults
-match in all eight cases.
+match in all seven remaining cases (`dprst_depth_avg` moved to Bucket 1
+above — issue #173).
 
 | Param | legacy `0b` value | pyWatershed default | units | note |
 |---|---|---|---|---|
-| `dprst_depth_avg` | 132 | 132.0 | inches | matches |
-| `dprst_et_coef` | 1 | 1.0 | decimal fraction | matches |
-| `dprst_frac_init` | 0.5 | 0.5 | decimal fraction | matches |
-| `dprst_frac_open` | 1 | 1.0 | decimal fraction | matches |
-| `imperv_stor_max` | 0.05 | 0.05 | inches | matches |
-| `op_flow_thres` | 1 | 1.0 | decimal fraction | matches |
-| `va_clos_exp` | 0.001 | 0.001 | none | matches |
-| `va_open_exp` | 0.001 | 0.001 | none | matches |
+| `dprst_et_coef` | 1 | 1.0 | decimal fraction | matches; not yet emitted as a CSV |
+| `dprst_frac_init` | 0.5 | 0.5 | decimal fraction | matches; not yet emitted as a CSV |
+| `dprst_frac_open` | 1 | 1.0 | decimal fraction | matches; not yet emitted as a CSV |
+| `imperv_stor_max` | 0.05 | 0.05 | inches | matches; not yet emitted as a CSV |
+| `op_flow_thres` | 1 | 1.0 | decimal fraction | matches; **emitted** as `op_flow_thres_params.csv` (issue #173, constant 1.0 per HRU — see `depstor_builders/dprst_depth.py::_write_op_flow_thres`) |
+| `va_clos_exp` | 0.001 | 0.001 | none | matches; not yet emitted as a CSV |
+| `va_open_exp` | 0.001 | 0.001 | none | matches; not yet emitted as a CSV |
 
 (Units above are the freshly-printed `pywatershed.meta` strings, e.g.
 "decimal fraction" rather than the shorthand "fraction" used in earlier
 notes — no value discrepancy, just the verbatim metadata wording.)
+
+`op_flow_thres` is the only bucket-2 constant with real emitted code so
+far — issue #173's `dprst_depth` builder needed *some* mechanism to write a
+per-HRU CSV, so it wrote the smallest correct one for its own constant
+rather than waiting on a generic constant-param emitter (see
+`depstor_builders/dprst_depth.py`'s module docstring). The other six remain
+candidates for whatever that generic mechanism ends up being.
 
 ## Bucket 3 — gaps: pyWatershed needs, legacy `0b` never emitted
 
@@ -87,13 +109,15 @@ notes — no value discrepancy, just the verbatim metadata wording.)
 
 ## Verdict
 
-`gfv2/params/merged/` supplies all **6** spatial parameters that
-pyWatershed's `PRMSRunoff` requires (bucket 1), each as a
+`gfv2/params/merged/` supplies all **7** spatial parameters that
+pyWatershed's `PRMSRunoff` requires (bucket 1 — as of issue #173,
+`dprst_depth_avg` is derived rather than a constant), each as a
 `nat_hru_id,<param>` CSV. The remaining **11** non-spatial parameters
 `PRMSRunoff` requires are a priori constants, not zonal-stats products:
 
-- **8 already match** the legacy `0b` constants exactly (bucket 2) — no
-  action needed, carry them forward as-is.
+- **7 already match** the legacy `0b` constants exactly (bucket 2) — no
+  further action needed for 6 of them; the 7th, `op_flow_thres`, is already
+  **emitted** (issue #173, `op_flow_thres_params.csv`).
 - **3 are gaps** the legacy pipeline never emitted (bucket 3) — action:
   adopt the pyWatershed defaults verbatim (`dprst_flow_coef=0.05`,
   `dprst_seep_rate_open=0.02`, `smidx_exp=0.3`); no spatial basis exists for
@@ -103,9 +127,11 @@ pyWatershed's `PRMSRunoff` requires (bucket 1), each as a
   `dprst_seep_rate_close`) before it is written into any production param
   set; document whichever is chosen and why.
 
-No code is produced by this document; it is a requirements/gap record for
-Task 4's presentation and for whoever implements the constant-param emission
-step.
+This document was originally analysis-only (no code); `dprst_depth_avg` and
+`op_flow_thres` have since been implemented (issue #173, Phase 1) and this
+file was corrected in place (2026-07-11) rather than superseded — the
+remaining 6 bucket-2 constants and the bucket-3/seep-rate-clos decision are
+still open for whoever implements a generic constant-param emission step.
 
 ## Verification command and output (evidence)
 

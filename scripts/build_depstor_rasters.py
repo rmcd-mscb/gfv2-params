@@ -95,6 +95,10 @@ def _build_context(config: dict, force: bool) -> BuildContext:
         twi_raster=Path(config["twi_raster"]) if config.get("twi_raster") else None,
         vpu=config.get("vpu"),
         imperv_source=Path(config["imperv_source"]) if config.get("imperv_source") else None,
+        wesm_index=Path(config["wesm_index"]) if config.get("wesm_index") else None,
+        ecoregions_gpkg=Path(config["ecoregions_gpkg"]) if config.get("ecoregions_gpkg") else None,
+        dprst_depth_floor_in=float(config.get("dprst_depth_floor_in", 49.0)),
+        dprst_hollister_n_min=int(config.get("dprst_hollister_n_min", 5)),
         force=force,
     )
 
@@ -145,6 +149,8 @@ def _expected_outputs(step: dict) -> dict:
         return {"dprst": outputs["dprst"], "onstream": outputs["onstream"]}
     if name == "carea_map":
         return {"carea_max": outputs["carea_max"], "smidx": outputs["smidx"]}
+    if name == "dprst_depth":
+        return {"dprst_depth": outputs["dprst_depth"], "op_flow_thres": outputs["op_flow_thres"]}
     raise ValueError(f"Unrecognised step name: {name}")
 
 
