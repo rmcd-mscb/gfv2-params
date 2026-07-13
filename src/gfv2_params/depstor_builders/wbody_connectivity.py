@@ -18,6 +18,7 @@ from ..depstor import (
     select_connected_waterbodies,
     write_uint8_binary,
 )
+from ..endorheic import load_endorheic_comids
 from ..nhd_ftypes import NEVER_ONSTREAM_FTYPES
 from .context import BuildContext
 
@@ -74,9 +75,26 @@ def build(step_cfg: dict, ctx: BuildContext, logger) -> dict:
             )
         n_flowthrough = len(flowthrough - connected)
         connected = connected | flowthrough
+
+    # Endorheic demotion (see gfv2_params.endorheic). A STRICT SUBTRACTION: these
+    # signals can only remove COMIDs from the on-stream set, never add one — so the
+    # on-stream mask can never be inflated by them. This is what finally takes the
+    # Great Salt Lake off-stream: both local classifiers promote it, because NHD
+    # draws Network artificial paths between its arms.
+    n_endorheic = 0
+    if "endorheic_comids" in ctx.paths:
+        endorheic = load_endorheic_comids(ctx.require("endorheic_comids"))
+        n_endorheic = len(connected & endorheic)
+        connected = connected - endorheic
+        logger.info(
+            "  endorheic demotion: %d of %d endorheic COMIDs were on-stream → dprst",
+            n_endorheic, len(endorheic),
+        )
+
     logger.info(
-        "  on-stream COMIDs: %d WBAREACOMI + %d new flow-through = %d total",
-        n_wbareacomi, n_flowthrough, len(connected),
+        "  on-stream COMIDs: %d WBAREACOMI + %d new flow-through - %d endorheic "
+        "= %d total",
+        n_wbareacomi, n_flowthrough, n_endorheic, len(connected),
     )
     try:
         wb_gdf = gpd.read_file(ctx.waterbody_gpkg, layer=ctx.waterbody_layer, use_arrow=True)

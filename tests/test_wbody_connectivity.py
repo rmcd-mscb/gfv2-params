@@ -534,3 +534,127 @@ def test_wbody_connectivity_flowthrough_none_is_silent_noop(tmp_path):
         {"output": "connected_wbody.tif"}, ctx, logging.getLogger("test")
     )
     assert "connected_wbody" in produced
+
+
+# ---------------------------------------------------------------------------
+# Endorheic demotion (Task 6)
+# ---------------------------------------------------------------------------
+
+
+def test_endorheic_comid_is_demoted_from_the_connected_raster(tmp_path):
+    """A waterbody the endorheic classifier flags must NOT reach connected_wbody.tif.
+
+    This is the Great Salt Lake path: it IS in the WBAREACOMI/flow-through union
+    (both local classifiers promote it), and the endorheic subtraction is the only
+    thing that takes it back out.
+    """
+    import logging
+
+    import geopandas as gpd
+    import pandas as pd
+    import rasterio
+    from shapely.geometry import box
+
+    from gfv2_params.depstor_builders import wbody_connectivity
+    from gfv2_params.depstor_builders.context import BuildContext
+
+    template = tmp_path / "template.tif"
+    landmask = tmp_path / "land_mask.tif"
+    _write_template(template)
+    _write_landmask(landmask)
+
+    # Two on-stream waterbodies; COMID 2 is also flagged endorheic. Grid-aligned to
+    # the 30 m _write_template/_write_landmask pixels (see the top-left/middle boxes
+    # used by the other builder tests in this file) so `rasterize_binary`'s
+    # pixel-center predicate actually burns them.
+    wb = gpd.GeoDataFrame(
+        {"COMID": [1, 2], "member_comid": [1, 2], "FTYPE": ["LakePond", "LakePond"]},
+        geometry=[box(0, 270, 60, 300), box(120, 150, 180, 180)],
+        crs="EPSG:5070",
+    )
+    wb_path = tmp_path / "wb.gpkg"
+    wb.to_file(wb_path, layer="waterbodies", driver="GPKG")
+
+    conn = tmp_path / "connected.parquet"
+    pd.DataFrame({"comid": [1, 2]}).to_parquet(conn, index=False)
+
+    endo = tmp_path / "endorheic.parquet"
+    pd.DataFrame(
+        {"comid": [2], "frac_own": [1.0], "by_terminus": [True],
+         "by_closed_huc12": [False]}
+    ).to_parquet(endo, index=False)
+
+    ctx = BuildContext(
+        fabric="test", template_path=template, output_dir=tmp_path,
+        hru_gpkg=wb_path, hru_layer="waterbodies",
+        waterbody_gpkg=wb_path, waterbody_layer="waterbodies",
+        connected_comids_table=conn,
+    )
+    ctx.paths["landmask"] = landmask
+    ctx.paths["endorheic_comids"] = endo
+
+    wbody_connectivity.build(
+        {"output": "connected_wbody.tif"}, ctx, logging.getLogger("t")
+    )
+    with rasterio.open(tmp_path / "connected_wbody.tif") as src:
+        arr = src.read(1)
+
+    # COMID 1 (on-stream, not endorheic) is rasterised; COMID 2 (demoted) is not.
+    assert (arr[0:1, 0:2] == 1).any(), "COMID 1 should still be on-stream"
+    assert not (arr[4:6, 4:6] == 1).any(), "COMID 2 was endorheic and must be demoted"
+
+
+def test_endorheic_subtraction_never_widens_the_onstream_set(tmp_path):
+    """An endorheic COMID that is NOT on-stream must be a pure no-op.
+
+    The safety invariant: these signals may only SUBTRACT. If this ever fails, the
+    endorheic table has become capable of ADDING to the on-stream mask.
+    """
+    import logging
+
+    import geopandas as gpd
+    import pandas as pd
+    import rasterio
+    from shapely.geometry import box
+
+    from gfv2_params.depstor_builders import wbody_connectivity
+    from gfv2_params.depstor_builders.context import BuildContext
+
+    template = tmp_path / "template.tif"
+    landmask = tmp_path / "land_mask.tif"
+    _write_template(template)
+    _write_landmask(landmask)
+
+    # Grid-aligned to the 30 m template pixels — see the note in the previous test.
+    wb = gpd.GeoDataFrame(
+        {"COMID": [1], "member_comid": [1], "FTYPE": ["LakePond"]},
+        geometry=[box(0, 270, 60, 300)], crs="EPSG:5070",
+    )
+    wb_path = tmp_path / "wb.gpkg"
+    wb.to_file(wb_path, layer="waterbodies", driver="GPKG")
+
+    conn = tmp_path / "connected.parquet"
+    pd.DataFrame({"comid": [1]}).to_parquet(conn, index=False)
+
+    # COMID 999 is endorheic but was never on-stream: subtracting it changes nothing.
+    endo = tmp_path / "endorheic.parquet"
+    pd.DataFrame(
+        {"comid": [999], "frac_own": [1.0], "by_terminus": [True],
+         "by_closed_huc12": [False]}
+    ).to_parquet(endo, index=False)
+
+    ctx = BuildContext(
+        fabric="test", template_path=template, output_dir=tmp_path,
+        hru_gpkg=wb_path, hru_layer="waterbodies",
+        waterbody_gpkg=wb_path, waterbody_layer="waterbodies",
+        connected_comids_table=conn,
+    )
+    ctx.paths["landmask"] = landmask
+    ctx.paths["endorheic_comids"] = endo
+
+    wbody_connectivity.build(
+        {"output": "connected_wbody.tif"}, ctx, logging.getLogger("t")
+    )
+    with rasterio.open(tmp_path / "connected_wbody.tif") as src:
+        arr = src.read(1)
+    assert (arr[0:1, 0:2] == 1).any(), "COMID 1 must remain on-stream — no widening"
