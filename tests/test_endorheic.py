@@ -3,12 +3,22 @@
 from __future__ import annotations
 
 import geopandas as gpd
+import numpy as np
 import pytest
+import rasterio
+from rasterio.transform import from_origin
 from shapely.geometry import Polygon
 
-from gfv2_params.endorheic import closed_basin_comids
+from gfv2_params.endorheic import (
+    closed_basin_comids,
+    frac_own_for_window,
+    terminal_cells,
+    terminus_own_fraction,
+)
 
 CRS = "EPSG:5070"
+# ESRI D8: 1=E 2=SE 4=S 8=SW 16=W 32=NW 64=N 128=NE. 0 and 255 are termini.
+NOD = 255
 
 
 def _box(x0, y0, x1, y1):
@@ -22,6 +32,14 @@ def _wb(rows):
 def _closed(polys):
     return gpd.GeoDataFrame({"HUC_12": [str(i) for i in range(len(polys))]},
                             geometry=polys, crs=CRS)
+
+
+def _write_fdr(path, arr, transform, nodata=NOD):
+    with rasterio.open(
+        path, "w", driver="GTiff", height=arr.shape[0], width=arr.shape[1],
+        count=1, dtype=arr.dtype, crs=CRS, transform=transform, nodata=nodata,
+    ) as dst:
+        dst.write(arr, 1)
 
 
 def test_closed_basin_keeps_a_waterbody_fully_inside():
@@ -120,3 +138,105 @@ def test_closed_basin_reprojects_mismatched_closed_gdf_crs():
     closed = _closed([_box(0, 0, 10, 10)]).to_crs("EPSG:4326")
     assert closed.crs != wb.crs
     assert closed_basin_comids(wb, closed) == {110}
+
+
+def test_frac_own_endorheic_lake_drains_to_its_own_terminus():
+    # A 3x3 lake (rows/cols 1..3) whose every cell flows to a code-0 cell at its
+    # centre (2,2) -- the Great Salt Lake shape. All 9 cells reach their OWN
+    # terminus, so frac_own == 1.0.
+    fdr = np.full((5, 5), NOD, dtype=np.uint8)
+    fdr[1, 1], fdr[1, 2], fdr[1, 3] = 2, 4, 8        # SE, S, SW -> (2,2)
+    fdr[2, 1], fdr[2, 2], fdr[2, 3] = 1, 0, 16       # E, SINK, W -> (2,2)
+    fdr[3, 1], fdr[3, 2], fdr[3, 3] = 128, 64, 32    # NE, N, NW -> (2,2)
+    inside = np.zeros((5, 5), dtype=bool)
+    inside[1:4, 1:4] = True
+    assert frac_own_for_window(fdr, inside, NOD) == 1.0
+
+
+def test_frac_own_through_flowing_lake_rejects():
+    # The Lewis and Clark Lake shape: a through-flowing reservoir that happens to
+    # contain ONE stray terminal cell. Every other cell flows E and leaves the lake,
+    # so only the sink cell itself reaches an inside terminus -> 1/9 = 0.111.
+    # Rule A ("contains a terminal cell") would wrongly demote this; Signal A does not.
+    fdr = np.full((5, 5), 1, dtype=np.uint8)         # everything flows East
+    fdr[1, 1] = 0                                     # the stray terminal cell
+    inside = np.zeros((5, 5), dtype=bool)
+    inside[1:4, 1:4] = True
+    frac = frac_own_for_window(fdr, inside, NOD)
+    assert frac == pytest.approx(1 / 9, abs=1e-6)
+    assert frac < 0.5
+
+
+def test_frac_own_is_zero_when_the_lake_has_no_terminal_cell():
+    fdr = np.full((5, 5), 1, dtype=np.uint8)
+    inside = np.zeros((5, 5), dtype=bool)
+    inside[1:4, 1:4] = True
+    assert frac_own_for_window(fdr, inside, NOD) == 0.0
+
+
+def test_frac_own_ignores_a_terminal_cell_OUTSIDE_the_lake():
+    # A pond upstream in a closed basin drains to the BASIN's terminus, not its own.
+    # Signal A must not demote it. Here the lake's cells all flow E to a sink that
+    # lies outside the lake.
+    fdr = np.full((5, 5), 1, dtype=np.uint8)
+    fdr[2, 4] = 0                                     # terminus OUTSIDE the lake
+    inside = np.zeros((5, 5), dtype=bool)
+    inside[1:4, 1:4] = True
+    assert frac_own_for_window(fdr, inside, NOD) == 0.0
+
+
+def test_terminal_cells_finds_the_one_code0_cell(tmp_path):
+    # terminal_cells scans block-by-block (required at CONUS scale, see module
+    # docstring) -- prove it finds exactly the sink cell and none of the flow cells.
+    fdr = np.full((5, 5), 1, dtype=np.uint8)
+    fdr[2, 2] = 0
+    transform = from_origin(0.0, 5 * 2000.0, 2000.0, 2000.0)
+    path = tmp_path / "fdr_single.tif"
+    _write_fdr(path, fdr, transform)
+    terminal = terminal_cells(path)
+    assert len(terminal) == 1
+    with rasterio.open(path) as src:
+        assert terminal.crs == src.crs
+
+
+def test_terminus_own_fraction_dissolves_a_two_row_comid(tmp_path):
+    # `conus_waterbodies.gpkg` stores a multi-part waterbody as several rows sharing
+    # one COMID (measured on the real candidate set: 6,429 rows / 6,427 unique
+    # COMIDs). COMID 555 here is split into two rows that do NOT touch:
+    #   * part_b (3x3, 9 cells, area 3.6e7 m^2) -- the Great-Salt-Lake "own terminus"
+    #     pattern, holding the ONLY code-0 cell in the raster, and every one of its
+    #     other 8 cells drains to it.
+    #   * part_a (4x4, 16 cells, area 6.4e7 m^2 -- the LARGER part) -- flows due east
+    #     and never reaches part_b's terminus.
+    # Keeping only the largest row (`drop_duplicates(subset="COMID")` on area) would
+    # throw part_b -- and the only terminal cell -- away entirely, silently zeroing
+    # frac_own for the whole COMID. Dissolving keeps both parts, so the terminus is
+    # still found and both parts' cells count in the denominator:
+    #   n_inside = 9 (part_b) + 16 (part_a) = 25; reach = the 9 part_b cells only
+    #   (part_a's east-flowing cells never reach it) -> frac_own = 9/25 = 0.36.
+    ny = 14
+    pixel = 2000.0
+    fdr = np.full((ny, ny), NOD, dtype=np.uint8)
+    fdr[1, 1], fdr[1, 2], fdr[1, 3] = 2, 4, 8
+    fdr[2, 1], fdr[2, 2], fdr[2, 3] = 1, 0, 16
+    fdr[3, 1], fdr[3, 2], fdr[3, 3] = 128, 64, 32
+    fdr[7:11, 7:11] = 1
+
+    transform = from_origin(0.0, ny * pixel, pixel, pixel)
+    fdr_path = tmp_path / "fdr_two_row.tif"
+    _write_fdr(fdr_path, fdr, transform)
+
+    part_b = _box(1 * pixel, (ny - 4) * pixel, 4 * pixel, (ny - 1) * pixel)
+    part_a = _box(7 * pixel, (ny - 11) * pixel, 11 * pixel, (ny - 7) * pixel)
+    assert part_a.area > part_b.area  # part_a is the one "keep largest" would keep
+    assert not part_a.intersects(part_b)
+    wb = _wb([[555, part_a], [555, part_b]])
+
+    terminal = terminal_cells(fdr_path)
+    assert len(terminal) == 1
+
+    out = terminus_own_fraction(wb, fdr_path, terminal)
+    assert list(out["comid"]) == [555]
+    row = out.iloc[0]
+    assert row["n_terminal"] == 1
+    assert row["frac_own"] == pytest.approx(9 / 25, abs=1e-6)
