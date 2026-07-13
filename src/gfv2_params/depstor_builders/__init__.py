@@ -18,6 +18,7 @@ from . import (
     carea_map,
     dprst,
     dprst_depth,
+    endorheic,
     hru_id,
     imperv,
     landmask,
@@ -35,6 +36,7 @@ BUILDERS = {
     "landmask":          landmask.build,
     "imperv":            imperv.build,
     "waterbody":         waterbody.build,
+    "endorheic":         endorheic.build,
     "wbody_connectivity": wbody_connectivity.build,
     "dprst":             dprst.build,
     "perv":              perv.build,
@@ -59,6 +61,9 @@ BUILDERS = {
 #   imperv             -> "imperv"                 imperv_binary.tif
 #   waterbody          -> "wbody_binary",          wbody_binary.tif,
 #                         "wbody_regions"          wbody_regions.tif
+#   endorheic          -> "endorheic_comids"       endorheic_waterbody_comids.parquet
+#                                                   (comid, frac_own, by_terminus,
+#                                                    by_closed_huc12)
 #   wbody_connectivity -> "connected_wbody"        connected_wbody.tif (uint8, 1=connected)
 #   dprst              -> "dprst",                 dprst_binary.tif,
 #                         "onstream"               onstream_binary.tif
@@ -78,6 +83,7 @@ STEP_ORDER = [
     "landmask",
     "imperv",
     "waterbody",
+    "endorheic",
     "wbody_connectivity",
     "dprst",
     "perv",

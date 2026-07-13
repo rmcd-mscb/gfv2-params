@@ -374,9 +374,15 @@ rejected; never substitute it.
 - `hru_gpkg`, `segments_gpkg`/`segments_layer`, `waterbody_gpkg`/`waterbody_layer` (waterbody is required; the step raises if unset).
 - `imperv_source` in `configs/depstor/depstor_rasters.yml` — NLCD fractional-impervious raster.
 
-**DAG order:** landmask → imperv / wbody_connectivity / waterbody → dprst → perv →
-hru_id → dprst_depth → vpu_id → routing → routing_hru → drains_perv / drains_imperv →
-carea_map. Selective re-runs via `--step <name>` or `--from <name>` passed
+**DAG order:** landmask → imperv / waterbody → endorheic → wbody_connectivity →
+dprst → perv → hru_id → dprst_depth → vpu_id → routing → routing_hru →
+drains_perv / drains_imperv → carea_map. `endorheic` emits
+`endorheic_waterbody_comids.parquet` (Signal A: FDR terminus-inside-itself;
+Signal B: majority-inside a closed WBD HUC12, when `wbd_huc12_table` is
+configured) — as of this writing it is produced but not yet consumed;
+`wbody_connectivity` subtracting it from the on-stream set is tracked
+separately (issue tracked by the endorheic-dprst-classifier spec). Selective
+re-runs via `--step <name>` or `--from <name>` passed
 through to the Python script. `dprst_depth` (issue #173) is a CONUS-scale
 compute outlier in this DAG — see "Stage 2d'" below; it needs its own SLURM
 array run **before** a full unfiltered `build_depstor_rasters.batch`, or that

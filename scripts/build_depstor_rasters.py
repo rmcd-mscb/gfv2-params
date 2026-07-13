@@ -91,6 +91,16 @@ def _build_context(config: dict, force: bool) -> BuildContext:
             Path(config["flowthrough_comids_table"])
             if config.get("flowthrough_comids_table") else None
         ),
+        wbd_huc12_table=(
+            Path(config["wbd_huc12_table"]) if config.get("wbd_huc12_table") else None
+        ),
+        burn_add_waterbody_table=(
+            Path(config["burn_add_waterbody_table"])
+            if config.get("burn_add_waterbody_table") else None
+        ),
+        sink_points_table=(
+            Path(config["sink_points_table"]) if config.get("sink_points_table") else None
+        ),
         fdr_raster=Path(config["fdr_raster"]) if config.get("fdr_raster") else None,
         twi_raster=Path(config["twi_raster"]) if config.get("twi_raster") else None,
         vpu=config.get("vpu"),
@@ -134,6 +144,7 @@ def _expected_outputs(step: dict) -> dict:
         single_key = {
             "landmask": "landmask",
             "imperv": "imperv",
+            "endorheic": "endorheic_comids",
             "wbody_connectivity": "connected_wbody",
             "perv": "perv",
             "routing": "drains_to_dprst",

@@ -9,11 +9,15 @@ import rasterio
 from rasterio.transform import from_origin
 from shapely.geometry import Polygon
 
+import pandas as pd
+
 from gfv2_params.endorheic import (
     closed_basin_comids,
     frac_own_for_window,
+    load_endorheic_comids,
     terminal_cells,
     terminus_own_fraction,
+    write_endorheic_comids,
 )
 
 CRS = "EPSG:5070"
@@ -240,3 +244,25 @@ def test_terminus_own_fraction_dissolves_a_two_row_comid(tmp_path):
     row = out.iloc[0]
     assert row["n_terminal"] == 1
     assert row["frac_own"] == pytest.approx(9 / 25, abs=1e-6)
+
+
+def test_endorheic_parquet_roundtrip(tmp_path):
+    df = pd.DataFrame({
+        "comid": [1, 2, 3],
+        "frac_own": [1.0, 0.007, 0.0],
+        "by_terminus": [True, False, False],
+        "by_closed_huc12": [False, False, True],
+    })
+    p = tmp_path / "endorheic.parquet"
+    write_endorheic_comids(df, p)
+    # Only rows flagged by at least one signal are demotions.
+    assert load_endorheic_comids(p) == {1, 3}
+
+
+def test_load_endorheic_comids_rejects_an_empty_table(tmp_path):
+    p = tmp_path / "endorheic.parquet"
+    write_endorheic_comids(
+        pd.DataFrame(columns=["comid", "frac_own", "by_terminus", "by_closed_huc12"]), p
+    )
+    with pytest.raises(ValueError, match="0 endorheic COMIDs"):
+        load_endorheic_comids(p)

@@ -114,8 +114,8 @@ BATCHES=$(pixi run --as-is python -c \
 slurm_batch/submit_dprst_depth.sh "$BATCHES" gfv2 configs/base_config.yml 150
 
 # 3c. the rest of the depstor raster stack (landmask + dprst_depth both
-# already exist -> skipped fast; imperv/waterbody/wbody_connectivity/dprst/
-# perv/hru_id/vpu_id/routing/routing_hru/drains_*/carea_map run normally):
+# already exist -> skipped fast; imperv/waterbody/endorheic/wbody_connectivity/
+# dprst/perv/hru_id/vpu_id/routing/routing_hru/drains_*/carea_map run normally):
 sbatch slurm_batch/build_depstor_rasters.batch
 ```
 

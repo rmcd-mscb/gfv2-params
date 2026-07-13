@@ -181,6 +181,9 @@ whether the depstor pipeline will be run for the fabric:
 | `waterbody_layer` | — | ✓ | Layer name inside `waterbody_gpkg` |
 | `wesm_index` | — | ✓ | Path to `input/wesm/wesm_1m_footprints.gpkg` — pre-staged, 1m/QL1/QL2-qualifying USGS 3DEP WESM workunit footprints (a `project` column + geometry). Produced by `pixi run python -m gfv2_params.download.wesm` (issue #173). Consumed by the `dprst_depth` step's `topo.resolution_class` (best-available-topo tagging) and `tiling.group_by_tile` (1 m tile-key resolution); required for `dprst_depth`, not for any other depstor step. |
 | `ecoregions_gpkg` | — | ✓ | Path to `input/ecoregions/us_eco_l3.gpkg` — EPA Level III Ecoregions (see `gfv2_params.download.epa_ecoregions`). Used by the `dprst_depth` step's per-ecoregion regional-fill donor pool (`dprst_depth.fill.fit_ecoregion_models`); every fabric profile with a depstor-configured `dprst_depth` step already stages it (also listed as a shared, reusable input in `README.md`'s Stage 0). |
+| `wbd_huc12_table` | — | — | Path to `input/wbd/wbd_huc12.parquet` — the full WBD HUC12 layer; the `endorheic` depstor builder filters `HU_12_TYPE == 'C'` (closed-basin) itself. Optional: absent turns off Signal B (majority-inside-closed-HUC12) and the `endorheic` step still runs Signal A (FDR terminus-inside-itself) alone. Do **not** point this at `input/nhd/closed_huc12.gpkg` — that is an incomplete extract (23 type-C HUC12s in the Great Basin vs 141 in the full WBD). |
+| `burn_add_waterbody_table` | — | — | Path to `input/nhd/burn_add_waterbodies.parquet` — NHDPlus BurnAddWaterbody polygons (new depression AREA), unioned into the waterbody layer by the `waterbody` builder. Optional, staged by `gfv2_params.download.nhd_burn_components`. |
+| `sink_points_table` | — | — | Path to `input/nhd/sink_points.parquet` — NHDPlus `Sink.shp`, provenance + the BurnAdd linkage only. **Not** a classifier signal itself: the `endorheic` builder's Signal A reads the FDR grid (the same grid `routing` reads), not this point layer. Optional. |
 
 For `template_raster`/`fdr_raster`, stage the clip with:
 
@@ -361,6 +364,21 @@ These are hard-won; violating them silently corrupts outputs.
   rule). Hardcoded data_root-relative, no config key — `nhd_topology.py` must
   run before **both** `nhd_flowlines.py` and `nhd_flowthrough.py` (each fails
   loud if `input/nhd/flowline_topology.parquet` is missing).
+- **`endorheic` step (runs between `waterbody` and `wbody_connectivity`).**
+  Emits `endorheic_waterbody_comids.parquet` (comid, frac_own, by_terminus,
+  by_closed_huc12) via `endorheic_frame` (`src/gfv2_params/endorheic.py`):
+  Signal A is a waterbody whose D8 terminus (on the same FDR grid `routing`
+  reads) lies INSIDE itself; Signal B is a waterbody majority-inside a closed
+  (type-C) WBD HUC12, needed because some closed-basin waterbodies (e.g.
+  Walker Lake) contain no FDR terminal cell. Signal A needs only `fdr_raster`
+  (already required on every fabric) and runs everywhere; Signal B activates
+  only when `wbd_huc12_table` is configured. `load_endorheic_comids` and the
+  builder both fail loud on a zero-row result — a silent no-op would leave
+  the Great Salt Lake on-stream with nothing in the logs to say so. As of
+  this writing the step only **produces** the table; `wbody_connectivity`
+  subtracting it from the on-stream set (the fix for the Great Salt Lake
+  misclassification) is a separate follow-on change. See
+  [`docs/superpowers/specs/2026-07-12-endorheic-dprst-classifier-design.md`](superpowers/specs/2026-07-12-endorheic-dprst-classifier-design.md).
 - **`carea_max`/`smidx_coef` threshold mode.** The legacy `absolute`
   thresholds (8.0/15.6) are only calibrated against VPU 01's ArcPy TWI
   distribution. For any other fabric, use `threshold_mode: percentile` (the

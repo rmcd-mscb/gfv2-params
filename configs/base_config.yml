@@ -51,6 +51,19 @@ fabrics:
     # by wbody_connectivity to catch through-flow swamps NHD never tagged with
     # WBAREACOMI. Optional: absent -> WBAREACOMI-only behaviour.
     flowthrough_comids_table: "{data_root}/input/nhd/flowthrough_waterbody_comids.parquet"
+    # --- endorheic classifier (see docs/superpowers/specs/2026-07-12-endorheic-*) ---
+    # Full WBD HUC12 layer; the `endorheic` builder filters HU_12_TYPE == 'C' itself.
+    # Stage with: pixi run python -m gfv2_params.download.wbd_huc12
+    # NOTE: do NOT point this at input/nhd/closed_huc12.gpkg — that is an incomplete
+    # extract (23 type-C HUC12s in the Great Basin vs 141 in the full WBD).
+    wbd_huc12_table: "{data_root}/input/wbd/wbd_huc12.parquet"
+    # NHDPlus BurnAddWaterbody polygons — new depression AREA, unioned into the
+    # waterbody layer. Stage with:
+    #   pixi run python -m gfv2_params.download.nhd_burn_components
+    burn_add_waterbody_table: "{data_root}/input/nhd/burn_add_waterbodies.parquet"
+    # NHDPlus Sink.shp — provenance + the BurnAdd linkage only. NOT a classifier
+    # signal: the endorheic classifier reads the FDR grid the router reads.
+    sink_points_table: "{data_root}/input/nhd/sink_points.parquet"
     # EPA Level III Ecoregions (shared CONUS input, see
     # gfv2_params.download.epa_ecoregions). The dprst_depth builder (#173)
     # joins dprst polygons to a region by centroid for the per-ecoregion
@@ -108,6 +121,19 @@ fabrics:
     # by wbody_connectivity to catch through-flow swamps NHD never tagged with
     # WBAREACOMI. Optional: absent -> WBAREACOMI-only behaviour.
     flowthrough_comids_table: "{data_root}/input/nhd/flowthrough_waterbody_comids.parquet"
+    # --- endorheic classifier (see docs/superpowers/specs/2026-07-12-endorheic-*) ---
+    # Full WBD HUC12 layer; the `endorheic` builder filters HU_12_TYPE == 'C' itself.
+    # Stage with: pixi run python -m gfv2_params.download.wbd_huc12
+    # NOTE: do NOT point this at input/nhd/closed_huc12.gpkg — that is an incomplete
+    # extract (23 type-C HUC12s in the Great Basin vs 141 in the full WBD).
+    wbd_huc12_table: "{data_root}/input/wbd/wbd_huc12.parquet"
+    # NHDPlus BurnAddWaterbody polygons — new depression AREA, unioned into the
+    # waterbody layer. Stage with:
+    #   pixi run python -m gfv2_params.download.nhd_burn_components
+    burn_add_waterbody_table: "{data_root}/input/nhd/burn_add_waterbodies.parquet"
+    # NHDPlus Sink.shp — provenance + the BurnAdd linkage only. NOT a classifier
+    # signal: the endorheic classifier reads the FDR grid the router reads.
+    sink_points_table: "{data_root}/input/nhd/sink_points.parquet"
     ecoregions_gpkg: "{data_root}/input/ecoregions/us_eco_l3.gpkg"
     wesm_index: "{data_root}/input/wesm/wesm_1m_footprints.gpkg"
     hru_gpkg: "{data_root}/gfv2/fabric/gfv2_nhru_merged.gpkg"

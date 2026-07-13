@@ -208,3 +208,64 @@ def terminus_own_fraction(
             if logger and (i + 1) % 500 == 0:
                 logger.info("  terminus scan: %d/%d waterbodies", i + 1, len(cand))
     return pd.DataFrame(rows, columns=["comid", "n_terminal", "frac_own"])
+
+
+def endorheic_frame(
+    wb_gdf: gpd.GeoDataFrame,
+    fdr_path: Path,
+    closed_gdf: gpd.GeoDataFrame | None = None,
+    min_frac: float = MIN_FRAC,
+    logger=None,
+) -> pd.DataFrame:
+    """Combine Signal A and Signal B into one provenance-carrying frame.
+
+    Columns: comid, frac_own, by_terminus, by_closed_huc12. A COMID appears iff at
+    least one signal flags it.
+    """
+    terminal = terminal_cells(fdr_path)
+    if logger:
+        logger.info("  %d FDR terminal (code-0) cells", len(terminal))
+    own = terminus_own_fraction(wb_gdf, fdr_path, terminal, logger=logger)
+    a = set(own.loc[own["frac_own"] > min_frac, "comid"].astype(int))
+    b = closed_basin_comids(wb_gdf, closed_gdf, min_frac) if closed_gdf is not None else set()
+    if logger:
+        logger.info(
+            "  Signal A (terminus-inside-itself): %d; Signal B (closed basin): %d; "
+            "union: %d", len(a), len(b), len(a | b),
+        )
+    frac = dict(zip(own["comid"].astype(int), own["frac_own"]))
+    comids = sorted(a | b)
+    return pd.DataFrame({
+        "comid": pd.Series(comids, dtype="int64"),
+        "frac_own": [float(frac.get(c, 0.0)) for c in comids],
+        "by_terminus": [c in a for c in comids],
+        "by_closed_huc12": [c in b for c in comids],
+    })
+
+
+def write_endorheic_comids(df: pd.DataFrame, out_path: Path) -> None:
+    """Write the endorheic COMID table (with per-signal provenance)."""
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    df.astype({"comid": "int64"}).to_parquet(out_path, index=False)
+
+
+def load_endorheic_comids(path: Path) -> set[int]:
+    """Load the endorheic COMID set. Fails loud on an empty table.
+
+    An empty table means the classifier found nothing and would degrade silently to
+    the old behaviour — including leaving the Great Salt Lake on-stream.
+
+    A row only counts as a demotion if at least one signal actually flagged it —
+    `endorheic_frame` only ever emits such rows, but this guards against a hand-built
+    or stale table that carries a COMID with both `by_terminus` and
+    `by_closed_huc12` false.
+    """
+    df = pd.read_parquet(path, columns=["comid", "by_terminus", "by_closed_huc12"])
+    flagged = df[df["by_terminus"] | df["by_closed_huc12"]]
+    comids = {int(c) for c in flagged["comid"].to_numpy()}
+    if not comids:
+        raise ValueError(
+            f"{path} lists 0 endorheic COMIDs → the demotion would be a silent no-op "
+            f"and Great Salt Lake would stay on-stream. Re-run the `endorheic` step."
+        )
+    return comids

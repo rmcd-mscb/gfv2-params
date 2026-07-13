@@ -28,6 +28,16 @@ class BuildContext:
     waterbody_layer: str | None = None
     connected_comids_table: Path | None = None
     flowthrough_comids_table: Path | None = None
+    # --- endorheic classifier inputs ---------------------------------------
+    # Full WBD HUC12 layer (type-C rows), staged by gfv2_params.download.wbd_huc12.
+    # Optional: absent -> Signal B off, Signal A (FDR terminus) still runs.
+    wbd_huc12_table: Path | None = None
+    # BurnAddWaterbody polygons (gfv2_params.download.nhd_burn_components), unioned
+    # into the waterbody layer by the `waterbody` builder. Optional.
+    burn_add_waterbody_table: Path | None = None
+    # NHDPlus Sink.shp — provenance + the BurnAdd linkage only, NOT a classifier
+    # signal (the classifier reads the FDR grid). Optional.
+    sink_points_table: Path | None = None
     fdr_raster: Path | None = None
     twi_raster: Path | None = None
     vpu: str | None = None  # single-VPU fabric's VPU label (e.g. "17"); None = use fabric `vpu` attr
