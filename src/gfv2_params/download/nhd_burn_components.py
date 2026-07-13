@@ -13,11 +13,22 @@ Two products, one archive per VPU:
   to mark where a burned flowline's network terminates. It therefore contains 0 sinks
   inside Great Salt Lake, where NHDPlus has 29. Do not use it.
 
-* `burn_add_waterbodies.parquet` — waterbody polygons NHDPlus added for the burn that
-  are absent from NHDWaterbody. These are genuinely new depression AREA (VPU 16 alone:
-  23 polygons, 374.5 km², largest a 136.8 km² playa; 0 of 23 overlap an existing
-  waterbody). `waterbody.py` unions them into the waterbody layer, after which they
-  flow through waterbody -> dprst -> routing untouched and become dprst pour-points.
+* `burn_add_waterbodies.parquet` — the SINK-PURPOSE subset of BurnAddWaterbody.shp:
+  waterbody polygons NHDPlus added for the burn that are absent from NHDWaterbody.
+  These are genuinely new depression AREA (VPU 16 alone: 23 polygons, 374.5 km²,
+  largest a 136.8 km² playa; 0 of 23 overlap an existing waterbody). `waterbody.py`
+  unions them into the waterbody layer, after which they flow through waterbody ->
+  dprst -> routing untouched and become dprst pour-points.
+
+  BurnAddWaterbody is NOT a sink layer. It is the general "waterbodies added to the
+  DEM burn" layer, and only the rows carrying a sink `PurpCode` are sinks (see
+  PURPCODE_IS_SINK). Measured on the real archives: VPU 16's rows all have PurpCode
+  populated and every one is referenced by a sink, but VPU 01 ships 702 rows whose
+  PurpCode/PurpDesc are entirely NULL, VPU 01's own Sink.shp holds ZERO sinks, 503 of
+  those 702 are ON-network (OnOffNet = 1), and their FCodes include 12 × 46006
+  (StreamRiver) and 1 × 33600 (CanalDitch). Merging them would classify canals and
+  river reaches as depression storage. So `burn_add_to_waterbody_frame` keeps only the
+  sink-purpose rows and drops the rest.
 """
 
 from __future__ import annotations
@@ -42,10 +53,48 @@ from gfv2_params.log import configure_logging
 
 logger = configure_logging("download_nhd_burn_components")
 
-# BurnAddWaterbody PurpCode -> NHD FTYPE. Deliberately exhaustive: an unrecognised
-# code raises rather than defaulting, because FTYPE drives NEVER_ONSTREAM_FTYPES
-# (a mis-defaulted Playa would become promotable on-stream).
-PURPCODE_TO_FTYPE = {4: "Playa", 8: "LakePond"}
+# Is this BurnAddWaterbody PurpCode a SINK (depression-storage) purpose? Measured
+# across all 21 CONUS VPU archives (PurpCode is a STRING domain — it carries "NT"):
+#
+#   PurpCode  PurpDesc                                      rows  FCODEs
+#   4         BurnAddWaterbody Playa                          86  36100
+#   5         NHD Waterbody closed lake                       21  36100 (17), 46600 (4)
+#   8         BurnAddWaterbody closed lake                  1550  39000/39001/39004/39009 (1550), 46600 (1)
+#   NT        Canada National Topographic Data Base (NTDB)     3  39004 (2), 46006 (1)
+#   (NULL)    —                                              704  39004/39000/46006/44500/33600
+#
+# 4/5/8 are the closed-lake / playa purposes → depression storage. PurpCode 5's rows
+# are NOT already in `conus_waterbodies.gpkg` despite the "NHD Waterbody" wording
+# (measured: 0.000 area overlap with the existing layer for all 21) — they are 17 real
+# Rio Grande playas and 4 swamp/marsh polygons, i.e. genuinely new depression area.
+# `NT` is a PROVENANCE tag on Canadian fill polygons, not a sink purpose (one of the 3
+# is a 26.7 km² StreamRiver), and NULL means "added to the DEM burn, not a sink".
+# Both are dropped: merging them would turn river reaches and canals into depression
+# storage. A POPULATED code absent from this table RAISES rather than defaulting.
+PURPCODE_IS_SINK = {"4": True, "5": True, "8": True, "NT": False}
+
+# NHD FCODE (first three digits) -> FTYPE. FCODE, not PurpCode, is the authoritative
+# FTYPE source here: it is populated on every BurnAddWaterbody row, and PurpCode 5
+# spans BOTH Playa (36100) and SwampMarsh (46600), so a PurpCode->FTYPE map would
+# mislabel 17 real playas as lakes. FTYPE drives NEVER_ONSTREAM_FTYPES,
+# EXCLUDE_WATERBODY_FTYPES and the dprst_depth donor grouping, so an unrecognised
+# FCODE raises rather than defaulting.
+FTYPE_BY_FCODE_PREFIX = {
+    336: "CanalDitch",
+    361: "Playa",
+    378: "Ice Mass",
+    390: "LakePond",
+    436: "Reservoir",
+    445: "SeaOcean",
+    460: "StreamRiver",
+    466: "SwampMarsh",
+    493: "Estuary",
+}
+
+# A sink-purpose polygon that is a CONVEYANCE is a contradiction in terms — this is
+# precisely the failure mode the NULL/NT drop exists to prevent, so assert it on the
+# rows we KEEP rather than trusting the PurpCode domain to stay clean forever.
+CONVEYANCE_FTYPES = {"StreamRiver", "CanalDitch", "ArtificialPath"}
 
 
 def pick_component_key(keys: list[str], vpu: str) -> str | None:
@@ -146,32 +195,104 @@ def _resolve_field(gdf: gpd.GeoDataFrame, canon: str) -> str:
     return actual
 
 
+def normalize_purpcode(value) -> str | None:
+    """Canonical string form of a raw PurpCode cell, or None when it is NULL.
+
+    The domain is mixed: numeric codes arrive as int, float or str across VPUs
+    ("4", 4, 4.0 all mean PurpCode 4), and "NT" is a genuine non-numeric code. NULL
+    (None/NaN/blank) means "not a sink-purpose polygon", not "unknown code".
+    """
+    if value is None or pd.isna(value):
+        return None
+    s = str(value).strip()
+    if not s or s.lower() in {"nan", "none"}:
+        return None
+    try:
+        return str(int(float(s)))
+    except ValueError:
+        return s.upper()
+
+
+def ftype_for_fcode(fcode) -> str:
+    """NHD FTYPE for an FCODE (its first three digits). Raises on an unknown FTYPE."""
+    prefix = int(fcode) // 100
+    ftype = FTYPE_BY_FCODE_PREFIX.get(prefix)
+    if ftype is None:
+        raise ValueError(
+            f"BurnAddWaterbody row carries FCODE {fcode} (FTYPE code {prefix}), which "
+            f"is not in FTYPE_BY_FCODE_PREFIX; refusing to guess a FTYPE. FTYPE drives "
+            f"NEVER_ONSTREAM_FTYPES / EXCLUDE_WATERBODY_FTYPES, so a wrong default "
+            f"would misclassify this polygon. Extend FTYPE_BY_FCODE_PREFIX "
+            f"deliberately. Known: {sorted(FTYPE_BY_FCODE_PREFIX)}"
+        )
+    return ftype
+
+
 def burn_add_to_waterbody_frame(gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
-    """Reshape BurnAddWaterbody.shp into the waterbody-layer schema.
+    """Reshape the SINK-PURPOSE rows of BurnAddWaterbody.shp into the waterbody schema.
+
+    Rows whose `PurpCode` is not a sink purpose (PURPCODE_IS_SINK) are DROPPED, because
+    BurnAddWaterbody is not a sink layer (module docstring): VPU 01's 702 rows carry a
+    NULL PurpCode, 503 of them are on-network, and they include StreamRiver and
+    CanalDitch FCodes. Merging those would turn canals and river reaches into
+    depression storage. A NULL PurpCode means "not a sink-purpose polygon" and is
+    dropped; a POPULATED but unrecognised PurpCode still raises (FTYPE drives
+    NEVER_ONSTREAM_FTYPES, so it must never be guessed).
+
+    FTYPE comes from FCODE (see FTYPE_BY_FCODE_PREFIX), and every retained row is
+    asserted to be a non-conveyance FTYPE.
 
     `PolyID` (always negative) becomes both COMID and member_comid, so
     depstor.select_connected_waterbodies can join without a KeyError — and so these
     polygons can never match a WBAREACOMI / flow-through COMID (all positive). That
     makes them structurally incapable of on-stream promotion, which is correct:
-    NHDPlus flagged every one of them as a sink.
+    every retained row is a sink-purpose polygon.
+
+    Returns an EMPTY frame (not an error) when a VPU has no sink-purpose row at all —
+    VPU 01 (702 rows, none sink-purpose) is exactly that case.
     """
     purpcode_col = _resolve_field(gdf, "PurpCode")
     polyid_col = _resolve_field(gdf, "PolyID")
+    fcode_col = _resolve_field(gdf, "FCode")
 
-    unknown = sorted(set(gdf[purpcode_col].astype(int)) - set(PURPCODE_TO_FTYPE))
+    code = gdf[purpcode_col].map(normalize_purpcode)
+    unknown = sorted(set(code.dropna().unique()) - set(PURPCODE_IS_SINK))
     if unknown:
         raise ValueError(
             f"BurnAddWaterbody carries unrecognised PurpCode(s) {unknown}; refusing "
-            f"to guess a FTYPE. FTYPE drives NEVER_ONSTREAM_FTYPES, so a wrong "
-            f"default would let a Playa be promoted on-stream. Known codes: "
-            f"{sorted(PURPCODE_TO_FTYPE)} — extend PURPCODE_TO_FTYPE deliberately."
+            f"to guess whether they are sinks. A wrong default would either drop real "
+            f"depression area or turn a river reach into depression storage. Known "
+            f"codes: {sorted(PURPCODE_IS_SINK)} — extend PURPCODE_IS_SINK "
+            f"deliberately, from the layer's own PurpDesc/FCode."
+        )
+    sink_codes = [c for c, is_sink in PURPCODE_IS_SINK.items() if is_sink]
+    keep = code.isin(sink_codes)
+    n_dropped = int((~keep).sum())
+    if n_dropped:
+        dropped = code[~keep].fillna("(NULL)").value_counts().to_dict()
+        logger.info(
+            f"  dropped {n_dropped} of {len(gdf)} BurnAddWaterbody polygons with no "
+            f"sink PurpCode {dropped} — NULL = added to the DEM burn but not a sink, "
+            f"NT = Canadian NTDB fill polygon; keeping them would classify on-network "
+            f"canals/river reaches as depression storage"
+        )
+    gdf = gdf[keep]
+
+    ftype = gdf[fcode_col].map(ftype_for_fcode)
+    conveyance = sorted(set(ftype) & CONVEYANCE_FTYPES)
+    if conveyance:
+        raise ValueError(
+            f"sink-purpose BurnAddWaterbody rows carry conveyance FTYPE(s) "
+            f"{conveyance} — a canal/river reach is not depression storage. Refusing "
+            f"to merge them into the waterbody layer; check the archive's "
+            f"PurpCode/FCode domain."
         )
     out = gpd.GeoDataFrame(
         {
             "GNIS_ID": pd.Series([None] * len(gdf), dtype="object"),
             "GNIS_NAME": pd.Series([None] * len(gdf), dtype="object"),
             "COMID": gdf[polyid_col].astype("int64").to_numpy(),
-            "FTYPE": gdf[purpcode_col].astype(int).map(PURPCODE_TO_FTYPE).to_numpy(),
+            "FTYPE": ftype.to_numpy(),
             "member_comid": gdf[polyid_col].astype("int64").to_numpy(),
             "area_sqkm": (gdf.to_crs(5070).geometry.area / 1e6).to_numpy(),
         },
@@ -217,7 +338,15 @@ def main() -> None:
         if len(b) == 0:
             continue
         logger.info(f"VPU {vpu}: {len(b)} BurnAddWaterbody polygons")
-        burns.append(burn_add_to_waterbody_frame(b).to_crs(5070))
+        sink_purpose = burn_add_to_waterbody_frame(b)
+        if len(sink_purpose) == 0:
+            # Legitimate: a VPU can ship BurnAddWaterbody rows with no sink PurpCode
+            # at all (VPU 01 ships 702 such rows and zero sinks). They add no
+            # depression area — see burn_add_to_waterbody_frame.
+            logger.info(f"VPU {vpu}: 0 of {len(b)} are sink-purpose (PurpCode 4/8)")
+            continue
+        logger.info(f"VPU {vpu}: {len(sink_purpose)} sink-purpose BurnAddWaterbody kept")
+        burns.append(sink_purpose.to_crs(5070))
 
     if failures:
         raise RuntimeError(

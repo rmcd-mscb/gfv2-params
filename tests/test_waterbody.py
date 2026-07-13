@@ -155,10 +155,11 @@ def test_build_merges_burn_add_before_ftype_exclusion(tmp_path):
     would let a BurnAdd Ice Mass polygon leak into the raster unfiltered -- this test
     drives the real `build()` entry point to catch exactly that regression.
 
-    Note: an "Ice Mass" BurnAdd row can't actually occur via the real staging path
-    (`nhd_burn_components.PURPCODE_TO_FTYPE` only ever maps to `Playa`/`LakePond` and
-    raises on anything else) -- this FTYPE is synthetic here purely to exercise the
-    merge-before-filter ordering invariant, not a live production hazard.
+    Note: no "Ice Mass" BurnAdd row occurs in the real staged data (the sink-purpose
+    rows across all 21 CONUS VPUs are Playa/LakePond/SwampMarsh only -- see
+    `nhd_burn_components.PURPCODE_IS_SINK` / `FTYPE_BY_FCODE_PREFIX`), but the staging
+    path derives FTYPE from FCODE and so *could* emit one. This test exercises the
+    merge-before-filter ordering invariant that keeps such a row out of the raster.
     """
     from gfv2_params.depstor_builders import waterbody
     from gfv2_params.depstor_builders.context import BuildContext
