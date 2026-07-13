@@ -96,6 +96,9 @@ pixi run --as-is python -m gfv2_params.download.nhd_topology
 sbatch slurm_batch/download_nhd_flowlines.batch
 # Stage flow-through waterbody COMIDs (one-time, CONUS):
 sbatch slurm_batch/stage_nhd_flowthrough.batch
+# Endorheic classifier inputs (run once; CONUS-shared, fabric-independent):
+pixi run --as-is python -m gfv2_params.download.nhd_burn_components   # Sink.shp + BurnAddWaterbody
+pixi run --as-is python -m gfv2_params.download.wbd_huc12             # full WBD (type-C closed basins)
 # Stage WESM 1m footprints (one-time, CONUS; dprst_depth's best-available-topo tagging):
 pixi run --as-is python -m gfv2_params.download.wesm
 pixi run --as-is python scripts/clip_shared_to_fabric.py --fabric gfv2   # tiny VRT (login OK)
@@ -120,7 +123,7 @@ sbatch slurm_batch/build_depstor_rasters.batch
 ```
 
 **What it does:** clips the fabric-bounds FDR template, then builds the full
-depression-storage raster stack. The three NHD staging steps + the WESM stage
+depression-storage raster stack. The NHD/WBD staging steps + the WESM stage
 are one-time CONUS runs. `nhd_topology` stages the NHDPlus PlusFlowlineVAA
 network (`flowline_topology.parquet`) and **must run first**: both COMID
 steps gate on-stream promotion on Network-Flowline membership, so a waterbody
@@ -132,6 +135,18 @@ unioned by the `wbody_connectivity` builder. If you update either NHD staging
 COMID output after an initial build, rerun the depstor stack from
 `wbody_connectivity`
 (`sbatch slurm_batch/build_depstor_rasters.batch --from wbody_connectivity --force`).
+
+`nhd_burn_components` and `wbd_huc12` stage the (optional) inputs to the
+`endorheic` depstor step — Signal A (FDR terminus-inside-itself) needs no
+staging and always runs; Signal B (majority-inside a closed WBD HUC12) and the
+BurnAddWaterbody union into `waterbody` need these two. Never substitute the
+pre-made `input/nhd/NHD_sink_points.gpkg` or `input/nhd/closed_huc12.gpkg` —
+both are incomplete extracts (see `HPC_REFERENCE.md`'s "Endorheic classifier
+inputs"). `wbody_connectivity` subtracts the `endorheic` output from the
+on-stream set — a strict subtraction, never additive — so changing the
+waterbody layer or the on-stream COMID set re-runs `waterbody → endorheic →
+wbody_connectivity → dprst → routing → drains_perv/drains_imperv`
+(`--mem=384G` for `waterbody`/`dprst`, `96G` for `routing`).
 
 `dprst_depth` (3b) is split out of the single whole-stack job (3c) because its
 compute cost scales with the ~286k CONUS dprst **polygons** (one windowed DEM

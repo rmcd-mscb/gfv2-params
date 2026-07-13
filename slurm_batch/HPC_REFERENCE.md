@@ -379,15 +379,33 @@ dprst → perv → hru_id → dprst_depth → vpu_id → routing → routing_hru
 drains_perv / drains_imperv → carea_map. `endorheic` emits
 `endorheic_waterbody_comids.parquet` (Signal A: FDR terminus-inside-itself;
 Signal B: majority-inside a closed WBD HUC12, when `wbd_huc12_table` is
-configured) — as of this writing it is produced but not yet consumed;
-`wbody_connectivity` subtracting it from the on-stream set is tracked
-separately (issue tracked by the endorheic-dprst-classifier spec). Selective
-re-runs via `--step <name>` or `--from <name>` passed
-through to the Python script. `dprst_depth` (issue #173) is a CONUS-scale
-compute outlier in this DAG — see "Stage 2d'" below; it needs its own SLURM
-array run **before** a full unfiltered `build_depstor_rasters.batch`, or that
-job will attempt an unbounded in-process fallback compute at the `dprst_depth`
-step.
+configured); `wbody_connectivity` subtracts this set from the unioned
+on-stream COMIDs — a STRICT SUBTRACTION, never additive — which is the fix for
+the Great Salt Lake misclassification. If `endorheic` hasn't been run for a
+fabric, `wbody_connectivity` logs a loud warning and proceeds without the
+demotion rather than failing. Selective re-runs via `--step <name>` or
+`--from <name>` passed through to the Python script. `dprst_depth` (issue
+#173) is a CONUS-scale compute outlier in this DAG — see "Stage 2d'" below; it
+needs its own SLURM array run **before** a full unfiltered
+`build_depstor_rasters.batch`, or that job will attempt an unbounded
+in-process fallback compute at the `dprst_depth` step.
+
+**Endorheic classifier inputs.** Signal A needs only `fdr_raster` (already
+required on every fabric) and needs no extra staging. Signal B and the
+BurnAddWaterbody union into `waterbody` are optional and staged once,
+CONUS-wide, fabric-independent:
+
+```bash
+pixi run --as-is python -m gfv2_params.download.nhd_burn_components   # Sink.shp + BurnAddWaterbody
+pixi run --as-is python -m gfv2_params.download.wbd_huc12             # full WBD (type-C closed basins)
+```
+
+Do **not** substitute the pre-made `input/nhd/NHD_sink_points.gpkg` (a strict
+subset of NHDPlus's `Sink.shp` — 537 sinks vs 3,222 in VPU 16 — that omits
+`PURPCODE 1` entirely and has 0 sinks inside Great Salt Lake, where NHDPlus has
+29) or `input/nhd/closed_huc12.gpkg` (23 type-C HUC12s in the Great Basin vs
+141 in the full WBD). Both are incomplete extracts; stage from source via the
+two commands above.
 
 **On-stream staging.** The `wbody_connectivity` builder unions two COMID
 parquets: `connected_waterbody_comids.parquet` (WBAREACOMI, from
@@ -411,6 +429,14 @@ rebuilding from `wbody_connectivity`:
 ```bash
 sbatch slurm_batch/build_depstor_rasters.batch --from wbody_connectivity --force
 ```
+
+**waterbody/endorheic rebuild cascade.** Changing the waterbody layer (e.g. a
+new BurnAddWaterbody union) or the on-stream COMID set re-runs
+`waterbody → endorheic → wbody_connectivity → dprst → routing →
+drains_perv/drains_imperv` — `--mem=384G` for `waterbody`/`dprst`, `96G` for
+`routing`. Rebuild with `--from waterbody --force` (or `--from endorheic
+--force` if only the endorheic signals/inputs changed and the waterbody layer
+itself did not).
 
 **dprst rebuild cascade.** Changing `dprst` membership (e.g. the per-cell
 impervious carve-out, or the on-stream COMID set) invalidates everything

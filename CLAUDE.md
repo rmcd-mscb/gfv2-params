@@ -89,10 +89,45 @@ These are hard-won; violating them silently corrupts outputs.
   clip must come from the hydrology lattice (`fdr.vrt`/`twi.vrt`); `elevation.vrt`
   is on the offset DEM lattice and `carea_map` requires `template ≡ twi`
   alignment. `fdr.vrt` is the **official NHDPlus V2 `FdrFac`** (NHDPlus HydroDEM:
-  stream-burned + walled + fully depression-filled), so `drains_to_dprst` routes
-  on a fully drainage-enforced FDR with interior sinks removed — *not* the opt-in
-  richdem `Fdr_hydrodem` from `compute_dem_derivatives.py`. See `docs/ARCHITECTURE.md`
-  and issue #147 (depression-respecting FDR investigation) for the provenance/tradeoff.
+  stream-burned + walled + depression-filled **everywhere except at NHDPlus's own
+  sinks**). It is **not** fully drainage-enforced: it contains exactly **15,262
+  code-0 (terminal) cells**, and 8,591 of the 8,611 NHD sink points land on one.
+  NHDPlus leaves those sinks unfilled *by design* — that is what a sink is. The
+  "FDR code-0 warnings" noted during issue #145 **are that sink set**, and they
+  are now the primary signal of the endorheic dprst classifier: a waterbody is
+  depression storage iff its water's terminus lies inside itself
+  (`gfv2_params.endorheic`, Signal A) — *not* the opt-in richdem `Fdr_hydrodem`
+  from `compute_dem_derivatives.py`. `d8_routing` already treats code 0 as a
+  terminus, so the classifier and the router read the same grid and agree by
+  construction. See `docs/ARCHITECTURE.md`,
+  `docs/superpowers/specs/2026-07-12-endorheic-dprst-classifier-design.md`, and
+  issue #147 (depression-respecting FDR investigation) for the provenance/tradeoff.
+- **Endorheic demotion is a STRICT SUBTRACTION, and its input is the FDR — not a
+  vector sink file.** `wbody_connectivity` subtracts an endorheic COMID set from
+  the on-stream union; the subtraction can only ever remove COMIDs, never add
+  one. Signal A ("terminus-inside-itself") reads the FDR's code-0 cells and runs
+  `d8_routing`'s own kernel, so the classifier and the router agree by
+  construction. **Do not** substitute `input/nhd/NHD_sink_points.gpkg` — it is a
+  strict subset of NHDPlus's own `Sink.shp` (537 sinks vs 3,222 in VPU 16) that
+  omits `PURPCODE 1` ("BurnLineEvent network end") entirely — precisely the
+  class that marks terminal lakes — and therefore contains **0 sinks inside
+  Great Salt Lake**, where NHDPlus's file has **29**. Stage from source via
+  `gfv2_params.download.nhd_burn_components`. Likewise, do not substitute
+  `input/nhd/closed_huc12.gpkg` — an incomplete extract (**23** type-C HUC12s in
+  the Great Basin vs **141** in the full WBD; it resolves 1 of the 10 classic
+  terminal lakes where the full WBD resolves 5). Stage via
+  `gfv2_params.download.wbd_huc12`. Containment tests use **majority-area**,
+  never `intersects` (a zero-interior-overlap boundary touch returns `True` —
+  Eagle Lake and Middle Alkali Lake graze closed basins at frac = 0.000) and
+  never `within` (it **drops Great Salt Lake**, which spills 1.1% into a
+  neighbouring HUC12 at frac = 0.989). Separately, the BurnAddWaterbody overlap
+  guard in `waterbody`'s `merge_burn_add` models **8-connected raster adjacency,
+  not vector intersection** — `clump_regions` merges 8-connected cells, so two
+  polygons ~42 m apart on a 30 m grid can clump-merge without vector-intersecting.
+  If a BurnAdd polygon lands in the same clump as an on-stream waterbody,
+  `regions_touching_mask` would delete the whole clump, silently destroying the
+  BurnAdd playa's depression area — so the guard buffers by `cell_size *
+  sqrt(2)` and **raises** instead of silently dropping it.
 - **On-stream waterbodies are traversal barriers in `routing`.** Land upslope
   of an on-stream (non-dprst) waterbody is captured by that waterbody's
   stream/lake routing and must not be attributed to a downstream depression —

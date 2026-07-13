@@ -374,10 +374,15 @@ These are hard-won; violating them silently corrupts outputs.
   (already required on every fabric) and runs everywhere; Signal B activates
   only when `wbd_huc12_table` is configured. `load_endorheic_comids` and the
   builder both fail loud on a zero-row result — a silent no-op would leave
-  the Great Salt Lake on-stream with nothing in the logs to say so. As of
-  this writing the step only **produces** the table; `wbody_connectivity`
-  subtracting it from the on-stream set (the fix for the Great Salt Lake
-  misclassification) is a separate follow-on change. See
+  the Great Salt Lake on-stream with nothing in the logs to say so.
+  `wbody_connectivity` subtracts this COMID set from the unioned on-stream set
+  — a STRICT SUBTRACTION, so it can only remove COMIDs, never add one — which
+  is what finally takes the Great Salt Lake off-stream (both WBAREACOMI and
+  flow-through otherwise promote it, because NHD draws Network artificial paths
+  between its arms). If `endorheic_comids` is absent from the build context
+  (the `endorheic` step hasn't run for this fabric), `wbody_connectivity` warns
+  loudly and proceeds without the demotion rather than failing — terminal/
+  closed-basin lakes stay on-stream until the step is run. See
   [`docs/superpowers/specs/2026-07-12-endorheic-dprst-classifier-design.md`](superpowers/specs/2026-07-12-endorheic-dprst-classifier-design.md).
 - **`carea_max`/`smidx_coef` threshold mode.** The legacy `absolute`
   thresholds (8.0/15.6) are only calibrated against VPU 01's ArcPy TWI
