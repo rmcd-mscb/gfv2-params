@@ -7,9 +7,12 @@ from pathlib import Path
 
 import geopandas as gpd
 import numpy as np
+import pytest
 import rasterio
 from rasterio.transform import from_origin
-from shapely.geometry import box
+from shapely.geometry import Polygon, box
+
+from gfv2_params.depstor_builders.waterbody import merge_burn_add
 
 
 def _write_template(path: Path, n: int = 10) -> None:
@@ -75,8 +78,6 @@ def test_waterbody_excludes_ice_mass_keeps_lakepond(tmp_path):
 
 def test_waterbody_missing_ftype_column_raises(tmp_path):
     """A waterbody layer without FTYPE must raise (refuse to silently miss Ice Mass)."""
-    import pytest
-
     from gfv2_params.depstor_builders import waterbody
     from gfv2_params.depstor_builders.context import BuildContext
 
@@ -104,3 +105,53 @@ def test_waterbody_missing_ftype_column_raises(tmp_path):
             {"outputs": {"binary": "wbody_binary.tif", "regions": "wbody_regions.tif"}},
             ctx, logging.getLogger("test"),
         )
+
+
+CRS = "EPSG:5070"
+WB_COLS = ["GNIS_ID", "GNIS_NAME", "COMID", "FTYPE", "member_comid", "area_sqkm"]
+
+
+def _sq(x0, y0, s=100):
+    return Polygon([(x0, y0), (x0 + s, y0), (x0 + s, y0 + s), (x0, y0 + s)])
+
+
+def _frame(rows):
+    return gpd.GeoDataFrame(rows, columns=WB_COLS + ["geometry"], crs=CRS)
+
+
+def test_merge_burn_add_appends_the_polygons():
+    base = _frame([[None, None, 111, "LakePond", 111, 0.01, _sq(0, 0)]])
+    burn = _frame([[None, None, -367111, "Playa", -367111, 0.01, _sq(500, 500)]])
+    out = merge_burn_add(base, burn)
+    assert len(out) == 2
+    assert set(out.COMID) == {111, -367111}
+
+
+def test_merge_burn_add_rejects_a_non_negative_comid():
+    # A positive BurnAdd COMID could match a WBAREACOMI / flow-through COMID and be
+    # promoted on-stream -- but NHDPlus flagged every BurnAddWaterbody as a SINK.
+    base = _frame([[None, None, 111, "LakePond", 111, 0.01, _sq(0, 0)]])
+    burn = _frame([[None, None, 222, "Playa", 222, 0.01, _sq(500, 500)]])
+    with pytest.raises(ValueError, match="negative"):
+        merge_burn_add(base, burn)
+
+
+def test_merge_burn_add_is_a_noop_when_not_configured():
+    base = _frame([[None, None, 111, "LakePond", 111, 0.01, _sq(0, 0)]])
+    assert merge_burn_add(base, None) is base
+
+
+def test_merge_burn_add_rejects_an_overlapping_polygon():
+    """A BurnAdd polygon overlapping an existing waterbody must FAIL LOUD.
+
+    `clump_regions` labels 8-connected components, so an overlap merges the BurnAdd
+    playa and the existing waterbody into ONE region. If that waterbody is on-stream,
+    `regions_touching_mask` excludes the whole clump — silently DELETING the playa's
+    depression area, the exact opposite of why we staged it, with nothing in the log
+    to say so. The VPU 16 spike measured 0/23 overlaps; CONUS-wide is unverified, so
+    this is checked at build time and not left to a diagnostic.
+    """
+    base = _frame([[None, None, 111, "LakePond", 111, 0.01, _sq(0, 0)]])
+    burn = _frame([[None, None, -367111, "Playa", -367111, 0.01, _sq(50, 50)]])  # overlaps
+    with pytest.raises(ValueError, match="overlap"):
+        merge_burn_add(base, burn)

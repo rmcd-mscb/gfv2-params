@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import geopandas as gpd
+import pandas as pd
 
 from ..depstor import (
     RasterInfo,
@@ -16,6 +17,55 @@ from ..depstor import (
 )
 from ..nhd_ftypes import EXCLUDE_WATERBODY_FTYPES
 from .context import BuildContext
+
+
+def merge_burn_add(
+    wb_gdf: gpd.GeoDataFrame, burn_gdf: gpd.GeoDataFrame | None
+) -> gpd.GeoDataFrame:
+    """Union NHDPlus BurnAddWaterbody polygons into the waterbody layer.
+
+    These are closed lakes / playas NHDPlus added for the DEM burn that are absent
+    from NHDWaterbody — genuinely new depression AREA (0 of 23 overlap an existing
+    waterbody in VPU 16). Once they are waterbody polygons they flow through
+    waterbody -> dprst -> routing untouched and become dprst pour-points, which is
+    why `routing` needs no change.
+
+    Their COMID (NHDPlus `PolyID`) is NEGATIVE, so it can never match a WBAREACOMI or
+    flow-through COMID (all positive) — that is what makes them structurally incapable
+    of on-stream promotion. Asserted here rather than left to luck.
+    """
+    if burn_gdf is None or len(burn_gdf) == 0:
+        return wb_gdf
+    if (burn_gdf["COMID"] >= 0).any():
+        raise ValueError(
+            "BurnAddWaterbody COMID must be negative (NHDPlus PolyID). A non-negative "
+            "value could match a positive WBAREACOMI/flow-through COMID and be promoted "
+            "on-stream — but NHDPlus flagged every BurnAddWaterbody as a sink."
+        )
+    burn = burn_gdf.to_crs(wb_gdf.crs) if burn_gdf.crs != wb_gdf.crs else burn_gdf
+
+    # A BurnAdd polygon overlapping an existing waterbody would be MERGED with it by
+    # clump_regions (8-connected labelling). If that waterbody is on-stream,
+    # regions_touching_mask then excludes the whole clump — silently DELETING the
+    # BurnAdd playa's depression area, the opposite of why we staged it, and invisible
+    # in the logs. VPU 16 measured 0 of 23 overlapping; CONUS-wide is unverified, so
+    # this fails loud rather than corrupting the product quietly.
+    hits = gpd.sjoin(
+        burn[["COMID", "geometry"]], wb_gdf[["COMID", "geometry"]],
+        how="inner", predicate="intersects",
+    )
+    if not hits.empty:
+        bad = sorted(set(hits["COMID_left"]))[:10]
+        raise ValueError(
+            f"{hits['COMID_left'].nunique()} BurnAddWaterbody polygon(s) overlap an "
+            f"existing waterbody (e.g. {bad}). clump_regions would merge them into one "
+            f"region, so an on-stream neighbour would silently drag the BurnAdd "
+            f"depression out of dprst. Investigate the overlap — do not suppress this."
+        )
+
+    return gpd.GeoDataFrame(
+        pd.concat([wb_gdf, burn[wb_gdf.columns]], ignore_index=True), crs=wb_gdf.crs
+    )
 
 
 def _load_waterbodies(path: Path, layer: str | None, logger):
@@ -56,6 +106,23 @@ def build(step_cfg: dict, ctx: BuildContext, logger) -> dict:
         logger.info("  Reprojecting wbodies from %s to %s", wb_gdf.crs, info.crs)
         wb_gdf = wb_gdf.to_crs(info.crs)
     wb_gdf = wb_gdf[wb_gdf.geometry.notna() & ~wb_gdf.geometry.is_empty]
+
+    if ctx.burn_add_waterbody_table is not None:
+        if not ctx.burn_add_waterbody_table.exists():
+            raise FileNotFoundError(
+                f"BurnAddWaterbody table not found: {ctx.burn_add_waterbody_table}. "
+                f"Run `python -m gfv2_params.download.nhd_burn_components` first, or "
+                f"remove `burn_add_waterbody_table` from the profile."
+            )
+        burn = gpd.read_parquet(ctx.burn_add_waterbody_table)
+        n_before = len(wb_gdf)
+        wb_gdf = merge_burn_add(wb_gdf, burn)
+        logger.info(
+            "  merged %d BurnAddWaterbody polygons (%.1f km2) into %d waterbodies",
+            len(wb_gdf) - n_before,
+            float(burn.to_crs(info.crs).geometry.area.sum() / 1e6),
+            n_before,
+        )
 
     if "FTYPE" in wb_gdf.columns:
         n_pre = len(wb_gdf)
