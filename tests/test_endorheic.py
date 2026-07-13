@@ -107,3 +107,16 @@ def test_closed_basin_raises_on_zero_area_geometry():
     closed = _closed([_box(0, 0, 10, 10)])
     with pytest.raises(ValueError, match="zero/negative total area"):
         closed_basin_comids(wb, closed)
+
+
+def test_closed_basin_reprojects_mismatched_closed_gdf_crs():
+    # closed_gdf's CRS can legitimately differ from wb_gdf's (e.g. WBD staged
+    # natively in one CRS, the waterbody layer in another). Every other fixture
+    # in this file hardcodes both frames to EPSG:5070, so without this test the
+    # `to_crs` reprojection branch never actually runs under test. Reuses the
+    # majority-overlap geometry (2/3 inside, frac_in = 0.667) so a reprojection
+    # bug that shifted or rescaled the union would flip the answer.
+    wb = _wb([[110, _box(8, 0, 11, 2)]])
+    closed = _closed([_box(0, 0, 10, 10)]).to_crs("EPSG:4326")
+    assert closed.crs != wb.crs
+    assert closed_basin_comids(wb, closed) == {110}
