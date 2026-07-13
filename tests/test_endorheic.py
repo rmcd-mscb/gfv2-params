@@ -6,12 +6,11 @@ import logging
 
 import geopandas as gpd
 import numpy as np
+import pandas as pd
 import pytest
 import rasterio
 from rasterio.transform import from_origin
 from shapely.geometry import Polygon
-
-import pandas as pd
 
 from gfv2_params.endorheic import (
     closed_basin_comids,
