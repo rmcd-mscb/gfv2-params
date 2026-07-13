@@ -253,8 +253,10 @@ Mirrors `nhd_flowlines.py`: S3-listing discovery, pattern
 **New — `src/gfv2_params/download/wbd_huc12.py`**
 Full WBD from NHDPlus's per-VPU `WBDSnapshot` (~25 MB/VPU) → `wbd_huc12.parquet`.
 
-Both iterate the **18 consolidated VPU tiles**, not the 21-entry RPU-split list — see
-the `shared_rasters_vpu_scope_mismatch` trap (PR #150).
+Both iterate `nhd_flowlines.vpu_index` — the **21 NHDPlus VPU archive codes**
+(`03N`/`03S`/`03W`, `10L`/`10U`, …), which is what the S3 keys are named by. (The
+18-vs-21 trap in `shared_rasters_vpu_scope_mismatch` / PR #150 concerns *raster tiles
+on disk*, not NHDPlus archives — it does not apply here.)
 
 **New — `src/gfv2_params/endorheic.py`**
 Pure functions, no I/O: `terminus_own_fraction()` (Signal A),
