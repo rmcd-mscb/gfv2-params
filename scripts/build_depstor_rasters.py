@@ -101,6 +101,10 @@ def _build_context(config: dict, force: bool) -> BuildContext:
         sink_points_table=(
             Path(config["sink_points_table"]) if config.get("sink_points_table") else None
         ),
+        min_endorheic_comids=(
+            int(config["min_endorheic_comids"])
+            if config.get("min_endorheic_comids") is not None else None
+        ),
         fdr_raster=Path(config["fdr_raster"]) if config.get("fdr_raster") else None,
         twi_raster=Path(config["twi_raster"]) if config.get("twi_raster") else None,
         vpu=config.get("vpu"),

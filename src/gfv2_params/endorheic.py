@@ -244,16 +244,36 @@ def endorheic_frame(
 
 
 def write_endorheic_comids(df: pd.DataFrame, out_path: Path) -> None:
-    """Write the endorheic COMID table (with per-signal provenance)."""
+    """Write the endorheic COMID table (with per-signal provenance).
+
+    Dtypes are pinned so a legitimately EMPTY table (a domain with no closed basin)
+    round-trips with the same schema as a populated one, instead of writing all-null
+    columns that `load_endorheic_comids` then has to guess at.
+    """
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    df.astype({"comid": "int64"}).to_parquet(out_path, index=False)
+    df.astype(
+        {
+            "comid": "int64",
+            "frac_own": "float64",
+            "by_terminus": "bool",
+            "by_closed_huc12": "bool",
+        }
+    ).to_parquet(out_path, index=False)
 
 
 def load_endorheic_comids(path: Path) -> set[int]:
-    """Load the endorheic COMID set. Fails loud on an empty table.
+    """Load the endorheic COMID set. An EMPTY set is a legitimate result.
 
-    An empty table means the classifier found nothing and would degrade silently to
-    the old behaviour — including leaving the Great Salt Lake on-stream.
+    A domain with no closed basin has no endorheic waterbody — `tjc` (Texas-Gulf) is
+    exactly that, with 4 FDR code-0 cells and 0 flagged waterbodies against 15,262 /
+    thousands on `gfv2`. Raising here (as this used to) conflated "the classifier is
+    broken" with "this domain legitimately has none" and bricked the whole `tjc`
+    depstor DAG. The demotion then subtracts the empty set: a correct no-op.
+
+    The protection against a SILENTLY empty result on a fabric that should have
+    demotions (where a no-op would leave the Great Salt Lake on-stream) lives at the
+    producing end instead — `depstor_builders/endorheic.py`'s `min_endorheic_comids`
+    floor, which `gfv2` declares.
 
     A row only counts as a demotion if at least one signal actually flagged it —
     `endorheic_frame` only ever emits such rows, but this guards against a hand-built
@@ -261,11 +281,7 @@ def load_endorheic_comids(path: Path) -> set[int]:
     `by_closed_huc12` false.
     """
     df = pd.read_parquet(path, columns=["comid", "by_terminus", "by_closed_huc12"])
-    flagged = df[df["by_terminus"] | df["by_closed_huc12"]]
-    comids = {int(c) for c in flagged["comid"].to_numpy()}
-    if not comids:
-        raise ValueError(
-            f"{path} lists 0 endorheic COMIDs → the demotion would be a silent no-op "
-            f"and Great Salt Lake would stay on-stream. Re-run the `endorheic` step."
-        )
-    return comids
+    if df.empty:
+        return set()
+    flagged = df[df["by_terminus"].astype(bool) | df["by_closed_huc12"].astype(bool)]
+    return {int(c) for c in flagged["comid"].to_numpy()}

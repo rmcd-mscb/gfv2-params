@@ -36,8 +36,20 @@ class BuildContext:
     # into the waterbody layer by the `waterbody` builder. Optional.
     burn_add_waterbody_table: Path | None = None
     # NHDPlus Sink.shp — provenance + the BurnAdd linkage only, NOT a classifier
-    # signal (the classifier reads the FDR grid). Optional.
+    # signal (the classifier reads the FDR grid). INTENTIONALLY UNREAD: no builder
+    # consumes it. It is threaded through the profile + this context so the sink
+    # layer that BurnAddWaterbody is linked to (SOURCEFC/FEATUREID) is staged and
+    # discoverable alongside the polygons it explains, and so a future step can pick
+    # it up without a config change. Do not "wire it up" to a classifier — Signal A
+    # deliberately reads the FDR grid the router reads, not this lossy point shadow
+    # of it (see gfv2_params.endorheic).
     sink_points_table: Path | None = None
+    # Optional per-fabric floor on the number of endorheic COMIDs the `endorheic`
+    # builder must produce. Absent (the default) means "this domain may legitimately
+    # have none" — e.g. `tjc`, Texas-Gulf, has zero closed basins. `gfv2` declares a
+    # floor so a collapsed/silently-empty CONUS classifier result fails loud instead
+    # of quietly leaving the Great Salt Lake on-stream.
+    min_endorheic_comids: int | None = None
     fdr_raster: Path | None = None
     twi_raster: Path | None = None
     vpu: str | None = None  # single-VPU fabric's VPU label (e.g. "17"); None = use fabric `vpu` attr

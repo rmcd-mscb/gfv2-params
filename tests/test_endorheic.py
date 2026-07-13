@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging
+
 import geopandas as gpd
 import numpy as np
 import pytest
@@ -259,10 +261,203 @@ def test_endorheic_parquet_roundtrip(tmp_path):
     assert load_endorheic_comids(p) == {1, 3}
 
 
-def test_load_endorheic_comids_rejects_an_empty_table(tmp_path):
+def test_load_endorheic_comids_tolerates_an_empty_table(tmp_path):
+    # An empty table is a LEGITIMATE result: a domain with no closed basin has no
+    # endorheic waterbody (tjc, Texas-Gulf: 4 FDR code-0 cells, 0 flagged). This used
+    # to raise, which conflated "the classifier is broken" with "this domain has none"
+    # and bricked the whole tjc depstor DAG with a message about the Great Salt Lake.
+    # The guard against a SILENTLY empty result lives at the producing end instead
+    # (the `min_endorheic_comids` floor in depstor_builders/endorheic.py).
     p = tmp_path / "endorheic.parquet"
     write_endorheic_comids(
         pd.DataFrame(columns=["comid", "frac_own", "by_terminus", "by_closed_huc12"]), p
     )
-    with pytest.raises(ValueError, match="0 endorheic COMIDs"):
-        load_endorheic_comids(p)
+    assert load_endorheic_comids(p) == set()
+
+
+# ---------------------------------------------------------------------------
+# Builder tests (depstor_builders/endorheic.py)
+# ---------------------------------------------------------------------------
+
+PIXEL = 2000.0
+NY = 14
+
+
+def _endorheic_fdr(path):
+    """A 14x14 FDR whose 3x3 block at rows/cols 1..3 all drains to a code-0 centre."""
+    fdr = np.full((NY, NY), NOD, dtype=np.uint8)
+    fdr[1, 1], fdr[1, 2], fdr[1, 3] = 2, 4, 8
+    fdr[2, 1], fdr[2, 2], fdr[2, 3] = 1, 0, 16
+    fdr[3, 1], fdr[3, 2], fdr[3, 3] = 128, 64, 32
+    _write_fdr(path, fdr, from_origin(0.0, NY * PIXEL, PIXEL, PIXEL))
+    return path
+
+
+def _through_flowing_fdr(path):
+    """Same grid with NO terminal cell: every cell flows east and leaves. Signal A: 0."""
+    fdr = np.full((NY, NY), 1, dtype=np.uint8)
+    _write_fdr(path, fdr, from_origin(0.0, NY * PIXEL, PIXEL, PIXEL))
+    return path
+
+
+def _lake():
+    """The waterbody covering the FDR's rows/cols 1..3 block."""
+    return _box(1 * PIXEL, (NY - 4) * PIXEL, 4 * PIXEL, (NY - 1) * PIXEL)
+
+
+def _wb_gpkg(path, gdf):
+    gdf.to_file(path, layer="waterbodies", driver="GPKG")
+    return path
+
+
+def _ctx(tmp_path, fdr, gpkg, **kw):
+    from gfv2_params.depstor_builders.context import BuildContext
+
+    return BuildContext(
+        fabric="t", template_path=fdr, output_dir=tmp_path,
+        hru_gpkg=gpkg, hru_layer="waterbodies",
+        waterbody_gpkg=gpkg, waterbody_layer="waterbodies",
+        fdr_raster=fdr, **kw,
+    )
+
+
+def _build(ctx):
+    from gfv2_params.depstor_builders import endorheic as builder
+
+    return builder.build(
+        {"output": "endorheic_waterbody_comids.parquet"}, ctx,
+        logging.getLogger("test"),
+    )
+
+
+def test_builder_flags_the_endorheic_lake(tmp_path):
+    fdr = _endorheic_fdr(tmp_path / "fdr.tif")
+    gpkg = _wb_gpkg(tmp_path / "wb.gpkg", _wb([[555, _lake()]]))
+    out = _build(_ctx(tmp_path, fdr, gpkg))["endorheic_comids"]
+    df = pd.read_parquet(out)
+    assert list(df["comid"]) == [555]
+    assert bool(df["by_terminus"].iloc[0])
+    assert load_endorheic_comids(out) == {555}
+
+
+def test_builder_empty_result_is_not_an_error(tmp_path):
+    # THE tjc case. tjc (Texas-Gulf) has 4 FDR code-0 cells and 0 endorheic
+    # waterbodies; the builder used to raise ValueError on a zero-row result, which
+    # made `build_depstor_rasters.py` sys.exit(1) with a message about the Great Salt
+    # Lake and took the whole tjc depstor DAG from working to fatally erroring. A
+    # domain with no closed basin must produce an EMPTY table and carry on.
+    fdr = _through_flowing_fdr(tmp_path / "fdr.tif")
+    gpkg = _wb_gpkg(tmp_path / "wb.gpkg", _wb([[555, _lake()]]))
+    out = _build(_ctx(tmp_path, fdr, gpkg))["endorheic_comids"]
+    assert out.exists()
+    assert len(pd.read_parquet(out)) == 0
+    assert load_endorheic_comids(out) == set()  # a no-op subtraction downstream
+
+
+def test_builder_min_endorheic_floor_makes_an_empty_result_fail_loud(tmp_path):
+    # The real protection the old raise-on-empty was reaching for, kept but scoped to
+    # the fabrics that can assert an expectation (gfv2 declares min_endorheic_comids).
+    # On such a fabric a collapsed/empty classifier result must still be impossible to
+    # miss -- the demotion would be a no-op and Great Salt Lake would stay on-stream.
+    fdr = _through_flowing_fdr(tmp_path / "fdr.tif")
+    gpkg = _wb_gpkg(tmp_path / "wb.gpkg", _wb([[555, _lake()]]))
+    with pytest.raises(ValueError, match="min_endorheic_comids"):
+        _build(_ctx(tmp_path, fdr, gpkg, min_endorheic_comids=1))
+
+
+def test_builder_min_endorheic_floor_is_enforced_on_the_skip_path(tmp_path):
+    # A stale/empty table left on disk must not sail through the output-exists
+    # short-circuit and silently disable the demotion on a fabric with a floor.
+    fdr = _endorheic_fdr(tmp_path / "fdr.tif")
+    gpkg = _wb_gpkg(tmp_path / "wb.gpkg", _wb([[555, _lake()]]))
+    write_endorheic_comids(
+        pd.DataFrame(columns=["comid", "frac_own", "by_terminus", "by_closed_huc12"]),
+        tmp_path / "endorheic_waterbody_comids.parquet",
+    )
+    with pytest.raises(ValueError, match="min_endorheic_comids"):
+        _build(_ctx(tmp_path, fdr, gpkg, min_endorheic_comids=1))
+
+
+def test_builder_skips_when_the_output_exists_and_rebuilds_on_force(tmp_path):
+    fdr = _endorheic_fdr(tmp_path / "fdr.tif")
+    gpkg = _wb_gpkg(tmp_path / "wb.gpkg", _wb([[555, _lake()]]))
+    stale = tmp_path / "endorheic_waterbody_comids.parquet"
+    write_endorheic_comids(
+        pd.DataFrame({"comid": [999], "frac_own": [1.0], "by_terminus": [True],
+                      "by_closed_huc12": [False]}),
+        stale,
+    )
+    _build(_ctx(tmp_path, fdr, gpkg))
+    assert list(pd.read_parquet(stale)["comid"]) == [999]  # untouched
+
+    _build(_ctx(tmp_path, fdr, gpkg, force=True))
+    assert list(pd.read_parquet(stale)["comid"]) == [555]  # rebuilt
+
+
+def test_builder_requires_a_comid_column(tmp_path):
+    fdr = _endorheic_fdr(tmp_path / "fdr.tif")
+    gdf = gpd.GeoDataFrame({"GNIS_NAME": ["x"]}, geometry=[_lake()], crs=CRS)
+    gpkg = _wb_gpkg(tmp_path / "wb.gpkg", gdf)
+    with pytest.raises(KeyError, match="COMID"):
+        _build(_ctx(tmp_path, fdr, gpkg))
+
+
+def test_builder_raises_when_the_fdr_is_missing(tmp_path):
+    gpkg = _wb_gpkg(tmp_path / "wb.gpkg", _wb([[555, _lake()]]))
+    ctx = _ctx(tmp_path, tmp_path / "absent_fdr.tif", gpkg)
+    with pytest.raises(FileNotFoundError, match="FDR raster not found"):
+        _build(ctx)
+
+
+def test_builder_raises_when_the_wbd_table_is_missing(tmp_path):
+    fdr = _endorheic_fdr(tmp_path / "fdr.tif")
+    gpkg = _wb_gpkg(tmp_path / "wb.gpkg", _wb([[555, _lake()]]))
+    ctx = _ctx(tmp_path, fdr, gpkg, wbd_huc12_table=tmp_path / "absent.parquet")
+    with pytest.raises(FileNotFoundError, match="WBD HUC12 table not found"):
+        _build(ctx)
+
+
+def test_builder_filters_the_wbd_to_type_c(tmp_path):
+    # The docs promise the builder applies the HU_12_TYPE == 'C' filter itself; it did
+    # NOT -- it handed every row to closed_basin_comids, which treats them all as
+    # closed. An operator who points `wbd_huc12_table` at a genuine FULL WBD layer
+    # would then have every waterbody flagged endorheic and the on-stream set emptied.
+    # Here the lake sits inside a CONTRIBUTING (type 'S') HUC12 and nowhere near the
+    # one type-C HUC12; Signal A finds nothing (through-flowing FDR), so an unfiltered
+    # Signal B is the only thing that could flag it.
+    fdr = _through_flowing_fdr(tmp_path / "fdr.tif")
+    gpkg = _wb_gpkg(tmp_path / "wb.gpkg", _wb([[555, _lake()]]))
+    wbd = tmp_path / "wbd.parquet"
+    gpd.GeoDataFrame(
+        {"HUC_12": ["120000000000", "160000000000"], "HU_12_TYPE": ["S", "C"]},
+        geometry=[_box(0, 0, NY * PIXEL, NY * PIXEL),          # covers the lake
+                  _box(1e6, 1e6, 1e6 + 1000, 1e6 + 1000)],     # far away
+        crs=CRS,
+    ).to_parquet(wbd)
+
+    out = _build(_ctx(tmp_path, fdr, gpkg, wbd_huc12_table=wbd))["endorheic_comids"]
+    assert load_endorheic_comids(out) == set()
+
+
+def test_builder_raises_when_the_wbd_has_no_hu_12_type(tmp_path):
+    fdr = _endorheic_fdr(tmp_path / "fdr.tif")
+    gpkg = _wb_gpkg(tmp_path / "wb.gpkg", _wb([[555, _lake()]]))
+    wbd = tmp_path / "wbd.parquet"
+    gpd.GeoDataFrame(
+        {"HUC_12": ["120000000000"]},
+        geometry=[_box(0, 0, NY * PIXEL, NY * PIXEL)], crs=CRS,
+    ).to_parquet(wbd)
+    with pytest.raises(KeyError, match="HU_12_TYPE"):
+        _build(_ctx(tmp_path, fdr, gpkg, wbd_huc12_table=wbd))
+
+
+def test_builder_raises_when_the_waterbodies_dont_overlap_the_fdr(tmp_path):
+    # The breakage the empty-result tolerance must NOT swallow: a waterbody layer that
+    # doesn't overlap the FDR grid at all (wrong fabric wiring, an upstream CRS
+    # collapse) silently zeroes both signals, which is indistinguishable from a domain
+    # that legitimately has no closed basin.
+    fdr = _endorheic_fdr(tmp_path / "fdr.tif")
+    far = _box(1e6, 1e6, 1e6 + 1000, 1e6 + 1000)
+    gpkg = _wb_gpkg(tmp_path / "wb.gpkg", _wb([[555, far]]))
+    with pytest.raises(ValueError, match="does not overlap the FDR grid"):
+        _build(_ctx(tmp_path, fdr, gpkg))

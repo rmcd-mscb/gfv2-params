@@ -81,6 +81,19 @@ def build(step_cfg: dict, ctx: BuildContext, logger) -> dict:
     # on-stream mask can never be inflated by them. This is what finally takes the
     # Great Salt Lake off-stream: both local classifiers promote it, because NHD
     # draws Network artificial paths between its arms.
+    #
+    # An EMPTY endorheic set is a legitimate no-op, not an error: a domain with no
+    # closed basin (e.g. tjc, Texas-Gulf) has no endorheic waterbody. The guard
+    # against a *silently* empty set on a fabric that should have demotions is the
+    # `min_endorheic_comids` floor in the `endorheic` builder, not a raise here.
+    #
+    # NOTE: `select_connected_waterbodies` promotes a waterbody on COMID **or**
+    # `member_comid`, but this subtraction removes COMIDs only (the endorheic table is
+    # COMID-keyed — `endorheic_frame` groups by COMID). Verified inert on the real
+    # layer today: COMID and member_comid are equal on every numeric row, and 0 rows
+    # are on-stream via `member_comid` alone. If those keys ever diverge, a waterbody
+    # could be demoted by COMID here and then re-promoted through its `member_comid`
+    # below, silently disabling the demotion — subtract on both keys if that happens.
     n_endorheic = 0
     endorheic_applied = False
     if "endorheic_comids" in ctx.paths:
@@ -92,6 +105,11 @@ def build(step_cfg: dict, ctx: BuildContext, logger) -> dict:
             "  endorheic demotion: %d of %d endorheic COMIDs were on-stream → dprst",
             n_endorheic, len(endorheic),
         )
+        if not endorheic:
+            logger.info(
+                "  (the endorheic table is empty — expected only for a domain with no "
+                "closed basin; the demotion is a no-op)"
+            )
     else:
         logger.warning(
             "  ENDORHEIC DEMOTION NOT APPLIED: `endorheic_comids` is not present in "
