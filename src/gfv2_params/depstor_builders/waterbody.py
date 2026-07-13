@@ -11,19 +11,46 @@ import pandas as pd
 from ..depstor import (
     RasterInfo,
     clump_regions,
+    load_connected_comids,
     rasterize_binary,
     read_land_mask,
+    select_connected_waterbodies,
     write_int32_regions,
     write_uint8_binary,
 )
-from ..nhd_ftypes import EXCLUDE_WATERBODY_FTYPES
+from ..nhd_ftypes import EXCLUDE_WATERBODY_FTYPES, NEVER_ONSTREAM_FTYPES
 from .context import BuildContext
+
+
+def _load_onstream_comids(ctx: BuildContext, logger) -> set[int] | None:
+    """Union of WBAREACOMI + flow-through COMIDs, for the BurnAdd overlap guard.
+
+    Mirrors the union `wbody_connectivity` computes — NOT its endorheic
+    subtraction: `waterbody` runs before `endorheic` in `STEP_ORDER` and cannot see
+    its output. Using the pre-endorheic on-stream set is a conservative superset —
+    it can only make the overlap guard in `merge_burn_add` fire MORE, never less,
+    which is the safe direction (verified: still 0 CONUS-wide hits).
+
+    Returns `None` if the on-stream set can't be determined — `connected_comids_table`
+    isn't configured, or either configured table isn't yet staged on disk — so the
+    caller must fall back to the broad "raise on any overlap" guard rather than
+    silently skip it.
+    """
+    if ctx.connected_comids_table is None or not ctx.connected_comids_table.exists():
+        return None
+    connected = load_connected_comids(ctx.connected_comids_table)
+    if ctx.flowthrough_comids_table is not None:
+        if not ctx.flowthrough_comids_table.exists():
+            return None
+        connected = connected | load_connected_comids(ctx.flowthrough_comids_table)
+    return connected
 
 
 def merge_burn_add(
     wb_gdf: gpd.GeoDataFrame,
     burn_gdf: gpd.GeoDataFrame | None,
     cell_size: float = 30.0,
+    onstream_comids: set[int] | None = None,
 ) -> gpd.GeoDataFrame:
     """Union NHDPlus BurnAddWaterbody polygons into the waterbody layer.
 
@@ -56,6 +83,18 @@ def merge_burn_add(
     `wb_gdf`'s CRS) drives the overlap guard below: it must match what
     `clump_regions` will actually rasterize against, so pass the real template
     cell size (`RasterInfo.from_path(ctx.template_path)`), not the default.
+
+    `onstream_comids` (see `_load_onstream_comids`) narrows the overlap guard below
+    to real on-stream neighbours only — measured against real CONUS data, 112 of
+    1,658 BurnAdd polygons genuinely overlap an existing waterbody, but all 112
+    neighbour an already-dprst waterbody and NONE neighbour an on-stream one.
+    Merging into an already-dprst clump is harmless (the clump simply stays dprst
+    and the BurnAdd area is preserved); only an on-stream neighbour causes the harm
+    this guard exists to catch. Pass `None` (the default) when the on-stream set is
+    unknown (tables not configured / not staged) — the guard then falls back to
+    raising on ANY overlap, the old broad behaviour, since a false negative here
+    (silently letting a real on-stream merge slip through) is worse than a false
+    positive.
     """
     if burn_gdf is None or len(burn_gdf) == 0:
         return wb_gdf
@@ -68,12 +107,24 @@ def merge_burn_add(
     burn = burn_gdf.to_crs(wb_gdf.crs) if burn_gdf.crs != wb_gdf.crs else burn_gdf
 
     # A BurnAdd polygon overlapping an existing waterbody would be MERGED with it by
-    # clump_regions (8-connected labelling). If that waterbody is on-stream,
-    # regions_touching_mask then excludes the whole clump — silently DELETING the
-    # BurnAdd playa's depression area, the opposite of why we staged it, and invisible
-    # in the logs. VPU 16 measured 0 of 23 overlapping; CONUS-wide is unverified, so
-    # this fails loud rather than corrupting the product quietly.
-    #
+    # clump_regions (8-connected labelling). The harm only occurs if that neighbour
+    # is ON-STREAM: regions_touching_mask then excludes the whole clump — silently
+    # DELETING the BurnAdd playa's depression area, the opposite of why we staged
+    # it. Merging into an already-dprst neighbour is harmless — the clump simply
+    # stays dprst and the BurnAdd area is preserved — so the guard is restricted to
+    # on-stream waterbodies when `onstream_comids` is available, and falls back to
+    # the broad "any overlap" guard when it is not (on-stream status unknowable).
+    if onstream_comids is not None:
+        overlap_target = select_connected_waterbodies(wb_gdf, onstream_comids)
+        if "FTYPE" in overlap_target.columns:
+            overlap_target = overlap_target[
+                ~overlap_target["FTYPE"].isin(NEVER_ONSTREAM_FTYPES)
+            ].copy()
+        descriptor = "on-stream "
+    else:
+        overlap_target = wb_gdf
+        descriptor = ""
+
     # This must test what clump_regions actually does to the RASTERIZED cells, not
     # vector intersection: 8-connectivity merges cells whose centres are up to
     # `cell_size * sqrt(2)` apart (a diagonal neighbour), so two polygons that do NOT
@@ -86,7 +137,7 @@ def merge_burn_add(
     buffered = burn[["COMID", "geometry"]].copy()
     buffered["geometry"] = buffered.geometry.buffer(buffer_dist)
     hits = gpd.sjoin(
-        buffered, wb_gdf[["COMID", "geometry"]],
+        buffered, overlap_target[["COMID", "geometry"]],
         how="inner", predicate="intersects",
     )
     if not hits.empty:
@@ -94,10 +145,10 @@ def merge_burn_add(
         raise ValueError(
             f"{hits['COMID_left'].nunique()} BurnAddWaterbody polygon(s) overlap or "
             f"lie within one rasterized cell diagonal ({buffer_dist:.1f} m) of an "
-            f"existing waterbody (e.g. {bad}). clump_regions would merge them into one "
-            f"8-connected region, so an on-stream neighbour would silently drag the "
-            f"BurnAdd depression out of dprst. Investigate the overlap — do not "
-            f"suppress this."
+            f"existing {descriptor}waterbody (e.g. {bad}). clump_regions would merge "
+            f"them into one 8-connected region, so an on-stream neighbour would "
+            f"silently drag the BurnAdd depression out of dprst. Investigate the "
+            f"overlap — do not suppress this."
         )
 
     burn = burn[wb_gdf.columns].copy()
@@ -173,8 +224,19 @@ def build(step_cfg: dict, ctx: BuildContext, logger) -> dict:
                 f"remove `burn_add_waterbody_table` from the profile."
             )
         burn = gpd.read_parquet(ctx.burn_add_waterbody_table)
+        onstream_comids = _load_onstream_comids(ctx, logger)
+        if onstream_comids is None:
+            logger.warning(
+                "  BurnAdd overlap guard: on-stream COMID table(s) unavailable "
+                "(`connected_comids_table` not configured, or it/`flowthrough_"
+                "comids_table` not yet staged on disk) — cannot restrict the guard "
+                "to on-stream neighbours, falling back to the broad guard (raises "
+                "on ANY overlap with an existing waterbody, not just an on-stream one)."
+            )
         n_before = len(wb_gdf)
-        wb_gdf = merge_burn_add(wb_gdf, burn, cell_size=abs(info.transform.a))
+        wb_gdf = merge_burn_add(
+            wb_gdf, burn, cell_size=abs(info.transform.a), onstream_comids=onstream_comids,
+        )
         logger.info(
             "  merged %d BurnAddWaterbody polygons (%.1f km2) into %d waterbodies",
             len(wb_gdf) - n_before,

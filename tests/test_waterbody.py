@@ -237,20 +237,96 @@ def test_build_raises_on_configured_but_missing_burn_add_table(tmp_path):
         )
 
 
-def test_merge_burn_add_rejects_an_overlapping_polygon():
-    """A BurnAdd polygon overlapping an existing waterbody must FAIL LOUD.
+def test_merge_burn_add_rejects_overlap_with_onstream_neighbor():
+    """A BurnAdd polygon overlapping an ON-STREAM waterbody must FAIL LOUD.
 
     `clump_regions` labels 8-connected components, so an overlap merges the BurnAdd
     playa and the existing waterbody into ONE region. If that waterbody is on-stream,
     `regions_touching_mask` excludes the whole clump — silently DELETING the playa's
     depression area, the exact opposite of why we staged it, with nothing in the log
-    to say so. The VPU 16 spike measured 0/23 overlaps; CONUS-wide is unverified, so
-    this is checked at build time and not left to a diagnostic.
+    to say so. Real CONUS data measured 112 of 1,658 BurnAdd/existing overlaps, none
+    on-stream — but the guard must still fire on this failure mode if it ever occurs.
     """
     base = _frame([[None, None, 111, "LakePond", 111, 0.01, _sq(0, 0)]])
     burn = _frame([[None, None, -367111, "Playa", -367111, 0.01, _sq(50, 50)]])  # overlaps
     with pytest.raises(ValueError, match="overlap"):
-        merge_burn_add(base, burn)
+        merge_burn_add(base, burn, onstream_comids={111})
+
+
+def test_merge_burn_add_does_not_raise_for_overlap_with_dprst_neighbor():
+    """A BurnAdd polygon overlapping an already-DPRST (not on-stream) neighbour is
+    harmless and must NOT raise. `clump_regions` still merges them into one region,
+    but `regions_touching_mask` only excludes clumps touching the on-stream mask —
+    a dprst-only clump simply stays dprst, and the BurnAdd depression area is
+    preserved. This is the real CONUS-wide case: all 112 of 1,658 measured
+    BurnAdd/existing overlaps neighbour an already-dprst waterbody, none on-stream —
+    so the old unconditional guard wrongly hard-failed the whole CONUS build here.
+    """
+    base = _frame([[None, None, 111, "LakePond", 111, 0.01, _sq(0, 0)]])
+    burn = _frame([[None, None, -367111, "Playa", -367111, 0.01, _sq(50, 50)]])  # overlaps
+    # 111 is absent from onstream_comids -> it's a dprst neighbour, not on-stream.
+    out = merge_burn_add(base, burn, onstream_comids=set())
+    assert len(out) == 2
+    assert set(out.COMID) == {111, -367111}
+
+
+def test_merge_burn_add_falls_back_to_broad_guard_when_onstream_unknown():
+    """When the on-stream COMID set can't be determined (`onstream_comids=None`, the
+    default — mirroring `connected_comids_table`/`flowthrough_comids_table` not
+    configured or not yet staged), the guard must fall back to the OLD broad
+    behaviour: raise on ANY overlap, regardless of whether the neighbour is
+    actually on-stream or dprst. A false negative here (silently letting a real
+    on-stream merge through unraised) is worse than the false positive of raising
+    on a dprst neighbour.
+    """
+    base = _frame([[None, None, 111, "LakePond", 111, 0.01, _sq(0, 0)]])
+    burn = _frame([[None, None, -367111, "Playa", -367111, 0.01, _sq(50, 50)]])  # overlaps
+    with pytest.raises(ValueError, match="overlap"):
+        merge_burn_add(base, burn, onstream_comids=None)
+
+
+def test_build_burn_add_overlap_falls_back_to_broad_guard_without_comid_tables(tmp_path):
+    """Integration check on `waterbody.build()` itself: when `connected_comids_table`
+    isn't configured on the fabric profile (the `BuildContext` default), the ctx-level
+    wiring (`_load_onstream_comids` returning `None`) must still reach
+    `merge_burn_add`'s broad guard and raise on a real overlap — the fallback isn't
+    silently skipped just because on-stream status is unknowable.
+    """
+    from gfv2_params.depstor_builders import waterbody
+    from gfv2_params.depstor_builders.context import BuildContext
+
+    template = tmp_path / "template.tif"
+    landmask = tmp_path / "land_mask.tif"
+    wb_gpkg = tmp_path / "wb.gpkg"
+    burn_parquet = tmp_path / "burn_add.parquet"
+    _write_template(template)
+    _write_landmask(landmask)
+
+    gpd.GeoDataFrame(
+        {"COMID": [111], "FTYPE": ["LakePond"], "member_comid": [111]},
+        geometry=[_sq(0, 0)],
+        crs=CRS,
+    ).to_file(wb_gpkg, layer="waterbodies", driver="GPKG")
+
+    _write_burn_add_parquet(
+        burn_parquet,
+        [[None, None, -367111, "Playa", -367111, 0.01, _sq(50, 50)]],  # overlaps
+    )
+
+    ctx = BuildContext(
+        fabric="t", template_path=template, output_dir=tmp_path,
+        hru_gpkg=wb_gpkg, hru_layer="waterbodies",
+        waterbody_gpkg=wb_gpkg, waterbody_layer="waterbodies",
+        burn_add_waterbody_table=burn_parquet,
+        # connected_comids_table intentionally left at its BuildContext default (None).
+    )
+    ctx.paths["landmask"] = landmask
+
+    with pytest.raises(ValueError, match="overlap"):
+        waterbody.build(
+            {"outputs": {"binary": "wbody_binary.tif", "regions": "wbody_regions.tif"}},
+            ctx, logging.getLogger("test"),
+        )
 
 
 def test_merge_burn_add_rejects_a_near_miss_that_would_8_connect():
