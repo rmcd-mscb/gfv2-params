@@ -66,9 +66,6 @@ Sampling `gfv2_fdr.vrt`:
 
 * The CONUS FDR contains exactly **15,262 code-0 (terminal) cells**.
 * **8,591 of the 8,611 NHD sink points (99.8 %) land on one.**
-* But **6,775 terminal cells sit >100 m from any sink point** — genuinely distinct
-  termini the sink-point file never mentions, including those inside **Great Salt
-  Lake, Mono Lake, Salton Sea, Pyramid, Goose, Honey, Abert, Summer and Devils Lake**.
 
 `CLAUDE.md` states the NHDPlus FdrFac is "stream-burned + walled + fully
 depression-filled … with interior sinks removed". **That is false**, and it is the
@@ -76,9 +73,32 @@ load-bearing correction here: NHDPlus leaves these sinks unfilled *by design*, a
 they are exactly what makes this classifier possible. The "benign FDR code-0
 warnings" noted during #145 **are this dataset**.
 
-The vector sink-point file is a **lossy shadow of the grid**. It is retained for
-provenance (`PURPCODE`/`PURPDESC`) and for the BurnAddWaterbody linkage
-(`SOURCEFC`/`FEATUREID`), **not** as a classifier signal.
+### `input/nhd/NHD_sink_points.gpkg` is an incomplete extract — stage `Sink.shp` instead
+
+Against NHDPlus's authoritative `NHDPlusBurnComponents/Sink.shp` for VPU 16:
+
+| | `NHD_sink_points.gpkg` | **NHDPlus `Sink.shp`** |
+| --- | --- | --- |
+| VPU 16 sinks | 537 | **3,222** |
+| SINKIDs unique to it | **0** (a strict subset) | 2,685 |
+| **sinks inside Great Salt Lake** | **0** | **29** |
+| VPU-16 terminal cells explained (≤100 m) | 13.8 % | **80.9 %** |
+
+The cause is specific: NHDPlus sinks include **`PURPCODE 1 = "BurnLineEvent network
+end"`** — a sink placed where a burned flowline's network *ends*, i.e. exactly the
+terminus of a terminal lake. There are **29 of them inside Great Salt Lake**. The
+staged extract carries purpose codes 3–10 and **omits PURPCODE 1 entirely**, so it
+systematically drops precisely the class of sink that marks endorheic lakes.
+
+**Do not use `NHD_sink_points.gpkg`.** `nhd_burn_components` stages `Sink.shp` from
+source. Even so, the sink vectors are retained only for provenance
+(`PURPCODE`/`PURPDESC`) and the BurnAddWaterbody linkage (`SOURCEFC`/`FEATUREID`) —
+**not** as a classifier signal, because Signal A reads the grid the router reads.
+
+> This is the third hand-made extract in `input/nhd/` found to be defective, alongside
+> `closed_huc12.gpkg` (23 type-C HUC12s in the Great Basin vs 141 in the full WBD) and
+> the `conus_waterbodies` layer (all 66,488 SwampMarsh removed). **Stage from the
+> authoritative source; do not consume the pre-made extracts.**
 
 ### Rule validation
 
@@ -142,6 +162,13 @@ and **no need for the fabric↔NHD crosswalk**. Nothing to re-validate when the 
 is rebuilt.
 
 ### Orphan sinks and why BurnAddWaterbody is load-bearing
+
+> ⚠️ **The figures in this section are provisional floors.** They were computed from
+> `NHD_sink_points.gpkg` and `sink_cats.gpkg`, which share the same incomplete sink
+> subset (`sink_cats` joins 8,476 of its 8,520 catchments to that file's SINKIDs).
+> Recompute them at implementation against the authoritative `Sink.shp` and its
+> catchments. The *direction* is robust — orphan sinks need an area, not a
+> pour-point — but every number below will move.
 
 2,402 terminal cells fall inside no waterbody. `sink_cats.gpkg` gives their
 contributing area:
