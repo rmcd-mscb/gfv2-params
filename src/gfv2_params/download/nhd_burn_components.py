@@ -205,7 +205,11 @@ def main() -> None:
         s = gpd.read_file(sink_shp)
         s["vpu"] = vpu
         logger.info(f"VPU {vpu}: {len(s)} sinks")
-        sinks.append(s)
+        # Reproject each VPU's frame individually before concatenating —
+        # mirrors the `burns` handling below. Labelling the concatenated
+        # multi-VPU frame with a single VPU's CRS (as this used to do) silently
+        # mis-projects every other VPU's sink points if their source CRS differs.
+        sinks.append(s.to_crs(5070))
         if burn_shp is None:
             # Already logged (with reason) inside download_burn_components.
             continue
@@ -222,10 +226,9 @@ def main() -> None:
         )
 
     sink_out = out_dir / "sink_points.parquet"
-    gpd.GeoDataFrame(pd.concat(sinks, ignore_index=True), crs=sinks[0].crs).to_crs(
-        5070
-    ).to_parquet(sink_out)
-    logger.info(f"Wrote {sink_out} ({sum(len(s) for s in sinks)} sinks)")
+    combined_sinks = gpd.GeoDataFrame(pd.concat(sinks, ignore_index=True), crs=5070)
+    combined_sinks.to_parquet(sink_out)
+    logger.info(f"Wrote {sink_out} ({len(combined_sinks)} sinks)")
 
     if not burns:
         raise ValueError(
