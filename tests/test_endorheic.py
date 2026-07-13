@@ -64,3 +64,19 @@ def test_closed_basin_empty_closed_set_demotes_nothing():
     wb = _wb([[106, _box(1, 1, 2, 2)]])
     empty = gpd.GeoDataFrame({"HUC_12": []}, geometry=[], crs=CRS)
     assert closed_basin_comids(wb, empty) == set()
+
+
+def test_closed_basin_aggregates_multi_row_comid_by_area():
+    # A single COMID split across two rows -- multi-part waterbody geometry, as
+    # in the real conus_waterbodies.gpkg layer (448,124 rows, strictly fewer
+    # unique COMIDs). Row A is 100% inside the closed union but is only 10% of
+    # the COMID's true total area; row B is the other 90% and sits entirely
+    # outside. The true combined fraction is 0.1 (must NOT be endorheic), but
+    # "any row individually clears min_frac" semantics wrongly grab COMID 107
+    # off row A alone (frac_A = 1.0). A waterbody is a COMID, not a row.
+    wb = _wb([
+        [107, _box(1, 1, 2, 2)],        # area 1, fully inside closed box -> frac 1.0
+        [107, _box(20, 0, 29, 1)],      # area 9, fully outside -> frac 0.0
+    ])
+    closed = _closed([_box(0, 0, 10, 10)])
+    assert closed_basin_comids(wb, closed) == set()

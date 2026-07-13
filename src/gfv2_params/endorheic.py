@@ -45,6 +45,13 @@ def closed_basin_comids(
     Dissolve first, then measure: a lake straddling two *adjacent* closed HUC12s is
     fully inside the closed system but majority-inside neither polygon on its own.
 
+    A waterbody is a COMID, not a row: `conus_waterbodies.gpkg` stores multi-part
+    waterbodies as multiple rows sharing one COMID (448,124 rows, strictly fewer
+    unique COMIDs). Area and intersection-area are summed across all of a COMID's
+    rows BEFORE dividing, so a COMID is never decided on the strength of one row
+    that individually clears `min_frac` while the COMID's true combined fraction
+    does not.
+
     Majority-area -- NOT `intersects`, NOT `within`:
       * `within` fails on Great Salt Lake, which spills 1.1% into a neighbouring
         HUC12 (frac_in = 0.989).
@@ -56,6 +63,7 @@ def closed_basin_comids(
         return set()
     closed = closed_gdf.to_crs(wb_gdf.crs) if closed_gdf.crs != wb_gdf.crs else closed_gdf
     union = closed.geometry.union_all()
-    area = wb_gdf.geometry.area
-    frac = wb_gdf.geometry.intersection(union).area / area.where(area > 0)
-    return {int(c) for c in wb_gdf.loc[frac > min_frac, "COMID"]}
+    area = wb_gdf.geometry.area.groupby(wb_gdf["COMID"]).sum()
+    inter = wb_gdf.geometry.intersection(union).area.groupby(wb_gdf["COMID"]).sum()
+    frac = inter / area.where(area > 0)
+    return {int(c) for c in area.index[frac > min_frac]}
