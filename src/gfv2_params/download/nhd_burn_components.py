@@ -23,7 +23,6 @@ Two products, one archive per VPU:
 from __future__ import annotations
 
 import re
-import shutil
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
@@ -83,22 +82,47 @@ def download_burn_components(
         return None, None
     filename = url.rsplit("/", 1)[1]
     archive = download_dir / filename
+
     if archive.exists():
         logger.info(f"Already downloaded: {filename}")
     else:
         logger.info(f"Downloading {filename} ...")
+        # Download to a .part sidecar and atomically rename only after a
+        # size-verified, complete write, so an interrupted download (node
+        # preemption, walltime) can't leave a truncated archive that the next
+        # run silently reuses via the archive.exists() short-circuit above.
+        tmp = archive.with_suffix(archive.suffix + ".part")
         with requests.get(url, stream=True, timeout=600) as r:
             r.raise_for_status()
-            with open(archive, "wb") as fh:
-                shutil.copyfileobj(r.raw, fh)
+            expected = int(r.headers.get("Content-Length", 0))
+            with open(tmp, "wb") as f:
+                for chunk in r.iter_content(chunk_size=8192):
+                    f.write(chunk)
+        got = tmp.stat().st_size
+        if expected and got != expected:
+            tmp.unlink(missing_ok=True)
+            raise OSError(f"{filename}: downloaded {got} bytes, expected {expected}")
+        tmp.rename(archive)
 
+    # Always re-extract rather than trusting a possibly-partial target dir: a
+    # walltime kill mid-extraction can leave Sink.shp written but
+    # BurnAddWaterbody.shp not yet extracted, and a bare `if not
+    # target.exists()` skip would then treat that partial extraction as done
+    # forever, silently dropping BurnAddWaterbody for that VPU on every future run.
     target = extract_dir / f"burncomponents_{vpu}"
-    if not target.exists():
-        with py7zr.SevenZipFile(archive, mode="r") as a:
-            a.extractall(path=target)
+    target.mkdir(parents=True, exist_ok=True)
+    with py7zr.SevenZipFile(archive, mode="r") as a:
+        a.extractall(path=target)
 
     sink = next(iter(target.rglob("Sink.shp")), None)
     burn = next(iter(target.rglob("BurnAddWaterbody.shp")), None)
+    if sink is None:
+        logger.error(f"Sink.shp not found in extracted burn components for VPU {vpu}")
+    if burn is None:
+        logger.info(
+            f"BurnAddWaterbody.shp not found in extracted burn components for VPU "
+            f"{vpu} (this is normal for some VPUs)"
+        )
     return sink, burn
 
 
@@ -160,7 +184,7 @@ def main() -> None:
         logger.info(f"VPU {vpu}: {len(s)} sinks")
         sinks.append(s)
         if burn_shp is None:
-            logger.info(f"VPU {vpu}: no BurnAddWaterbody (this is normal for some VPUs)")
+            # Already logged (with reason) inside download_burn_components.
             continue
         b = gpd.read_file(burn_shp)
         if len(b) == 0:
