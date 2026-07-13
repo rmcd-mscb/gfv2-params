@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import geopandas as gpd
+import pytest
 from shapely.geometry import Polygon
 
 from gfv2_params.endorheic import closed_basin_comids
@@ -80,3 +81,29 @@ def test_closed_basin_aggregates_multi_row_comid_by_area():
     ])
     closed = _closed([_box(0, 0, 10, 10)])
     assert closed_basin_comids(wb, closed) == set()
+
+
+def test_closed_basin_raises_on_all_empty_geometry():
+    # If every incoming geometry is null/empty (e.g. an upstream CRS bug
+    # collapsed a whole batch), silently returning set() would misclassify
+    # every one of these waterbodies as not-endorheic with no signal that
+    # anything went wrong. Fail loud instead -- mirrors the notna()/is_empty()
+    # prefilter in depstor_builders/wbody_connectivity.py.
+    wb = _wb([[108, Polygon()]])
+    closed = _closed([_box(0, 0, 10, 10)])
+    with pytest.raises(ValueError, match="null/empty"):
+        closed_basin_comids(wb, closed)
+
+
+def test_closed_basin_raises_on_zero_area_geometry():
+    # A degenerate (collinear-point) polygon has area 0.0 without being
+    # `is_empty` -- the notna()/is_empty() prefilter alone can't catch it.
+    # `area.where(area > 0)` used to turn this into NaN and silently drop it
+    # (NaN > min_frac is False, same as "not endorheic"). That must fail loud.
+    degenerate = Polygon([(1, 1), (2, 1), (3, 1)])  # collinear -> area 0.0
+    assert degenerate.area == 0.0
+    assert not degenerate.is_empty
+    wb = _wb([[109, degenerate]])
+    closed = _closed([_box(0, 0, 10, 10)])
+    with pytest.raises(ValueError, match="zero/negative total area"):
+        closed_basin_comids(wb, closed)

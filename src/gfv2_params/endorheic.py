@@ -58,12 +58,40 @@ def closed_basin_comids(
       * `intersects` returns True for a ZERO-interior-overlap boundary touch, which
         wrongly grabs lakes grazing a closed boundary at frac_in = 0.000 (Eagle Lake,
         Middle Alkali Lake). Do not "simplify" this predicate back to `intersects`.
+
+    Degenerate geometry (null/empty rows, or a COMID whose rows sum to zero/
+    negative area) raises `ValueError` instead of silently falling out via
+    `NaN > min_frac == False` -- which would be indistinguishable from
+    "legitimately not endorheic" and could hide an upstream CRS collapse across
+    a whole batch. Mirrors the notna()/is_empty() guard in
+    `depstor_builders/wbody_connectivity.py`.
     """
     if closed_gdf.empty:
         return set()
+
+    n_before = len(wb_gdf)
+    wb_gdf = wb_gdf[wb_gdf.geometry.notna() & ~wb_gdf.geometry.is_empty]
+    if n_before and wb_gdf.empty:
+        raise ValueError(
+            f"closed_basin_comids: all {n_before} waterbody geometries are "
+            "null/empty -- this would silently classify a whole batch as "
+            "not-endorheic instead of failing loud. Check the waterbody layer "
+            "for an upstream CRS bug or bad extract."
+        )
+    if wb_gdf.empty:
+        return set()
+
     closed = closed_gdf.to_crs(wb_gdf.crs) if closed_gdf.crs != wb_gdf.crs else closed_gdf
     union = closed.geometry.union_all()
     area = wb_gdf.geometry.area.groupby(wb_gdf["COMID"]).sum()
     inter = wb_gdf.geometry.intersection(union).area.groupby(wb_gdf["COMID"]).sum()
-    frac = inter / area.where(area > 0)
+    if (area <= 0).any():
+        bad = area.index[area <= 0].tolist()
+        raise ValueError(
+            f"closed_basin_comids: {len(bad)} COMID(s) have zero/negative total "
+            f"area after summing all rows (e.g. {bad[:5]}) -- likely degenerate "
+            "geometry or a CRS collapse upstream. Fail loud instead of letting "
+            "them silently drop out of the closed-basin signal."
+        )
+    frac = inter / area
     return {int(c) for c in area.index[frac > min_frac]}
