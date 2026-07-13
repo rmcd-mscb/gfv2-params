@@ -59,6 +59,17 @@ def test_burn_add_comids_are_all_negative():
     assert (burn_add_to_waterbody_frame(g).COMID < 0).all()
 
 
+def test_burn_add_fails_loud_on_positive_polyid():
+    # A positive PolyID could collide with a real WBAREACOMI/flow-through
+    # COMID and get promoted on-stream, even though NHDPlus flagged every
+    # BurnAddWaterbody as a sink. This is a hard constraint of the task, so the
+    # guard must actually fire on non-negative input — not just pass by
+    # construction on fixtures that are always negative.
+    g = _baw([[367111, 4, "BurnAddWaterbody Playa", 1, 36100, SQ]])
+    with pytest.raises(ValueError, match="expected to be negative"):
+        burn_add_to_waterbody_frame(g)
+
+
 def test_burn_add_fails_loud_on_unknown_purpcode():
     # An unrecognised PurpCode must NOT default to a FTYPE: FTYPE drives
     # NEVER_ONSTREAM_FTYPES, so a mis-defaulted Playa becomes promotable on-stream.
