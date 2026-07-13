@@ -44,8 +44,9 @@ MIN_PAD_M = 20_000.0
 
 # Share of a waterbody's area that must lie inside the closed-basin union (Signal B),
 # and share of its cells that must reach its own terminus (Signal A). NOT a tuned
-# knob: frac_own is bimodal (204 of 239 CONUS candidates at >= 0.95, only 3 in
-# 0.45-0.55) and the demotion set moves ~3% across thresholds 0.3-0.7.
+# knob: frac_own is bimodal on the real CONUS run of this code -- 6,298 of the 6,427
+# candidate COMIDs sit at >= 0.95 and only 10 fall in the whole 0.45-0.55 band -- and
+# the demotion set moves ~3% across thresholds 0.3-0.7.
 MIN_FRAC = 0.5
 
 

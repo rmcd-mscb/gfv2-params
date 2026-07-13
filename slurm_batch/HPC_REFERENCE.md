@@ -383,7 +383,11 @@ configured); `wbody_connectivity` subtracts this set from the unioned
 on-stream COMIDs — a STRICT SUBTRACTION, never additive — which is the fix for
 the Great Salt Lake misclassification. If `endorheic` hasn't been run for a
 fabric, `wbody_connectivity` logs a loud warning and proceeds without the
-demotion rather than failing. Selective re-runs via `--step <name>` or
+demotion rather than failing. A fabric whose domain has no closed basin (e.g.
+`tjc`, Texas-Gulf) legitimately produces an EMPTY endorheic table and carries on
+— the demotion is then a no-op. On a fabric that DOES expect demotions, set
+`min_endorheic_comids` in its profile (gfv2: 100): the `endorheic` step then
+fails loud if the classifier collapses below that floor. Selective re-runs via `--step <name>` or
 `--from <name>` passed through to the Python script. `dprst_depth` (issue
 #173) is a CONUS-scale compute outlier in this DAG — see "Stage 2d'" below; it
 needs its own SLURM array run **before** a full unfiltered

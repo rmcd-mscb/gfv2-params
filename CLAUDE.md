@@ -128,6 +128,22 @@ These are hard-won; violating them silently corrupts outputs.
   `regions_touching_mask` would delete the whole clump, silently destroying the
   BurnAdd playa's depression area — so the guard buffers by `cell_size *
   sqrt(2)` and **raises** instead of silently dropping it.
+- **`BurnAddWaterbody` is NOT a sink layer.** It is every waterbody NHDPlus added
+  to the DEM burn; only the rows with a sink `PurpCode` (4 Playa, 5/8 closed
+  lake) are sinks and become depression area. VPU 01 ships **702 NULL-`PurpCode`
+  rows against ZERO sinks in its own `Sink.shp`** — 503 of them on-network,
+  including StreamRiver and CanalDitch FCodes — so merging the layer wholesale
+  turns canals and river reaches into depression storage.
+  `download/nhd_burn_components.py` keeps only the sink-purpose rows and takes
+  `FTYPE` from **`FCODE`**, not `PurpCode` (`PurpCode` 5 spans both Playa and
+  SwampMarsh, and a Playa mislabelled LakePond loses force-dprst). A populated
+  unrecognised `PurpCode`, or a retained conveyance `FTYPE`, raises.
+- **An empty endorheic table is a legitimate result, not a failure.** A domain
+  with no closed basin (`tjc`, Texas-Gulf) has no endorheic waterbody, and the
+  `endorheic` step lives in the fabric-independent depstor config, so raising on
+  a zero-row result bricks that fabric's whole DAG. Protection against a
+  *silently* empty result lives in the optional per-fabric
+  `min_endorheic_comids` profile floor (gfv2: 100), not in a blanket raise.
 - **On-stream waterbodies are traversal barriers in `routing`.** Land upslope
   of an on-stream (non-dprst) waterbody is captured by that waterbody's
   stream/lake routing and must not be attributed to a downstream depression —
