@@ -70,6 +70,28 @@ def test_burn_add_fails_loud_on_positive_polyid():
         burn_add_to_waterbody_frame(g)
 
 
+def test_burn_add_resolves_fields_case_insensitively():
+    # Sink.shp/BurnAddWaterbody.shp are the same class of raw per-VPU NHDPlus
+    # shapefile as NHDFlowline/PlusFlowlineVAA, where field casing is known to
+    # vary across VPUs (VPU 12 ships COMID/WBAREACOMI, VPU 13 ships
+    # ComID/WBAreaComI). Lower-case columns here stand in for that drift.
+    g = gpd.GeoDataFrame(
+        [[-367111, 4, SQ]], columns=["polyid", "purpcode", "geometry"], crs=CRS
+    )
+    out = burn_add_to_waterbody_frame(g)
+    assert list(out.COMID) == [-367111]
+    assert list(out.FTYPE) == ["Playa"]
+
+
+def test_burn_add_fails_loud_on_missing_required_field():
+    # A genuinely missing field must raise a descriptive error naming the
+    # field and the available columns, not a bare pandas KeyError 15 VPUs
+    # into a CONUS run.
+    g = gpd.GeoDataFrame([[-367111, SQ]], columns=["PolyID", "geometry"], crs=CRS)
+    with pytest.raises(KeyError, match="PurpCode"):
+        burn_add_to_waterbody_frame(g)
+
+
 def test_burn_add_fails_loud_on_unknown_purpcode():
     # An unrecognised PurpCode must NOT default to a FTYPE: FTYPE drives
     # NEVER_ONSTREAM_FTYPES, so a mis-defaulted Playa becomes promotable on-stream.

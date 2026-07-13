@@ -126,6 +126,26 @@ def download_burn_components(
     return sink, burn
 
 
+def _resolve_field(gdf: gpd.GeoDataFrame, canon: str) -> str:
+    """Case-insensitive column lookup for a raw NHDPlus shapefile field.
+
+    Sink.shp/BurnAddWaterbody.shp are the same class of raw per-VPU NHDPlus
+    shapefile as NHDFlowline/PlusFlowlineVAA, where field-name casing is known
+    to vary across VPUs (e.g. VPU 12 ships COMID/WBAREACOMI, VPU 13 ships
+    ComID/WBAreaComI). Raises a descriptive KeyError (not a bare
+    ``KeyError: 'PurpCode'``) if the field is genuinely absent, so a real
+    schema problem is actionable mid-CONUS-run rather than a mystery 15 VPUs in.
+    """
+    by_upper = {c.upper(): c for c in gdf.columns}
+    actual = by_upper.get(canon.upper())
+    if actual is None:
+        raise KeyError(
+            f"BurnAddWaterbody has no '{canon}' field (case-insensitive). "
+            f"Available fields: {list(gdf.columns)}"
+        )
+    return actual
+
+
 def burn_add_to_waterbody_frame(gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
     """Reshape BurnAddWaterbody.shp into the waterbody-layer schema.
 
@@ -135,7 +155,10 @@ def burn_add_to_waterbody_frame(gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
     makes them structurally incapable of on-stream promotion, which is correct:
     NHDPlus flagged every one of them as a sink.
     """
-    unknown = sorted(set(gdf["PurpCode"].astype(int)) - set(PURPCODE_TO_FTYPE))
+    purpcode_col = _resolve_field(gdf, "PurpCode")
+    polyid_col = _resolve_field(gdf, "PolyID")
+
+    unknown = sorted(set(gdf[purpcode_col].astype(int)) - set(PURPCODE_TO_FTYPE))
     if unknown:
         raise ValueError(
             f"BurnAddWaterbody carries unrecognised PurpCode(s) {unknown}; refusing "
@@ -147,9 +170,9 @@ def burn_add_to_waterbody_frame(gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
         {
             "GNIS_ID": pd.Series([None] * len(gdf), dtype="object"),
             "GNIS_NAME": pd.Series([None] * len(gdf), dtype="object"),
-            "COMID": gdf["PolyID"].astype("int64").to_numpy(),
-            "FTYPE": gdf["PurpCode"].astype(int).map(PURPCODE_TO_FTYPE).to_numpy(),
-            "member_comid": gdf["PolyID"].astype("int64").to_numpy(),
+            "COMID": gdf[polyid_col].astype("int64").to_numpy(),
+            "FTYPE": gdf[purpcode_col].astype(int).map(PURPCODE_TO_FTYPE).to_numpy(),
+            "member_comid": gdf[polyid_col].astype("int64").to_numpy(),
             "area_sqkm": (gdf.to_crs(5070).geometry.area / 1e6).to_numpy(),
         },
         geometry=gdf.geometry.to_numpy(),
