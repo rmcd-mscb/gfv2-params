@@ -115,6 +115,13 @@ def build(step_cfg: dict, ctx: BuildContext, logger) -> dict:
             "(endorheic demotion NOT APPLIED — see warning above) = %d total",
             n_wbareacomi, n_flowthrough, len(connected),
         )
+    # NOTE: this re-reads the raw waterbody_gpkg from disk, NOT the merged frame
+    # `waterbody.build()` produces (which unions in BurnAddWaterbody rows). So
+    # BurnAdd rows are never present here, and the NEVER_ONSTREAM_FTYPES filter
+    # below never evaluates against them -- not "checked and passed", genuinely
+    # invisible to it. That's fine: BurnAdd rows' negative COMID can never match
+    # a connected/flow-through COMID (see waterbody.merge_burn_add), so they can't
+    # reach this on-stream set regardless.
     try:
         wb_gdf = gpd.read_file(ctx.waterbody_gpkg, layer=ctx.waterbody_layer, use_arrow=True)
     except ImportError:

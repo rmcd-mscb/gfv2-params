@@ -33,6 +33,21 @@ def merge_burn_add(
     Their COMID (NHDPlus `PolyID`) is NEGATIVE, so it can never match a WBAREACOMI or
     flow-through COMID (all positive) — that is what makes them structurally incapable
     of on-stream promotion. Asserted here rather than left to luck.
+
+    On `NEVER_ONSTREAM_FTYPES` (Playa/Ice Mass): `wbody_connectivity` and
+    `nhd_flowthrough` both apply that guardrail against a SEPARATE, fresh re-read of
+    the raw `waterbody_gpkg` — never against the merged frame this function returns.
+    A BurnAdd row's negative COMID is simply never present in that re-read, so
+    `NEVER_ONSTREAM_FTYPES` is never evaluated against it — it neither passes nor
+    fails that check, it is invisible to it. Do NOT describe BurnAdd rows as
+    "subject to" or "checked against" `NEVER_ONSTREAM_FTYPES`. Safety instead comes
+    structurally from the two asserts in this function: the negative-COMID guard
+    (can't match a connected/flow-through COMID to be promoted on-stream in the
+    first place) and the overlap guard below (can't be clump-merged into an
+    on-stream region by `clump_regions`). `EXCLUDE_WATERBODY_FTYPES` (Ice Mass) is
+    different and DOES apply to BurnAdd rows: `waterbody.build()` runs it on the
+    merged frame this function returns, which is why this merge must happen before
+    that filter, not after.
     """
     if burn_gdf is None or len(burn_gdf) == 0:
         return wb_gdf
@@ -63,8 +78,23 @@ def merge_burn_add(
             f"depression out of dprst. Investigate the overlap — do not suppress this."
         )
 
+    burn = burn[wb_gdf.columns].copy()
+    # `member_comid` is a plain string in the real conus_waterbodies.gpkg, but
+    # burn_add_to_waterbody_frame (Task 1) emits it as int64 (same value as COMID).
+    # Left un-normalised, pd.concat below produces an `object` column with mixed
+    # str/int rows. Nothing downstream reads it today -- select_connected_waterbodies
+    # re-reads the raw gpkg, not this merged frame -- so it's inert, but it's a
+    # fragile state a future `sorted()` or `.str` accessor over it would TypeError
+    # on. Normalise to whatever dtype wb_gdf already uses before concatenating.
+    if "member_comid" in wb_gdf.columns:
+        target_dtype = wb_gdf["member_comid"].dtype
+        if target_dtype is object:
+            burn["member_comid"] = burn["member_comid"].astype(str)
+        else:
+            burn["member_comid"] = burn["member_comid"].astype(target_dtype)
+
     return gpd.GeoDataFrame(
-        pd.concat([wb_gdf, burn[wb_gdf.columns]], ignore_index=True), crs=wb_gdf.crs
+        pd.concat([wb_gdf, burn], ignore_index=True), crs=wb_gdf.crs
     )
 
 

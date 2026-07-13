@@ -141,6 +141,95 @@ def test_merge_burn_add_is_a_noop_when_not_configured():
     assert merge_burn_add(base, None) is base
 
 
+def _write_burn_add_parquet(path: Path, rows: list[list]) -> None:
+    gpd.GeoDataFrame(rows, columns=WB_COLS + ["geometry"], crs=CRS).to_parquet(path)
+
+
+def test_build_merges_burn_add_before_ftype_exclusion(tmp_path):
+    """A BurnAdd Ice Mass polygon must still be excluded from wbody_binary.
+
+    `merge_burn_add` must run BEFORE the `EXCLUDE_WATERBODY_FTYPES` filter inside
+    `waterbody.build()`. A refactor that moved the merge to AFTER that filter would
+    pass every other test in this file (they all call `merge_burn_add` directly) but
+    would let a BurnAdd Ice Mass polygon leak into the raster unfiltered -- this test
+    drives the real `build()` entry point to catch exactly that regression.
+    """
+    from gfv2_params.depstor_builders import waterbody
+    from gfv2_params.depstor_builders.context import BuildContext
+
+    template = tmp_path / "template.tif"
+    landmask = tmp_path / "land_mask.tif"
+    wb_gpkg = tmp_path / "wb.gpkg"
+    burn_parquet = tmp_path / "burn_add.parquet"
+    _write_template(template)
+    _write_landmask(landmask)
+
+    # Base layer: one ordinary LakePond, top-left 2x2 block (cells [0,0]-[1,1]).
+    gpd.GeoDataFrame(
+        {"COMID": [10], "FTYPE": ["LakePond"]},
+        geometry=[box(0, 270, 60, 300)],
+        crs=CRS,
+    ).to_file(wb_gpkg, layer="waterbodies", driver="GPKG")
+
+    # BurnAdd Ice Mass polygon, exactly cell [5,5] (900 m^2, at the min-area floor),
+    # far from the base waterbody so it can't be clump-merged with it.
+    _write_burn_add_parquet(
+        burn_parquet,
+        [[None, None, -900555, "Ice Mass", -900555, 0.0009, _sq(150, 120)]],
+    )
+
+    ctx = BuildContext(
+        fabric="t", template_path=template, output_dir=tmp_path,
+        hru_gpkg=wb_gpkg, hru_layer="waterbodies",
+        waterbody_gpkg=wb_gpkg, waterbody_layer="waterbodies",
+        burn_add_waterbody_table=burn_parquet,
+    )
+    ctx.paths["landmask"] = landmask
+
+    produced = waterbody.build(
+        {"outputs": {"binary": "wbody_binary.tif", "regions": "wbody_regions.tif"}},
+        ctx, logging.getLogger("test"),
+    )
+
+    with rasterio.open(produced["wbody_binary"]) as src:
+        arr = src.read(1)
+
+    assert arr[0, 0] == 1     # base LakePond present
+    assert arr[5, 5] != 1     # BurnAdd Ice Mass excluded, even though it was merged in
+
+
+def test_build_raises_on_configured_but_missing_burn_add_table(tmp_path):
+    """A configured `burn_add_waterbody_table` that doesn't exist must fail loud."""
+    from gfv2_params.depstor_builders import waterbody
+    from gfv2_params.depstor_builders.context import BuildContext
+
+    template = tmp_path / "template.tif"
+    landmask = tmp_path / "land_mask.tif"
+    wb_gpkg = tmp_path / "wb.gpkg"
+    _write_template(template)
+    _write_landmask(landmask)
+
+    gpd.GeoDataFrame(
+        {"COMID": [10], "FTYPE": ["LakePond"]},
+        geometry=[box(0, 270, 60, 300)],
+        crs=CRS,
+    ).to_file(wb_gpkg, layer="waterbodies", driver="GPKG")
+
+    ctx = BuildContext(
+        fabric="t", template_path=template, output_dir=tmp_path,
+        hru_gpkg=wb_gpkg, hru_layer="waterbodies",
+        waterbody_gpkg=wb_gpkg, waterbody_layer="waterbodies",
+        burn_add_waterbody_table=tmp_path / "does_not_exist.parquet",
+    )
+    ctx.paths["landmask"] = landmask
+
+    with pytest.raises(FileNotFoundError, match="BurnAddWaterbody table not found"):
+        waterbody.build(
+            {"outputs": {"binary": "wbody_binary.tif", "regions": "wbody_regions.tif"}},
+            ctx, logging.getLogger("test"),
+        )
+
+
 def test_merge_burn_add_rejects_an_overlapping_polygon():
     """A BurnAdd polygon overlapping an existing waterbody must FAIL LOUD.
 
