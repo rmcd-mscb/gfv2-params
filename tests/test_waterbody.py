@@ -7,6 +7,7 @@ from pathlib import Path
 
 import geopandas as gpd
 import numpy as np
+import pandas as pd
 import pytest
 import rasterio
 from rasterio.transform import from_origin
@@ -153,6 +154,11 @@ def test_build_merges_burn_add_before_ftype_exclusion(tmp_path):
     pass every other test in this file (they all call `merge_burn_add` directly) but
     would let a BurnAdd Ice Mass polygon leak into the raster unfiltered -- this test
     drives the real `build()` entry point to catch exactly that regression.
+
+    Note: an "Ice Mass" BurnAdd row can't actually occur via the real staging path
+    (`nhd_burn_components.PURPCODE_TO_FTYPE` only ever maps to `Playa`/`LakePond` and
+    raises on anything else) -- this FTYPE is synthetic here purely to exercise the
+    merge-before-filter ordering invariant, not a live production hazard.
     """
     from gfv2_params.depstor_builders import waterbody
     from gfv2_params.depstor_builders.context import BuildContext
@@ -171,8 +177,8 @@ def test_build_merges_burn_add_before_ftype_exclusion(tmp_path):
         crs=CRS,
     ).to_file(wb_gpkg, layer="waterbodies", driver="GPKG")
 
-    # BurnAdd Ice Mass polygon, exactly cell [5,5] (900 m^2, at the min-area floor),
-    # far from the base waterbody so it can't be clump-merged with it.
+    # BurnAdd Ice Mass polygon: a 100x100 m (10,000 m^2) block spanning rows 2-5 /
+    # cols 5-8, far from the base waterbody so it can't be clump-merged with it.
     _write_burn_add_parquet(
         burn_parquet,
         [[None, None, -900555, "Ice Mass", -900555, 0.0009, _sq(150, 120)]],
@@ -244,3 +250,50 @@ def test_merge_burn_add_rejects_an_overlapping_polygon():
     burn = _frame([[None, None, -367111, "Playa", -367111, 0.01, _sq(50, 50)]])  # overlaps
     with pytest.raises(ValueError, match="overlap"):
         merge_burn_add(base, burn)
+
+
+def test_merge_burn_add_rejects_a_near_miss_that_would_8_connect():
+    """A BurnAdd polygon that does NOT vector-intersect an existing waterbody, but is
+    close enough to become an 8-connected clump once rasterized, must still FAIL LOUD.
+
+    `clump_regions` labels 8-connected components -- cells whose centres are up to
+    `cell_size * sqrt(2)` apart (a diagonal neighbour) merge into one region. A vector
+    `predicate="intersects"` test alone misses this: two polygons with a real gap
+    between them (here 10 m, at cell_size=30 m => diagonal ~= 42.4 m) do not
+    intersect, but their rasterized cells can still land in the same 8-connected
+    clump. The guard must buffer by one cell diagonal before the join to catch this,
+    or it silently misses the exact hazard `test_merge_burn_add_rejects_an_overlapping_polygon`
+    is meant to cover.
+    """
+    base = _frame([[None, None, 111, "LakePond", 111, 0.01, _sq(0, 0, s=100)]])
+    # Gap of 10 m between base's right edge (x=100) and burn's left edge (x=110) --
+    # no vector intersection, but well within one 30 m cell diagonal (~42.4 m).
+    burn = _frame([[None, None, -367111, "Playa", -367111, 0.01, _sq(110, 0, s=100)]])
+    assert not base.geometry.iloc[0].intersects(burn.geometry.iloc[0])
+    with pytest.raises(ValueError, match="overlap"):
+        merge_burn_add(base, burn, cell_size=30.0)
+
+
+def test_merge_burn_add_normalises_object_dtype_member_comid():
+    """When wb_gdf's `member_comid` is genuine object dtype (not pandas StringDtype),
+    the burn frame's int64 `member_comid` must be stringified, not silently wrapped
+    as raw ints via a dead `target_dtype is object` identity check.
+
+    `pd.Series(dtype=object).dtype is object` is always False for a pandas dtype
+    instance, so the old `if target_dtype is object:` branch never actually fired --
+    execution fell through to `.astype(target_dtype)` every time, which on a genuine
+    object dtype does nothing to int64 values (wraps them as Python ints, not str).
+    This test forces a real object-dtype column so the branch has to fire correctly.
+    """
+    base = _frame([[None, None, 111, "LakePond", 111, 0.01, _sq(0, 0)]])
+    base["member_comid"] = base["member_comid"].astype(object)
+    assert pd.api.types.is_object_dtype(base["member_comid"].dtype)
+
+    burn = _frame([[None, None, -367111, "Playa", -367111, 0.01, _sq(500, 500)]])
+    # burn_add_to_waterbody_frame emits member_comid as int64.
+    burn["member_comid"] = burn["member_comid"].astype("int64")
+
+    out = merge_burn_add(base, burn)
+    merged_burn_row = out[out["COMID"] == -367111].iloc[0]
+    assert isinstance(merged_burn_row["member_comid"], str)
+    assert merged_burn_row["member_comid"] == "-367111"

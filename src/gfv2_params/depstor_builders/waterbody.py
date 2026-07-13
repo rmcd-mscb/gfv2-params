@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from pathlib import Path
 
 import geopandas as gpd
@@ -20,7 +21,9 @@ from .context import BuildContext
 
 
 def merge_burn_add(
-    wb_gdf: gpd.GeoDataFrame, burn_gdf: gpd.GeoDataFrame | None
+    wb_gdf: gpd.GeoDataFrame,
+    burn_gdf: gpd.GeoDataFrame | None,
+    cell_size: float = 30.0,
 ) -> gpd.GeoDataFrame:
     """Union NHDPlus BurnAddWaterbody polygons into the waterbody layer.
 
@@ -48,6 +51,11 @@ def merge_burn_add(
     different and DOES apply to BurnAdd rows: `waterbody.build()` runs it on the
     merged frame this function returns, which is why this merge must happen before
     that filter, not after.
+
+    `cell_size` (the template raster's pixel size, in the same linear units as
+    `wb_gdf`'s CRS) drives the overlap guard below: it must match what
+    `clump_regions` will actually rasterize against, so pass the real template
+    cell size (`RasterInfo.from_path(ctx.template_path)`), not the default.
     """
     if burn_gdf is None or len(burn_gdf) == 0:
         return wb_gdf
@@ -65,17 +73,31 @@ def merge_burn_add(
     # BurnAdd playa's depression area, the opposite of why we staged it, and invisible
     # in the logs. VPU 16 measured 0 of 23 overlapping; CONUS-wide is unverified, so
     # this fails loud rather than corrupting the product quietly.
+    #
+    # This must test what clump_regions actually does to the RASTERIZED cells, not
+    # vector intersection: 8-connectivity merges cells whose centres are up to
+    # `cell_size * sqrt(2)` apart (a diagonal neighbour), so two polygons that do NOT
+    # intersect in vector space can still land in adjacent, 8-connected cells and be
+    # clump-merged anyway. Buffering the BurnAdd geometry by one cell diagonal before
+    # the join is a conservative over-approximation of that adjacency test — it can
+    # flag a near-miss that wouldn't actually rasterize into the same clump, but it
+    # can never miss a real one. Fail loud on the near-miss; never miss the real thing.
+    buffer_dist = cell_size * math.sqrt(2)
+    buffered = burn[["COMID", "geometry"]].copy()
+    buffered["geometry"] = buffered.geometry.buffer(buffer_dist)
     hits = gpd.sjoin(
-        burn[["COMID", "geometry"]], wb_gdf[["COMID", "geometry"]],
+        buffered, wb_gdf[["COMID", "geometry"]],
         how="inner", predicate="intersects",
     )
     if not hits.empty:
         bad = sorted(set(hits["COMID_left"]))[:10]
         raise ValueError(
-            f"{hits['COMID_left'].nunique()} BurnAddWaterbody polygon(s) overlap an "
+            f"{hits['COMID_left'].nunique()} BurnAddWaterbody polygon(s) overlap or "
+            f"lie within one rasterized cell diagonal ({buffer_dist:.1f} m) of an "
             f"existing waterbody (e.g. {bad}). clump_regions would merge them into one "
-            f"region, so an on-stream neighbour would silently drag the BurnAdd "
-            f"depression out of dprst. Investigate the overlap — do not suppress this."
+            f"8-connected region, so an on-stream neighbour would silently drag the "
+            f"BurnAdd depression out of dprst. Investigate the overlap — do not "
+            f"suppress this."
         )
 
     burn = burn[wb_gdf.columns].copy()
@@ -88,7 +110,13 @@ def merge_burn_add(
     # on. Normalise to whatever dtype wb_gdf already uses before concatenating.
     if "member_comid" in wb_gdf.columns:
         target_dtype = wb_gdf["member_comid"].dtype
-        if target_dtype is object:
+        # `pd.api.types.is_object_dtype` compares dtype identity correctly, unlike
+        # `target_dtype is object` (always False for a pandas dtype instance — that
+        # comparison never fires, so this branch was previously dead code). A plain
+        # `.astype(object)` on an int64 column wraps the raw ints rather than
+        # stringifying them, reproducing the exact mixed str/int column this
+        # normalisation exists to prevent.
+        if pd.api.types.is_object_dtype(target_dtype):
             burn["member_comid"] = burn["member_comid"].astype(str)
         else:
             burn["member_comid"] = burn["member_comid"].astype(target_dtype)
@@ -146,7 +174,7 @@ def build(step_cfg: dict, ctx: BuildContext, logger) -> dict:
             )
         burn = gpd.read_parquet(ctx.burn_add_waterbody_table)
         n_before = len(wb_gdf)
-        wb_gdf = merge_burn_add(wb_gdf, burn)
+        wb_gdf = merge_burn_add(wb_gdf, burn, cell_size=abs(info.transform.a))
         logger.info(
             "  merged %d BurnAddWaterbody polygons (%.1f km2) into %d waterbodies",
             len(wb_gdf) - n_before,
