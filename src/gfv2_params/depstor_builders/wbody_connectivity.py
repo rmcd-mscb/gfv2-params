@@ -82,20 +82,39 @@ def build(step_cfg: dict, ctx: BuildContext, logger) -> dict:
     # Great Salt Lake off-stream: both local classifiers promote it, because NHD
     # draws Network artificial paths between its arms.
     n_endorheic = 0
+    endorheic_applied = False
     if "endorheic_comids" in ctx.paths:
         endorheic = load_endorheic_comids(ctx.require("endorheic_comids"))
         n_endorheic = len(connected & endorheic)
         connected = connected - endorheic
+        endorheic_applied = True
         logger.info(
             "  endorheic demotion: %d of %d endorheic COMIDs were on-stream → dprst",
             n_endorheic, len(endorheic),
         )
+    else:
+        logger.warning(
+            "  ENDORHEIC DEMOTION NOT APPLIED: `endorheic_comids` is not present in "
+            "the build context (the `endorheic` step has not run and produced no "
+            "output on disk for this fabric). Terminal/closed-basin lakes — "
+            "including the Great Salt Lake — will remain classified ON-STREAM. "
+            "Run the `endorheic` step first (e.g. `--from endorheic`) if this "
+            "fabric supports it; if it genuinely can't (e.g. no COMID column), "
+            "this is expected and safe to ignore."
+        )
 
-    logger.info(
-        "  on-stream COMIDs: %d WBAREACOMI + %d new flow-through - %d endorheic "
-        "= %d total",
-        n_wbareacomi, n_flowthrough, n_endorheic, len(connected),
-    )
+    if endorheic_applied:
+        logger.info(
+            "  on-stream COMIDs: %d WBAREACOMI + %d new flow-through - %d endorheic "
+            "= %d total",
+            n_wbareacomi, n_flowthrough, n_endorheic, len(connected),
+        )
+    else:
+        logger.info(
+            "  on-stream COMIDs: %d WBAREACOMI + %d new flow-through "
+            "(endorheic demotion NOT APPLIED — see warning above) = %d total",
+            n_wbareacomi, n_flowthrough, len(connected),
+        )
     try:
         wb_gdf = gpd.read_file(ctx.waterbody_gpkg, layer=ctx.waterbody_layer, use_arrow=True)
     except ImportError:

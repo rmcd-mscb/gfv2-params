@@ -626,9 +626,16 @@ def test_endorheic_subtraction_never_widens_the_onstream_set(tmp_path):
     _write_landmask(landmask)
 
     # Grid-aligned to the 30 m template pixels — see the note in the previous test.
+    # COMID 1 is genuinely on-stream (in the connected table). COMID 999 has a real
+    # waterbody polygon (middle block, cells [4,4],[4,5],[5,4],[5,5]) but is NOT in
+    # the connected table -- i.e. it was never on-stream. If the subtraction ever
+    # regressed to a union (`connected | endorheic` instead of `connected -
+    # endorheic`), COMID 999 would be wrongly added to the on-stream set and its
+    # pixels would burn -- this fixture is what makes that regression observable;
+    # with no polygon for 999, byte-identical output would hide the bug.
     wb = gpd.GeoDataFrame(
-        {"COMID": [1], "member_comid": [1], "FTYPE": ["LakePond"]},
-        geometry=[box(0, 270, 60, 300)], crs="EPSG:5070",
+        {"COMID": [1, 999], "member_comid": [1, 999], "FTYPE": ["LakePond", "LakePond"]},
+        geometry=[box(0, 270, 60, 300), box(120, 150, 180, 180)], crs="EPSG:5070",
     )
     wb_path = tmp_path / "wb.gpkg"
     wb.to_file(wb_path, layer="waterbodies", driver="GPKG")
@@ -658,3 +665,6 @@ def test_endorheic_subtraction_never_widens_the_onstream_set(tmp_path):
     with rasterio.open(tmp_path / "connected_wbody.tif") as src:
         arr = src.read(1)
     assert (arr[0:1, 0:2] == 1).any(), "COMID 1 must remain on-stream — no widening"
+    assert not (arr[4:6, 4:6] == 1).any(), (
+        "COMID 999 was never on-stream; a union-regression would wrongly burn it"
+    )
