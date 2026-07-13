@@ -1297,25 +1297,130 @@ Salt Lake on-stream."
 
 - [ ] **Step 1: Write the failing test**
 
+`tests/test_wbody_connectivity.py` already carries builder-level fixtures — `_write_template()`, `_write_landmask()`, and `test_wbody_connectivity_rasterizes_only_connected(tmp_path)`, which drives the real builder through a real `BuildContext`. **Extend that pattern**; do not write a set-arithmetic assertion (it would test the stdlib, not this code).
+
 Append to `tests/test_wbody_connectivity.py`:
 
 ```python
-def test_endorheic_subtraction_can_only_shrink_the_onstream_set():
-    # The whole safety property: the endorheic signals may only SUBTRACT. Feeding a
-    # COMID that is not on-stream must be a no-op, and one that is must be removed.
-    connected = {1, 2, 3}
-    endorheic = {2, 99}          # 2 is on-stream; 99 is not
-    result = connected - endorheic
-    assert result == {1, 3}
-    assert result <= connected   # never widens
+def test_endorheic_comid_is_demoted_from_the_connected_raster(tmp_path):
+    """A waterbody the endorheic classifier flags must NOT reach connected_wbody.tif.
+
+    This is the Great Salt Lake path: it IS in the WBAREACOMI/flow-through union
+    (both local classifiers promote it), and the endorheic subtraction is the only
+    thing that takes it back out.
+    """
+    import logging
+
+    import geopandas as gpd
+    import pandas as pd
+    import rasterio
+    from shapely.geometry import box
+
+    from gfv2_params.depstor_builders import wbody_connectivity
+    from gfv2_params.depstor_builders.context import BuildContext
+
+    template = tmp_path / "template.tif"
+    landmask = tmp_path / "land_mask.tif"
+    _write_template(template)
+    _write_landmask(landmask)
+
+    # Two on-stream waterbodies; COMID 2 is also flagged endorheic.
+    wb = gpd.GeoDataFrame(
+        {"COMID": [1, 2], "member_comid": [1, 2], "FTYPE": ["LakePond", "LakePond"]},
+        geometry=[box(1, 1, 3, 3), box(5, 5, 7, 7)],
+        crs="EPSG:5070",
+    )
+    wb_path = tmp_path / "wb.gpkg"
+    wb.to_file(wb_path, layer="waterbodies", driver="GPKG")
+
+    conn = tmp_path / "connected.parquet"
+    pd.DataFrame({"comid": [1, 2]}).to_parquet(conn, index=False)
+
+    endo = tmp_path / "endorheic.parquet"
+    pd.DataFrame(
+        {"comid": [2], "frac_own": [1.0], "by_terminus": [True],
+         "by_closed_huc12": [False]}
+    ).to_parquet(endo, index=False)
+
+    ctx = BuildContext(
+        fabric="test", template_path=template, output_dir=tmp_path,
+        hru_gpkg=wb_path, hru_layer="waterbodies",
+        waterbody_gpkg=wb_path, waterbody_layer="waterbodies",
+        connected_comids_table=conn,
+    )
+    ctx.paths["landmask"] = landmask
+    ctx.paths["endorheic_comids"] = endo
+
+    wbody_connectivity.build(
+        {"output": "connected_wbody.tif"}, ctx, logging.getLogger("t")
+    )
+    with rasterio.open(tmp_path / "connected_wbody.tif") as src:
+        arr = src.read(1)
+
+    # COMID 1 (on-stream, not endorheic) is rasterised; COMID 2 (demoted) is not.
+    assert (arr[1:3, 1:3] == 1).any(), "COMID 1 should still be on-stream"
+    assert not (arr[5:7, 5:7] == 1).any(), "COMID 2 was endorheic and must be demoted"
+
+
+def test_endorheic_subtraction_never_widens_the_onstream_set(tmp_path):
+    """An endorheic COMID that is NOT on-stream must be a pure no-op.
+
+    The safety invariant: these signals may only SUBTRACT. If this ever fails, the
+    endorheic table has become capable of ADDING to the on-stream mask.
+    """
+    import logging
+
+    import geopandas as gpd
+    import pandas as pd
+    import rasterio
+    from shapely.geometry import box
+
+    from gfv2_params.depstor_builders import wbody_connectivity
+    from gfv2_params.depstor_builders.context import BuildContext
+
+    template = tmp_path / "template.tif"
+    landmask = tmp_path / "land_mask.tif"
+    _write_template(template)
+    _write_landmask(landmask)
+
+    wb = gpd.GeoDataFrame(
+        {"COMID": [1], "member_comid": [1], "FTYPE": ["LakePond"]},
+        geometry=[box(1, 1, 3, 3)], crs="EPSG:5070",
+    )
+    wb_path = tmp_path / "wb.gpkg"
+    wb.to_file(wb_path, layer="waterbodies", driver="GPKG")
+
+    conn = tmp_path / "connected.parquet"
+    pd.DataFrame({"comid": [1]}).to_parquet(conn, index=False)
+
+    # COMID 999 is endorheic but was never on-stream: subtracting it changes nothing.
+    endo = tmp_path / "endorheic.parquet"
+    pd.DataFrame(
+        {"comid": [999], "frac_own": [1.0], "by_terminus": [True],
+         "by_closed_huc12": [False]}
+    ).to_parquet(endo, index=False)
+
+    ctx = BuildContext(
+        fabric="test", template_path=template, output_dir=tmp_path,
+        hru_gpkg=wb_path, hru_layer="waterbodies",
+        waterbody_gpkg=wb_path, waterbody_layer="waterbodies",
+        connected_comids_table=conn,
+    )
+    ctx.paths["landmask"] = landmask
+    ctx.paths["endorheic_comids"] = endo
+
+    wbody_connectivity.build(
+        {"output": "connected_wbody.tif"}, ctx, logging.getLogger("t")
+    )
+    with rasterio.open(tmp_path / "connected_wbody.tif") as src:
+        arr = src.read(1)
+    assert (arr[1:3, 1:3] == 1).any(), "COMID 1 must remain on-stream — no widening"
 ```
 
-(This pins the invariant at the unit level; the builder-level behaviour is exercised by the existing `wbody_connectivity` tests plus the Task 9 CONUS gate.)
+- [ ] **Step 2: Run it to verify it fails**
 
-- [ ] **Step 2: Run it**
-
-Run: `pixi run -e dev pytest tests/test_wbody_connectivity.py -v`
-Expected: PASS (it is a pure-set assertion) — this documents the invariant before the code lands.
+Run: `pixi run -e dev pytest tests/test_wbody_connectivity.py -k endorheic -v`
+Expected: FAIL — the builder ignores `ctx.paths["endorheic_comids"]`, so COMID 2 is still rasterised into `connected_wbody.tif`.
 
 - [ ] **Step 3: Implement the subtraction**
 
@@ -1426,6 +1531,22 @@ def test_merge_burn_add_rejects_a_non_negative_comid():
 def test_merge_burn_add_is_a_noop_when_not_configured():
     base = _frame([[None, None, 111, "LakePond", 111, 0.01, _sq(0, 0)]])
     assert merge_burn_add(base, None) is base
+
+
+def test_merge_burn_add_rejects_an_overlapping_polygon():
+    """A BurnAdd polygon overlapping an existing waterbody must FAIL LOUD.
+
+    `clump_regions` labels 8-connected components, so an overlap merges the BurnAdd
+    playa and the existing waterbody into ONE region. If that waterbody is on-stream,
+    `regions_touching_mask` excludes the whole clump — silently DELETING the playa's
+    depression area, the exact opposite of why we staged it, with nothing in the log
+    to say so. The VPU 16 spike measured 0/23 overlaps; CONUS-wide is unverified, so
+    this is checked at build time and not left to a diagnostic.
+    """
+    base = _frame([[None, None, 111, "LakePond", 111, 0.01, _sq(0, 0)]])
+    burn = _frame([[None, None, -367111, "Playa", -367111, 0.01, _sq(50, 50)]])  # overlaps
+    with pytest.raises(ValueError, match="overlap"):
+        merge_burn_add(base, burn)
 ```
 
 - [ ] **Step 2: Run it to verify it fails**
@@ -1465,6 +1586,26 @@ def merge_burn_add(
             "on-stream — but NHDPlus flagged every BurnAddWaterbody as a sink."
         )
     burn = burn_gdf.to_crs(wb_gdf.crs) if burn_gdf.crs != wb_gdf.crs else burn_gdf
+
+    # A BurnAdd polygon overlapping an existing waterbody would be MERGED with it by
+    # clump_regions (8-connected labelling). If that waterbody is on-stream,
+    # regions_touching_mask then excludes the whole clump — silently DELETING the
+    # BurnAdd playa's depression area, the opposite of why we staged it, and invisible
+    # in the logs. VPU 16 measured 0 of 23 overlapping; CONUS-wide is unverified, so
+    # this fails loud rather than corrupting the product quietly.
+    hits = gpd.sjoin(
+        burn[["COMID", "geometry"]], wb_gdf[["COMID", "geometry"]],
+        how="inner", predicate="intersects",
+    )
+    if not hits.empty:
+        bad = sorted(set(hits["COMID_left"]))[:10]
+        raise ValueError(
+            f"{hits['COMID_left'].nunique()} BurnAddWaterbody polygon(s) overlap an "
+            f"existing waterbody (e.g. {bad}). clump_regions would merge them into one "
+            f"region, so an on-stream neighbour would silently drag the BurnAdd "
+            f"depression out of dprst. Investigate the overlap — do not suppress this."
+        )
+
     return gpd.GeoDataFrame(
         pd.concat([wb_gdf, burn[wb_gdf.columns]], ignore_index=True), crs=wb_gdf.crs
     )
