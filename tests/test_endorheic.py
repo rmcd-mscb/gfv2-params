@@ -248,6 +248,31 @@ def test_terminus_own_fraction_dissolves_a_two_row_comid(tmp_path):
     assert row["frac_own"] == pytest.approx(9 / 25, abs=1e-6)
 
 
+def test_closed_basin_prefilter_matches_the_unfiltered_overlay():
+    # closed_basin_comids prefilters with an sjoin and only computes intersection area
+    # for waterbodies that touch the closed union at all (the elementwise GEOS overlay
+    # across all 448,124 CONUS waterbodies ran ~17 s per 2,000 rows -> hours). The
+    # prefilter must not change ANY result: everything it skips has frac = 0 by
+    # construction. Prove it against a brute-force reference on a frame that mixes
+    # every case -- inside, majority, minority, boundary-graze, far away, multi-row.
+    closed = _closed([_box(0, 0, 10, 10), _box(10, 0, 20, 10)])
+    wb = _wb([
+        [201, _box(1, 1, 2, 2)],        # fully inside
+        [202, _box(8, 0, 11, 2)],       # majority (straddles the two closed boxes)
+        [203, _box(19, 0, 22, 2)],      # minority
+        [204, _box(20, 0, 22, 2)],      # boundary graze, zero interior overlap
+        [205, _box(50, 50, 60, 60)],    # far away -- never reaches the overlay
+        [206, _box(3, 3, 4, 4)],        # multi-row COMID, part 1 (inside)
+        [206, _box(70, 70, 80, 80)],    # multi-row COMID, part 2 (far away, 99x area)
+    ])
+    union = closed.geometry.union_all()
+    area = wb.geometry.area.groupby(wb["COMID"]).sum()
+    inter = wb.geometry.intersection(union).area.groupby(wb["COMID"]).sum()
+    reference = {int(c) for c in area.index[(inter / area) > 0.5]}
+    assert reference == {201, 202}  # pin the reference itself
+    assert closed_basin_comids(wb, closed) == reference
+
+
 def test_endorheic_parquet_roundtrip(tmp_path):
     df = pd.DataFrame({
         "comid": [1, 2, 3],

@@ -79,6 +79,12 @@ def closed_basin_comids(
     "legitimately not endorheic" and could hide an upstream CRS collapse across
     a whole batch. Mirrors the notna()/is_empty() guard in
     `depstor_builders/wbody_connectivity.py`.
+
+    The intersection is computed only for the waterbodies an STRtree/`sjoin` says
+    touch the closed union AT ALL (a few thousand of the 448,124). Everything else
+    has intersection area 0 by construction, so this changes no result -- but the
+    unfiltered elementwise GEOS overlay measured ~17 s per 2,000 rows, i.e. hours of
+    single-threaded work inside the 384 G depstor job.
     """
     if closed_gdf.empty:
         return set()
@@ -94,11 +100,11 @@ def closed_basin_comids(
         )
     if wb_gdf.empty:
         return set()
+    # A duplicated index would make the positional candidate lookup below ambiguous.
+    wb_gdf = wb_gdf.reset_index(drop=True)
 
     closed = closed_gdf.to_crs(wb_gdf.crs) if closed_gdf.crs != wb_gdf.crs else closed_gdf
-    union = closed.geometry.union_all()
     area = wb_gdf.geometry.area.groupby(wb_gdf["COMID"]).sum()
-    inter = wb_gdf.geometry.intersection(union).area.groupby(wb_gdf["COMID"]).sum()
     if (area <= 0).any():
         bad = area.index[area <= 0].tolist()
         raise ValueError(
@@ -107,6 +113,19 @@ def closed_basin_comids(
             "geometry or a CRS collapse upstream. Fail loud instead of letting "
             "them silently drop out of the closed-basin signal."
         )
+
+    hits = wb_gdf.sindex.query(closed.geometry, predicate="intersects")[1]
+    cand = wb_gdf.iloc[np.unique(hits)]
+    if cand.empty:
+        return set()
+    union = closed.geometry.union_all()
+    # Summed per COMID, then reindexed onto EVERY COMID: a COMID with rows both in and
+    # out of the candidate set still divides its inside-area by its FULL area (the
+    # majority-area-by-COMID semantics), and a COMID with no candidate row gets 0.0.
+    inter = (
+        cand.geometry.intersection(union).area.groupby(cand["COMID"]).sum()
+        .reindex(area.index, fill_value=0.0)
+    )
     frac = inter / area
     return {int(c) for c in area.index[frac > min_frac]}
 
