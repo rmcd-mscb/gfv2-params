@@ -374,14 +374,48 @@ rejected; never substitute it.
 - `hru_gpkg`, `segments_gpkg`/`segments_layer`, `waterbody_gpkg`/`waterbody_layer` (waterbody is required; the step raises if unset).
 - `imperv_source` in `configs/depstor/depstor_rasters.yml` — NLCD fractional-impervious raster.
 
-**DAG order:** landmask → imperv / wbody_connectivity / waterbody → dprst → perv →
-hru_id → dprst_depth → vpu_id → routing → routing_hru → drains_perv / drains_imperv →
-carea_map. Selective re-runs via `--step <name>` or `--from <name>` passed
-through to the Python script. `dprst_depth` (issue #173) is a CONUS-scale
-compute outlier in this DAG — see "Stage 2d'" below; it needs its own SLURM
-array run **before** a full unfiltered `build_depstor_rasters.batch`, or that
-job will attempt an unbounded in-process fallback compute at the `dprst_depth`
-step.
+**DAG order:** landmask → imperv / waterbody → endorheic → wbody_connectivity →
+dprst → perv → hru_id → dprst_depth → vpu_id → routing → routing_hru →
+drains_perv / drains_imperv → carea_map. `endorheic` emits
+`endorheic_waterbody_comids.parquet` (Signal A: FDR terminus-inside-itself;
+Signal B: majority-inside a closed WBD HUC12, when `wbd_huc12_table` is
+configured); `wbody_connectivity` subtracts this set from the unioned
+on-stream COMIDs — a STRICT SUBTRACTION, never additive — and also rasterizes
+the full endorheic set (regardless of on-stream status) to a second output,
+`endorheic_wbody.tif`, which `dprst` consumes (see "Endorheic clump-veto
+exemption" below). If `endorheic` hasn't been run for a fabric (no
+`endorheic_comids` in the build context), `wbody_connectivity` **raises**
+rather than proceeding without the demotion. A fabric whose domain has no closed basin (e.g.
+`tjc`, Texas-Gulf) legitimately produces an EMPTY endorheic table and carries on
+— the demotion is then a no-op. On a fabric that DOES expect demotions, set
+`min_endorheic_comids` in its profile (gfv2: 100): both the `endorheic` step
+**and** `wbody_connectivity` then fail loud if the classifier has collapsed
+below that floor, or if either signal has died entirely. Checking it at the
+consuming end too is what covers `--from wbody_connectivity` — that recipe
+skips the `endorheic` step, so the orchestrator hydrates its table off disk
+and the producing builder's own check never runs. Selective re-runs via `--step <name>` or
+`--from <name>` passed through to the Python script. `dprst_depth` (issue
+#173) is a CONUS-scale compute outlier in this DAG — see "Stage 2d'" below; it
+needs its own SLURM array run **before** a full unfiltered
+`build_depstor_rasters.batch`, or that job will attempt an unbounded
+in-process fallback compute at the `dprst_depth` step.
+
+**Endorheic classifier inputs.** Signal A needs only `fdr_raster` (already
+required on every fabric) and needs no extra staging. Signal B and the
+BurnAddWaterbody union into `waterbody` are optional and staged once,
+CONUS-wide, fabric-independent:
+
+```bash
+pixi run --as-is python -m gfv2_params.download.nhd_burn_components   # Sink.shp + BurnAddWaterbody
+pixi run --as-is python -m gfv2_params.download.wbd_huc12             # full WBD (type-C closed basins)
+```
+
+Do **not** substitute the pre-made `input/nhd/NHD_sink_points.gpkg` (a strict
+subset of NHDPlus's `Sink.shp` — 537 sinks vs 3,222 in VPU 16 — that omits
+`PURPCODE 1` entirely and has 0 sinks inside Great Salt Lake, where NHDPlus has
+29) or `input/nhd/closed_huc12.gpkg` (23 type-C HUC12s in the Great Basin vs
+141 in the full WBD). Both are incomplete extracts; stage from source via the
+two commands above.
 
 **On-stream staging.** The `wbody_connectivity` builder unions two COMID
 parquets: `connected_waterbody_comids.parquet` (WBAREACOMI, from
@@ -405,6 +439,68 @@ rebuilding from `wbody_connectivity`:
 ```bash
 sbatch slurm_batch/build_depstor_rasters.batch --from wbody_connectivity --force
 ```
+
+**NHDWaterbody polygon staging (source-derived, not yet wired).** The
+`waterbody_gpkg`/`waterbody_layer` profile keys still point at the hand-made
+`input/nhd/conus_waterbodies.gpkg` — the last unverified NHD/WBD input in the
+pipeline. `gfv2_params.download.nhd_waterbodies` stages a reproducible
+replacement from the same per-VPU `NHDSnapshot` archives `nhd_flowlines`
+already downloads:
+
+```bash
+srun -p cpu -A impd --time=02:00:00 --ntasks=1 --cpus-per-task=4 --mem=48G \
+  pixi run --as-is python -m gfv2_params.download.nhd_waterbodies
+# writes input/nhd/nhd_waterbodies.parquet
+pixi run --as-is python scripts/diagnose/verify_nhd_waterbodies.py
+```
+
+CONUS-scale (~450k raw polygons across 21 VPU archives); run via `srun`/`sbatch`,
+never on the login node. Do not repoint `waterbody_gpkg`/`waterbody_layer` at
+the staged parquet without first running the verify script and reconciling any
+reported difference — the current CONUS product is validated against the
+hand-made layer's exact row/COMID/FTYPE/area numbers.
+
+**Endorheic clump-veto exemption.** Demoting the Great Salt Lake's COMIDs out
+of the on-stream set (above) is not sufficient by itself: `clump_regions`
+labels 8-connected waterbody components, and `regions_touching_mask` excludes
+a WHOLE region from `dprst` if any one cell touches the on-stream mask. The
+Great Salt Lake is 8-connected to a 49.1 km² inflow SwampMarsh (COMID
+10273192) that is correctly left on-stream, so the region-level exclusion
+vetoed the entire merged region — silently excluding all 4,854,156 Great Salt
+Lake cells from depression storage even after the COMID demotion.
+`dprst.py` fixes this using `endorheic_wbody.tif`: it exempts a waterbody's
+own cells from the region-level exclusion wherever `endorheic_wbody == 1 AND
+connected_wbody != 1 AND wbody_binary == 1` — direct hydrologic evidence
+(terminus-inside-itself) overrides the clump proxy, but only for the
+waterbody's own not-on-stream cells (the marsh's own cells stay excluded
+because they ARE on-stream), and only where `waterbody` already calls the cell
+a waterbody (without that term the 2 Mt Shasta Ice Mass COMIDs, which
+`waterbody` deliberately excluded, would come back as depression storage).
+Runs before the impervious carve and land mask, so both still apply to
+recovered cells. This is deliberately narrower than a global per-cell
+on-stream carve — dropping the `endorheic_wbody` term alone *is* that carve,
+and it would additionally recover ~6,518 km² of non-endorheic waterbodies
+whose clump merely abuts an on-stream feature (reproduce with
+`scripts/diagnose/measure_global_carve.py`); those keep the unexempted clump
+behaviour.
+
+**`endorheic_wbody` is required, not optional.** `wbody_connectivity` always
+writes it alongside `connected_wbody`, so an output directory with one and not
+the other is always STALE — written before the classifier existed — never a
+valid configuration. `dprst` therefore **raises** when it is missing. This
+matters for the recovery recipes below: a `--from dprst --force` rebuild
+against a pre-classifier `depstor_rasters/` would otherwise silently re-emit
+the old product (the marsh's clump veto returns, all 4,854,156 Great Salt Lake
+cells drop back out of depression storage) and exit 0. If you hit that raise,
+re-run `wbody_connectivity` first.
+
+**waterbody/endorheic rebuild cascade.** Changing the waterbody layer (e.g. a
+new BurnAddWaterbody union) or the on-stream COMID set re-runs
+`waterbody → endorheic → wbody_connectivity → dprst → routing →
+drains_perv/drains_imperv` — `--mem=384G` for `waterbody`/`dprst`, `96G` for
+`routing`. Rebuild with `--from waterbody --force` (or `--from endorheic
+--force` if only the endorheic signals/inputs changed and the waterbody layer
+itself did not).
 
 **dprst rebuild cascade.** Changing `dprst` membership (e.g. the per-cell
 impervious carve-out, or the on-stream COMID set) invalidates everything

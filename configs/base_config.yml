@@ -51,6 +51,27 @@ fabrics:
     # by wbody_connectivity to catch through-flow swamps NHD never tagged with
     # WBAREACOMI. Optional: absent -> WBAREACOMI-only behaviour.
     flowthrough_comids_table: "{data_root}/input/nhd/flowthrough_waterbody_comids.parquet"
+    # --- endorheic classifier (see docs/superpowers/specs/2026-07-12-endorheic-*) ---
+    # Full WBD HUC12 layer; the `endorheic` builder re-applies the
+    # HU_12_TYPE == 'C' (closed-basin) filter itself, so pointing this at a full WBD
+    # layer cannot flag every waterbody endorheic.
+    # Stage with: pixi run python -m gfv2_params.download.wbd_huc12
+    # NOTE: do NOT point this at input/nhd/closed_huc12.gpkg — that is an incomplete
+    # extract (23 type-C HUC12s in the Great Basin vs 141 in the full WBD).
+    wbd_huc12_table: "{data_root}/input/wbd/wbd_huc12.parquet"
+    # Floor on the endorheic COMIDs the `endorheic` builder must produce on this
+    # fabric. CONUS yields thousands; a result below this floor means the classifier
+    # collapsed and the demotion would be a silent no-op (Great Salt Lake back
+    # on-stream). Omit the key on a fabric that legitimately has no closed basin
+    # (e.g. tjc, Texas-Gulf) — an empty table is a valid no-op result there.
+    min_endorheic_comids: 100
+    # NHDPlus BurnAddWaterbody polygons — new depression AREA, unioned into the
+    # waterbody layer. Stage with:
+    #   pixi run python -m gfv2_params.download.nhd_burn_components
+    burn_add_waterbody_table: "{data_root}/input/nhd/burn_add_waterbodies.parquet"
+    # NHDPlus Sink.shp — provenance + the BurnAdd linkage only. NOT a classifier
+    # signal: the endorheic classifier reads the FDR grid the router reads.
+    sink_points_table: "{data_root}/input/nhd/sink_points.parquet"
     # EPA Level III Ecoregions (shared CONUS input, see
     # gfv2_params.download.epa_ecoregions). The dprst_depth builder (#173)
     # joins dprst polygons to a region by centroid for the per-ecoregion
@@ -108,6 +129,27 @@ fabrics:
     # by wbody_connectivity to catch through-flow swamps NHD never tagged with
     # WBAREACOMI. Optional: absent -> WBAREACOMI-only behaviour.
     flowthrough_comids_table: "{data_root}/input/nhd/flowthrough_waterbody_comids.parquet"
+    # --- endorheic classifier (see docs/superpowers/specs/2026-07-12-endorheic-*) ---
+    # Full WBD HUC12 layer; the `endorheic` builder re-applies the
+    # HU_12_TYPE == 'C' (closed-basin) filter itself, so pointing this at a full WBD
+    # layer cannot flag every waterbody endorheic.
+    # Stage with: pixi run python -m gfv2_params.download.wbd_huc12
+    # NOTE: do NOT point this at input/nhd/closed_huc12.gpkg — that is an incomplete
+    # extract (23 type-C HUC12s in the Great Basin vs 141 in the full WBD).
+    wbd_huc12_table: "{data_root}/input/wbd/wbd_huc12.parquet"
+    # Floor on the endorheic COMIDs the `endorheic` builder must produce on this
+    # fabric. CONUS yields thousands; a result below this floor means the classifier
+    # collapsed and the demotion would be a silent no-op (Great Salt Lake back
+    # on-stream). Omit the key on a fabric that legitimately has no closed basin
+    # (e.g. tjc, Texas-Gulf) — an empty table is a valid no-op result there.
+    min_endorheic_comids: 100
+    # NHDPlus BurnAddWaterbody polygons — new depression AREA, unioned into the
+    # waterbody layer. Stage with:
+    #   pixi run python -m gfv2_params.download.nhd_burn_components
+    burn_add_waterbody_table: "{data_root}/input/nhd/burn_add_waterbodies.parquet"
+    # NHDPlus Sink.shp — provenance + the BurnAdd linkage only. NOT a classifier
+    # signal: the endorheic classifier reads the FDR grid the router reads.
+    sink_points_table: "{data_root}/input/nhd/sink_points.parquet"
     ecoregions_gpkg: "{data_root}/input/ecoregions/us_eco_l3.gpkg"
     wesm_index: "{data_root}/input/wesm/wesm_1m_footprints.gpkg"
     hru_gpkg: "{data_root}/gfv2/fabric/gfv2_nhru_merged.gpkg"
@@ -127,9 +169,11 @@ fabrics:
     waterbody_gpkg: "{data_root}/input/fabric/NHM_01_draft.gpkg"
     waterbody_layer: wbs
     # No `connected_comids_table`: the `wbs` layer has no COMID/member_comid
-    # column, so the WBAREACOMI join cannot run. The depstor
-    # `wbody_connectivity`/`dprst` steps therefore fail-fast on this profile —
-    # use the `gfv2` profile for depstor validation.
+    # column, so neither the WBAREACOMI join nor the COMID-keyed endorheic
+    # classifier can run. The depstor DAG therefore fail-fasts on this profile
+    # — at the `endorheic` step first, which now precedes `wbody_connectivity`
+    # and raises on a waterbody layer with no COMID column. Use the `gfv2`
+    # profile for depstor validation.
     hru_gpkg: "{data_root}/{fabric}/fabric/gfv2_vpu01_nhru.gpkg"
     hru_layer: nhru
     id_feature: nat_hru_id

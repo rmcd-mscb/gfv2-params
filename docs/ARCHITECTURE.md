@@ -175,12 +175,16 @@ whether the depstor pipeline will be run for the fabric:
 | `twi_raster` | — | ✓ | CONUS `twi.vrt` (ArcPy, calibrated) or `twi_hydrodem.vrt` (open-source, CONUS-complete) |
 | `segments_gpkg` | — | ✓ | Stream-segment gpkg (no longer feeds any depstor step — the `streambuffer` step is retired). A VPU-based fabric (gfv2) merges per-VPU `nsegment` layers via `scripts/merge_vpu_segments.py` for other potential uses. |
 | `segments_layer` | — | ✓ | Layer name inside `segments_gpkg` (typically `nsegment`) |
-| `connected_comids_table` | — | ✓ | Path to `input/nhd/connected_waterbody_comids.parquet` — the set of NHDPlusV2 waterbody COMIDs that a **Network** NHD artificial path flows through (i.e. on-stream via `WBAREACOMI`). Produced by `download/nhd_flowlines.py`, which keeps a WBAREACOMI only if the flowline carrying it is a Network Flowline (in `flowline_topology.parquet`), so Non-Network artificial paths NHD draws through closed-basin lakes don't promote endorheic waterbodies on-stream (issue #161); consumed by the depstor `wbody_connectivity` builder. Required only for fabrics whose waterbody layer is COMID-keyed (`gfv2`, `oregon`, `tjc`); the `gfv2_vpu01` profile omits it (its `wbs` layer has no COMID), so `wbody_connectivity`/`dprst` fail-fast there — use `gfv2` for depstor validation. |
+| `connected_comids_table` | — | ✓ | Path to `input/nhd/connected_waterbody_comids.parquet` — the set of NHDPlusV2 waterbody COMIDs that a **Network** NHD artificial path flows through (i.e. on-stream via `WBAREACOMI`). Produced by `download/nhd_flowlines.py`, which keeps a WBAREACOMI only if the flowline carrying it is a Network Flowline (in `flowline_topology.parquet`), so Non-Network artificial paths NHD draws through closed-basin lakes don't promote endorheic waterbodies on-stream (issue #161); consumed by the depstor `wbody_connectivity` builder. Required only for fabrics whose waterbody layer is COMID-keyed (`gfv2`, `oregon`, `tjc`); the `gfv2_vpu01` profile omits it (its `wbs` layer has no COMID), so the depstor DAG fail-fasts there — at the `endorheic` step first (it raises on a waterbody layer with no COMID column), and at `wbody_connectivity`/`dprst` after that. Use `gfv2` for depstor validation. |
 | `flowthrough_comids_table` | — | — | Path to `input/nhd/flowthrough_waterbody_comids.parquet` — a second on-stream COMID set from flow-through topology: waterbodies that a **Network** conveyance flowline demonstrably enters AND exits (T1), or whose upstream end is inside the waterbody per authoritative NHDPlus routed-network direction (D1 — source/headwater lakes and split pass-through outflows), or that overlap an NHDArea conveyance polygon (T3). T1/D1 candidate flowlines are gated to Network Flowlines (in `flowline_topology.parquet`) so Non-Network closed-basin lines can't promote endorheic lakes (issue #161). Playa/Ice Mass waterbodies are dropped up front and never promoted onto the on-stream set (Playa because it's force-dprst; Ice Mass because it's excluded from the waterbody classification entirely — see the `waterbody` row below). Produced by `download/nhd_flowthrough.py`; unioned with `connected_comids_table` by `wbody_connectivity` before rasterizing (which also re-applies the `NEVER_ONSTREAM_FTYPES` guardrail to the unioned set, so it covers the WBAREACOMI path too). Optional (omitting it uses `connected_comids_table` only). |
-| `waterbody_gpkg` | — | ✓ | NHDPlus waterbodies; depstor's `waterbody` step **raises** if unset. If the layer has an `FTYPE` column, `waterbody` drops `EXCLUDE_WATERBODY_FTYPES` (`{"Ice Mass"}`) before rasterizing: a glacier/permanent ice mass is not depression storage, so its cells are left out of `wbody_binary`/`wbody_regions` entirely and fall back to land (perv/imperv via LULC), not dprst and not on-stream. Playa is unaffected here — it stays a normal waterbody clump and is force-dprst downstream by the `NEVER_ONSTREAM_FTYPES` guardrail in `wbody_connectivity`/`nhd_flowthrough`. |
+| `waterbody_gpkg` | — | ✓ | NHDPlus waterbodies; depstor's `waterbody` step **raises** if unset. If the layer has an `FTYPE` column, `waterbody` drops `EXCLUDE_WATERBODY_FTYPES` (`{"Ice Mass"}`) before rasterizing: a glacier/permanent ice mass is not depression storage, so its cells are left out of `wbody_binary`/`wbody_regions` entirely and fall back to land (perv/imperv via LULC), not dprst and not on-stream. Playa is unaffected here — it stays a normal waterbody clump and is force-dprst downstream by the `NEVER_ONSTREAM_FTYPES` guardrail in `wbody_connectivity`/`nhd_flowthrough`. Currently points at the hand-made `input/nhd/conus_waterbodies.gpkg` (layer `waterbodies`). `gfv2_params.download.nhd_waterbodies` stages a source-derived replacement, `input/nhd/nhd_waterbodies.parquet`, matching the exact same schema (`GNIS_ID, GNIS_NAME, COMID, FTYPE, member_comid, area_sqkm, geometry`) — **staged and verified, not yet repointed**; see `scripts/diagnose/verify_nhd_waterbodies.py` for the row-count/COMID-set/FTYPE/area diff against the hand-made layer before ever making that swap. |
 | `waterbody_layer` | — | ✓ | Layer name inside `waterbody_gpkg` |
 | `wesm_index` | — | ✓ | Path to `input/wesm/wesm_1m_footprints.gpkg` — pre-staged, 1m/QL1/QL2-qualifying USGS 3DEP WESM workunit footprints (a `project` column + geometry). Produced by `pixi run python -m gfv2_params.download.wesm` (issue #173). Consumed by the `dprst_depth` step's `topo.resolution_class` (best-available-topo tagging) and `tiling.group_by_tile` (1 m tile-key resolution); required for `dprst_depth`, not for any other depstor step. |
 | `ecoregions_gpkg` | — | ✓ | Path to `input/ecoregions/us_eco_l3.gpkg` — EPA Level III Ecoregions (see `gfv2_params.download.epa_ecoregions`). Used by the `dprst_depth` step's per-ecoregion regional-fill donor pool (`dprst_depth.fill.fit_ecoregion_models`); every fabric profile with a depstor-configured `dprst_depth` step already stages it (also listed as a shared, reusable input in `README.md`'s Stage 0). |
+| `wbd_huc12_table` | — | — | Path to `input/wbd/wbd_huc12.parquet` — the full WBD HUC12 layer. Both ends filter `HU_12_TYPE == 'C'` (closed basin): `download/wbd_huc12.py` stages only type-C rows, **and** the `endorheic` depstor builder re-applies the filter itself (a table with no `HU_12_TYPE` column raises), so pointing this at a genuine full WBD layer cannot flag every waterbody endorheic and empty the on-stream set. Optional: absent turns off Signal B (majority-inside-closed-HUC12) and the `endorheic` step still runs Signal A (FDR terminus-inside-itself) alone. Do **not** point this at `input/nhd/closed_huc12.gpkg` — that is an incomplete extract (23 type-C HUC12s in the Great Basin vs 141 in the full WBD). |
+| `burn_add_waterbody_table` | — | — | Path to `input/nhd/burn_add_waterbodies.parquet` — the **sink-purpose subset** of NHDPlus's BurnAddWaterbody polygons (new depression AREA; 1,658 polygons / 721.9 km² CONUS-wide), unioned into the waterbody layer by the `waterbody` builder's `merge_burn_add`, **before** the `EXCLUDE_WATERBODY_FTYPES` (Ice Mass) filter runs, so a BurnAdd Ice Mass polygon is still excluded. Configured-but-missing fails loud (`FileNotFoundError`), never silently skipped. BurnAdd rows are never on-stream-promotable, but not because `NEVER_ONSTREAM_FTYPES` is applied to them — `wbody_connectivity`/`nhd_flowthrough` re-read the raw `waterbody_gpkg` from disk, never the merged frame this builder produces, so that guardrail is never evaluated against a BurnAdd row at all. Safety is structural instead: `merge_burn_add` asserts every BurnAdd COMID (NHDPlus `PolyID`) is negative, so it can never match a positive WBAREACOMI/flow-through COMID, and asserts no BurnAdd polygon lies within one rasterized cell diagonal (`cell_size * sqrt(2)`, passed in from the template raster) of an existing **on-stream** waterbody — a buffered spatial join, not plain vector intersection, because `clump_regions`' 8-connectivity can merge cells that never touch in vector space. The guard is restricted to on-stream neighbours (via `_load_onstream_comids`, the same pre-endorheic WBAREACOMI ∪ flow-through union `wbody_connectivity` computes, minus `NEVER_ONSTREAM_FTYPES`) because merging with an already-dprst neighbour is harmless — the clump simply stays dprst — whereas an on-stream neighbour would silently drag the BurnAdd depression out of dprst; measured against real CONUS data, 112 of 1,658 BurnAdd polygons genuinely overlap an existing waterbody, all 112 neighbouring an already-dprst waterbody and none on-stream, so the original unconditional guard aborted the whole CONUS build over a failure mode that doesn't occur. If the on-stream COMID table(s) aren't configured or not yet staged, `merge_burn_add` falls back to the old broad guard (raises on ANY overlap) rather than silently skipping the check. Optional, staged by `gfv2_params.download.nhd_burn_components` — which keeps only the rows whose `PurpCode` is a sink purpose (4 Playa / 5 closed lake / 8 closed lake) and drops the rest: **BurnAddWaterbody is not a sink layer**, it is every waterbody NHDPlus added to the DEM burn, and VPU 01 alone ships 702 NULL-`PurpCode` rows (503 on-network, including StreamRiver and CanalDitch FCodes) against **zero** sinks in its own `Sink.shp`. FTYPE comes from `FCODE`, not `PurpCode` (`PurpCode` 5 spans both Playa and SwampMarsh). |
+| `sink_points_table` | — | — | Path to `input/nhd/sink_points.parquet` — NHDPlus `Sink.shp` (15,728 sinks CONUS-wide). **Intentionally unread: no builder consumes it.** It is threaded through the profile and `BuildContext` for provenance and for the BurnAddWaterbody linkage (`SOURCEFC`/`FEATUREID`), so the sink layer that explains those polygons is staged and discoverable alongside them. It is **not** a classifier signal and must not be wired up as one: the `endorheic` builder's Signal A deliberately reads the FDR grid (the same grid `routing` reads), not this lossy point shadow of it. Optional. |
+| `min_endorheic_comids` | — | — | Integer floor on the number of FLAGGED endorheic COMIDs on this fabric (`gfv2`/`gfv2_dev`: 100). Below it — or if either signal flags nothing at all — the pipeline **raises**, because a collapsed or empty result makes the demotion a silent no-op and leaves the Great Salt Lake on-stream. Enforced in three places: the `endorheic` builder's fresh-build path, its output-exists skip path, and `wbody_connectivity` (the consuming end, which is what covers `--from wbody_connectivity`, a recipe that skips the `endorheic` step entirely). Optional, and deliberately absent on fabrics that legitimately have no closed basin (`tjc`, Texas-Gulf: 4 FDR code-0 cells, 0 endorheic waterbodies) — there an empty table is the correct result. |
 
 For `template_raster`/`fdr_raster`, stage the clip with:
 
@@ -361,6 +365,149 @@ These are hard-won; violating them silently corrupts outputs.
   rule). Hardcoded data_root-relative, no config key — `nhd_topology.py` must
   run before **both** `nhd_flowlines.py` and `nhd_flowthrough.py` (each fails
   loud if `input/nhd/flowline_topology.parquet` is missing).
+- **`nhd_waterbodies` (staged, not yet wired) and the `member_comid` provenance.**
+  `download/nhd_waterbodies.py` stages NHDWaterbody polygons from the same
+  per-VPU `NHDSnapshot` archive `nhd_flowlines` already downloads, reproducing
+  `input/nhd/conus_waterbodies.gpkg`. Verified via
+  `scripts/diagnose/verify_nhd_waterbodies.py` against the real CONUS layer:
+  **exact match** on row count (448,124), unique-COMID count (447,907, incl.
+  the same 217 residual duplicate-COMID rows), the full COMID set (0 only on
+  either side), and the FTYPE distribution (incl. 66,488 SwampMarsh). Total
+  area differs by ~2.2% (393,635 km2 staged vs 402,554 km2 existing),
+  concentrated in ~1,000 of the largest waterbodies (Lake Michigan/Superior/
+  Huron alone account for ~834 km2 of the gap) — consistent with the hand-made
+  layer having been built from an older NHDSnapshot vintage than the highest
+  version `_pick_snapshot_key` resolves today (NHD periodically revises
+  shoreline vertices for a stable COMID), not a code defect.
+
+  `member_comid` is NOT a native NHDWaterbody field: reverse-engineered from
+  the hand-made layer, it is `str(COMID)` for 447,844 of 448,124 rows, and for
+  the other 280 a **sorted comma list of raw COMIDs** dissolved into one output
+  polygon. **The merge rule is: every NHDWaterbody row sharing a non-null
+  GNIS_ID, WITHIN ONE VPU, is always dissolved into one row — there is no
+  spatial-adjacency test.** This was verified, not assumed: Lake Conroe (VPU
+  12, GNIS_ID 1380953, COMIDs 1466730/120053033) merges despite its two parts
+  being 662.8 m apart (`touches=False`, `intersects=False`), disproving a
+  touching/intersecting requirement. The retained `COMID`/`GNIS_NAME`/`FTYPE`
+  come from the **largest-area member** (also true when `FTYPE` disagrees —
+  Lake Oahe, GNIS_ID 1266878, two small LakePond parts + a 1,254.6 km2
+  Reservoir part, resolves to `Reservoir`, matching the existing layer).
+  `member_comid` is functionally near-inert downstream:
+  `select_connected_waterbodies` calls `pd.to_numeric(member_comid,
+  errors="coerce")`, turning every comma-list to NaN, so a merged row is only
+  ever matched via its single `COMID`.
+
+  **Why per-VPU, never cross-VPU:** the existing layer's 14 residual
+  same-GNIS_ID pairs that stay unmerged are — every one checked — a case that
+  spans TWO different VPU archives (either the exact same COMID, cross-VPU
+  duplicated, e.g. GNIS_ID 178159 "Saint Vrain Glaciers" at the VPU 10L/14
+  seam; or a named feature split into two different COMIDs at a VPU boundary,
+  e.g. GNIS_ID 1564644 "Empire Swamp" at the VPU 04/07 seam). `main()`
+  reproduces this by dissolving each VPU's frame independently before
+  concatenating, never comparing polygons across archives — which also means
+  it does not collapse NHDPlus's 218 known cross-VPU-duplicate COMIDs (VPU
+  04/07 and 12/13 seams) into one row; `dedupe_cross_vpu_duplicates` exists,
+  tested, to do that, but `main()` deliberately does not call it, since the
+  layer being reproduced doesn't either. See the module docstring for the full
+  derivation.
+- **`endorheic` step (runs between `waterbody` and `wbody_connectivity`).**
+  Emits `endorheic_waterbody_comids.parquet` (comid, frac_own, by_terminus,
+  by_closed_huc12) via `endorheic_frame` (`src/gfv2_params/endorheic.py`):
+  Signal A is a waterbody whose D8 terminus (on the same FDR grid `routing`
+  reads) lies INSIDE itself; Signal B is a waterbody majority-inside a closed
+  (type-C) WBD HUC12, needed because some closed-basin waterbodies (e.g.
+  Walker Lake) contain no FDR terminal cell.
+
+  Two counts, easy to confuse: a COMID is **flagged** when a signal calls it
+  endorheic (**22,942** on CONUS — this is what `min_endorheic_comids` floors
+  and what `endorheic_wbody.tif` rasterizes), and **demoted** when a flagged
+  COMID was *also* on-stream, so `wbody_connectivity`'s subtraction actually
+  removed it (**818** on CONUS). Most flagged COMIDs were never on-stream, so
+  the subtraction is a no-op for them.
+
+  On the shipped CONUS tables Signal
+  B is not a minor complement: of the 818 demotions, 543 are Signal-B-only,
+  112 Signal-A-only, 163 both — BY COUNT Signal B dominates. BY AREA it does
+  not: Signal-B-only demotions are small (median ~0.09 km², ~1,400 km² total,
+  mostly ponds/playas inside a closed basin), while Signal A carries the
+  overwhelming majority of the demoted area, including the Great Salt Lake
+  itself (4,369 km²). Signal A needs only `fdr_raster` (already required on
+  every fabric) and runs everywhere; Signal B activates only when
+  `wbd_huc12_table` is configured (and the builder re-applies the type-C
+  filter itself). The emitted table also carries every Signal-A-EVALUATED
+  candidate that was NOT flagged (both `by_terminus`/`by_closed_huc12` false),
+  not only demotions, so a threshold sweep over `frac_own` (see
+  `scripts/diagnose/endorheic_fixtures.py`) measures the real candidate
+  distribution instead of only the rows a 0.5 threshold already flagged;
+  `load_endorheic_comids` still filters to flagged rows only, so this does not
+  change which COMIDs get demoted. An EMPTY (zero-FLAGGED) result is
+  legitimate — a domain with no closed basin has no endorheic waterbody
+  (`tjc`, Texas-Gulf: 4 FDR code-0 cells, 0 flagged; against 15,262 /
+  thousands on `gfv2` and 1,438 / 680 on `oregon`) — so `wbody_connectivity`
+  subtracts the empty (flagged) set, a correct no-op. What fails loud is
+  BREAKAGE: a waterbody layer that doesn't overlap the FDR grid, an all-null
+  geometry set, a staged WBD with zero type-C rows when Signal B is configured,
+  and a flagged-row count below the fabric's optional `min_endorheic_comids`
+  floor — so a silently-empty CONUS result, which would leave the Great Salt
+  Lake on-stream, is still impossible to miss. That floor is checked in **three**
+  places, and all three are load-bearing: on the `endorheic` builder's fresh-build
+  path, on its output-exists skip path, and again at the CONSUMING end in
+  `wbody_connectivity`. The last is not redundant — `--from wbody_connectivity`
+  (the documented cascade-rebuild recipe) does not run the `endorheic` step at
+  all, so the orchestrator hydrates its table straight off disk and the producing
+  builder's checks never execute. The floor is applied per SIGNAL as well as to
+  the union, because the union alone cannot see one signal die: Signal B dominates
+  by COUNT (543 of 818 CONUS demotions) while Signal A carries almost all the
+  demoted AREA, so a total Signal-A collapse would still clear a count-based floor
+  while ~75% of the demoted area silently vanished.
+  `wbody_connectivity` subtracts this COMID set from the unioned on-stream set
+  — a STRICT SUBTRACTION, so it can only remove COMIDs, never add one — which
+  is what finally takes the Great Salt Lake off-stream (both WBAREACOMI and
+  flow-through otherwise promote it, because NHD draws Network artificial paths
+  between its arms). If `endorheic_comids` is absent from the build context
+  (the `endorheic` step hasn't run for this fabric), `wbody_connectivity`
+  **raises** rather than proceeding without the demotion — every fabric that
+  can reach `wbody_connectivity` has both a COMID-keyed waterbody layer and
+  `fdr_raster`, so it can always run the `endorheic` step first; a *present but
+  empty* endorheic table (the `tjc` case above) is unaffected and stays a
+  legitimate no-op. See
+  [`docs/superpowers/specs/2026-07-12-endorheic-dprst-classifier-design.md`](superpowers/specs/2026-07-12-endorheic-dprst-classifier-design.md).
+- **`wbody_connectivity` emits a SECOND raster, `endorheic_wbody.tif`** — every
+  waterbody the `endorheic` classifier flagged (Signal A and/or B), rasterized
+  from the FULL endorheic set regardless of on-stream status (not just the ones
+  the subtraction above demoted). `dprst.py` needs this because the demotion
+  alone doesn't fix the CONUS product: `clump_regions` labels 8-connected
+  waterbody components, and `regions_touching_mask` excludes a WHOLE region if
+  any one cell touches the on-stream mask. The Great Salt Lake (4,369 km²,
+  correctly demoted to dprst by `endorheic`) is 8-connected to a 49.1 km²
+  SwampMarsh (COMID 10273192) whose water flows INTO the lake and is correctly
+  left on-stream — so the region-level exclusion vetoed the entire merged
+  region, silently excluding all 4,854,156 Great Salt Lake cells from
+  depression storage even though `connected_wbody.tif` no longer contains it.
+  The fix, in `dprst.py`, exempts a waterbody's own cells from the
+  region-level exclusion wherever `endorheic_wbody == 1 AND connected_wbody !=
+  1 AND wbody_binary == 1` — i.e. direct hydrologic evidence
+  (terminus-inside-itself) overrides the clump proxy, but only for the
+  waterbody's own (not itself on-stream) cells (the marsh's own cells stay
+  excluded because they ARE on-stream), and only where `waterbody` already calls
+  the cell a waterbody. That third term matters: `endorheic_wbody` is rasterized
+  from a raw, unfiltered read of the gpkg, so without it the 2 Mt Shasta Ice Mass
+  COMIDs that `waterbody` deliberately excluded would be reinstated as depression
+  storage, breaking `dprst ⊆ wbody_binary`. This runs **before** the impervious
+  carve and land mask so both still apply to recovered cells (the
+  imperv/dprst/perv partition stays disjoint). It is intentionally narrower than
+  a global per-cell on-stream carve — dropping the `endorheic_wbody` term alone
+  *is* that carve, and it would recover a further ~6,518 km² of non-endorheic
+  waterbodies whose clump merely abuts an on-stream feature (reproduce with
+  [`scripts/diagnose/measure_global_carve.py`](../scripts/diagnose/measure_global_carve.py));
+  those must keep the
+  unexempted clump behaviour exactly, which is what the `drains_to_dprst`
+  over-extension #145/#158/#161 fixed. `endorheic_wbody` is **required** by
+  `dprst`, not optional: `wbody_connectivity` always writes it alongside
+  `connected_wbody`, so a build context with one and not the other is always a
+  stale output directory, never a legitimate configuration. Treating it as
+  "exemption off" is how a `--from dprst --force` rebuild against a pre-classifier
+  output directory would silently re-emit the old product; `dprst` raises instead.
 - **`carea_max`/`smidx_coef` threshold mode.** The legacy `absolute`
   thresholds (8.0/15.6) are only calibrated against VPU 01's ArcPy TWI
   distribution. For any other fabric, use `threshold_mode: percentile` (the

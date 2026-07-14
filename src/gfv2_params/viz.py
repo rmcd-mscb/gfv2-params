@@ -466,6 +466,7 @@ _DEPSTOR_RASTERS = [
     "dprst_binary.tif",
     "onstream_binary.tif",
     "connected_wbody.tif",
+    "endorheic_wbody.tif",
     "wbody_binary.tif",
     "wbody_regions.tif",
     "carea_map_t8_binary.tif",
@@ -478,11 +479,14 @@ _DEPSTOR_RASTERS = [
 
 
 def depstor_raster_inventory(cfg) -> list[RasterEntry]:
-    """The fixed 14 depstor binary rasters under {data_root}/{fabric}/depstor_rasters.
+    """The fixed 15 depstor binary rasters under {data_root}/{fabric}/depstor_rasters.
 
     All are discrete (binary masks / region or VPU labels), so kind is
     "categorical". Missing files are skipped with a warning.
     ``connected_wbody.tif`` replaced the retired ``stream_buffer.tif``.
+    ``endorheic_wbody.tif`` is the direct hydrologic-evidence mask consumed by
+    `dprst.py`'s endorheic exemption -- the mask most worth a QA figure for
+    that fix (e.g. it should light up the Great Salt Lake, not Mt Shasta).
     """
     base = Path(cfg["data_root"]) / cfg["fabric"] / "depstor_rasters"
     entries = [

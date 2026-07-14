@@ -91,6 +91,15 @@ def flowthrough_comids(
     the gate keeps them in depression storage. When omitted, T1 stays
     pure-geometry (the pre-gate contract). When `routed_comids` is omitted or
     empty, D1 is inert and only T1/T3 apply.
+
+    NOTE: `waterbodies` here is the raw waterbody_gpkg (this is a standalone
+    download/staging script, run independent of and typically before the
+    `waterbody` depstor builder). BurnAddWaterbody rows -- staged separately by
+    `nhd_burn_components` and unioned in only inside `waterbody.build()` -- are
+    never present in this frame, so NEVER_ONSTREAM_FTYPES below never evaluates
+    against them; they're invisible to it, not "checked and passed". That's fine:
+    their negative COMID can never match a Network Flowline COMID (see
+    `waterbody.merge_burn_add`), so T1/D1/T3 could never promote one anyway.
     """
     wb = waterbodies[~waterbodies["FTYPE"].isin(NEVER_ONSTREAM_FTYPES)].copy()
     if wb.empty:

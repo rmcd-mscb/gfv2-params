@@ -91,6 +91,20 @@ def _build_context(config: dict, force: bool) -> BuildContext:
             Path(config["flowthrough_comids_table"])
             if config.get("flowthrough_comids_table") else None
         ),
+        wbd_huc12_table=(
+            Path(config["wbd_huc12_table"]) if config.get("wbd_huc12_table") else None
+        ),
+        burn_add_waterbody_table=(
+            Path(config["burn_add_waterbody_table"])
+            if config.get("burn_add_waterbody_table") else None
+        ),
+        sink_points_table=(
+            Path(config["sink_points_table"]) if config.get("sink_points_table") else None
+        ),
+        min_endorheic_comids=(
+            int(config["min_endorheic_comids"])
+            if config.get("min_endorheic_comids") is not None else None
+        ),
         fdr_raster=Path(config["fdr_raster"]) if config.get("fdr_raster") else None,
         twi_raster=Path(config["twi_raster"]) if config.get("twi_raster") else None,
         vpu=config.get("vpu"),
@@ -130,11 +144,11 @@ def _expected_outputs(step: dict) -> dict:
             return {"drains_perv": step["output"]}
         if name == "drains_imperv":
             return {"drains_imperv": step["output"]}
-        # landmask, imperv, wbody_connectivity, perv, routing each map to a single key.
+        # landmask, imperv, perv, routing each map to a single key.
         single_key = {
             "landmask": "landmask",
             "imperv": "imperv",
-            "wbody_connectivity": "connected_wbody",
+            "endorheic": "endorheic_comids",
             "perv": "perv",
             "routing": "drains_to_dprst",
             "vpu_id": "vpu_id",
@@ -145,6 +159,11 @@ def _expected_outputs(step: dict) -> dict:
     outputs = step["outputs"]
     if name == "waterbody":
         return {"wbody_binary": outputs["binary"], "wbody_regions": outputs["regions"]}
+    if name == "wbody_connectivity":
+        return {
+            "connected_wbody": outputs["connected_wbody"],
+            "endorheic_wbody": outputs["endorheic_wbody"],
+        }
     if name == "dprst":
         return {"dprst": outputs["dprst"], "onstream": outputs["onstream"]}
     if name == "carea_map":

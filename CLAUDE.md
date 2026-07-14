@@ -89,10 +89,121 @@ These are hard-won; violating them silently corrupts outputs.
   clip must come from the hydrology lattice (`fdr.vrt`/`twi.vrt`); `elevation.vrt`
   is on the offset DEM lattice and `carea_map` requires `template ≡ twi`
   alignment. `fdr.vrt` is the **official NHDPlus V2 `FdrFac`** (NHDPlus HydroDEM:
-  stream-burned + walled + fully depression-filled), so `drains_to_dprst` routes
-  on a fully drainage-enforced FDR with interior sinks removed — *not* the opt-in
-  richdem `Fdr_hydrodem` from `compute_dem_derivatives.py`. See `docs/ARCHITECTURE.md`
-  and issue #147 (depression-respecting FDR investigation) for the provenance/tradeoff.
+  stream-burned + walled + depression-filled **everywhere except at NHDPlus's own
+  sinks**). It is **not** fully drainage-enforced: it contains exactly **15,262
+  code-0 (terminal) cells**, and **15,693 of the 15,728** sinks in NHDPlus's own
+  `Sink.shp` (99.8%) land on one — i.e. the FDR's code-0 cells *are* the NHD sink
+  set. NHDPlus leaves those sinks unfilled *by design* — that is what a sink is. The
+  "FDR code-0 warnings" noted during issue #145 **are that sink set**, and they
+  are now the primary signal of the endorheic dprst classifier: a waterbody is
+  depression storage iff its water's terminus lies inside itself
+  (`gfv2_params.endorheic`, Signal A) — *not* the opt-in richdem `Fdr_hydrodem`
+  from `compute_dem_derivatives.py`. `d8_routing` already treats code 0 as a
+  terminus, so the classifier and the router read the same grid and agree by
+  construction. See `docs/ARCHITECTURE.md`,
+  `docs/superpowers/specs/2026-07-12-endorheic-dprst-classifier-design.md`, and
+  issue #147 (depression-respecting FDR investigation) for the provenance/tradeoff.
+- **Endorheic demotion is a STRICT SUBTRACTION, and its input is the FDR — not a
+  vector sink file.** `wbody_connectivity` subtracts an endorheic COMID set from
+  the on-stream union; the subtraction can only ever remove COMIDs, never add
+  one. Signal A ("terminus-inside-itself") reads the FDR's code-0 cells and runs
+  `d8_routing`'s own kernel, so the classifier and the router agree by
+  construction. **Do not** substitute a vector sink file for the FDR grid — not
+  `input/nhd/NHD_sink_points.gpkg`, not any other point layer. A point layer is a
+  lossy *shadow* of the grid the router actually reads: Signal A must agree with
+  `d8_routing` by construction, and it can only do that by reading the same FDR.
+  (A hand-curated `NHD_sink_points.gpkg` was rejected during design for dropping
+  `PURPCODE 1`, "BurnLineEvent network end" — exactly the class that marks terminal
+  lakes — and so containing **0 sinks inside Great Salt Lake**. That specific file
+  has since been replaced with a near-complete copy of `Sink.shp`, so **do not
+  re-derive the prohibition from its current contents**; the architectural reason
+  above is what stands.) Stage the authoritative sinks from source via
+  `gfv2_params.download.nhd_burn_components` — they are provenance for
+  BurnAddWaterbody, deliberately unread by any classifier. Likewise, do not substitute
+  `input/nhd/closed_huc12.gpkg` — an incomplete extract (**23** type-C HUC12s in
+  the Great Basin vs **141** in the full WBD; it resolves 1 of the 10 classic
+  terminal lakes where the full WBD resolves 5). Stage via
+  `gfv2_params.download.wbd_huc12`. Containment tests use **majority-area**,
+  never `intersects` (a zero-interior-overlap boundary touch returns `True` —
+  Eagle Lake and Middle Alkali Lake graze closed basins at frac = 0.000) and
+  never `within` (it **drops Great Salt Lake**, which spills 1.1% into a
+  neighbouring HUC12 at frac = 0.989). Separately, the BurnAddWaterbody overlap
+  guard in `waterbody`'s `merge_burn_add` models **8-connected raster adjacency,
+  not vector intersection** — `clump_regions` merges 8-connected cells, so two
+  polygons ~42 m apart on a 30 m grid can clump-merge without vector-intersecting.
+  If a BurnAdd polygon lands in the same clump as an on-stream waterbody,
+  `regions_touching_mask` would delete the whole clump, silently destroying the
+  BurnAdd playa's depression area — so the guard buffers by `cell_size *
+  sqrt(2)` and **raises** instead of silently dropping it. That clump membership
+  is **transitive**, and the guard must walk it: BurnAdd → already-dprst waterbody
+  → on-stream waterbody is ONE region, so testing only a BurnAdd's *direct*
+  neighbours misses the chain. Do **not** "simplify" it back to a direct
+  neighbour test on the reasoning that merging into an already-dprst neighbour is
+  harmless — being dprst *by COMID* does not mean a waterbody's *region* survives
+  the on-stream exclusion, which is exactly what the Great Salt Lake / COMID
+  10273192 marsh case demonstrates. (Inert on today's CONUS layer: the 1,658
+  BurnAdd polygons pull in 113 waterbodies, the walk closes after one hop, and
+  none of them is on-stream.)
+- **Endorheic demotion alone does not fix the CONUS dprst product — the
+  region-level on-stream exclusion still vetoes it.** `clump_regions` labels
+  8-connected waterbody components, and `regions_touching_mask` excludes a
+  WHOLE region from `dprst` if any one cell touches the on-stream mask. The
+  Great Salt Lake (4,369 km², correctly demoted to dprst by `endorheic`) is
+  8-connected to a 49.1 km² SwampMarsh (COMID 10273192) whose water flows INTO
+  the lake and is correctly left on-stream — so without a fix, that one
+  marsh's on-stream status vetoed the entire merged region, silently
+  excluding all 4,854,156 Great Salt Lake cells from depression storage even
+  though `connected_wbody.tif` no longer contains it. The fix:
+  `wbody_connectivity` rasterizes a SECOND mask, `endorheic_wbody.tif` (the
+  FULL endorheic set, regardless of on-stream status), and `dprst.py` exempts a
+  waterbody's own cells from the region-level exclusion wherever
+  `endorheic_wbody == 1 AND connected_wbody != 1 AND wbody_binary == 1`. All
+  three terms are load-bearing: direct hydrologic evidence (terminus-inside-itself)
+  overrides the clump proxy, but ONLY for the waterbody's own not-on-stream cells
+  — a cell that is itself on-stream (the marsh) always stays excluded — and only
+  where `waterbody` already calls it a waterbody, since `endorheic_wbody` is
+  rasterized from a raw, unfiltered read of the gpkg and would otherwise reinstate
+  the 2 Mt Shasta Ice Mass COMIDs that `waterbody` deliberately dropped (a glacier
+  is not depression storage; this preserves `dprst ⊆ wbody_binary`). Runs before
+  the impervious carve and land mask so both still apply to recovered cells.
+  Deliberately narrower than a global per-cell on-stream carve, which was
+  considered and rejected — dropping the `endorheic_wbody` term alone *is* that
+  carve, and it would recover a further ~6,518 km² of non-endorheic waterbodies
+  whose clump merely abuts an on-stream feature (reproduce with
+  `scripts/diagnose/measure_global_carve.py`); those must keep the unexempted
+  clump behaviour exactly, which is what `drains_to_dprst` over-extension
+  #145/#158/#161 fixed. `endorheic_wbody` is **required**, not optional:
+  `wbody_connectivity` always writes it alongside `connected_wbody`, so having one
+  without the other is always a *stale output directory*, never a legitimate
+  configuration — treating it as "exemption off" is exactly how a `--from dprst`
+  rebuild would silently re-emit the pre-fix product (all 4,854,156 Great Salt Lake
+  cells back out of dprst, exit code 0). `dprst` fails loud instead.
+- **`BurnAddWaterbody` is NOT a sink layer.** It is every waterbody NHDPlus added
+  to the DEM burn; only the rows with a sink `PurpCode` (4 Playa, 5/8 closed
+  lake) are sinks and become depression area. VPU 01 ships **702 NULL-`PurpCode`
+  rows against ZERO sinks in its own `Sink.shp`** — 503 of them on-network,
+  including StreamRiver and CanalDitch FCodes — so merging the layer wholesale
+  turns canals and river reaches into depression storage.
+  `download/nhd_burn_components.py` keeps only the sink-purpose rows and takes
+  `FTYPE` from **`FCODE`**, not `PurpCode` (`PurpCode` 5 spans both Playa and
+  SwampMarsh, and a Playa mislabelled LakePond loses force-dprst). A populated
+  unrecognised `PurpCode`, or a retained conveyance `FTYPE`, raises.
+- **An empty endorheic table is a legitimate result, not a failure.** A domain
+  with no closed basin (`tjc`, Texas-Gulf) has no endorheic waterbody, and the
+  `endorheic` step lives in the fabric-independent depstor config, so raising on
+  a zero-row result bricks that fabric's whole DAG. Protection against a
+  *silently* empty result lives in the optional per-fabric
+  `min_endorheic_comids` profile floor (gfv2: 100), not in a blanket raise.
+  **The floor must be enforced at the CONSUMING end (`wbody_connectivity`), not
+  only in the `endorheic` builder that writes the table** — `--from
+  wbody_connectivity` (the documented cascade-rebuild recipe) leaves `endorheic`
+  out of the run list, and `_hydrate_existing_outputs` then pulls its table off
+  disk with no validation at all. A guard that lives only in the producing
+  builder never executes on the exact path operators actually use. The floor also
+  applies **per signal**, not just to the union: Signal B dominates by COUNT (543
+  of 818 CONUS demotions) while Signal A carries almost all the demoted AREA, so a
+  total Signal-A collapse still clears a count-based floor while ~75% of the
+  demoted area silently vanishes.
 - **On-stream waterbodies are traversal barriers in `routing`.** Land upslope
   of an on-stream (non-dprst) waterbody is captured by that waterbody's
   stream/lake routing and must not be attributed to a downstream depression —

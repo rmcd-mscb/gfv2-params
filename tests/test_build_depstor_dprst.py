@@ -10,6 +10,7 @@ import logging
 from pathlib import Path
 
 import numpy as np
+import pytest
 import rasterio
 from rasterio.transform import from_origin
 
@@ -26,6 +27,19 @@ def _write(path: Path, arr: np.ndarray, dtype: str, nodata) -> None:
         crs="EPSG:5070", transform=_TRANSFORM, nodata=nodata,
     ) as dst:
         dst.write(arr.astype(dtype), 1)
+
+
+def _write_empty_endorheic(tmp_path: Path) -> Path:
+    """An all-nodata `endorheic_wbody` — no waterbody carries endorheic evidence.
+
+    `dprst` now REQUIRES `endorheic_wbody` (absent means a stale output dir, never a
+    legitimate config — see test_endorheic_absent_raises), so tests that don't
+    exercise the exemption still need one wired in. All-nodata makes it a no-op and
+    leaves their expectations unchanged.
+    """
+    path = tmp_path / "endorheic_wbody.tif"
+    _write(path, np.full((_N, _N), 255, dtype=np.uint8), "uint8", 255)
+    return path
 
 
 def test_dprst_excludes_connected_region_keeps_isolated(tmp_path):
@@ -61,6 +75,7 @@ def test_dprst_excludes_connected_region_keeps_isolated(tmp_path):
         "wbody_regions": tmp_path / "wbody_regions.tif",
         "connected_wbody": tmp_path / "connected_wbody.tif",
         "imperv": tmp_path / "imperv.tif",
+        "endorheic_wbody": _write_empty_endorheic(tmp_path),
     })
 
     produced = dprst.build(
@@ -114,6 +129,7 @@ def test_dprst_carves_imperv_cells_but_keeps_region(tmp_path):
         "wbody_regions": tmp_path / "wbody_regions.tif",
         "connected_wbody": tmp_path / "connected_wbody.tif",
         "imperv": tmp_path / "imperv.tif",
+        "endorheic_wbody": _write_empty_endorheic(tmp_path),
     })
 
     produced = dprst.build(
@@ -137,3 +153,233 @@ def test_dprst_carves_imperv_cells_but_keeps_region(tmp_path):
     assert onstream_arr[0, 1] != 1
     # Invariant: dprst and imperv never coincide (no double-count).
     assert int(((dprst_arr == 1) & (imperv == 1)).sum()) == 0
+
+
+# ---------------------------------------------------------------------------
+# Endorheic exemption (the Great Salt Lake clump-veto fix)
+#
+# GSL scenario, synthetic: one wbody_regions clump ("region 1") holds BOTH the
+# "lake" cells (rows 0-2, cols 0-2 -- endorheic, NOT themselves on-stream) and
+# the "marsh" cells (rows 3-4, cols 3-4 -- genuinely on-stream), mirroring how
+# clump_regions' 8-connectivity actually merged the Great Salt Lake with its
+# 49.1 km2 inflow SwampMarsh (COMID 10273192) into one region. Without the
+# exemption, the marsh's on-stream status vetoes the WHOLE region -- including
+# the lake, which is the bug this fix addresses.
+# ---------------------------------------------------------------------------
+
+
+def _gsl_clump_ctx(tmp_path, *, with_endorheic: bool, imperv_lake_cell: bool = False):
+    template = tmp_path / "template.tif"
+    _write(template, np.full((_N, _N), 100.0), "float32", -9999.0)
+
+    # Region 1 -- the merged GSL clump: "lake" (rows 0-2, cols 0-2, endorheic) +
+    # "marsh" (rows 3-4, cols 3-4, on-stream).
+    #
+    # Region 2 -- the CONTROL: a waterbody clump (rows 7-9, cols 0-2) with NO endorheic
+    # evidence, one of whose cells (9,2) is on-stream. It stands for the ~8,471 km2 of
+    # non-endorheic waterbodies CONUS-wide whose clump merely abuts an on-stream feature
+    # and which MUST keep the unexempted clump behaviour (whole region excluded). It is
+    # what distinguishes the shipped three-term exemption from the global per-cell
+    # on-stream carve the project considered and rejected: drop the
+    # `endorheic_binary == 1` term and region 2's not-on-stream cells get recovered too.
+    regions = np.zeros((_N, _N), dtype=np.int32)
+    regions[0:3, 0:3] = 1  # lake
+    regions[3:5, 3:5] = 1  # marsh -- same region id, already clump-merged upstream
+    regions[7:10, 0:3] = 2  # control clump, not endorheic
+
+    wbody_binary = np.where(regions > 0, np.uint8(1), np.uint8(255))
+    _write(tmp_path / "wbody_regions.tif", regions, "int32", 0)
+    _write(tmp_path / "wbody_binary.tif", wbody_binary, "uint8", 255)
+
+    # The marsh cells are genuinely on-stream, as is one cell of the control clump.
+    connected = np.full((_N, _N), 255, dtype=np.uint8)
+    connected[3:5, 3:5] = 1
+    connected[9, 2] = 1
+    _write(tmp_path / "connected_wbody.tif", connected, "uint8", 255)
+
+    # Only the lake cells carry positive endorheic evidence.
+    endorheic = np.full((_N, _N), 255, dtype=np.uint8)
+    endorheic[0:3, 0:3] = 1
+    _write(tmp_path / "endorheic_wbody.tif", endorheic, "uint8", 255)
+
+    imperv = np.full((_N, _N), 255, dtype=np.uint8)
+    if imperv_lake_cell:
+        imperv[0, 0] = 1  # one impervious pixel inside the lake
+    _write(tmp_path / "imperv.tif", imperv, "uint8", 255)
+    _write(tmp_path / "land_mask.tif", np.ones((_N, _N), dtype=np.uint8), "uint8", 255)
+
+    ctx = BuildContext(
+        fabric="t", template_path=template, output_dir=tmp_path,
+        hru_gpkg=tmp_path / "x.gpkg", hru_layer="nhru",
+    )
+    ctx.paths.update({
+        "landmask": tmp_path / "land_mask.tif",
+        "wbody_binary": tmp_path / "wbody_binary.tif",
+        "wbody_regions": tmp_path / "wbody_regions.tif",
+        "connected_wbody": tmp_path / "connected_wbody.tif",
+        "imperv": tmp_path / "imperv.tif",
+    })
+    if with_endorheic:
+        ctx.paths["endorheic_wbody"] = tmp_path / "endorheic_wbody.tif"
+    return ctx
+
+
+def test_endorheic_exemption_recovers_gsl_lake_without_freeing_the_marsh(tmp_path):
+    """With the exemption: the lake becomes dprst, the marsh stays on-stream."""
+    ctx = _gsl_clump_ctx(tmp_path, with_endorheic=True)
+
+    produced = dprst.build(
+        {"outputs": {"dprst": "dprst_binary.tif", "onstream": "onstream_binary.tif"}},
+        ctx, logging.getLogger("test"),
+    )
+    with rasterio.open(produced["dprst"]) as src:
+        dprst_arr = src.read(1)
+    with rasterio.open(produced["onstream"]) as src:
+        onstream_arr = src.read(1)
+
+    # Lake cells: recovered into dprst.
+    assert dprst_arr[0, 0] == 1
+    assert dprst_arr[2, 2] == 1
+    assert onstream_arr[0, 0] != 1
+    # Marsh cells: still genuinely on-stream, NOT swept into dprst.
+    assert dprst_arr[3, 3] != 1
+    assert onstream_arr[3, 3] == 1
+
+
+def test_endorheic_exemption_does_not_recover_a_non_endorheic_clump(tmp_path):
+    """The exemption is NOT a global per-cell on-stream carve.
+
+    Region 2 is a waterbody clump with no endorheic evidence, one of whose cells is
+    on-stream. `regions_touching_mask` must still veto the WHOLE region: its
+    not-on-stream cells stay out of dprst. This is the difference between the shipped
+    design and the rejected one -- a global carve (`exempt = not-on-stream & wbody`,
+    i.e. the exemption WITHOUT its `endorheic_binary == 1` term) would recover these
+    cells, and CONUS-wide would pull in ~8,471 km2 of non-endorheic waterbodies whose
+    clump merely abuts an on-stream feature.
+
+    Delete `exempt = endorheic_binary == 1` from dprst.py and only this test fails.
+    """
+    ctx = _gsl_clump_ctx(tmp_path, with_endorheic=True)
+
+    produced = dprst.build(
+        {"outputs": {"dprst": "dprst_binary.tif", "onstream": "onstream_binary.tif"}},
+        ctx, logging.getLogger("test"),
+    )
+    with rasterio.open(produced["dprst"]) as src:
+        dprst_arr = src.read(1)
+
+    # Not on-stream, a waterbody cell, but NOT endorheic -> stays vetoed by its clump.
+    assert dprst_arr[7, 0] != 1
+    assert dprst_arr[8, 1] != 1
+    # The endorheic lake in the other clump IS recovered -- the exemption still works,
+    # so this test fails for the right reason (over-recovery), not because it's inert.
+    assert dprst_arr[0, 0] == 1
+
+
+def test_endorheic_absent_raises_instead_of_silently_emitting_the_pre_fix_product(tmp_path):
+    """A missing `endorheic_wbody` is a STALE output dir, never a valid config.
+
+    `wbody_connectivity` always writes `endorheic_wbody` alongside `connected_wbody`,
+    so having one without the other can only mean the output directory predates the
+    endorheic classifier. Treating that as "exemption off" is exactly how the
+    documented `--from dprst --force` rebuild would silently re-emit the pre-fix
+    product -- the marsh's clump veto returns and all 4,854,156 Great Salt Lake cells
+    drop out of depression storage, with a zero exit code and one INFO line.
+    """
+    ctx = _gsl_clump_ctx(tmp_path, with_endorheic=False)
+
+    with pytest.raises(FileNotFoundError, match="endorheic_wbody"):
+        dprst.build(
+            {"outputs": {"dprst": "dprst_binary.tif",
+                         "onstream": "onstream_binary.tif"}},
+            ctx, logging.getLogger("test"),
+        )
+
+
+def test_endorheic_exemption_never_overrides_an_onstream_cell(tmp_path):
+    """A cell that is BOTH endorheic-flagged AND itself on-stream must stay
+    carved out -- the exemption only ever applies where `connected_binary != 1`.
+    """
+    ctx = _gsl_clump_ctx(tmp_path, with_endorheic=True)
+    # Overwrite: mark one of the marsh cells as ALSO endorheic-flagged (e.g. a
+    # provenance edge case) while it remains on-stream. It must still be
+    # excluded -- self on-stream status always wins over endorheic evidence.
+    endorheic = np.full((_N, _N), 255, dtype=np.uint8)
+    endorheic[0:3, 0:3] = 1
+    endorheic[3, 3] = 1  # marsh cell, also flagged endorheic
+    _write(tmp_path / "endorheic_wbody.tif", endorheic, "uint8", 255)
+
+    produced = dprst.build(
+        {"outputs": {"dprst": "dprst_binary.tif", "onstream": "onstream_binary.tif"}},
+        ctx, logging.getLogger("test"),
+    )
+    with rasterio.open(produced["dprst"]) as src:
+        dprst_arr = src.read(1)
+    with rasterio.open(produced["onstream"]) as src:
+        onstream_arr = src.read(1)
+
+    assert dprst_arr[3, 3] != 1, "on-stream cell must stay carved out despite endorheic flag"
+    assert onstream_arr[3, 3] == 1
+
+
+def test_endorheic_exemption_keeps_imperv_dprst_perv_disjoint(tmp_path):
+    """An impervious cell inside the recovered lake must still be carved out of
+    dprst -- the imperv/dprst/perv partition stays disjoint after the exemption
+    runs, same invariant as the pre-existing imperv carve test above."""
+    ctx = _gsl_clump_ctx(tmp_path, with_endorheic=True, imperv_lake_cell=True)
+
+    produced = dprst.build(
+        {"outputs": {"dprst": "dprst_binary.tif", "onstream": "onstream_binary.tif"}},
+        ctx, logging.getLogger("test"),
+    )
+    with rasterio.open(produced["dprst"]) as src:
+        dprst_arr = src.read(1)
+    with rasterio.open(tmp_path / "imperv.tif") as src:
+        imperv_arr = src.read(1)
+
+    # The impervious lake cell is carved out of dprst despite being exempted...
+    assert dprst_arr[0, 0] != 1
+    # ... while the rest of the recovered lake stays dprst.
+    assert dprst_arr[2, 2] == 1
+    # Invariant: dprst and imperv never coincide (no double-count).
+    assert int(((dprst_arr == 1) & (imperv_arr == 1)).sum()) == 0
+
+
+def test_endorheic_exemption_never_recovers_a_non_wbody_cell(tmp_path):
+    """`endorheic_wbody` is rasterized from a raw, unfiltered read of the
+    waterbody gpkg (no EXCLUDE_WATERBODY_FTYPES / Ice Mass filter, no
+    min_area_threshold), unlike `wbody_binary` which applies both. The real
+    case: two Mt Shasta glacier COMIDs (Ice Mass, excluded from the waterbody
+    classification entirely -- its cells fall back to land) are flagged
+    endorheic by Signal B because the summit HUC12s are WBD type-C. Without
+    gating the exemption on `wbody_binary == 1`, those glacier cells would be
+    silently reinstated as dprst, violating `dprst ⊆ wbody_binary` and turning
+    a glacier into a depression-storage pour-point.
+    """
+    ctx = _gsl_clump_ctx(tmp_path, with_endorheic=True)
+
+    # Knock the lake's corner cell out of wbody_binary -- standing in for an
+    # Ice Mass polygon that `waterbody.build()` excluded but the raw
+    # endorheic-wbody rasterization (no FTYPE filter) still flags.
+    with rasterio.open(tmp_path / "wbody_binary.tif") as src:
+        wbody_binary = src.read(1)
+    wbody_binary[0, 0] = 255
+    with rasterio.open(
+        tmp_path / "wbody_binary.tif", "w", driver="GTiff", height=_N, width=_N,
+        count=1, dtype="uint8", crs="EPSG:5070", transform=_TRANSFORM, nodata=255,
+    ) as dst:
+        dst.write(wbody_binary, 1)
+
+    produced = dprst.build(
+        {"outputs": {"dprst": "dprst_binary.tif", "onstream": "onstream_binary.tif"}},
+        ctx, logging.getLogger("test"),
+    )
+    with rasterio.open(produced["dprst"]) as src:
+        dprst_arr = src.read(1)
+
+    # The non-wbody "glacier" cell is endorheic-flagged and not on-stream, but
+    # must NOT be recovered into dprst -- it isn't a waterbody cell at all.
+    assert dprst_arr[0, 0] != 1
+    # The rest of the recovered lake (still a genuine wbody_binary cell) is
+    # unaffected by the gate.
+    assert dprst_arr[2, 2] == 1
