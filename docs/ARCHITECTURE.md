@@ -184,7 +184,7 @@ whether the depstor pipeline will be run for the fabric:
 | `wbd_huc12_table` | — | — | Path to `input/wbd/wbd_huc12.parquet` — the full WBD HUC12 layer. Both ends filter `HU_12_TYPE == 'C'` (closed basin): `download/wbd_huc12.py` stages only type-C rows, **and** the `endorheic` depstor builder re-applies the filter itself (a table with no `HU_12_TYPE` column raises), so pointing this at a genuine full WBD layer cannot flag every waterbody endorheic and empty the on-stream set. Optional: absent turns off Signal B (majority-inside-closed-HUC12) and the `endorheic` step still runs Signal A (FDR terminus-inside-itself) alone. Do **not** point this at `input/nhd/closed_huc12.gpkg` — that is an incomplete extract (23 type-C HUC12s in the Great Basin vs 141 in the full WBD). |
 | `burn_add_waterbody_table` | — | — | Path to `input/nhd/burn_add_waterbodies.parquet` — the **sink-purpose subset** of NHDPlus's BurnAddWaterbody polygons (new depression AREA; 1,658 polygons / 721.9 km² CONUS-wide), unioned into the waterbody layer by the `waterbody` builder's `merge_burn_add`, **before** the `EXCLUDE_WATERBODY_FTYPES` (Ice Mass) filter runs, so a BurnAdd Ice Mass polygon is still excluded. Configured-but-missing fails loud (`FileNotFoundError`), never silently skipped. BurnAdd rows are never on-stream-promotable, but not because `NEVER_ONSTREAM_FTYPES` is applied to them — `wbody_connectivity`/`nhd_flowthrough` re-read the raw `waterbody_gpkg` from disk, never the merged frame this builder produces, so that guardrail is never evaluated against a BurnAdd row at all. Safety is structural instead: `merge_burn_add` asserts every BurnAdd COMID (NHDPlus `PolyID`) is negative, so it can never match a positive WBAREACOMI/flow-through COMID, and asserts no BurnAdd polygon lies within one rasterized cell diagonal (`cell_size * sqrt(2)`, passed in from the template raster) of an existing **on-stream** waterbody — a buffered spatial join, not plain vector intersection, because `clump_regions`' 8-connectivity can merge cells that never touch in vector space. The guard is restricted to on-stream neighbours (via `_load_onstream_comids`, the same pre-endorheic WBAREACOMI ∪ flow-through union `wbody_connectivity` computes, minus `NEVER_ONSTREAM_FTYPES`) because merging with an already-dprst neighbour is harmless — the clump simply stays dprst — whereas an on-stream neighbour would silently drag the BurnAdd depression out of dprst; measured against real CONUS data, 112 of 1,658 BurnAdd polygons genuinely overlap an existing waterbody, all 112 neighbouring an already-dprst waterbody and none on-stream, so the original unconditional guard aborted the whole CONUS build over a failure mode that doesn't occur. If the on-stream COMID table(s) aren't configured or not yet staged, `merge_burn_add` falls back to the old broad guard (raises on ANY overlap) rather than silently skipping the check. Optional, staged by `gfv2_params.download.nhd_burn_components` — which keeps only the rows whose `PurpCode` is a sink purpose (4 Playa / 5 closed lake / 8 closed lake) and drops the rest: **BurnAddWaterbody is not a sink layer**, it is every waterbody NHDPlus added to the DEM burn, and VPU 01 alone ships 702 NULL-`PurpCode` rows (503 on-network, including StreamRiver and CanalDitch FCodes) against **zero** sinks in its own `Sink.shp`. FTYPE comes from `FCODE`, not `PurpCode` (`PurpCode` 5 spans both Playa and SwampMarsh). |
 | `sink_points_table` | — | — | Path to `input/nhd/sink_points.parquet` — NHDPlus `Sink.shp` (15,728 sinks CONUS-wide). **Intentionally unread: no builder consumes it.** It is threaded through the profile and `BuildContext` for provenance and for the BurnAddWaterbody linkage (`SOURCEFC`/`FEATUREID`), so the sink layer that explains those polygons is staged and discoverable alongside them. It is **not** a classifier signal and must not be wired up as one: the `endorheic` builder's Signal A deliberately reads the FDR grid (the same grid `routing` reads), not this lossy point shadow of it. Optional. |
-| `min_endorheic_comids` | — | — | Integer floor on the number of endorheic COMIDs the `endorheic` builder must produce on this fabric (`gfv2`/`gfv2_dev`: 100). Below it, the builder **raises** — on the fresh-build path and on the output-exists skip path — because a collapsed or empty result makes the demotion a silent no-op and leaves the Great Salt Lake on-stream. Optional, and deliberately absent on fabrics that legitimately have no closed basin (`tjc`, Texas-Gulf: 4 FDR code-0 cells, 0 endorheic waterbodies) — there an empty table is the correct result. |
+| `min_endorheic_comids` | — | — | Integer floor on the number of FLAGGED endorheic COMIDs on this fabric (`gfv2`/`gfv2_dev`: 100). Below it — or if either signal flags nothing at all — the pipeline **raises**, because a collapsed or empty result makes the demotion a silent no-op and leaves the Great Salt Lake on-stream. Enforced in three places: the `endorheic` builder's fresh-build path, its output-exists skip path, and `wbody_connectivity` (the consuming end, which is what covers `--from wbody_connectivity`, a recipe that skips the `endorheic` step entirely). Optional, and deliberately absent on fabrics that legitimately have no closed basin (`tjc`, Texas-Gulf: 4 FDR code-0 cells, 0 endorheic waterbodies) — there an empty table is the correct result. |
 
 For `template_raster`/`fdr_raster`, stage the clip with:
 
@@ -437,10 +437,20 @@ These are hard-won; violating them silently corrupts outputs.
   thousands on `gfv2` and 1,438 / 680 on `oregon`) — so `wbody_connectivity`
   subtracts the empty (flagged) set, a correct no-op. What fails loud is
   BREAKAGE: a waterbody layer that doesn't overlap the FDR grid, an all-null
-  geometry set, and a flagged-row count below the fabric's optional
-  `min_endorheic_comids` floor (declared by `gfv2`, and checked on the
-  output-exists skip path too) — so a silently-empty CONUS result, which
-  would leave the Great Salt Lake on-stream, is still impossible to miss.
+  geometry set, a staged WBD with zero type-C rows when Signal B is configured,
+  and a flagged-row count below the fabric's optional `min_endorheic_comids`
+  floor — so a silently-empty CONUS result, which would leave the Great Salt
+  Lake on-stream, is still impossible to miss. That floor is checked in **three**
+  places, and all three are load-bearing: on the `endorheic` builder's fresh-build
+  path, on its output-exists skip path, and again at the CONSUMING end in
+  `wbody_connectivity`. The last is not redundant — `--from wbody_connectivity`
+  (the documented cascade-rebuild recipe) does not run the `endorheic` step at
+  all, so the orchestrator hydrates its table straight off disk and the producing
+  builder's checks never execute. The floor is applied per SIGNAL as well as to
+  the union, because the union alone cannot see one signal die: Signal B dominates
+  by COUNT (543 of 818 CONUS demotions) while Signal A carries almost all the
+  demoted AREA, so a total Signal-A collapse would still clear a count-based floor
+  while ~75% of the demoted area silently vanished.
   `wbody_connectivity` subtracts this COMID set from the unioned on-stream set
   — a STRICT SUBTRACTION, so it can only remove COMIDs, never add one — which
   is what finally takes the Great Salt Lake off-stream (both WBAREACOMI and
@@ -467,17 +477,26 @@ These are hard-won; violating them silently corrupts outputs.
   depression storage even though `connected_wbody.tif` no longer contains it.
   The fix, in `dprst.py`, exempts a waterbody's own cells from the
   region-level exclusion wherever `endorheic_wbody == 1 AND connected_wbody !=
-  1` — i.e. direct hydrologic evidence (terminus-inside-itself) overrides the
-  clump proxy, but only for the waterbody's own (not itself on-stream) cells;
-  the marsh's own cells stay excluded because they ARE on-stream. This runs
-  **before** the impervious carve and land mask so both still apply to
-  recovered cells (the imperv/dprst/perv partition stays disjoint). Fabrics
-  that have not run `endorheic` (no `endorheic_wbody` in the build context)
-  get no exemption — a pure no-op, so this cannot re-open the
-  `drains_to_dprst` over-extension #145/#158/#161 fixed. This is intentionally
-  narrower than a global per-cell on-stream carve (which would recover a
-  further ~8,471 km² of non-endorheic waterbodies whose clump merely abuts an
-  on-stream feature) — those keep today's clump behaviour exactly.
+  1 AND wbody_binary == 1` — i.e. direct hydrologic evidence
+  (terminus-inside-itself) overrides the clump proxy, but only for the
+  waterbody's own (not itself on-stream) cells (the marsh's own cells stay
+  excluded because they ARE on-stream), and only where `waterbody` already calls
+  the cell a waterbody. That third term matters: `endorheic_wbody` is rasterized
+  from a raw, unfiltered read of the gpkg, so without it the 2 Mt Shasta Ice Mass
+  COMIDs that `waterbody` deliberately excluded would be reinstated as depression
+  storage, breaking `dprst ⊆ wbody_binary`. This runs **before** the impervious
+  carve and land mask so both still apply to recovered cells (the
+  imperv/dprst/perv partition stays disjoint). It is intentionally narrower than
+  a global per-cell on-stream carve — dropping the `endorheic_wbody` term alone
+  *is* that carve, and it would recover a further ~8,471 km² of non-endorheic
+  waterbodies whose clump merely abuts an on-stream feature; those must keep the
+  unexempted clump behaviour exactly, which is what the `drains_to_dprst`
+  over-extension #145/#158/#161 fixed. `endorheic_wbody` is **required** by
+  `dprst`, not optional: `wbody_connectivity` always writes it alongside
+  `connected_wbody`, so a build context with one and not the other is always a
+  stale output directory, never a legitimate configuration. Treating it as
+  "exemption off" is how a `--from dprst --force` rebuild against a pre-classifier
+  output directory would silently re-emit the old product; `dprst` raises instead.
 - **`carea_max`/`smidx_coef` threshold mode.** The legacy `absolute`
   thresholds (8.0/15.6) are only calibrated against VPU 01's ArcPy TWI
   distribution. For any other fabric, use `threshold_mode: percentile` (the

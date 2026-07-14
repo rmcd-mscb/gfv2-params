@@ -169,9 +169,11 @@ fabrics:
     waterbody_gpkg: "{data_root}/input/fabric/NHM_01_draft.gpkg"
     waterbody_layer: wbs
     # No `connected_comids_table`: the `wbs` layer has no COMID/member_comid
-    # column, so the WBAREACOMI join cannot run. The depstor
-    # `wbody_connectivity`/`dprst` steps therefore fail-fast on this profile —
-    # use the `gfv2` profile for depstor validation.
+    # column, so neither the WBAREACOMI join nor the COMID-keyed endorheic
+    # classifier can run. The depstor DAG therefore fail-fasts on this profile
+    # — at the `endorheic` step first, which now precedes `wbody_connectivity`
+    # and raises on a waterbody layer with no COMID column. Use the `gfv2`
+    # profile for depstor validation.
     hru_gpkg: "{data_root}/{fabric}/fabric/gfv2_vpu01_nhru.gpkg"
     hru_layer: nhru
     id_feature: nat_hru_id
