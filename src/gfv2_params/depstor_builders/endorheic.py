@@ -90,7 +90,16 @@ def build(step_cfg: dict, ctx: BuildContext, logger) -> dict:
         logger.info("  Output exists — skipping (pass --force to rebuild)")
         # Still honour the fabric's floor: a stale/empty table left on disk would
         # otherwise sail through the skip path and silently disable the demotion.
-        _check_floor(len(pd.read_parquet(output_path, columns=["comid"])), ctx, output_path)
+        # The table may carry unflagged evaluated candidates (see endorheic_frame),
+        # so the floor must count only the FLAGGED (actually-demoted) rows, not
+        # every row on disk.
+        existing = pd.read_parquet(
+            output_path, columns=["comid", "by_terminus", "by_closed_huc12"]
+        )
+        n_existing_flagged = int(
+            (existing["by_terminus"] | existing["by_closed_huc12"]).sum()
+        )
+        _check_floor(n_existing_flagged, ctx, output_path)
         return {"endorheic_comids": output_path}
     if not ctx.fdr_raster.exists():
         raise FileNotFoundError(f"FDR raster not found: {ctx.fdr_raster}")
@@ -140,12 +149,19 @@ def build(step_cfg: dict, ctx: BuildContext, logger) -> dict:
         )
 
     df = endorheic_frame(wb, ctx.fdr_raster, closed_gdf=closed, logger=logger)
-    _check_floor(len(df), ctx, output_path)
-    if df.empty:
+    # `df` now carries every Signal-A-EVALUATED candidate (flagged or not), so the
+    # threshold sweep in scripts/diagnose/endorheic_fixtures.py can measure the real
+    # frac_own distribution -- NOT just the demotions. `len(df)` is therefore the
+    # wrong count for both the floor and the "is this domain endorheic at all?"
+    # check below; both must count only the FLAGGED (actually-demoted) rows.
+    n_flagged = int((df["by_terminus"] | df["by_closed_huc12"]).sum())
+    _check_floor(n_flagged, ctx, output_path)
+    if n_flagged == 0:
         # A domain with no closed basin (e.g. `tjc`, Texas-Gulf). Legitimate: write the
-        # empty table so `wbody_connectivity` applies an empty — and therefore no-op —
-        # subtraction, and carry on. The `min_endorheic_comids` floor above is what
-        # keeps this from being a silent regression on a fabric that expects demotions.
+        # table (possibly with unflagged evaluated candidates, but zero demotions) so
+        # `wbody_connectivity` applies an empty — and therefore no-op — subtraction,
+        # and carry on. The `min_endorheic_comids` floor above is what keeps this from
+        # being a silent regression on a fabric that expects demotions.
         logger.warning(
             "  endorheic classifier flagged 0 waterbodies — no waterbody's D8 terminus "
             "lies inside itself and none is majority-inside a closed HUC12. Expected "
@@ -153,7 +169,8 @@ def build(step_cfg: dict, ctx: BuildContext, logger) -> dict:
         )
     write_endorheic_comids(df, output_path)
     logger.info(
-        "  %d endorheic COMIDs (%d by terminus, %d by closed basin)",
-        len(df), int(df.by_terminus.sum()), int(df.by_closed_huc12.sum()),
+        "  %d endorheic COMIDs (%d by terminus, %d by closed basin) out of %d "
+        "evaluated candidates persisted",
+        n_flagged, int(df.by_terminus.sum()), int(df.by_closed_huc12.sum()), len(df),
     )
     return {"endorheic_comids": output_path}

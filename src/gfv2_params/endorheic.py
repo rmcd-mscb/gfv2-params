@@ -239,8 +239,19 @@ def endorheic_frame(
 ) -> pd.DataFrame:
     """Combine Signal A and Signal B into one provenance-carrying frame.
 
-    Columns: comid, frac_own, by_terminus, by_closed_huc12. A COMID appears iff at
-    least one signal flags it.
+    Columns: comid, frac_own, by_terminus, by_closed_huc12.
+
+    Every waterbody Signal A EVALUATED (>= 1 FDR terminal cell inside it -- the
+    cheap Signal-A prefilter in `terminus_own_fraction`) appears here, whether or
+    not it cleared `min_frac` -- plus any additional COMID Signal B flags. This is
+    load-bearing for `scripts/diagnose/endorheic_fixtures.py`'s threshold sweep: if
+    only the FLAGGED union were persisted (as this used to do), a candidate at
+    frac_own = 0.40 would never be written, and a sweep at threshold 0.3 would
+    structurally undercount -- unable to tell an inert threshold from a broken one.
+    `by_terminus`/`by_closed_huc12` are both False on an evaluated-but-unflagged
+    row, so `load_endorheic_comids`'s existing `by_terminus | by_closed_huc12`
+    filter still excludes it from the demotion set -- persisting the full
+    distribution changes nothing about which COMIDs get demoted.
     """
     terminal = terminal_cells(fdr_path)
     if logger:
@@ -254,7 +265,10 @@ def endorheic_frame(
             "union: %d", len(a), len(b), len(a | b),
         )
     frac = dict(zip(own["comid"].astype(int), own["frac_own"]))
-    comids = sorted(a | b)
+    # Every Signal-A-evaluated candidate is persisted (flagged or not), unioned with
+    # anything Signal B flags that Signal A never evaluated (no terminal cell, so it
+    # gets frac_own = 0.0 below -- Signal A simply never ran against it).
+    comids = sorted(set(own["comid"].astype(int)) | b)
     return pd.DataFrame({
         "comid": pd.Series(comids, dtype="int64"),
         "frac_own": [float(frac.get(c, 0.0)) for c in comids],
@@ -295,10 +309,11 @@ def load_endorheic_comids(path: Path) -> set[int]:
     producing end instead — `depstor_builders/endorheic.py`'s `min_endorheic_comids`
     floor, which `gfv2` declares.
 
-    A row only counts as a demotion if at least one signal actually flagged it —
-    `endorheic_frame` only ever emits such rows, but this guards against a hand-built
-    or stale table that carries a COMID with both `by_terminus` and
-    `by_closed_huc12` false.
+    A row only counts as a demotion if at least one signal actually flagged it.
+    `endorheic_frame` also persists every Signal-A-EVALUATED candidate that was NOT
+    flagged (both columns false) — so a threshold sweep over the full `frac_own`
+    distribution is possible (see `scripts/diagnose/endorheic_fixtures.py`) — and
+    this filter is what keeps that from silently changing the demotion set.
     """
     df = pd.read_parquet(path, columns=["comid", "by_terminus", "by_closed_huc12"])
     if df.empty:

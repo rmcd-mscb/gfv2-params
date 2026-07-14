@@ -14,6 +14,7 @@ from shapely.geometry import Polygon
 
 from gfv2_params.endorheic import (
     closed_basin_comids,
+    endorheic_frame,
     frac_own_for_window,
     load_endorheic_comids,
     terminal_cells,
@@ -247,6 +248,56 @@ def test_terminus_own_fraction_dissolves_a_two_row_comid(tmp_path):
     assert row["frac_own"] == pytest.approx(9 / 25, abs=1e-6)
 
 
+def test_endorheic_frame_persists_unflagged_evaluated_candidates(tmp_path):
+    # Fix for the threshold-sweep bias in scripts/diagnose/endorheic_fixtures.py: the
+    # sweep used to run over the emitted table, which only ever held FLAGGED COMIDs
+    # (frac_own > 0.5 or Signal B), so a candidate like COMID 777 below (frac_own =
+    # 1/9, never flagged) was structurally invisible and the "is 0.5 inert?" gate
+    # couldn't see it. `endorheic_frame` must persist every Signal-A-EVALUATED
+    # candidate -- flagged or not -- with its real frac_own.
+    ny = 14
+    pixel = 2000.0
+    fdr = np.full((ny, ny), NOD, dtype=np.uint8)
+    # COMID 555 -- the GSL pattern: every cell in the 3x3 block drains to its own
+    # centre (2, 2) -> frac_own = 1.0 -> flagged.
+    fdr[1, 1], fdr[1, 2], fdr[1, 3] = 2, 4, 8
+    fdr[2, 1], fdr[2, 2], fdr[2, 3] = 1, 0, 16
+    fdr[3, 1], fdr[3, 2], fdr[3, 3] = 128, 64, 32
+    # COMID 777 -- the Lewis and Clark Lake pattern, relocated: a through-flowing 3x3
+    # block (everything flows East) with one stray terminal cell in its top-left
+    # corner (mirrors test_frac_own_through_flowing_lake_rejects's fdr[1,1] exactly,
+    # just shifted) -> only the sink cell itself reaches it (everything else flows
+    # east, away) -> frac_own = 1/9, well under 0.5 -> a real Signal-A candidate
+    # that must NOT be flagged.
+    fdr[7:10, 7:10] = 1
+    fdr[7, 7] = 0
+
+    transform = from_origin(0.0, ny * pixel, pixel, pixel)
+    fdr_path = tmp_path / "fdr_mixed.tif"
+    _write_fdr(fdr_path, fdr, transform)
+
+    lake_555 = _box(1 * pixel, (ny - 4) * pixel, 4 * pixel, (ny - 1) * pixel)
+    lake_777 = _box(7 * pixel, (ny - 10) * pixel, 10 * pixel, (ny - 7) * pixel)
+    wb = _wb([[555, lake_555], [777, lake_777]])
+
+    df = endorheic_frame(wb, fdr_path, closed_gdf=None)
+    assert set(df["comid"]) == {555, 777}  # BOTH persisted, not just the flagged one
+
+    row_555 = df.loc[df.comid == 555].iloc[0]
+    assert row_555.frac_own == pytest.approx(1.0)
+    assert bool(row_555.by_terminus)
+
+    row_777 = df.loc[df.comid == 777].iloc[0]
+    assert row_777.frac_own == pytest.approx(1 / 9, abs=1e-6)
+    assert not bool(row_777.by_terminus)
+    assert not bool(row_777.by_closed_huc12)
+
+    # The demotion filter must still exclude the unflagged, merely-persisted row.
+    out = tmp_path / "endorheic.parquet"
+    write_endorheic_comids(df, out)
+    assert load_endorheic_comids(out) == {555}
+
+
 def test_closed_basin_prefilter_matches_the_unfiltered_overlay():
     # closed_basin_comids prefilters with an sjoin and only computes intersection area
     # for waterbodies that touch the closed union at all (the elementwise GEOS overlay
@@ -324,6 +375,22 @@ def _through_flowing_fdr(path):
     return path
 
 
+def _through_flowing_with_stray_sink_fdr(path):
+    """The `_lake()` block, through-flowing but with ONE stray terminal cell inside.
+
+    A real Signal-A CANDIDATE (it contains a terminal cell, so `terminus_own_fraction`
+    evaluates it) whose frac_own (1/9) never clears 0.5 -- it must be PERSISTED but
+    NOT FLAGGED. Used to prove `min_endorheic_comids` counts only flagged rows.
+    """
+    fdr = np.full((NY, NY), 1, dtype=np.uint8)  # everything flows East
+    # Stray terminal cell in the top-left corner of the _lake() block (rows/cols
+    # 1..3) -- mirrors test_frac_own_through_flowing_lake_rejects's fdr[1,1] exactly,
+    # so only the sink cell itself reaches it (everything else flows east, away).
+    fdr[1, 1] = 0
+    _write_fdr(path, fdr, from_origin(0.0, NY * PIXEL, PIXEL, PIXEL))
+    return path
+
+
 def _lake():
     """The waterbody covering the FDR's rows/cols 1..3 block."""
     return _box(1 * PIXEL, (NY - 4) * PIXEL, 4 * PIXEL, (NY - 1) * PIXEL)
@@ -384,6 +451,19 @@ def test_builder_min_endorheic_floor_makes_an_empty_result_fail_loud(tmp_path):
     # On such a fabric a collapsed/empty classifier result must still be impossible to
     # miss -- the demotion would be a no-op and Great Salt Lake would stay on-stream.
     fdr = _through_flowing_fdr(tmp_path / "fdr.tif")
+    gpkg = _wb_gpkg(tmp_path / "wb.gpkg", _wb([[555, _lake()]]))
+    with pytest.raises(ValueError, match="min_endorheic_comids"):
+        _build(_ctx(tmp_path, fdr, gpkg, min_endorheic_comids=1))
+
+
+def test_builder_floor_counts_only_flagged_rows_not_all_persisted_candidates(tmp_path):
+    # `df` now persists every Signal-A-EVALUATED candidate (see
+    # test_endorheic_frame_persists_unflagged_evaluated_candidates), so `len(df)` is
+    # no longer "how many were demoted". This lake IS a Signal-A candidate (it
+    # contains a terminal cell) but its frac_own (1/9) never clears 0.5 -- if the
+    # floor counted every persisted row instead of only the flagged ones, this would
+    # wrongly satisfy a floor of 1 and mask a genuinely collapsed/no-op demotion.
+    fdr = _through_flowing_with_stray_sink_fdr(tmp_path / "fdr.tif")
     gpkg = _wb_gpkg(tmp_path / "wb.gpkg", _wb([[555, _lake()]]))
     with pytest.raises(ValueError, match="min_endorheic_comids"):
         _build(_ctx(tmp_path, fdr, gpkg, min_endorheic_comids=1))

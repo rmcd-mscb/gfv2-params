@@ -69,11 +69,19 @@ def main() -> int:
         return 1
 
     df = pd.read_parquet(path)
-    demoted = set(df["comid"].astype(int))
+    # `df` carries every Signal-A-EVALUATED candidate (flagged or not), not just the
+    # demotions -- see gfv2_params.endorheic.endorheic_frame. A demotion is a row
+    # flagged by at least one signal; `demoted` must apply that filter rather than
+    # treat every persisted row as endorheic.
+    flagged = df["by_terminus"] | df["by_closed_huc12"]
+    demoted = set(df.loc[flagged, "comid"].astype(int))
     print(f"{path}")
     print(f"  {len(demoted):,} endorheic COMIDs "
           f"({int(df.by_terminus.sum()):,} by terminus, "
-          f"{int(df.by_closed_huc12.sum()):,} by closed basin)\n")
+          f"{int(df.by_closed_huc12.sum()):,} by closed basin)")
+    print(f"  {len(df):,} total Signal-A-evaluated candidates persisted "
+          f"(flagged + unflagged) — this is the population the threshold sweep "
+          f"below runs over\n")
 
     failures: list[str] = []
     for comid, name in MUST_BE_DPRST.items():
@@ -92,7 +100,12 @@ def main() -> int:
             failures.append(f"{name} is a DOMAIN EXIT and must NOT be demoted")
 
     # The 0.5 threshold must remain inert — that is what makes it a physical fact
-    # rather than a tuned knob. Design measured a ~3% swing across 0.3-0.7.
+    # rather than a tuned knob. Design measured a ~3% swing across 0.3-0.7, over the
+    # FULL evaluated-candidate population (6,427 candidates; 6,298 at frac_own >=
+    # 0.95; only 10 in the whole 0.45-0.55 band) — NOT just the rows already flagged
+    # at 0.5, which would structurally hide any candidate sitting between 0.3 and 0.5
+    # (never written under the old flagged-only table) and make this gate unable to
+    # detect the one failure mode it exists to catch.
     counts = {t: int((df["frac_own"] > t).sum()) for t in (0.3, 0.5, 0.7)}
     swing = (counts[0.3] - counts[0.7]) / max(counts[0.5], 1)
     print(f"\nthreshold sweep (Signal A): {counts}   swing = {swing:.1%}")
