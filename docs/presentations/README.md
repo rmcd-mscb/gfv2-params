@@ -12,8 +12,10 @@ to the source docs it cites) and render to HTML or PDF on demand.
   Sexstone et al. (2020) lognormal/CV library shaped the pipeline. References
   figures under `../figures/snarea/{oregon,gfv2}/`.
 - `2026-07-depression-storage-workflow.slides.md` — the PRMS/NHM
-  depression-storage parameter workflow: the legacy ArcPy pipeline
-  (`docs/0b_TB_depr_stor.py`) vs. the current open-source pipeline.
+  depression-storage parameter workflow, framed rule-first: each on-stream /
+  dprst classification rule stated as a rule and shown firing on named
+  hydrography, from the legacy ArcPy pipeline (`docs/0b_TB_depr_stor.py`)
+  through the endorheic terminus-inside-itself classifier (PR #178).
   Method/workflow-focused; spans fabrics. References figures under
   `../figures/depstor/`.
 
