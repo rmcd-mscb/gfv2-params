@@ -77,7 +77,7 @@ Then one slide per rule, each with a real-world tile:
 | # | Rule | Real-world example | Figure |
 |---|---|---|---|
 | 9 | What counts as a waterbody — NHDWaterbody + only the **sink-purpose** BurnAddWaterbody rows; `FTYPE` from `FCODE`, not `PurpCode` | VPU 01's 702 NULL-`PurpCode` rows against zero sinks in its own `Sink.shp` — 503 on-network, incl. StreamRiver and CanalDitch | `rule_burnadd_purpcode.png` |
-| 10 | **Ice Mass** is excluded from the waterbody classification entirely → falls back to land, perv/imperv via LULC. Not equivalent to Playa. | a Cascades ice mass | `rule_icemass.png` |
+| 10 | **Playa and Ice Mass are hard guardrails, and are NOT equivalent.** Playa → force-dprst, never promoted on-stream. Ice Mass → excluded from the classification entirely, falls back to land, perv/imperv via LULC. *As built: this slide absorbed the Playa half of row 18's planned "Guardrails" slide, so Playa and Ice Mass are contrasted on one tile rather than split across two.* | a playa vs. a Cascades ice mass | `rule_playa_guardrail.png` (supersedes the planned `rule_icemass.png`) |
 | 11 | **Default: a waterbody IS depression storage** unless proven on-stream | *(statement slide, no tile)* | — |
 | 12 | On-stream evidence A — **WBAREACOMI** artificial-path topology | a run-of-river reservoir with the artificial path threaded through it | `rule_wbareacomi.png` |
 | 13 | On-stream evidence B — **geometric flow-through**: a Network flowline demonstrably enters **and** exits. Terminal sinks (inflow only) and locally-spilling potholes (outflow only) stay dprst. | Lewis and Clark Lake (in + out) vs. a terminal sink (in only) | `rule_flowthrough.png` |
@@ -85,7 +85,7 @@ Then one slide per rule, each with a real-world tile:
 | 15 | **Endorheic Signal A — terminus-inside-itself** (#178). `frac_own` = share of the waterbody's cells whose D8 path reaches an FDR **code-0** cell *inside that same waterbody*. dprst iff `frac_own > 0.5`. The classifier and the router read the same grid, so they agree by construction. | Great Salt Lake `frac_own = 1.000`, code-0 cells visibly inside it; Lewis and Clark `frac_own = 0.007` — its terminus is the Gulf of Mexico | `rule_terminus_gsl.png` |
 | 16 | `frac_own` is **bimodal** — 0.5 is not a tuned knob | 6,298 of 6,427 candidates at ≥ 0.95; 10 in the whole 0.45–0.55 band; threshold sweep moves the answer 0.5% across 0.3→0.7 | `frac_own_bimodal.png` |
 | 17 | **Endorheic Signal B — majority-inside a WBD type-C closed HUC12.** Containment is **majority-area** — never `intersects` (a zero-interior boundary touch returns `True`: Eagle Lake and Middle Alkali graze closed basins at frac = 0.000), never `within` (it **drops GSL**, which spills 1.1% into a neighbouring HUC12 at frac = 0.989). | Walker Lake — contains no FDR terminal cell, so Signal A alone misses it | `rule_closed_huc12_walker.png` |
-| 18 | **Guardrails.** Playa → force-dprst, never promoted on-stream. Domain exits — terminal only because the CONUS model ends there — must stay on-stream. | Lake Michigan, Lake Champlain, the Everglades SwampMarsh | `rule_domain_exits.png` |
+| 18 | **Domain-exit guardrail.** A waterbody that is terminal only because the CONUS model ends there is not endorheic; ten named fixtures must never be demoted. *As built: the Playa half of this planned slide moved to row 10, alongside Ice Mass — this slide covers domain exits only.* | Lake of the Woods, Champlain, the Everglades | `rule_domain_exits.png` |
 | 19 | **The clump veto and its exemption** (#178's second bug). `clump_regions` 8-connects GSL to a 49.1 km² SwampMarsh that is *correctly* on-stream (its water drains **into** GSL, so its terminus is GSL, not itself), and `regions_touching_mask` excludes a whole region sharing ≥1 cell with the on-stream mask — all 4,854,156 GSL cells went with it. Fixed by exempting endorheic waterbodies' own not-on-stream cells: **evidence overrides proxy, but only where we have evidence.** The global per-cell carve was considered and rejected (it recovers a further ~8,471 km² with *no* endorheic evidence). | GSL + the marsh, before/after | `clump_veto_gsl.png` |
 
 ### Act 3 — Classification → parameters, in brief (4 slides)
@@ -96,7 +96,9 @@ Then one slide per rule, each with a real-world tile:
 21. **D8 routing + the on-stream barrier** (#158/#159). Land upslope of an
     on-stream waterbody is captured by that waterbody's own routing and must not
     be attributed to a depression behind it. Strict subtraction — can only reduce
-    `drains_to_dprst`, never increase it. Figure: `lower_miss_before_after.png`.
+    `drains_to_dprst`, never increase it. Figure: `drains_great_basin_before_after.png`
+    (the planned `lower_miss_before_after.png` is not reproducible — see "Figures"
+    below).
 22. **same-HRU restriction on `sro_to_dprst_*`** (#160/#162) — reproduces the
     legacy `Con(rSro == hru)`; a per-cell reached-HRU-vs-own-HRU test that
     gdptools' partial-pixel weighting cannot express.
@@ -149,12 +151,22 @@ are small after the bbox filter.
 
 ### Inventory (14)
 
+As built, `rule_icemass.png` was folded into `rule_playa_guardrail.png` — Rule 2
+("Playa and Ice Mass are hard guardrails, and are NOT equivalent") covers both
+FTYPEs on one tile, since the point of the slide is contrasting them, not two
+separate figures. `lower_miss_before_after.png` was replaced by
+`drains_great_basin_before_after.png`: the isolating snapshot
+(`pre_flowthrough_2026-06-26`) that a Lower-Mississippi-only figure would have
+needed is deleted from disk (see the deck's "D8 + the on-stream barrier" slide),
+so it can no longer be reproduced or verified; the Great Basin drains_to_dprst
+before/after is derived from the two snapshots that do survive.
+
 | Figure | Status |
 |---|---|
 | `pipeline_dag.png` | regenerate (add the #178 steps) |
 | `rule_ladder.png` | **new** (replaces `decision_schematic.png`) |
 | `rule_burnadd_purpcode.png` | **new** |
-| `rule_icemass.png` | **new** |
+| `rule_playa_guardrail.png` | **new** (covers both Playa and Ice Mass; supersedes the planned `rule_icemass.png`) |
 | `rule_wbareacomi.png` | **new** |
 | `rule_flowthrough.png` | **new** |
 | `rule_network_gate.png` | **new** |
@@ -163,10 +175,11 @@ are small after the bbox filter.
 | `rule_closed_huc12_walker.png` | **new** |
 | `rule_domain_exits.png` | **new** |
 | `clump_veto_gsl.png` | **new** |
-| `lower_miss_before_after.png` | regenerate |
+| `drains_great_basin_before_after.png` | **new** (replaces the planned `lower_miss_before_after.png` — see above) |
 | `conus_dprst_before_after.png` | **new** |
 | `decision_schematic.png` | **delete** (superseded by `rule_ladder.png`) |
 | `great_basin_before_after.png` | **delete** — its caption credits the Network gate with the endorheic fix, the claim #178 disproves |
+| `lower_miss_before_after.png` | **delete** — the isolating snapshot it depended on is gone; not reproducible (see above) |
 
 ## Data sources (all verified present on disk)
 
