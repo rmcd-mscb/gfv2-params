@@ -436,6 +436,26 @@ rebuilding from `wbody_connectivity`:
 sbatch slurm_batch/build_depstor_rasters.batch --from wbody_connectivity --force
 ```
 
+**NHDWaterbody polygon staging (source-derived, not yet wired).** The
+`waterbody_gpkg`/`waterbody_layer` profile keys still point at the hand-made
+`input/nhd/conus_waterbodies.gpkg` — the last unverified NHD/WBD input in the
+pipeline. `gfv2_params.download.nhd_waterbodies` stages a reproducible
+replacement from the same per-VPU `NHDSnapshot` archives `nhd_flowlines`
+already downloads:
+
+```bash
+srun -p cpu -A impd --time=02:00:00 --ntasks=1 --cpus-per-task=4 --mem=48G \
+  pixi run --as-is python -m gfv2_params.download.nhd_waterbodies
+# writes input/nhd/nhd_waterbodies.parquet
+pixi run --as-is python scripts/diagnose/verify_nhd_waterbodies.py
+```
+
+CONUS-scale (~450k raw polygons across 21 VPU archives); run via `srun`/`sbatch`,
+never on the login node. Do not repoint `waterbody_gpkg`/`waterbody_layer` at
+the staged parquet without first running the verify script and reconciling any
+reported difference — the current CONUS product is validated against the
+hand-made layer's exact row/COMID/FTYPE/area numbers.
+
 **Endorheic clump-veto exemption.** Demoting the Great Salt Lake's COMIDs out
 of the on-stream set (above) is not sufficient by itself: `clump_regions`
 labels 8-connected waterbody components, and `regions_touching_mask` excludes

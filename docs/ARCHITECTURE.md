@@ -177,7 +177,7 @@ whether the depstor pipeline will be run for the fabric:
 | `segments_layer` | — | ✓ | Layer name inside `segments_gpkg` (typically `nsegment`) |
 | `connected_comids_table` | — | ✓ | Path to `input/nhd/connected_waterbody_comids.parquet` — the set of NHDPlusV2 waterbody COMIDs that a **Network** NHD artificial path flows through (i.e. on-stream via `WBAREACOMI`). Produced by `download/nhd_flowlines.py`, which keeps a WBAREACOMI only if the flowline carrying it is a Network Flowline (in `flowline_topology.parquet`), so Non-Network artificial paths NHD draws through closed-basin lakes don't promote endorheic waterbodies on-stream (issue #161); consumed by the depstor `wbody_connectivity` builder. Required only for fabrics whose waterbody layer is COMID-keyed (`gfv2`, `oregon`, `tjc`); the `gfv2_vpu01` profile omits it (its `wbs` layer has no COMID), so the depstor DAG fail-fasts there — at the `endorheic` step first (it raises on a waterbody layer with no COMID column), and at `wbody_connectivity`/`dprst` after that. Use `gfv2` for depstor validation. |
 | `flowthrough_comids_table` | — | — | Path to `input/nhd/flowthrough_waterbody_comids.parquet` — a second on-stream COMID set from flow-through topology: waterbodies that a **Network** conveyance flowline demonstrably enters AND exits (T1), or whose upstream end is inside the waterbody per authoritative NHDPlus routed-network direction (D1 — source/headwater lakes and split pass-through outflows), or that overlap an NHDArea conveyance polygon (T3). T1/D1 candidate flowlines are gated to Network Flowlines (in `flowline_topology.parquet`) so Non-Network closed-basin lines can't promote endorheic lakes (issue #161). Playa/Ice Mass waterbodies are dropped up front and never promoted onto the on-stream set (Playa because it's force-dprst; Ice Mass because it's excluded from the waterbody classification entirely — see the `waterbody` row below). Produced by `download/nhd_flowthrough.py`; unioned with `connected_comids_table` by `wbody_connectivity` before rasterizing (which also re-applies the `NEVER_ONSTREAM_FTYPES` guardrail to the unioned set, so it covers the WBAREACOMI path too). Optional (omitting it uses `connected_comids_table` only). |
-| `waterbody_gpkg` | — | ✓ | NHDPlus waterbodies; depstor's `waterbody` step **raises** if unset. If the layer has an `FTYPE` column, `waterbody` drops `EXCLUDE_WATERBODY_FTYPES` (`{"Ice Mass"}`) before rasterizing: a glacier/permanent ice mass is not depression storage, so its cells are left out of `wbody_binary`/`wbody_regions` entirely and fall back to land (perv/imperv via LULC), not dprst and not on-stream. Playa is unaffected here — it stays a normal waterbody clump and is force-dprst downstream by the `NEVER_ONSTREAM_FTYPES` guardrail in `wbody_connectivity`/`nhd_flowthrough`. |
+| `waterbody_gpkg` | — | ✓ | NHDPlus waterbodies; depstor's `waterbody` step **raises** if unset. If the layer has an `FTYPE` column, `waterbody` drops `EXCLUDE_WATERBODY_FTYPES` (`{"Ice Mass"}`) before rasterizing: a glacier/permanent ice mass is not depression storage, so its cells are left out of `wbody_binary`/`wbody_regions` entirely and fall back to land (perv/imperv via LULC), not dprst and not on-stream. Playa is unaffected here — it stays a normal waterbody clump and is force-dprst downstream by the `NEVER_ONSTREAM_FTYPES` guardrail in `wbody_connectivity`/`nhd_flowthrough`. Currently points at the hand-made `input/nhd/conus_waterbodies.gpkg` (layer `waterbodies`). `gfv2_params.download.nhd_waterbodies` stages a source-derived replacement, `input/nhd/nhd_waterbodies.parquet`, matching the exact same schema (`GNIS_ID, GNIS_NAME, COMID, FTYPE, member_comid, area_sqkm, geometry`) — **staged and verified, not yet repointed**; see `scripts/diagnose/verify_nhd_waterbodies.py` for the row-count/COMID-set/FTYPE/area diff against the hand-made layer before ever making that swap. |
 | `waterbody_layer` | — | ✓ | Layer name inside `waterbody_gpkg` |
 | `wesm_index` | — | ✓ | Path to `input/wesm/wesm_1m_footprints.gpkg` — pre-staged, 1m/QL1/QL2-qualifying USGS 3DEP WESM workunit footprints (a `project` column + geometry). Produced by `pixi run python -m gfv2_params.download.wesm` (issue #173). Consumed by the `dprst_depth` step's `topo.resolution_class` (best-available-topo tagging) and `tiling.group_by_tile` (1 m tile-key resolution); required for `dprst_depth`, not for any other depstor step. |
 | `ecoregions_gpkg` | — | ✓ | Path to `input/ecoregions/us_eco_l3.gpkg` — EPA Level III Ecoregions (see `gfv2_params.download.epa_ecoregions`). Used by the `dprst_depth` step's per-ecoregion regional-fill donor pool (`dprst_depth.fill.fit_ecoregion_models`); every fabric profile with a depstor-configured `dprst_depth` step already stages it (also listed as a shared, reusable input in `README.md`'s Stage 0). |
@@ -365,6 +365,51 @@ These are hard-won; violating them silently corrupts outputs.
   rule). Hardcoded data_root-relative, no config key — `nhd_topology.py` must
   run before **both** `nhd_flowlines.py` and `nhd_flowthrough.py` (each fails
   loud if `input/nhd/flowline_topology.parquet` is missing).
+- **`nhd_waterbodies` (staged, not yet wired) and the `member_comid` provenance.**
+  `download/nhd_waterbodies.py` stages NHDWaterbody polygons from the same
+  per-VPU `NHDSnapshot` archive `nhd_flowlines` already downloads, reproducing
+  `input/nhd/conus_waterbodies.gpkg`. Verified via
+  `scripts/diagnose/verify_nhd_waterbodies.py` against the real CONUS layer:
+  **exact match** on row count (448,124), unique-COMID count (447,907, incl.
+  the same 217 residual duplicate-COMID rows), the full COMID set (0 only on
+  either side), and the FTYPE distribution (incl. 66,488 SwampMarsh). Total
+  area differs by ~2.2% (393,635 km2 staged vs 402,554 km2 existing),
+  concentrated in ~1,000 of the largest waterbodies (Lake Michigan/Superior/
+  Huron alone account for ~834 km2 of the gap) — consistent with the hand-made
+  layer having been built from an older NHDSnapshot vintage than the highest
+  version `_pick_snapshot_key` resolves today (NHD periodically revises
+  shoreline vertices for a stable COMID), not a code defect.
+
+  `member_comid` is NOT a native NHDWaterbody field: reverse-engineered from
+  the hand-made layer, it is `str(COMID)` for 447,844 of 448,124 rows, and for
+  the other 280 a **sorted comma list of raw COMIDs** dissolved into one output
+  polygon. **The merge rule is: every NHDWaterbody row sharing a non-null
+  GNIS_ID, WITHIN ONE VPU, is always dissolved into one row — there is no
+  spatial-adjacency test.** This was verified, not assumed: Lake Conroe (VPU
+  12, GNIS_ID 1380953, COMIDs 1466730/120053033) merges despite its two parts
+  being 662.8 m apart (`touches=False`, `intersects=False`), disproving a
+  touching/intersecting requirement. The retained `COMID`/`GNIS_NAME`/`FTYPE`
+  come from the **largest-area member** (also true when `FTYPE` disagrees —
+  Lake Oahe, GNIS_ID 1266878, two small LakePond parts + a 1,254.6 km2
+  Reservoir part, resolves to `Reservoir`, matching the existing layer).
+  `member_comid` is functionally near-inert downstream:
+  `select_connected_waterbodies` calls `pd.to_numeric(member_comid,
+  errors="coerce")`, turning every comma-list to NaN, so a merged row is only
+  ever matched via its single `COMID`.
+
+  **Why per-VPU, never cross-VPU:** the existing layer's 14 residual
+  same-GNIS_ID pairs that stay unmerged are — every one checked — a case that
+  spans TWO different VPU archives (either the exact same COMID, cross-VPU
+  duplicated, e.g. GNIS_ID 178159 "Saint Vrain Glaciers" at the VPU 10L/14
+  seam; or a named feature split into two different COMIDs at a VPU boundary,
+  e.g. GNIS_ID 1564644 "Empire Swamp" at the VPU 04/07 seam). `main()`
+  reproduces this by dissolving each VPU's frame independently before
+  concatenating, never comparing polygons across archives — which also means
+  it does not collapse NHDPlus's 218 known cross-VPU-duplicate COMIDs (VPU
+  04/07 and 12/13 seams) into one row; `dedupe_cross_vpu_duplicates` exists,
+  tested, to do that, but `main()` deliberately does not call it, since the
+  layer being reproduced doesn't either. See the module docstring for the full
+  derivation.
 - **`endorheic` step (runs between `waterbody` and `wbody_connectivity`).**
   Emits `endorheic_waterbody_comids.parquet` (comid, frac_own, by_terminus,
   by_closed_huc12) via `endorheic_frame` (`src/gfv2_params/endorheic.py`):

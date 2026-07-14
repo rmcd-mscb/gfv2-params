@@ -99,6 +99,10 @@ sbatch slurm_batch/stage_nhd_flowthrough.batch
 # Endorheic classifier inputs (run once; CONUS-shared, fabric-independent):
 pixi run --as-is python -m gfv2_params.download.nhd_burn_components   # Sink.shp + BurnAddWaterbody
 pixi run --as-is python -m gfv2_params.download.wbd_huc12             # full WBD (type-C closed basins)
+# Source-derived replacement for the hand-made conus_waterbodies.gpkg (staged +
+# verified against it; NOT yet wired into waterbody_gpkg — see ARCHITECTURE.md):
+srun -p cpu -A impd --time=02:00:00 --ntasks=1 --cpus-per-task=4 --mem=48G \
+  pixi run --as-is python -m gfv2_params.download.nhd_waterbodies
 # Stage WESM 1m footprints (one-time, CONUS; dprst_depth's best-available-topo tagging):
 pixi run --as-is python -m gfv2_params.download.wesm
 pixi run --as-is python scripts/clip_shared_to_fabric.py --fabric gfv2   # tiny VRT (login OK)
