@@ -43,6 +43,10 @@ def _load_onstream_comids(ctx: BuildContext, logger) -> set[int] | None:
         if not ctx.flowthrough_comids_table.exists():
             return None
         connected = connected | load_connected_comids(ctx.flowthrough_comids_table)
+    logger.info(
+        "  BurnAdd overlap guard: %d on-stream COMIDs loaded (WBAREACOMI + "
+        "flow-through, pre-endorheic)", len(connected),
+    )
     return connected
 
 
