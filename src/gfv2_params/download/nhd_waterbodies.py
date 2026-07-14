@@ -113,6 +113,7 @@ from gfv2_params.config import load_base_config
 from gfv2_params.download.nhd_flowlines import download_snapshot as _download_flowline_snapshot
 from gfv2_params.download.nhd_flowlines import vpu_index
 from gfv2_params.log import configure_logging
+from gfv2_params.nhd_ftypes import NEVER_ONSTREAM_FTYPES
 
 logger = configure_logging("download_nhd_waterbodies")
 
@@ -198,10 +199,30 @@ def _merge_group(members: gpd.GeoDataFrame) -> dict:
     19251179) where two small parts are tagged LakePond and the dominant
     1,254.6 km2 part is tagged Reservoir. The existing hand-made layer resolves
     this the same way it resolves COMID/GNIS_NAME: the largest-area member
-    wins. A mismatch is logged (not silently invisible) but does not raise.
+    wins. A benign mismatch is logged but does not raise.
+
+    A mixed group containing a `NEVER_ONSTREAM_FTYPES` member DOES raise. FTYPE is
+    not cosmetic for those: Playa is force-dprst and Ice Mass is excluded from the
+    waterbody classification entirely, and largest-area-wins would silently retag a
+    small Playa dissolved into a bigger LakePond -- dropping the guardrail for that
+    area and making it eligible for on-stream promotion, at INFO level, inside a
+    run that emits hundreds of thousands of log lines. `ftype_for_fcode` already
+    refuses to GUESS an FTYPE for exactly this reason ("a wrong default would
+    misclassify this polygon"); a dissolve must not do by averaging what that
+    function refuses to do by defaulting.
     """
     ftypes = sorted(set(members["FTYPE"]))
     if len(ftypes) > 1:
+        guarded = sorted(set(ftypes) & NEVER_ONSTREAM_FTYPES)
+        if guarded:
+            raise ValueError(
+                f"GNIS_ID {members['GNIS_ID'].iloc[0]!r} (COMIDs "
+                f"{sorted(int(c) for c in members['COMID'])}) mixes FTYPEs {ftypes}, "
+                f"including the guardrail FTYPE(s) {guarded}. Dissolving would retag "
+                f"the group with the largest-area member's FTYPE and silently drop "
+                f"force-dprst (Playa) / exclude-from-waterbody (Ice Mass) for that "
+                f"area. Refusing to guess -- split the group or fix the source FTYPEs."
+            )
         logger.info(
             f"  GNIS_ID {members['GNIS_ID'].iloc[0]!r} "
             f"(COMIDs {sorted(int(c) for c in members['COMID'])}) mixes FTYPEs "

@@ -265,12 +265,11 @@ def _concat_burn(wb_gdf: gpd.GeoDataFrame, burn: gpd.GeoDataFrame) -> gpd.GeoDat
     # on. Normalise to whatever dtype wb_gdf already uses before concatenating.
     if "member_comid" in wb_gdf.columns:
         target_dtype = wb_gdf["member_comid"].dtype
-        # `pd.api.types.is_object_dtype` compares dtype identity correctly, unlike
-        # `target_dtype is object` (always False for a pandas dtype instance — that
-        # comparison never fires, so this branch was previously dead code). A plain
-        # `.astype(object)` on an int64 column wraps the raw ints rather than
-        # stringifying them, reproducing the exact mixed str/int column this
-        # normalisation exists to prevent.
+        # Must be `pd.api.types.is_object_dtype`, NOT `target_dtype is object`: the
+        # latter is always False for a pandas dtype instance, so the branch would never
+        # fire. And the cast must stringify explicitly — a plain `.astype(object)` on an
+        # int64 column wraps the raw ints rather than stringifying them, reproducing the
+        # exact mixed str/int column this normalisation exists to prevent.
         if pd.api.types.is_object_dtype(target_dtype):
             burn["member_comid"] = burn["member_comid"].astype(str)
         else:
@@ -328,6 +327,22 @@ def build(step_cfg: dict, ctx: BuildContext, logger) -> dict:
                 f"remove `burn_add_waterbody_table` from the profile."
             )
         burn = gpd.read_parquet(ctx.burn_add_waterbody_table)
+        if burn.empty:
+            # A zero-row table is NOT a legitimate result: nhd_burn_components.main()
+            # itself raises on it ("0 BurnAddWaterbody polygons staged across all VPUs
+            # -- that would add no depression area at all"), so a configured, present,
+            # EMPTY table means the staging was truncated or corrupted after the fact.
+            # merge_burn_add would quietly return wb_gdf unchanged and ~722 km2 of
+            # playa / closed-lake depression area would vanish from dprst behind an
+            # INFO line reading "merged 0 BurnAddWaterbody polygons".
+            raise ValueError(
+                f"{ctx.burn_add_waterbody_table} is configured but has ZERO rows. "
+                f"That is not a legitimate result — the staging step refuses to write "
+                f"an empty table — so it has been truncated or corrupted. Re-stage "
+                f"with `python -m gfv2_params.download.nhd_burn_components`, or remove "
+                f"`burn_add_waterbody_table` from the profile to run without BurnAdd "
+                f"depression area deliberately."
+            )
         onstream_comids = _load_onstream_comids(ctx, logger)
         if onstream_comids is None:
             logger.warning(

@@ -232,3 +232,49 @@ def test_dedupe_raises_on_mismatched_geometry_for_a_duplicate_comid():
     ])
     with pytest.raises(ValueError, match="NOT identical copies"):
         dedupe_cross_vpu_duplicates(g)
+
+
+def test_dissolve_keeps_resolving_a_benign_mixed_ftype_group_by_largest_area():
+    # The real Lake Oahe case (GNIS_ID 1266878): two small LakePond parts and a
+    # dominant Reservoir part. Neither FTYPE is a guardrail, so largest-area-wins is
+    # the right resolution and must NOT raise.
+    big = box(0, 0, 10, 10)     # Reservoir, area 100
+    small = box(10, 0, 11, 10)  # LakePond, area 10
+    g = _wb([
+        [19251179, "1266878", "Lake Oahe", "Reservoir", big],
+        [19247123, "1266878", "Lake Oahe", "LakePond", small],
+    ])
+    out = dissolve_named_parts(g)
+    assert len(out) == 1
+    assert out["FTYPE"].iloc[0] == "Reservoir"  # largest-area member wins
+
+
+def test_dissolve_refuses_to_retag_a_playa_out_of_a_mixed_ftype_group():
+    """A dissolve must not strip the Playa force-dprst guardrail.
+
+    FTYPE is not cosmetic for NEVER_ONSTREAM_FTYPES: Playa is force-dprst and Ice Mass
+    is excluded from the waterbody classification entirely. Largest-area-wins would
+    retag a small Playa dissolved into a bigger LakePond as LakePond, silently making
+    that depression area eligible for on-stream promotion via WBAREACOMI -- logged at
+    INFO, inside a run emitting hundreds of thousands of lines. `ftype_for_fcode`
+    already refuses to GUESS an FTYPE for this exact reason.
+    """
+    big = box(0, 0, 10, 10)     # LakePond, area 100
+    playa = box(10, 0, 11, 10)  # Playa, area 10 -- would be retagged LakePond
+    g = _wb([
+        [111, "999", "Mixed Basin", "LakePond", big],
+        [222, "999", "Mixed Basin", "Playa", playa],
+    ])
+    with pytest.raises(ValueError, match="guardrail FTYPE"):
+        dissolve_named_parts(g)
+
+
+def test_dissolve_refuses_to_retag_an_ice_mass_out_of_a_mixed_ftype_group():
+    big = box(0, 0, 10, 10)
+    ice = box(10, 0, 11, 10)
+    g = _wb([
+        [111, "999", "Mixed", "LakePond", big],
+        [222, "999", "Mixed", "Ice Mass", ice],
+    ])
+    with pytest.raises(ValueError, match="guardrail FTYPE"):
+        dissolve_named_parts(g)

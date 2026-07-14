@@ -443,3 +443,52 @@ def test_merge_burn_add_clump_walk_does_not_chain_through_ice_mass():
 
     out = merge_burn_add(base, burn, cell_size=30.0, onstream_comids={222})
     assert set(out.COMID) == {111, 222, -500}
+
+
+def test_build_raises_on_a_configured_but_empty_burn_add_table(tmp_path):
+    """A zero-row BurnAdd table means truncated/corrupted staging, not "no playas".
+
+    `nhd_burn_components.main()` itself refuses to write an empty table, so a
+    configured, present, EMPTY one can only mean corruption. `merge_burn_add` would
+    quietly return the frame unchanged and ~722 km2 of playa / closed-lake depression
+    area would vanish from dprst behind an INFO line reading "merged 0 polygons".
+    """
+    import rasterio
+    from rasterio.transform import from_origin
+
+    from gfv2_params.depstor_builders import waterbody
+    from gfv2_params.depstor_builders.context import BuildContext
+
+    n = 10
+    template = tmp_path / "template.tif"
+    landmask = tmp_path / "land_mask.tif"
+    for path, arr, dt, nd in (
+        (template, np.full((n, n), 100.0, dtype=np.float32), "float32", -9999.0),
+        (landmask, np.ones((n, n), dtype=np.uint8), "uint8", 255),
+    ):
+        with rasterio.open(
+            path, "w", driver="GTiff", height=n, width=n, count=1, dtype=dt,
+            crs=CRS, transform=from_origin(0, n * 30, 30, 30), nodata=nd,
+        ) as dst:
+            dst.write(arr, 1)
+
+    wb_gpkg = tmp_path / "wb.gpkg"
+    _frame([[None, None, 111, "LakePond", "111", 0.01, _sq(0, 0)]]).to_file(
+        wb_gpkg, layer="waterbodies", driver="GPKG"
+    )
+    empty_burn = tmp_path / "burn.parquet"
+    _frame([]).to_parquet(empty_burn)
+
+    ctx = BuildContext(
+        fabric="t", template_path=template, output_dir=tmp_path,
+        hru_gpkg=wb_gpkg, hru_layer="waterbodies",
+        waterbody_gpkg=wb_gpkg, waterbody_layer="waterbodies",
+        burn_add_waterbody_table=empty_burn,
+    )
+    ctx.paths["landmask"] = landmask
+
+    with pytest.raises(ValueError, match="ZERO rows"):
+        waterbody.build(
+            {"outputs": {"binary": "wbody_binary.tif", "regions": "wbody_regions.tif"}},
+            ctx, logging.getLogger("test"),
+        )
