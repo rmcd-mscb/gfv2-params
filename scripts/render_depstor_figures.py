@@ -106,7 +106,7 @@ def classification_array(dprst, dprst_nodata, onstream, onstream_nodata) -> np.n
 
 
 def frac_own_stats(df: pd.DataFrame) -> dict:
-    """Summarise the Signal-A distribution behind the deck's bimodality claim.
+    """Summarise the Signal-A distribution behind the deck's inert-threshold claim.
 
     ``candidates`` counts waterbodies with a computed ``frac_own`` (> 0) -- not
     every row in the table, most of which are Signal-B-only (flagged by a closed
@@ -396,7 +396,6 @@ def draw_tile(
     *,
     outlines: gpd.GeoDataFrame | None = None,
     vpu: str | None = None,
-    show_terminals: bool = False,
     title: str | None = None,
 ) -> None:
     """Composite the classification raster + outlines + flowlines + terminals."""
@@ -423,11 +422,6 @@ def draw_tile(
     if outlines is not None and len(outlines):
         outlines.boundary.plot(ax=ax, color="black", linewidth=0.9, zorder=5)
 
-    if show_terminals:
-        xs, ys = read_terminal_cells(bbox)
-        if len(xs):
-            ax.scatter(xs, ys, s=14, c=TERMINUS_COLOR, marker="x", linewidths=1.1, zorder=6)
-
     ax.set_xlim(bbox[0], bbox[2])
     ax.set_ylim(bbox[1], bbox[3])
     ax.set_xticks([])
@@ -436,9 +430,7 @@ def draw_tile(
         ax.set_title(title, fontsize=11)
 
 
-def _legend_handles(
-    *, flowlines: bool = False, terminals: bool = False, terminals_split: bool = False
-) -> list:
+def _legend_handles(*, flowlines: bool = False, terminals_split: bool = False) -> list:
     import matplotlib.lines as mlines
     import matplotlib.patches as mpatches
 
@@ -468,13 +460,6 @@ def _legend_handles(
                 markersize=5, markeredgewidth=0.8, alpha=0.6,
                 label="FDR code-0 terminal cell (elsewhere in tile)",
             ),
-        ]
-    elif terminals:
-        handles += [
-            mlines.Line2D(
-                [], [], color=TERMINUS_COLOR, marker="x", ls="none",
-                label="FDR code-0 terminal cell",
-            )
         ]
     return handles
 
@@ -707,11 +692,11 @@ def fig_terminus_gsl() -> Path:
         frac = float(row["frac_own"].iloc[0]) if len(row) else 0.0
         verdict = "dprst" if frac > 0.5 else "on-stream"
         bbox = waterbody_bbox(wb)
-        # show_terminals=False here: the undifferentiated whole-window marker
-        # set is exactly what destroys this figure's argument (every code-0
-        # cell in the Great Basin gets drawn, not just GSL's own). Draw the
-        # inside/outside split ourselves below instead.
-        draw_tile(ax, bbox, p["after"], outlines=wb, vpu=vpu, show_terminals=False)
+        # draw_tile never draws terminal markers itself: the undifferentiated
+        # whole-window marker set is exactly what destroys this figure's
+        # argument (every code-0 cell in the Great Basin gets drawn, not just
+        # GSL's own). Draw the inside/outside split ourselves below instead.
+        draw_tile(ax, bbox, p["after"], outlines=wb, vpu=vpu)
 
         xs, ys = read_terminal_cells(bbox)
         geom = wb.geometry.union_all()
@@ -837,7 +822,7 @@ def fig_network_gate() -> Path:
     bbox = waterbody_bbox(wb)
 
     fig, ax = plt.subplots(figsize=(8, 6.5))
-    draw_tile(ax, bbox, p["after"], outlines=wb, vpu="18", show_terminals=False)
+    draw_tile(ax, bbox, p["after"], outlines=wb, vpu="18")
     ax.set_title(
         wrap_to_width(
             "Sheepy Lake — dprst despite 8 Non-Network paths threading it "
@@ -888,7 +873,7 @@ def fig_flowthrough() -> Path:
     ):
         wb = read_waterbodies(comids=[comid])
         bbox = waterbody_bbox(wb)
-        draw_tile(ax, bbox, p["after"], outlines=wb, vpu=vpu, show_terminals=False, title=name)
+        draw_tile(ax, bbox, p["after"], outlines=wb, vpu=vpu, title=name)
 
     out_path = OUT / "rule_flowthrough.png"
     return finish_figure(
@@ -973,7 +958,7 @@ def fig_closed_huc12_walker() -> Path:
     huc12 = gpd.read_parquet(p["huc12"]).cx[minx:maxx, miny:maxy]
 
     fig, ax = plt.subplots(figsize=(8, 6.5))
-    draw_tile(ax, bbox, p["after"], outlines=wb, show_terminals=False)
+    draw_tile(ax, bbox, p["after"], outlines=wb)
     if len(huc12):
         huc12.boundary.plot(ax=ax, color="black", linewidth=1.4, linestyle="--", zorder=6)
 
@@ -1057,7 +1042,7 @@ def fig_domain_exits() -> Path:
     ):
         wb = read_waterbodies(comids=[comid])
         bbox = waterbody_bbox(wb)
-        draw_tile(ax, bbox, p["after"], outlines=wb, vpu=None, show_terminals=False, title=name)
+        draw_tile(ax, bbox, p["after"], outlines=wb, vpu=None, title=name)
 
         # Ground the "stayed on-stream" claim in the actual in-polygon pixel
         # counts rather than relying on the fill color alone -- Lake Michigan's
@@ -1113,7 +1098,7 @@ def fig_playa_guardrail() -> Path:
     ):
         wb = read_waterbodies(comids=[comid])
         bbox = waterbody_bbox(wb)
-        draw_tile(ax, bbox, p["after"], outlines=wb, vpu=None, show_terminals=False, title=name)
+        draw_tile(ax, bbox, p["after"], outlines=wb, vpu=None, title=name)
 
     out_path = OUT / "rule_playa_guardrail.png"
     return finish_figure(
@@ -1472,7 +1457,7 @@ def fig_pipeline_dag() -> Path:
 
 
 def fig_frac_own_bimodal() -> Path:
-    """frac_own is bimodal, so the 0.5 threshold is inert -- not a tuned knob.
+    """frac_own is overwhelmingly concentrated near 1.0, so the 0.5 threshold is inert -- not a tuned knob.
 
     Reads the classifier table directly rather than transcribing the PR body,
     so the deck's numbers cannot drift from the product.

@@ -84,17 +84,23 @@ def test_frac_own_stats_reports_bimodality_and_sweep():
 def test_split_terminal_cells_by_polygon_partitions_inside_vs_outside():
     """This is the terminus-inside-itself test the marquee figure depends on.
 
-    A point strictly inside the square is "evidence"; a point outside is
+    A point strictly inside the rectangle is "evidence"; a point outside is
     "context" -- drawing both undifferentiated is exactly the bug this test
     guards against (the FDR code-0 markers scattered across the whole tile,
     not just inside the waterbody).
+
+    The rectangle and inside points are deliberately asymmetric in x/y (wide
+    in x, narrow in y) so a ``points(ys, xs)`` transposition bug relocates an
+    "inside" point outside the polygon instead of silently staying inside --
+    a symmetric square with points like (5, 5)/(5, 2) would still pass under
+    that bug, since swapping x/y leaves both points inside the square.
     """
-    square = Polygon([(0, 0), (10, 0), (10, 10), (0, 10)])
-    xs = np.array([5.0, 5.0, 50.0, -50.0])
-    ys = np.array([5.0, 2.0, 50.0, -50.0])
-    in_xs, in_ys, out_xs, out_ys = rdf.split_terminal_cells_by_polygon(xs, ys, square)
-    assert sorted(in_xs.tolist()) == [5.0, 5.0]
-    assert sorted(in_ys.tolist()) == [2.0, 5.0]
+    rect = Polygon([(0, 0), (20, 0), (20, 5), (0, 5)])
+    xs = np.array([15.0, 18.0, 50.0, -50.0])
+    ys = np.array([3.0, 1.0, 50.0, -50.0])
+    in_xs, in_ys, out_xs, out_ys = rdf.split_terminal_cells_by_polygon(xs, ys, rect)
+    assert sorted(in_xs.tolist()) == [15.0, 18.0]
+    assert sorted(in_ys.tolist()) == [1.0, 3.0]
     assert sorted(out_xs.tolist()) == [-50.0, 50.0]
     assert sorted(out_ys.tolist()) == [-50.0, 50.0]
 
