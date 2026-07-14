@@ -287,3 +287,43 @@ def test_endorheic_exemption_keeps_imperv_dprst_perv_disjoint(tmp_path):
     assert dprst_arr[2, 2] == 1
     # Invariant: dprst and imperv never coincide (no double-count).
     assert int(((dprst_arr == 1) & (imperv_arr == 1)).sum()) == 0
+
+
+def test_endorheic_exemption_never_recovers_a_non_wbody_cell(tmp_path):
+    """`endorheic_wbody` is rasterized from a raw, unfiltered read of the
+    waterbody gpkg (no EXCLUDE_WATERBODY_FTYPES / Ice Mass filter, no
+    min_area_threshold), unlike `wbody_binary` which applies both. The real
+    case: two Mt Shasta glacier COMIDs (Ice Mass, excluded from the waterbody
+    classification entirely -- its cells fall back to land) are flagged
+    endorheic by Signal B because the summit HUC12s are WBD type-C. Without
+    gating the exemption on `wbody_binary == 1`, those glacier cells would be
+    silently reinstated as dprst, violating `dprst ⊆ wbody_binary` and turning
+    a glacier into a depression-storage pour-point.
+    """
+    ctx = _gsl_clump_ctx(tmp_path, with_endorheic=True)
+
+    # Knock the lake's corner cell out of wbody_binary -- standing in for an
+    # Ice Mass polygon that `waterbody.build()` excluded but the raw
+    # endorheic-wbody rasterization (no FTYPE filter) still flags.
+    with rasterio.open(tmp_path / "wbody_binary.tif") as src:
+        wbody_binary = src.read(1)
+    wbody_binary[0, 0] = 255
+    with rasterio.open(
+        tmp_path / "wbody_binary.tif", "w", driver="GTiff", height=_N, width=_N,
+        count=1, dtype="uint8", crs="EPSG:5070", transform=_TRANSFORM, nodata=255,
+    ) as dst:
+        dst.write(wbody_binary, 1)
+
+    produced = dprst.build(
+        {"outputs": {"dprst": "dprst_binary.tif", "onstream": "onstream_binary.tif"}},
+        ctx, logging.getLogger("test"),
+    )
+    with rasterio.open(produced["dprst"]) as src:
+        dprst_arr = src.read(1)
+
+    # The non-wbody "glacier" cell is endorheic-flagged and not on-stream, but
+    # must NOT be recovered into dprst -- it isn't a waterbody cell at all.
+    assert dprst_arr[0, 0] != 1
+    # The rest of the recovered lake (still a genuine wbody_binary cell) is
+    # unaffected by the gate.
+    assert dprst_arr[2, 2] == 1

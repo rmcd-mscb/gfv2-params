@@ -22,6 +22,13 @@ cells from the region-level exclusion. Evidence overrides proxy, but only
 where we have evidence: a waterbody with no endorheic evidence keeps today's
 clump behaviour exactly, so this cannot re-open the `drains_to_dprst`
 over-extension that #145/#158/#161 fixed.
+
+The exemption is also gated on `wbody_binary == 1` to preserve the
+`dprst ⊆ wbody_binary` invariant: `endorheic_wbody` is rasterized from a raw,
+unfiltered read of the waterbody gpkg (see `wbody_connectivity.py`), so
+without this gate it would reinstate cells `waterbody.build()` deliberately
+removed -- e.g. Ice Mass polygons (excluded from the waterbody classification
+entirely) or sub-`min_area_threshold` slivers.
 """
 
 from __future__ import annotations
@@ -96,7 +103,20 @@ def build(step_cfg: dict, ctx: BuildContext, logger) -> dict:
     # behaviour exactly.
     if "endorheic_wbody" in ctx.paths:
         endorheic_binary = read_aligned_uint8(ctx.require("endorheic_wbody"), info)
-        exempt = (endorheic_binary == 1) & (connected_binary != 1)
+        # `endorheic_wbody` is rasterized in `wbody_connectivity` from a fresh,
+        # unfiltered read of the waterbody gpkg -- no EXCLUDE_WATERBODY_FTYPES
+        # (Ice Mass) filter and no min_area_threshold, unlike `wbody_binary`
+        # (built in `waterbody.build()`, which applies both). Gate the
+        # exemption on `wbody_binary == 1` so it can only ever recover a cell
+        # `waterbody` itself already treats as a waterbody -- this keeps
+        # `dprst ⊆ wbody_binary` intact. Measured on real CONUS data: 2 of
+        # 22,942 flagged endorheic COMIDs are Ice Mass (COMIDs 8265726/8265734,
+        # the Mt Shasta glaciers, flagged via Signal B's HUC12 test) and would
+        # otherwise be silently reinstated as dprst -- a glacier is not
+        # depression storage.
+        exempt = endorheic_binary == 1
+        exempt &= connected_binary != 1
+        exempt &= wbody_binary == 1
         n_exempted = int((exempt & (dprst_binary != 1)).sum())
         dprst_binary[exempt] = 1
         logger.info(
