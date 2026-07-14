@@ -234,6 +234,35 @@ def read_classification(depstor_dir: Path, bbox) -> np.ndarray:
     return classification_array(dprst, dprst_nodata, onstream, onstream_nodata)
 
 
+def read_dprst_presence(depstor_dir: Path, bbox, *, max_side: int = _MAX_SIDE) -> np.ndarray:
+    """land / dprst binary array (no on-stream distinction), windowed to *bbox*.
+
+    Used by the CONUS before/after figure, which cares only about the dprst
+    footprint's total area -- ``read_classification``'s land/dprst/on-stream
+    split would need a second full-CONUS-scale read of ``onstream_binary.tif``
+    for information the area comparison doesn't use.
+    """
+    dprst, nodata = read_window(depstor_dir / "dprst_binary.tif", bbox, max_side=max_side)
+    cat = np.zeros(dprst.shape, dtype=np.uint8)
+    cat[dprst != nodata] = 1
+    return cat
+
+
+def read_drains_presence(depstor_dir: Path, bbox) -> np.ndarray:
+    """land / drains-to-dprst binary array, windowed to *bbox*.
+
+    ``drains_to_dprst.tif`` is a plain binary uint8 presence raster and is
+    HRU-agnostic (0 = the cell does not drain to any depression; 1 = it does;
+    ``nodata`` = off-fabric) -- the separate ``drains_to_dprst_hru.tif`` is the
+    HRU-valued raster ``same_hru_drains`` builds on. So "drains to a
+    depression" here is any valid, nonzero cell.
+    """
+    drains, nodata = read_window(depstor_dir / "drains_to_dprst.tif", bbox)
+    cat = np.zeros(drains.shape, dtype=np.uint8)
+    cat[(drains != nodata) & (drains != 0)] = 1
+    return cat
+
+
 def read_waterbodies(comids: list[int] | None = None, bbox=None) -> gpd.GeoDataFrame:
     """Read the profile's waterbody layer, filtered by COMID or bbox.
 
@@ -332,6 +361,15 @@ def read_terminal_cells(bbox) -> tuple[np.ndarray, np.ndarray]:
 
 CLASS_CMAP = ListedColormap(["#f0f0f0", "#3182bd", "#e6550d"])  # land, dprst, on-stream
 CLASS_LABELS = ["land", "depression storage (dprst)", "on-stream waterbody"]
+
+# Shared land/#3182bd-blue binary presence styling for the two before/after
+# figures that don't need the on-stream (orange) category: the drains-to-
+# dprst footprint (land-only vs. draining) and the CONUS dprst-only area
+# comparison. Same colors as CLASS_CMAP's land/dprst pair, so blue always
+# means "dprst" across every figure in this module.
+BINARY_CMAP = ListedColormap(["#f0f0f0", "#3182bd"])
+DRAINS_LABELS = ["land", "land draining to depression storage"]
+DPRST_ONLY_LABELS = ["land", "depression storage (dprst)"]
 
 NETWORK_COLOR = "#08519c"      # Network Flowline -- counts as connectivity
 NONNETWORK_COLOR = "#cc44aa"   # Non-Network cartographic path -- does NOT
@@ -602,6 +640,28 @@ SHEEPY_LAKE = 2554835
 # verified only 595 of 99,943 in-polygon cells, 0.6%, are on-stream -- so it
 # was not used.)
 LAKE_OF_THE_WOODS = 120052195
+
+# Great Basin (VPU 16) bounding box, EPSG:5070 -- recovered unchanged from the
+# pre-rewrite renderer (`git show a40f96b:scripts/render_depstor_figures.py`,
+# GREAT_BASIN), where it was resolved from a decimated read of vpu_id.tif.
+#
+# This is the endorheic classifier's downstream cascade into `drains_to_dprst`
+# showcase, NOT the on-stream-barrier-fix (#158/#159) showcase that pairing
+# used to illustrate: that fix predates BOTH snapshots this module reads
+# (`paths()["before"]` = `depstor_rasters_pre_endorheic_2026-07-13`, which
+# already postdates #158/#159), so no before/after pair on disk isolates it
+# any more -- the isolating snapshot (`pre_flowthrough_2026-06-26`) is gone.
+# What the two snapshots on disk DO isolate is the endorheic classifier
+# (PR #178): demoting closed-basin lakes to depression storage flips them
+# from on-stream routing barriers to pour-points, which changes the on-stream
+# mask `drains_to_dprst`'s barrier subtraction reads -- and that cascade is
+# concentrated in the Great Basin (VPU 16, home of Great Salt Lake). Verified
+# non-degenerate at native resolution within this bbox (no decimation,
+# streamed in 4096-row strips): drains_to_dprst grows 96,776.7 -> 148,438.6
+# km2 (+51,661.9 km2, +53.4%) -- a strict subtraction can only remove false
+# barrier-gated coverage, and indeed only 20.4 km2 (0.04% of the gain) is
+# lost, consistent with rounding/boundary noise rather than a real regression.
+GREAT_BASIN = (-2059337.07, 1533691.97, -1195168.54, 2362453.61)
 
 
 def fig_terminus_gsl() -> Path:
@@ -1551,6 +1611,230 @@ def fig_burnadd_purpcode() -> Path:
     )
 
 
+# --------------------------------------------------------------------------
+# Before/after figures -- the only readers of the `before` snapshot
+# --------------------------------------------------------------------------
+
+
+def fig_clump_veto_gsl() -> Path:
+    """The clump veto, and why endorheic evidence overrides it.
+
+    clump_regions 8-connects Great Salt Lake to a 49.1 km2 SwampMarsh
+    (COMID 10273192) whose water drains INTO the lake -- so the marsh's terminus
+    is GSL, not itself, and it is CORRECTLY left on-stream. But
+    regions_touching_mask excludes a WHOLE region if any one cell touches the
+    on-stream mask, so that one marsh vetoed all 4,854,156 GSL cells: GSL came
+    out 0% dprst even though connected_wbody.tif no longer contained it.
+
+    Fixed by exempting an endorheic waterbody's own not-on-stream cells from the
+    region-level exclusion. The clump rule is a heuristic PROXY for connectivity;
+    the terminus rule is direct hydrologic EVIDENCE. Evidence overrides proxy --
+    but only where we have evidence, and only for the waterbody's own cells. A
+    cell that is itself on-stream (the marsh) always stays excluded.
+
+    This is the headline figure: both GSL and the marsh are outlined so the
+    reader can see the 49 km2 feature that vetoed the 4,369 km2 lake.
+    """
+    p = paths()
+    wb = read_waterbodies(comids=[GREAT_SALT_LAKE, GSL_VETOING_MARSH])
+    bbox = waterbody_bbox(wb, pad_frac=0.10)
+
+    fig, axes = plt.subplots(1, 2, figsize=(12, 6.5))
+    for ax, d, title in (
+        (axes[0], p["before"], "before — the marsh vetoes the whole clump\nGSL: 0% dprst"),
+        (axes[1], p["after"], "after — endorheic cells exempted\nGSL: 100% dprst"),
+    ):
+        draw_tile(ax, bbox, d, outlines=wb, title=title)
+
+    out_path = OUT / "clump_veto_gsl.png"
+    return finish_figure(
+        fig,
+        out_path,
+        suptitle=(
+            "A 49.1 km² SwampMarsh was vetoing a 4,368.9 km² lake — evidence overrides "
+            "proxy, but only where we have evidence"
+        ),
+        legend_handles=_legend_handles(),
+        legend_ncol=3,
+        ax_title_extra_in=0.30,
+    )
+
+
+def drains_great_basin_deltas() -> dict:
+    """Re-derive the Great Basin `drains_to_dprst` delta from the two snapshots.
+
+    Derived, never transcribed -- mirrors `conus_area_deltas()`'s pattern so
+    the figure's panel titles and this function cannot disagree. Counts come
+    from `read_drains_presence`'s decimated read (bounded by `read_window`'s
+    `_MAX_SIDE` guard), so they are approximate, scaled by the decimation
+    factor -- this function exists to CONFIRM the direction/magnitude are in
+    the right ballpark, not to be the deck's cited number.
+
+    Cross-checked against a native-resolution (unscaled, 4096-row-streamed)
+    measurement of this exact bbox: drains_to_dprst grows 96,776.7 ->
+    148,438.6 km2 (+51,661.9 km2, +53.4%), with only 20.4 km2 (0.04% of the
+    gain) lost -- consistent with the strict-subtraction invariant a demoted
+    endorheic lake can only ever REMOVE itself as an on-stream barrier, never
+    add a new one.
+    """
+    p = paths()
+    out = {}
+    for label, d in (("before", p["before"]), ("after", p["after"])):
+        with rasterio.open(d / "drains_to_dprst.tif") as ds:
+            win = from_bounds(*GREAT_BASIN, transform=ds.transform)
+            native_h = int(round(win.height))
+            cell_km2 = abs(ds.transform.a * ds.transform.e) / 1e6
+        cat = read_drains_presence(d, GREAT_BASIN)
+        scale = native_h / cat.shape[0]
+        out[label] = float(cat.sum() * scale * scale * cell_km2)
+    out["delta_pct"] = (out["after"] - out["before"]) / out["before"] * 100
+    return out
+
+
+def fig_drains_great_basin_before_after() -> Path:
+    """The endorheic classifier's cascade into `drains_to_dprst` (Great Basin).
+
+    NOT the on-stream-barrier-fix (#158/#159) showcase this bbox used to draw
+    in the pre-rewrite renderer -- that fix predates both snapshots available
+    on disk (`paths()["before"]` = `depstor_rasters_pre_endorheic_2026-07-13`
+    already postdates #158/#159, merged 2026-07-01), and the snapshot that
+    could isolate it (`pre_flowthrough_2026-06-26`) is gone. What the two
+    snapshots on disk DO isolate is the endorheic classifier (PR #178): a
+    closed-basin lake demoted from on-stream to depression storage stops being
+    a `routing` traversal barrier and becomes a pour-point instead, so the
+    land draining to depression storage changes accordingly. That cascade is
+    concentrated in the Great Basin (VPU 16, home of Great Salt Lake) because
+    that is where the endorheic classifier actually changed on-stream status
+    (`endorheic_waterbody_comids.parquet` is a VPU 13/15/16/18-only set).
+
+    Verified non-degenerate before captioning (see `drains_great_basin_deltas`
+    and its native-resolution cross-check): this grows, it does not shrink --
+    the opposite direction from the retired Lower Mississippi figure, because
+    this is a different mechanism (barrier removal adds pour-point-reachable
+    land) than that figure's claim (over-extension removal subtracts land).
+    """
+    p = paths()
+    deltas = drains_great_basin_deltas()
+
+    fig, axes = plt.subplots(1, 2, figsize=(11, 6))
+    for ax, d, label in (
+        (axes[0], p["before"], "before"),
+        (axes[1], p["after"], "after"),
+    ):
+        cat = read_drains_presence(d, GREAT_BASIN)
+        ax.imshow(
+            cat,
+            cmap=BINARY_CMAP,
+            vmin=0,
+            vmax=1,
+            interpolation="nearest",
+            extent=(GREAT_BASIN[0], GREAT_BASIN[2], GREAT_BASIN[1], GREAT_BASIN[3]),
+            origin="upper",
+        )
+        ax.set_xlim(GREAT_BASIN[0], GREAT_BASIN[2])
+        ax.set_ylim(GREAT_BASIN[1], GREAT_BASIN[3])
+        ax.set_xticks([])
+        ax.set_yticks([])
+        ax.set_title(
+            f"{label} — {deltas[label]:,.0f} km² drains to dprst (derived, decimated)",
+            fontsize=11,
+        )
+
+    import matplotlib.patches as mpatches
+
+    handles = [
+        mpatches.Patch(color=BINARY_CMAP.colors[i], label=DRAINS_LABELS[i]) for i in range(2)
+    ]
+    out_path = OUT / "drains_great_basin_before_after.png"
+    return finish_figure(
+        fig,
+        out_path,
+        suptitle=(
+            "Great Basin (VPU 16) — demoting endorheic lakes to depression storage flips "
+            "them from on-stream routing barriers to pour-points: land draining to "
+            f"depression storage grows {deltas['before']:,.0f} → {deltas['after']:,.0f} km² "
+            f"({deltas['delta_pct']:+.1f}%, derived from these snapshots) — cross-check "
+            "against a native-resolution measurement of this same bbox: "
+            "96,776.7 → 148,438.6 km² (+53.4%), only 20.4 km² (0.04% of the gain) lost"
+        ),
+        legend_handles=handles,
+        legend_ncol=2,
+    )
+
+
+def conus_area_deltas() -> dict:
+    """Re-derive the deck's headline km² from the two snapshots.
+
+    Derived, never transcribed: the results table and the maps cannot disagree.
+    Counts are taken from a decimated read, so they are approximate -- scaled by
+    the decimation factor. The deck quotes the exact figures from the PR's own
+    A/B gate (scripts/diagnose/ab_endorheic_rebuild.py); this function exists to
+    CONFIRM they are in the right ballpark, and to fail loud if they are not.
+    """
+    p = paths()
+    with rasterio.open(p["after"] / "dprst_binary.tif") as ds:
+        bounds = ds.bounds
+        cell_km2 = abs(ds.transform.a * ds.transform.e) / 1e6
+
+    out = {}
+    for label, d in (("before", p["before"]), ("after", p["after"])):
+        arr, nodata = read_window(d / "dprst_binary.tif", tuple(bounds), max_side=_MAX_SIDE)
+        # Decimation samples 1 cell per (scale x scale) block, so scale the count.
+        with rasterio.open(d / "dprst_binary.tif") as ds:
+            scale = ds.height / arr.shape[0]
+        out[label] = float((arr != nodata).sum() * scale * scale * cell_km2)
+    out["delta_pct"] = (out["after"] - out["before"]) / out["before"] * 100
+    return out
+
+
+def fig_conus_dprst_before_after() -> Path:
+    """CONUS-wide dprst footprint, before vs. after the endorheic classifier.
+
+    The `_MAX_SIDE` guard in `read_window` is what makes this safe: a full-
+    resolution CONUS read is 16.9 billion cells (CLAUDE.md's CONUS-memory
+    rule). Both panels are decimated reads of the same CONUS bounds, so they
+    stay pixel-comparable.
+
+    Titles carry the areas `conus_area_deltas()` re-derives from these same
+    two snapshots (decimated, so approximate); the suptitle carries the exact
+    figures from PR #178's own A/B gate for cross-check. Growth should be most
+    visible in the Great Basin (VPU 16), the source of the marquee example.
+    """
+    p = paths()
+    with rasterio.open(p["after"] / "dprst_binary.tif") as ds:
+        bounds = tuple(ds.bounds)
+    deltas = conus_area_deltas()
+
+    fig, axes = plt.subplots(1, 2, figsize=(14, 7))
+    for ax, label, d in (
+        (axes[0], "before", p["before"]),
+        (axes[1], "after", p["after"]),
+    ):
+        cat = read_dprst_presence(d, bounds, max_side=_MAX_SIDE)
+        ax.imshow(cat, cmap=BINARY_CMAP, vmin=0, vmax=1, interpolation="nearest")
+        ax.set_xticks([])
+        ax.set_yticks([])
+        ax.set_title(f"{label} — {deltas[label]:,.0f} km² dprst (derived, decimated)", fontsize=11)
+
+    import matplotlib.patches as mpatches
+
+    handles = [
+        mpatches.Patch(color=BINARY_CMAP.colors[i], label=DPRST_ONLY_LABELS[i]) for i in range(2)
+    ]
+    out_path = OUT / "conus_dprst_before_after.png"
+    return finish_figure(
+        fig,
+        out_path,
+        suptitle=(
+            f"CONUS depression storage grows {deltas['before']:,.0f} → {deltas['after']:,.0f} km² "
+            f"({deltas['delta_pct']:+.1f}%, derived from these snapshots) — cross-check against "
+            "the PR #178 A/B gate's exact 42,535 → 51,930 km² (+22.1%)"
+        ),
+        legend_handles=handles,
+        legend_ncol=2,
+    )
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--only", help="render just this figure (stem, no .png)")
@@ -1571,6 +1855,9 @@ def main() -> None:
         "pipeline_dag": fig_pipeline_dag,
         "frac_own_bimodal": fig_frac_own_bimodal,
         "rule_burnadd_purpcode": fig_burnadd_purpcode,
+        "clump_veto_gsl": fig_clump_veto_gsl,
+        "drains_great_basin_before_after": fig_drains_great_basin_before_after,
+        "conus_dprst_before_after": fig_conus_dprst_before_after,
     }
     if args.only:
         if args.only not in figures:
