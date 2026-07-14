@@ -314,6 +314,147 @@ NONNETWORK_COLOR = "#cc44aa"   # Non-Network cartographic path -- does NOT
 TERMINUS_COLOR = "#111111"     # FDR code-0 terminal cell
 
 
+# --------------------------------------------------------------------------
+# The tile compositor
+# --------------------------------------------------------------------------
+
+
+def waterbody_bbox(gdf: gpd.GeoDataFrame, pad_frac: float = 0.35) -> tuple:
+    """Padded EPSG:5070 bounds around *gdf*, so context is visible around it."""
+    minx, miny, maxx, maxy = gdf.total_bounds
+    pad = max(maxx - minx, maxy - miny) * pad_frac
+    return (minx - pad, miny - pad, maxx + pad, maxy + pad)
+
+
+def draw_tile(
+    ax,
+    bbox,
+    depstor_dir: Path,
+    *,
+    outlines: gpd.GeoDataFrame | None = None,
+    vpu: str | None = None,
+    show_terminals: bool = False,
+    title: str | None = None,
+) -> None:
+    """Composite the classification raster + outlines + flowlines + terminals."""
+    cat = read_classification(depstor_dir, bbox)
+    ax.imshow(
+        cat,
+        cmap=CLASS_CMAP,
+        vmin=0,
+        vmax=2,
+        interpolation="nearest",
+        extent=(bbox[0], bbox[2], bbox[1], bbox[3]),
+        origin="upper",
+    )
+
+    if vpu is not None:
+        fl = read_flowlines(vpu, bbox)
+        net = fl[fl["network"]]
+        non = fl[~fl["network"]]
+        if len(non):
+            non.plot(ax=ax, color=NONNETWORK_COLOR, linewidth=1.4, linestyle="--", zorder=3)
+        if len(net):
+            net.plot(ax=ax, color=NETWORK_COLOR, linewidth=1.0, zorder=4)
+
+    if outlines is not None and len(outlines):
+        outlines.boundary.plot(ax=ax, color="black", linewidth=0.9, zorder=5)
+
+    if show_terminals:
+        xs, ys = read_terminal_cells(bbox)
+        if len(xs):
+            ax.scatter(xs, ys, s=14, c=TERMINUS_COLOR, marker="x", linewidths=1.1, zorder=6)
+
+    ax.set_xlim(bbox[0], bbox[2])
+    ax.set_ylim(bbox[1], bbox[3])
+    ax.set_xticks([])
+    ax.set_yticks([])
+    if title:
+        ax.set_title(title, fontsize=11)
+
+
+def _legend_handles(*, flowlines: bool = False, terminals: bool = False) -> list:
+    import matplotlib.lines as mlines
+    import matplotlib.patches as mpatches
+
+    handles = [
+        mpatches.Patch(color=CLASS_CMAP.colors[i], label=CLASS_LABELS[i]) for i in range(3)
+    ]
+    if flowlines:
+        handles += [
+            mlines.Line2D([], [], color=NETWORK_COLOR, lw=1.6, label="Network Flowline"),
+            mlines.Line2D(
+                [], [], color=NONNETWORK_COLOR, lw=1.6, ls="--",
+                label="Non-Network path (cartographic)",
+            ),
+        ]
+    if terminals:
+        handles += [
+            mlines.Line2D(
+                [], [], color=TERMINUS_COLOR, marker="x", ls="none",
+                label="FDR code-0 terminal cell",
+            )
+        ]
+    return handles
+
+
+# --------------------------------------------------------------------------
+# Figures
+# --------------------------------------------------------------------------
+
+GREAT_SALT_LAKE = 946020001
+LEWIS_AND_CLARK = 11758154
+
+
+def fig_terminus_gsl() -> Path:
+    """Signal A: the terminus-inside-itself rule, and its negative control.
+
+    Great Salt Lake's water ends IN Great Salt Lake (frac_own = 1.000): its FDR
+    code-0 terminal cells sit inside its own polygon. Lewis and Clark Lake -- a
+    Missouri mainstem reservoir with one stray terminal cell -- ends in the Gulf
+    of Mexico (frac_own = 0.007), so it stays on-stream. The rule is
+    "terminus INSIDE ITSELF", not merely "terminates at a sink": the latter
+    would demote every on-stream reservoir in the Great Basin.
+    """
+    p = paths()
+    end = pd.read_parquet(p["endorheic"])
+
+    fig, axes = plt.subplots(1, 2, figsize=(12, 6))
+    for ax, comid, vpu, name in (
+        (axes[0], GREAT_SALT_LAKE, "16", "Great Salt Lake"),
+        (axes[1], LEWIS_AND_CLARK, "10U", "Lewis and Clark Lake"),
+    ):
+        wb = read_waterbodies(comids=[comid])
+        row = end[end["comid"] == comid]
+        frac = float(row["frac_own"].iloc[0]) if len(row) else 0.0
+        verdict = "dprst" if frac > 0.5 else "on-stream"
+        draw_tile(
+            ax,
+            waterbody_bbox(wb),
+            p["after"],
+            outlines=wb,
+            vpu=vpu,
+            show_terminals=True,
+            title=f"{name}\nfrac_own = {frac:.3f}  →  {verdict}",
+        )
+
+    fig.legend(
+        handles=_legend_handles(flowlines=True, terminals=True),
+        loc="lower center",
+        ncol=3,
+        frameon=False,
+        fontsize=9,
+    )
+    fig.suptitle(
+        "Signal A — a waterbody is depression storage iff its water's terminus lies inside itself"
+    )
+    fig.tight_layout(rect=(0, 0.10, 1, 0.94))
+    out_path = OUT / "rule_terminus_gsl.png"
+    fig.savefig(out_path, dpi=150)
+    plt.close(fig)
+    return out_path
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--only", help="render just this figure (stem, no .png)")
@@ -322,7 +463,9 @@ def main() -> None:
     OUT.mkdir(parents=True, exist_ok=True)
     # CONTRACT: each key is exactly the PNG stem the function writes, so
     # `--only <stem>` always matches the filename the deck references.
-    figures = {}  # populated by later tasks
+    figures = {
+        "rule_terminus_gsl": fig_terminus_gsl,
+    }
     if args.only:
         if args.only not in figures:
             raise SystemExit(f"Unknown figure {args.only!r}. Known: {sorted(figures)}")
