@@ -457,21 +457,34 @@ def fig_terminus_gsl() -> Path:
     of Mexico (frac_own = 0.007), so it stays on-stream. The rule is
     "terminus INSIDE ITSELF", not merely "terminates at a sink": the latter
     would demote every on-stream reservoir in the Great Basin.
+
+    Both lakes contain an in-polygon terminal cell (a narrow-neck FDR artifact
+    puts 2 code-0 cells inside Lewis and Clark's boundary, same raw count as
+    Great Salt Lake) -- so raw containment does NOT discriminate them, and the
+    figure must not imply that it does. What discriminates them is
+    ``frac_own``: the SHARE of the waterbody's own cells whose D8 path actually
+    reaches that terminus. That share, not containment, is what the panels and
+    the takeaway line below the suptitle annotate.
     """
     p = paths()
     end = pd.read_parquet(p["endorheic"])
 
-    fig, axes = plt.subplots(1, 2, figsize=(12, 6.5))
+    fig, axes = plt.subplots(1, 2, figsize=(12, 5.6))
     # Fixed axes rectangle, set up front -- everything above the axes (name,
-    # frac_own, count) is then placed at fixed FIGURE-fraction y-coordinates
-    # via fig.text, not ax.text/set_title, so the three stacked lines never
-    # collide with each other regardless of how tight_layout would otherwise
-    # resize the axes.
-    fig.subplots_adjust(top=0.68, bottom=0.16, left=0.05, right=0.98, wspace=0.12)
+    # frac_own, share-of-water) is then placed at fixed FIGURE-fraction
+    # y-coordinates via fig.text, not ax.text/set_title, so the stacked lines
+    # never collide with each other regardless of how tight_layout would
+    # otherwise resize the axes. Lines are spaced evenly (no single oversized
+    # gap) and the header is kept short so the map -- not whitespace --
+    # dominates the figure at slide size.
+    fig.subplots_adjust(top=0.64, bottom=0.15, left=0.05, right=0.98, wspace=0.10)
 
-    for ax, comid, vpu, name in (
-        (axes[0], GREAT_SALT_LAKE, "16", "Great Salt Lake"),
-        (axes[1], LEWIS_AND_CLARK, "10U", "Lewis and Clark Lake"),
+    for ax, comid, vpu, name, downstream in (
+        (axes[0], GREAT_SALT_LAKE, "16", "Great Salt Lake", None),
+        (
+            axes[1], LEWIS_AND_CLARK, "10U", "Lewis and Clark Lake",
+            "Missouri → Gulf of Mexico",
+        ),
     ):
         wb = read_waterbodies(comids=[comid])
         row = end[end["comid"] == comid]
@@ -510,15 +523,29 @@ def fig_terminus_gsl() -> Path:
         # fall geometrically inside the polygon without being where most of
         # the waterbody's own water actually ends up (frac_own stays tiny).
         verdict_color = CLASS_CMAP.colors[1] if verdict == "dprst" else CLASS_CMAP.colors[2]
+        # Share-of-water framing, derived from frac_own (never hardcoded) --
+        # this replaces the old raw in-polygon COUNT line, which was identical
+        # (2 vs 2) for both lakes and therefore argued AGAINST the figure's
+        # own point. frac_own is what actually discriminates them: 100% of
+        # GSL's own cells terminate inside itself; only 0.7% of Lewis and
+        # Clark's do, the rest pass through downstream.
+        pct = frac * 100
+        if verdict == "dprst":
+            share_text = f"{pct:.0f}% of its cells drain to a terminus inside itself"
+        elif downstream:
+            share_text = f"{pct:.1f}% do — the rest flow through to the {downstream}"
+        else:
+            share_text = f"only {pct:.1f}% of its cells do"
+
         cx = (ax.get_position().x0 + ax.get_position().x1) / 2
-        fig.text(cx, 0.92, name, ha="center", va="bottom", fontsize=13)
+        fig.text(cx, 0.85, name, ha="center", va="bottom", fontsize=12)
         fig.text(
-            cx, 0.86, f"frac_own = {frac:.3f}  →  {verdict}",
-            ha="center", va="bottom", fontsize=12, fontweight="bold", color=verdict_color,
+            cx, 0.795, f"frac_own = {frac:.3f}  →  {verdict}",
+            ha="center", va="bottom", fontsize=11, fontweight="bold", color=verdict_color,
         )
         fig.text(
-            cx, 0.71, f"{len(in_xs)} terminal cell(s) inside its own polygon",
-            ha="center", va="bottom", fontsize=9, color="#555555",
+            cx, 0.745, share_text,
+            ha="center", va="bottom", fontsize=9.5, color="#555555",
         )
 
     fig.legend(
@@ -530,7 +557,17 @@ def fig_terminus_gsl() -> Path:
     )
     fig.suptitle(
         "Signal A — a waterbody is depression storage iff its water's terminus lies inside itself",
-        y=0.985,
+        y=0.975,
+        fontsize=13,
+    )
+    # The takeaway: both lakes contain an in-polygon terminal cell, so raw
+    # containment can't be (and isn't) the test -- forecloses the most
+    # obvious objection before a skeptical reader can raise it.
+    fig.text(
+        0.515, 0.91,
+        "Both lakes contain a terminal cell inside their polygon — containment isn't the "
+        "test; how much of the lake's own water actually ends there is.",
+        ha="center", va="bottom", fontsize=10, style="italic", color="#333333",
     )
     out_path = OUT / "rule_terminus_gsl.png"
     fig.savefig(out_path, dpi=150)
