@@ -279,6 +279,29 @@ def read_flowlines(vpu: str, bbox) -> gpd.GeoDataFrame:
     return gdf.to_crs(RASTER_CRS)
 
 
+def split_terminal_cells_by_polygon(
+    xs: np.ndarray, ys: np.ndarray, geom
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Partition terminal-cell points into inside/outside *geom*.
+
+    Returns ``(inside_xs, inside_ys, outside_xs, outside_ys)``. This is the
+    "inside itself" test the rule actually depends on: a terminal cell that
+    falls inside the waterbody's own polygon is the evidence Signal A reads;
+    one that falls outside is landscape context (the Great Basin is riddled
+    with closed-basin sinks -- that's *why* the rule has to be "inside itself"
+    and not merely "terminates at a sink").
+    """
+    xs = np.asarray(xs)
+    ys = np.asarray(ys)
+    if len(xs) == 0:
+        empty = np.asarray([])
+        return empty, empty, empty, empty
+    import shapely
+
+    inside = shapely.contains(geom, shapely.points(xs, ys))
+    return xs[inside], ys[inside], xs[~inside], ys[~inside]
+
+
 def read_terminal_cells(bbox) -> tuple[np.ndarray, np.ndarray]:
     """Return (x, y) coords of FDR code-0 (terminal) cells inside *bbox*.
 
@@ -312,6 +335,7 @@ CLASS_LABELS = ["land", "depression storage (dprst)", "on-stream waterbody"]
 NETWORK_COLOR = "#08519c"      # Network Flowline -- counts as connectivity
 NONNETWORK_COLOR = "#cc44aa"   # Non-Network cartographic path -- does NOT
 TERMINUS_COLOR = "#111111"     # FDR code-0 terminal cell
+TERMINUS_OUTSIDE_COLOR = "#bbbbbb"  # code-0 cell outside the waterbody -- context, not evidence
 
 
 # --------------------------------------------------------------------------
@@ -373,7 +397,9 @@ def draw_tile(
         ax.set_title(title, fontsize=11)
 
 
-def _legend_handles(*, flowlines: bool = False, terminals: bool = False) -> list:
+def _legend_handles(
+    *, flowlines: bool = False, terminals: bool = False, terminals_split: bool = False
+) -> list:
     import matplotlib.lines as mlines
     import matplotlib.patches as mpatches
 
@@ -388,7 +414,23 @@ def _legend_handles(*, flowlines: bool = False, terminals: bool = False) -> list
                 label="Non-Network path (cartographic)",
             ),
         ]
-    if terminals:
+    if terminals_split:
+        # Two marker styles: the bold in-polygon terminus is the evidence the
+        # rule reads, the faint elsewhere-in-tile terminus is context showing
+        # why "terminates at a sink" alone would over-demote.
+        handles += [
+            mlines.Line2D(
+                [], [], color=TERMINUS_COLOR, marker="x", ls="none",
+                markersize=9, markeredgewidth=2.2,
+                label="FDR code-0 terminal cell (inside this waterbody)",
+            ),
+            mlines.Line2D(
+                [], [], color=TERMINUS_OUTSIDE_COLOR, marker="x", ls="none",
+                markersize=5, markeredgewidth=0.8, alpha=0.6,
+                label="FDR code-0 terminal cell (elsewhere in tile)",
+            ),
+        ]
+    elif terminals:
         handles += [
             mlines.Line2D(
                 [], [], color=TERMINUS_COLOR, marker="x", ls="none",
@@ -419,7 +461,14 @@ def fig_terminus_gsl() -> Path:
     p = paths()
     end = pd.read_parquet(p["endorheic"])
 
-    fig, axes = plt.subplots(1, 2, figsize=(12, 6))
+    fig, axes = plt.subplots(1, 2, figsize=(12, 6.5))
+    # Fixed axes rectangle, set up front -- everything above the axes (name,
+    # frac_own, count) is then placed at fixed FIGURE-fraction y-coordinates
+    # via fig.text, not ax.text/set_title, so the three stacked lines never
+    # collide with each other regardless of how tight_layout would otherwise
+    # resize the axes.
+    fig.subplots_adjust(top=0.68, bottom=0.16, left=0.05, right=0.98, wspace=0.12)
+
     for ax, comid, vpu, name in (
         (axes[0], GREAT_SALT_LAKE, "16", "Great Salt Lake"),
         (axes[1], LEWIS_AND_CLARK, "10U", "Lewis and Clark Lake"),
@@ -428,27 +477,61 @@ def fig_terminus_gsl() -> Path:
         row = end[end["comid"] == comid]
         frac = float(row["frac_own"].iloc[0]) if len(row) else 0.0
         verdict = "dprst" if frac > 0.5 else "on-stream"
-        draw_tile(
-            ax,
-            waterbody_bbox(wb),
-            p["after"],
-            outlines=wb,
-            vpu=vpu,
-            show_terminals=True,
-            title=f"{name}\nfrac_own = {frac:.3f}  →  {verdict}",
+        bbox = waterbody_bbox(wb)
+        # show_terminals=False here: the undifferentiated whole-window marker
+        # set is exactly what destroys this figure's argument (every code-0
+        # cell in the Great Basin gets drawn, not just GSL's own). Draw the
+        # inside/outside split ourselves below instead.
+        draw_tile(ax, bbox, p["after"], outlines=wb, vpu=vpu, show_terminals=False)
+
+        xs, ys = read_terminal_cells(bbox)
+        geom = wb.geometry.union_all()
+        in_xs, in_ys, out_xs, out_ys = split_terminal_cells_by_polygon(xs, ys, geom)
+        # Faint context first (low zorder, low alpha): terminal cells are
+        # common in this landscape -- that's precisely why the rule has to be
+        # "inside ITSELF", not merely "terminates at a sink".
+        if len(out_xs):
+            ax.scatter(
+                out_xs, out_ys, s=6, c=TERMINUS_OUTSIDE_COLOR, marker="x",
+                linewidths=0.6, alpha=0.5, zorder=2,
+            )
+        # Bold evidence on top: the terminal cells actually inside this
+        # waterbody's own polygon.
+        if len(in_xs):
+            ax.scatter(
+                in_xs, in_ys, s=90, c=TERMINUS_COLOR, marker="x",
+                linewidths=2.4, zorder=7,
+            )
+
+        # frac_own is the rule's actual quantitative output -- color it to
+        # match the classification fill (dprst blue / on-stream orange) so
+        # the verdict is unmistakable even where, as at Lewis and Clark's
+        # narrow neck, a couple of locally-noisy code-0 pixels happen to
+        # fall geometrically inside the polygon without being where most of
+        # the waterbody's own water actually ends up (frac_own stays tiny).
+        verdict_color = CLASS_CMAP.colors[1] if verdict == "dprst" else CLASS_CMAP.colors[2]
+        cx = (ax.get_position().x0 + ax.get_position().x1) / 2
+        fig.text(cx, 0.92, name, ha="center", va="bottom", fontsize=13)
+        fig.text(
+            cx, 0.86, f"frac_own = {frac:.3f}  →  {verdict}",
+            ha="center", va="bottom", fontsize=12, fontweight="bold", color=verdict_color,
+        )
+        fig.text(
+            cx, 0.71, f"{len(in_xs)} terminal cell(s) inside its own polygon",
+            ha="center", va="bottom", fontsize=9, color="#555555",
         )
 
     fig.legend(
-        handles=_legend_handles(flowlines=True, terminals=True),
+        handles=_legend_handles(flowlines=True, terminals_split=True),
         loc="lower center",
-        ncol=3,
+        ncol=2,
         frameon=False,
         fontsize=9,
     )
     fig.suptitle(
-        "Signal A — a waterbody is depression storage iff its water's terminus lies inside itself"
+        "Signal A — a waterbody is depression storage iff its water's terminus lies inside itself",
+        y=0.985,
     )
-    fig.tight_layout(rect=(0, 0.10, 1, 0.94))
     out_path = OUT / "rule_terminus_gsl.png"
     fig.savefig(out_path, dpi=150)
     plt.close(fig)

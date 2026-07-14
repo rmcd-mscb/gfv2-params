@@ -14,7 +14,7 @@ import geopandas as gpd
 import numpy as np
 import pandas as pd
 import pytest
-from shapely.geometry import LineString
+from shapely.geometry import LineString, Polygon
 
 import scripts.render_depstor_figures as rdf
 
@@ -79,3 +79,29 @@ def test_frac_own_stats_reports_bimodality_and_sweep():
     assert stats["in_band_45_55"] == 1
     assert stats["sweep"] == {0.3: 5, 0.5: 4, 0.7: 4}
     assert stats["swing"] == pytest.approx(0.25)
+
+
+def test_split_terminal_cells_by_polygon_partitions_inside_vs_outside():
+    """This is the terminus-inside-itself test the marquee figure depends on.
+
+    A point strictly inside the square is "evidence"; a point outside is
+    "context" -- drawing both undifferentiated is exactly the bug this test
+    guards against (the FDR code-0 markers scattered across the whole tile,
+    not just inside the waterbody).
+    """
+    square = Polygon([(0, 0), (10, 0), (10, 10), (0, 10)])
+    xs = np.array([5.0, 5.0, 50.0, -50.0])
+    ys = np.array([5.0, 2.0, 50.0, -50.0])
+    in_xs, in_ys, out_xs, out_ys = rdf.split_terminal_cells_by_polygon(xs, ys, square)
+    assert sorted(in_xs.tolist()) == [5.0, 5.0]
+    assert sorted(in_ys.tolist()) == [2.0, 5.0]
+    assert sorted(out_xs.tolist()) == [-50.0, 50.0]
+    assert sorted(out_ys.tolist()) == [-50.0, 50.0]
+
+
+def test_split_terminal_cells_by_polygon_handles_empty_input():
+    square = Polygon([(0, 0), (10, 0), (10, 10), (0, 10)])
+    in_xs, in_ys, out_xs, out_ys = rdf.split_terminal_cells_by_polygon(
+        np.array([]), np.array([]), square
+    )
+    assert len(in_xs) == len(in_ys) == len(out_xs) == len(out_ys) == 0
