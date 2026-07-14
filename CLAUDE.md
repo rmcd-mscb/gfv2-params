@@ -134,7 +134,16 @@ These are hard-won; violating them silently corrupts outputs.
   If a BurnAdd polygon lands in the same clump as an on-stream waterbody,
   `regions_touching_mask` would delete the whole clump, silently destroying the
   BurnAdd playa's depression area — so the guard buffers by `cell_size *
-  sqrt(2)` and **raises** instead of silently dropping it.
+  sqrt(2)` and **raises** instead of silently dropping it. That clump membership
+  is **transitive**, and the guard must walk it: BurnAdd → already-dprst waterbody
+  → on-stream waterbody is ONE region, so testing only a BurnAdd's *direct*
+  neighbours misses the chain. Do **not** "simplify" it back to a direct
+  neighbour test on the reasoning that merging into an already-dprst neighbour is
+  harmless — being dprst *by COMID* does not mean a waterbody's *region* survives
+  the on-stream exclusion, which is exactly what the Great Salt Lake / COMID
+  10273192 marsh case demonstrates. (Inert on today's CONUS layer: the 1,658
+  BurnAdd polygons pull in 113 waterbodies, the walk closes after one hop, and
+  none of them is on-stream.)
 - **Endorheic demotion alone does not fix the CONUS dprst product — the
   region-level on-stream exclusion still vetoes it.** `clump_regions` labels
   8-connected waterbody components, and `regions_touching_mask` excludes a
