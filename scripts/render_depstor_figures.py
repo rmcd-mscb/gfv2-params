@@ -48,6 +48,7 @@ matplotlib.use("Agg")
 import argparse  # noqa: E402
 import glob  # noqa: E402
 import sys  # noqa: E402
+import textwrap  # noqa: E402
 from pathlib import Path  # noqa: E402
 
 import geopandas as gpd  # noqa: E402
@@ -440,6 +441,81 @@ def _legend_handles(
     return handles
 
 
+def wrap_to_width(text: str, width_in: float, *, fontsize: int = 12) -> str:
+    """Wrap *text* with `textwrap.fill` so it never overflows *width_in* inches
+    at *fontsize*, calibrated the same way for any caller (a figure-wide
+    `fig.suptitle` or a single `ax.set_title`).
+
+    ~9.3 chars/inch is calibrated against this file's actual title strings at
+    fontsize 12 (`rule_network_gate`'s 8in-wide, ~170-char suptitle wraps to 3
+    lines; `rule_domain_exits`' 15in-wide, ~210-char suptitle wraps to 2) --
+    comfortably inside the canvas at every figsize/fontsize used here.
+    """
+    chars_per_line = max(20, int(width_in * 9.3 * 12 / fontsize))
+    return textwrap.fill(text, width=chars_per_line)
+
+
+def finish_figure(
+    fig,
+    out_path: Path,
+    *,
+    suptitle: str,
+    legend_handles: list | None = None,
+    legend_ncol: int = 3,
+    suptitle_fontsize: int = 12,
+    legend_fontsize: int = 9,
+    extra_bottom_in: float = 0.0,
+    ax_title_extra_in: float = 0.0,
+    dpi: int = 150,
+) -> Path:
+    """Wrap the suptitle to the canvas width, put the legend below the axes,
+    reserve room for both (plus any known-tall `ax.set_title`), then save.
+
+    Every rule figure ends by calling this instead of hand-rolling its own
+    `tight_layout(rect=...)` + `fig.suptitle`/`ax.legend` combination. Two
+    bugs came from that per-figure guessing: `fig.suptitle` does not wrap or
+    shrink to fit -- a long string is simply drawn past the canvas edge and
+    cut off in the saved PNG (every rule figure's suptitle did this) -- and
+    `ax.legend(loc="lower left")` places the legend in AXES coordinates, so it
+    floats on top of the map instead of below it (`rule_network_gate`,
+    `rule_closed_huc12_walker`). Fix: wrap the title with `wrap_to_width` to
+    the figure's actual width in inches, then reserve vertical space for the
+    now-known line count (title) and handle count (legend) via
+    `subplots_adjust`, computed in inches rather than left to
+    `tight_layout`'s content-fitting guess -- `tight_layout` has no way to
+    know how tall wrapped suptitle text will be until after it's drawn.
+    `ax_title_extra_in` reserves additional room for a caller's own
+    multi-line `ax.set_title` sitting just above the axes, which otherwise
+    collides with a multi-line wrapped suptitle above it
+    (`rule_closed_huc12_walker` did this before the parameter existed).
+    """
+    fig_w_in, fig_h_in = fig.get_size_inches()
+
+    wrapped = wrap_to_width(suptitle, fig_w_in, fontsize=suptitle_fontsize)
+    n_lines = wrapped.count("\n") + 1
+
+    line_h_in = suptitle_fontsize * 1.35 / 72.0
+    title_in = n_lines * line_h_in + 0.18 + ax_title_extra_in
+    top = max(0.5, 1.0 - title_in / fig_h_in)
+
+    bottom = 0.06 + extra_bottom_in / fig_h_in
+    if legend_handles:
+        n_rows = -(-len(legend_handles) // legend_ncol)  # ceil
+        legend_in = n_rows * 0.20 + 0.14
+        bottom = max(bottom, legend_in / fig_h_in + extra_bottom_in / fig_h_in)
+
+    fig.subplots_adjust(top=top, bottom=bottom)
+    fig.suptitle(wrapped, fontsize=suptitle_fontsize, y=0.99)
+    if legend_handles:
+        fig.legend(
+            handles=legend_handles, loc="lower center", ncol=legend_ncol,
+            frameon=False, fontsize=legend_fontsize,
+        )
+    fig.savefig(out_path, dpi=dpi)
+    plt.close(fig)
+    return out_path
+
+
 # --------------------------------------------------------------------------
 # Figures
 # --------------------------------------------------------------------------
@@ -448,6 +524,11 @@ GREAT_SALT_LAKE = 946020001
 LEWIS_AND_CLARK = 11758154
 WALKER_LAKE = 10734232
 MONO_LAKE = 120053921
+# Kept per the brief's explicit constant list even though fig_domain_exits no
+# longer uses it as a panel (see LAKE_OF_THE_WOODS below) -- its interior is
+# outside the HRU fabric's domain, which made it render as an empty outline
+# rather than a convincing "stayed on-stream" panel. Still a true
+# MUST_STAY_ONSTREAM fixture, just a weak figure choice.
 LAKE_MICHIGAN = 904140248
 LAKE_CHAMPLAIN = 15447630
 EVERGLADES = 120055431
@@ -459,11 +540,39 @@ GSL_VETOING_MARSH = 10273192
 # or Non-Network) touching its polygon anywhere in VPU 16 (verified: a whole-
 # VPU attribute search on WBAreaComI for both Mono's merged COMID and its raw
 # MEMBER_COMID returns 0 rows, and a geometric intersection against its
-# padded bbox also returns 0). Pyramid Lake is an equally-valid MUST_BE_DPRST
-# fixture (scripts/diagnose/endorheic_fixtures.py) that genuinely has 7
-# Non-Network ArtificialPath segments threading it (of 46 flowlines
-# intersecting its polygon) -- verified empirically before this substitution.
+# padded bbox also returns 0). Pyramid Lake was tried next as an
+# equally-valid MUST_BE_DPRST fixture, but turned out to demonstrate a
+# DIFFERENT rule -- see SHEEPY_LAKE below, which replaced it.
 PYRAMID_LAKE = 11310757
+# fig_network_gate's exemplar (replaces PYRAMID_LAKE -- see that figure's
+# docstring). Found by querying, not assumed: of the 10 MUST_BE_DPRST named
+# fixtures, NONE is threaded by a Non-Network path with zero Network
+# flowlines also touching it -- every one that has any Non-Network path at
+# all (Pyramid, Salton Sea) also has real Network flowlines through it.
+# Broadened the search to the full endorheic-demoted COMID set in VPUs
+# 13/15/16/18 (22,942 COMIDs), spatially joined against each VPU's full
+# NHDFlowline set: VPU 16 alone has 107 Non-Network-only candidates, VPU 18
+# has 103. Sheepy Lake (Lower Klamath NWR, VPU 18) was chosen from that list:
+# FTYPE=LakePond (not Playa/Ice Mass -- those are guardrail-forced regardless
+# of this gate, which would undercut the story), 4.89 km2, 8 Non-Network
+# paths intersect its polygon and ZERO Network flowlines do, 3 of the 8
+# Non-Network paths carry WBAREACOMI == 2554835 (Sheepy Lake's own COMID) --
+# the concrete "would have promoted it on-stream" case the WBAREACOMI test
+# (`fig_wbareacomi`) is gated against. Raster-verified dprst: 5,284/5,444
+# (97.1%) of in-polygon cells, 0 on-stream.
+SHEEPY_LAKE = 2554835
+# NOT in the brief's constant list -- fig_domain_exits' third panel. Lake
+# Michigan's deep open water sits outside the HRU fabric's domain (verified:
+# only 77 of 62,836 in-polygon cells are on-stream, 62,759 are nodata/outside
+# the fabric), which makes a weak "domain exits stay on-stream" panel -- it
+# renders as an empty outline, not orange. Lake of the Woods (also a named
+# MUST_STAY_ONSTREAM fixture, drains north to Hudson Bay) is fully in-fabric
+# and renders convincingly on-stream: verified 154,948 of 155,007 in-polygon
+# cells (100.0%) are on-stream, only 59 outside the HRU domain. (Lake Borgne,
+# the other candidate the brief suggested, is worse than Lake Michigan here --
+# verified only 595 of 99,943 in-polygon cells, 0.6%, are on-stream -- so it
+# was not used.)
+LAKE_OF_THE_WOODS = 120052195
 
 
 def fig_terminus_gsl() -> Path:
@@ -598,39 +707,69 @@ def fig_network_gate() -> Path:
 
     NHD draws a Non-Network cartographic artificial path through essentially
     every closed-basin lake. Only Network membership (PlusFlowlineVAA) counts
-    as connectivity; the dashed path threading a correctly-blue Pyramid Lake
-    in the `after` snapshot IS the figure -- it shows the trap the gate
+    as connectivity; the dashed magenta paths threading a correctly-blue
+    Sheepy Lake in the `after` snapshot, with NO solid-blue Network flowline
+    anywhere in the polygon, IS the figure -- it shows the trap the gate
     exists to ignore.
 
-    Uses Pyramid Lake, not the brief's originally-specified Mono Lake: a
-    whole-VPU attribute search (``WBAreaComI`` for both Mono's merged COMID
-    120053921 and its raw MEMBER_COMID 20286504) and a geometric intersection
-    against its polygon both return ZERO flowlines -- Mono Lake has no
-    ArtificialPath of any kind threading it in this data, Network or
-    Non-Network, so the rule cannot be shown firing there. Pyramid Lake is an
-    equally-valid MUST_BE_DPRST fixture and genuinely has 7 Non-Network
-    ArtificialPath segments threading it (of 46 flowlines intersecting its
-    polygon) -- verified before this substitution, not assumed.
+    Two prior fixtures were tried and rejected before this one, in order:
+
+    1. The brief's originally-specified Mono Lake has ZERO flowlines of any
+       kind (Network or Non-Network) touching its polygon in this data --
+       verified by both a whole-VPU WBAreaComI attribute search and a
+       geometric intersection. The rule cannot be shown firing there.
+    2. Pyramid Lake (an equally-valid MUST_BE_DPRST fixture) DOES have
+       Non-Network paths threading it (7 of them) -- but it ALSO has 39
+       genuine Network flowlines through it (the Truckee River, its real
+       inflow). A figure built on Pyramid Lake shows Signal A overriding
+       on-stream evidence (already the marquee `rule_terminus_gsl` story),
+       not the Network gate -- solid blue Network lines are visibly threading
+       the lake, which is the opposite of what this figure claims.
+
+    Sheepy Lake (VPU 18, Lower Klamath NWR) is the genuine exemplar, found by
+    querying rather than assuming: of ALL 10 MUST_BE_DPRST named fixtures,
+    none is threaded by a Non-Network path with zero Network flowlines also
+    present -- every one with any Non-Network path also has real Network
+    flowlines through it, same failure mode as Pyramid Lake. Broadening the
+    search to the full endorheic-demoted COMID set (22,942 COMIDs) in VPUs
+    13/15/16/18, spatially joined against each VPU's full NHDFlowline set,
+    found genuine Non-Network-only cases in every VPU searched (VPU 16: 107,
+    VPU 18: 103, VPU 15: 12, VPU 13: 30). Sheepy Lake was selected from that
+    list: FTYPE=LakePond (not Playa/Ice Mass -- those are guardrail-forced
+    regardless of this gate, which would undercut the story that Signal A/B
+    or the connectivity gate is doing the work), 8 Non-Network paths
+    intersect its polygon and ZERO Network flowlines do, and 3 of the 8
+    Non-Network paths carry ``WBAREACOMI == 2554835`` -- Sheepy Lake's own
+    COMID -- the concrete case the WBAREACOMI test (`fig_wbareacomi`) is
+    gated against: ungated, those 3 paths would have promoted it on-stream.
     """
     p = paths()
-    wb = read_waterbodies(comids=[PYRAMID_LAKE])
+    wb = read_waterbodies(comids=[SHEEPY_LAKE])
     bbox = waterbody_bbox(wb)
 
     fig, ax = plt.subplots(figsize=(8, 6.5))
-    draw_tile(ax, bbox, p["after"], outlines=wb, vpu="16", show_terminals=False)
-    ax.legend(handles=_legend_handles(flowlines=True), loc="lower left", fontsize=8, frameon=True)
-    ax.set_title("Pyramid Lake -- dprst despite Non-Network paths threading it", fontsize=11)
-    fig.suptitle(
-        "The Network-Flowline gate (#161) — NHD draws Non-Network artificial paths "
-        "through essentially every closed-basin lake. Only Network membership counts "
-        "as connectivity.",
-        fontsize=12,
+    draw_tile(ax, bbox, p["after"], outlines=wb, vpu="18", show_terminals=False)
+    ax.set_title(
+        wrap_to_width(
+            "Sheepy Lake — dprst despite 8 Non-Network paths threading it "
+            "(3 carry its own WBAREACOMI); 0 Network flowlines touch it",
+            width_in=7.4, fontsize=10.5,
+        ),
+        fontsize=10.5,
     )
-    fig.tight_layout(rect=(0, 0, 1, 0.88))
     out_path = OUT / "rule_network_gate.png"
-    fig.savefig(out_path, dpi=150)
-    plt.close(fig)
-    return out_path
+    return finish_figure(
+        fig,
+        out_path,
+        suptitle=(
+            "The Network-Flowline gate (#161) — NHD draws Non-Network artificial paths "
+            "through essentially every closed-basin lake. Only Network membership counts "
+            "as connectivity."
+        ),
+        legend_handles=_legend_handles(flowlines=True),
+        legend_ncol=2,
+        ax_title_extra_in=0.30,
+    )
 
 
 def fig_flowthrough() -> Path:
@@ -662,21 +801,18 @@ def fig_flowthrough() -> Path:
         bbox = waterbody_bbox(wb)
         draw_tile(ax, bbox, p["after"], outlines=wb, vpu=vpu, show_terminals=False, title=name)
 
-    fig.legend(
-        handles=_legend_handles(flowlines=True), loc="lower center", ncol=2,
-        frameon=False, fontsize=9,
-    )
-    fig.suptitle(
-        "On-stream evidence B — a Network flowline must demonstrably enter AND exit. "
-        "Terminal sinks (inflow only) and locally-spilling potholes (outflow only) "
-        "stay dprst.",
-        fontsize=12,
-    )
-    fig.tight_layout(rect=(0, 0.07, 1, 0.90))
     out_path = OUT / "rule_flowthrough.png"
-    fig.savefig(out_path, dpi=150)
-    plt.close(fig)
-    return out_path
+    return finish_figure(
+        fig,
+        out_path,
+        suptitle=(
+            "On-stream evidence B — a Network flowline must demonstrably enter AND exit. "
+            "Terminal sinks (inflow only) and locally-spilling potholes (outflow only) "
+            "stay dprst."
+        ),
+        legend_handles=_legend_handles(flowlines=True),
+        legend_ncol=2,
+    )
 
 
 def fig_wbareacomi() -> Path:
@@ -705,12 +841,12 @@ def fig_wbareacomi() -> Path:
         f"WBAREACOMI = {LEWIS_AND_CLARK}\n→ on-stream",
         fontsize=11,
     )
-    fig.suptitle("On-stream evidence A — the WBAREACOMI artificial-path join")
-    fig.tight_layout(rect=(0, 0, 1, 0.93))
     out_path = OUT / "rule_wbareacomi.png"
-    fig.savefig(out_path, dpi=150)
-    plt.close(fig)
-    return out_path
+    return finish_figure(
+        fig,
+        out_path,
+        suptitle="On-stream evidence A — the WBAREACOMI artificial-path join",
+    )
 
 
 def fig_closed_huc12_walker() -> Path:
@@ -770,54 +906,63 @@ def fig_closed_huc12_walker() -> Path:
             [], [], color="black", lw=1.4, ls="--", label="closed (type-C) HUC12"
         ),
     ]
-    ax.legend(handles=handles, loc="lower left", fontsize=7.5, frameon=True)
     ax.set_title(
         f"Walker Lake — {len(in_xs)} in-polygon terminal cell, but frac_own = 0.000 "
         "(none of the lake's own water reaches it)\n"
         "majority-inside a closed HUC12 → dprst (Signal B)",
         fontsize=10,
     )
-    fig.suptitle(
-        "Signal B — majority-AREA containment, never `intersects` (Eagle Lake grazes "
-        "a closed basin at frac = 0.000) and never `within` (drops Great Salt Lake, "
-        "which spills 1.1% out at frac = 0.989)",
-        fontsize=11,
-    )
-    fig.tight_layout(rect=(0, 0, 1, 0.88))
     out_path = OUT / "rule_closed_huc12_walker.png"
-    fig.savefig(out_path, dpi=150)
-    plt.close(fig)
-    return out_path
+    return finish_figure(
+        fig,
+        out_path,
+        suptitle=(
+            "Signal B — majority-AREA containment, never `intersects` (Eagle Lake grazes "
+            "a closed basin at frac = 0.000) and never `within` (drops Great Salt Lake, "
+            "which spills 1.1% out at frac = 0.989)"
+        ),
+        legend_handles=handles,
+        legend_ncol=3,
+        legend_fontsize=8,
+        ax_title_extra_in=0.45,
+    )
 
 
 def fig_domain_exits() -> Path:
     """Guardrail -- domain exits stay on-stream regardless of the classifier.
 
-    Lake Michigan, Lake Champlain, and the Everglades SwampMarsh are terminal
-    only because the CONUS model ends there, not because their basin is
-    closed. All three are in the 20 named MUST_STAY_ONSTREAM fixtures the
-    endorheic classifier is graded against; demoting Lake Michigan to a
-    pothole would be catastrophic. The point of this figure is what did NOT
-    move -- no flowlines needed, since it's a negative control on the
+    Lake of the Woods, Lake Champlain, and the Everglades SwampMarsh are
+    terminal only because the CONUS model ends there, not because their basin
+    is closed. All three are in the 20 named MUST_STAY_ONSTREAM fixtures the
+    endorheic classifier is graded against. The point of this figure is what
+    did NOT move -- no flowlines needed, since it's a negative control on the
     classification raster itself.
 
-    Verified per-pixel (not assumed): Champlain and the Everglades render
-    ~orange fill as expected (99.7% / 99.9% of in-polygon cells). Lake
-    Michigan does NOT -- only 0.1% of its polygon is orange; 99.9% is nodata
-    (white, indistinguishable from "land" in this colormap), because the
-    HRU fabric that the depstor rasters are built from doesn't extend into
-    the Great Lakes' deep open water -- no HRU exists there to classify.
-    Critically, 0 of Lake Michigan's in-polygon cells are dprst (blue) either
-    -- the guardrail holds everywhere the fabric has an opinion; it simply
-    has no opinion over most of the open lake. Each panel is annotated with
-    the real in-polygon pixel breakdown so this isn't glossed over.
+    Verified per-pixel (not assumed): all three render ~orange fill as
+    expected -- Lake of the Woods 100.0% (154,948 / 155,007 in-polygon cells),
+    Champlain 99.7%, the Everglades 99.9%. Every panel is annotated with the
+    real in-polygon pixel breakdown so this isn't asserted on fill color alone.
+
+    Lake Michigan -- the brief's original third panel -- was tried and
+    dropped: verified only 77 of 62,836 in-polygon cells (0.1%) are on-stream;
+    99.9% is nodata, because the HRU fabric this raster is built from doesn't
+    extend into the Great Lakes' deep open water (no HRU exists there to
+    classify). It renders as an empty outline, not orange, which is honest
+    but a poor "stayed on-stream" panel -- a reader sees "nothing happened,"
+    not "the guardrail held." Lake Borgne (the other brief-suggested
+    alternate) is worse still: verified only 595 of 99,943 in-polygon cells
+    (0.6%) on-stream. Lake of the Woods is a fully in-fabric,
+    equally-valid MUST_STAY_ONSTREAM fixture that actually shows the fill.
+    Critically, 0 in-polygon cells are dprst (blue) for any of the four
+    candidates checked -- the guardrail never fails; only the pixel coverage
+    to *see* it varies by fixture.
     """
     import shapely
 
     p = paths()
     fig, axes = plt.subplots(1, 3, figsize=(15, 5.6))
     for ax, comid, name in (
-        (axes[0], LAKE_MICHIGAN, "Lake Michigan"),
+        (axes[0], LAKE_OF_THE_WOODS, "Lake of the Woods"),
         (axes[1], LAKE_CHAMPLAIN, "Lake Champlain"),
         (axes[2], EVERGLADES, "Everglades SwampMarsh"),
     ):
@@ -845,18 +990,20 @@ def fig_domain_exits() -> Path:
             fontsize=8,
         )
 
-    fig.legend(handles=_legend_handles(), loc="lower center", ncol=3, frameon=False, fontsize=9)
-    fig.suptitle(
-        "Guardrail — domain exits stay on-stream. These are terminal only because the "
-        "CONUS model ends there. Demoting Lake Michigan to a pothole would be "
-        "catastrophic; all three are in the 20 named fixtures.",
-        fontsize=12,
-    )
-    fig.tight_layout(rect=(0, 0.08, 1, 0.88))
     out_path = OUT / "rule_domain_exits.png"
-    fig.savefig(out_path, dpi=150)
-    plt.close(fig)
-    return out_path
+    return finish_figure(
+        fig,
+        out_path,
+        suptitle=(
+            "Guardrail — domain exits stay on-stream. These are terminal only because "
+            "the CONUS model ends there, not because their basin is closed. All three "
+            "are in the 20 named MUST_STAY_ONSTREAM fixtures."
+        ),
+        legend_handles=_legend_handles(),
+        legend_ncol=3,
+        extra_bottom_in=0.28,
+        ax_title_extra_in=0.15,
+    )
 
 
 def fig_playa_guardrail() -> Path:
@@ -879,18 +1026,18 @@ def fig_playa_guardrail() -> Path:
         bbox = waterbody_bbox(wb)
         draw_tile(ax, bbox, p["after"], outlines=wb, vpu=None, show_terminals=False, title=name)
 
-    fig.legend(handles=_legend_handles(), loc="lower center", ncol=3, frameon=False, fontsize=9)
-    fig.suptitle(
-        "Two hard guardrails, and they are NOT equivalent: Playa IS depression storage "
-        "(force-dprst, never promoted on-stream). Ice Mass is NOT depression storage — "
-        "it is excluded from the classification and falls back to land.",
-        fontsize=11,
-    )
-    fig.tight_layout(rect=(0, 0.08, 1, 0.88))
     out_path = OUT / "rule_playa_guardrail.png"
-    fig.savefig(out_path, dpi=150)
-    plt.close(fig)
-    return out_path
+    return finish_figure(
+        fig,
+        out_path,
+        suptitle=(
+            "Two hard guardrails, and they are NOT equivalent: Playa IS depression storage "
+            "(force-dprst, never promoted on-stream). Ice Mass is NOT depression storage — "
+            "it is excluded from the classification and falls back to land."
+        ),
+        legend_handles=_legend_handles(),
+        legend_ncol=3,
+    )
 
 
 def main() -> None:
