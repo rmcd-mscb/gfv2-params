@@ -175,8 +175,8 @@ are small after the bbox filter.
 | before rasters | `{data_root}/gfv2/depstor_rasters_pre_endorheic_2026-07-13/` |
 | after rasters | `{data_root}/gfv2/depstor_rasters/` |
 | classifier table (`frac_own`, `by_terminus`, `by_closed_huc12`) | `{data_root}/gfv2/depstor_rasters/endorheic_waterbody_comids.parquet` (22,970 rows) |
-| waterbody geometry (COMID → polygon, FTYPE) | `{data_root}/input/nhd/nhd_waterbodies.parquet` (448,124 rows) |
-| flowline geometry | `{data_root}/shared/source/{vpu}/NHDSnapshot/**/Hydrography/NHDFlowline.shp` (all 21 VPUs staged) |
+| waterbody geometry (COMID → polygon, FTYPE) | **the profile's `waterbody_gpkg`** — `{data_root}/input/nhd/conus_waterbodies.gpkg`, layer `waterbodies` (448,124 rows, EPSG:5070) |
+| flowline geometry | `{data_root}/shared/source/{vpu}/NHDSnapshot/**/Hydrography/NHDFlowline.shp` (all 21 VPUs staged, EPSG:4269) |
 | Network membership | `{data_root}/input/nhd/flowline_topology.parquet` (2,691,339 rows) |
 | BurnAdd rows | `{data_root}/input/nhd/burn_add_waterbodies.parquet` |
 | closed HUC12s | `{data_root}/input/wbd/wbd_huc12.parquet` |
@@ -185,6 +185,28 @@ are small after the bbox filter.
 
 Paths resolve through `load_base_config()` / `require_config_key` against the
 active fabric profile — never hardcoded (CLAUDE.md).
+
+### Three data gotchas the renderer must respect
+
+1. **Waterbody geometry comes from the profile's `waterbody_gpkg`
+   (`conus_waterbodies.gpkg`), NOT `nhd_waterbodies.parquet`.** The rasters were
+   built from the former; the latter is staged-from-source but not yet wired in
+   (see "Not in #178"). Their shorelines differ — Great Salt Lake is 4,368.9 km²
+   in the gpkg vs. 4,309.7 km² in the parquet, and the vetoing marsh is 49.1 vs.
+   38.7 km². Drawing outlines from the parquet would misalign them with the
+   pixels and contradict the PR's own numbers. Read with a `where=` clause on
+   COMID (pyogrio pushes it down; no full-layer read).
+2. **NHDFlowline field casing varies by VPU.** VPU 16 ships `ComID` /
+   `WBAreaComI` / `FCode`; VPUs 01 and 08 ship `COMID` / `WBAREACOMI` / `FCODE`.
+   The reader must upper-case field names before use — the same gotcha
+   `download/nhd_flowlines.py` already handles (PR #140). Flowlines are EPSG:4269
+   and must be reprojected to EPSG:5070.
+3. **The endorheic table is a SET, not a demotion list.** It holds 22,970 COMIDs
+   (6,364 by terminus, 21,503 by closed HUC12, 4,925 by both). Only the ones that
+   were *also* in the on-stream union get demoted — hence 725 demotions, not
+   22,970. The deck must say this plainly, or the numbers look inconsistent.
+   Signal A's candidate population is the 6,427 waterbodies with a computed
+   `frac_own`.
 
 ## Verification
 
