@@ -455,6 +455,35 @@ def wrap_to_width(text: str, width_in: float, *, fontsize: int = 12) -> str:
     return textwrap.fill(text, width=chars_per_line)
 
 
+def assert_ftype_coverage(ftype_counts: pd.Series, ftypes: list[str], kept_total: int) -> None:
+    """Raise unless every kept row's FTYPE is one of the plotted *ftypes*.
+
+    ``fig_burnadd_purpcode`` exists to show exactly what
+    ``nhd_burn_components.py`` kept -- a chart that quietly drops an unplotted
+    FTYPE from its bar would misrepresent the very thing it warns about. The
+    upstream guard in ``nhd_burn_components.py`` only rejects *conveyance*
+    FTYPEs (StreamRiver/CanalDitch/ArtificialPath), so a future data refresh
+    could introduce e.g. Reservoir or Estuary and sail straight through this
+    chart unnoticed. Fail loud instead, matching that file's own
+    unrecognised-code guards (``_ftype_for_fcode``, the PurpCode check) --
+    do not silently widen the plotted list, an unexpected FTYPE is a real
+    signal that wants human eyes.
+    """
+    plotted_total = sum(int(ftype_counts.get(f, 0)) for f in ftypes)
+    if plotted_total == kept_total:
+        return
+    unexpected = sorted(set(ftype_counts.index) - set(ftypes))
+    unexpected_counts = {f: int(ftype_counts[f]) for f in unexpected}
+    raise ValueError(
+        f"fig_burnadd_purpcode: {kept_total - plotted_total} kept BurnAdd row(s) "
+        f"carry FTYPE(s) not in the plotted set {ftypes}: {unexpected_counts}. "
+        "This figure exists to show what nhd_burn_components.py kept, so an "
+        "unplotted FTYPE must not be silently omitted. Add it deliberately "
+        "(with its own color) after checking why it showed up -- do not "
+        "widen the list reflexively."
+    )
+
+
 def finish_figure(
     fig,
     out_path: Path,
@@ -1050,6 +1079,17 @@ def fig_rule_ladder() -> Path:
     count drawn here is a static, verified figure (CLAUDE.md / PR #178), not
     something re-derived per render.
 
+    Landscape layout, boxes sized to content: each stage's title and body are
+    wrapped to the box's actual width in inches via ``wrap_to_width`` first,
+    then the box height is computed from the resulting line count -- so a box
+    can never run text past its own border no matter how the stage text is
+    edited later (the old fixed ``box_h``/hand-placed ``\\n`` broke exactly
+    this way once titles/bodies got long: stages 2/3/5 overflowed their
+    boxes). The axes are added via ``fig.add_axes([0, 0, 1, 1])`` instead of
+    ``plt.subplots`` so data coordinates equal figure-fraction coordinates
+    1:1 -- the inches-to-data-units conversion is then exact rather than
+    guessed against ``plt.subplots``' default margins.
+
     Stage 4 (endorheic demotion) is a STRICT SUBTRACTION: the nested-set icon
     to its right shows why -- carving a subset OUT of the on-stream union can
     only shrink it, never grow it. That is the load-bearing visual claim this
@@ -1058,13 +1098,17 @@ def fig_rule_ladder() -> Path:
     """
     import matplotlib.patches as mpatches
 
-    fig, ax = plt.subplots(figsize=(10, 11))
+    fig_w_in, fig_h_in = 14.0, 7.3  # landscape, slide-friendly (~1.9:1)
+    fig = plt.figure(figsize=(fig_w_in, fig_h_in))
+    ax = fig.add_axes([0, 0, 1, 1])  # data coords == figure fraction, 1:1
+    ax.set_xlim(0, 1)
+    ax.set_ylim(0, 1)
+    ax.axis("off")
 
     stages = [
         (
             "1 — Every NHD waterbody",
-            "448,124 waterbodies\n"
-            "− Ice Mass (1,220 → land, excluded entirely)\n"
+            "448,124 waterbodies — Ice Mass (1,220 → land, excluded entirely) "
             "+ BurnAdd sink-purpose rows (1,658)",
             "#deebf7",
         ),
@@ -1075,93 +1119,156 @@ def fig_rule_ladder() -> Path:
         ),
         (
             "3 — On-stream evidence (UNION), both Network-gated",
-            "WBAREACOMI join  ∪  geometric flow-through (in AND out)\n"
+            "WBAREACOMI join ∪ geometric flow-through (in AND out). "
             "Non-Network cartographic paths do not count (#161)",
             "#e6550d",
         ),
         (
-            "4 — Endorheic demotion",
-            "STRICT SUBTRACTION\n"
-            "Signal A (terminus-inside-itself) ∪ Signal B\n"
-            "(majority-inside a closed HUC12) → 725 demotions",
+            "4 — Endorheic demotion (STRICT SUBTRACTION)",
+            "Signal A (terminus-inside-itself) ∪ Signal B (majority-inside a "
+            "closed HUC12) → 725 demotions",
             "#fee6ce",
         ),
         (
             "5 — Guardrails",
-            "Playa force-dprst · Ice Mass excluded · domain exits stay on-stream\n"
-            "→ Products: dprst_binary.tif, onstream_binary.tif, endorheic_wbody.tif",
+            "Playa force-dprst · Ice Mass excluded · domain exits stay on-stream "
+            "→ dprst_binary.tif, onstream_binary.tif, endorheic_wbody.tif",
             "#c7e9c0",
         ),
     ]
 
-    n = len(stages)
-    box_h = 0.14
-    box_w = 0.67
-    ys = np.linspace(0.90, 0.10, n)  # top to bottom
+    suptitle = (
+        "The dprst / on-stream decision ladder — five stages, top to bottom. Stage 4 "
+        "is a strict subtraction: it can only remove a COMID from the on-stream set, "
+        "never add one."
+    )
 
-    for i, ((title, body, color), y) in enumerate(zip(stages, ys)):
+    # Reserve the same top margin `finish_figure` will reserve below for the
+    # (wrapped) suptitle -- computed identically here so the ladder never
+    # gets laid out under where the title will land.
+    suptitle_fontsize = 12
+    wrapped_sup = wrap_to_width(suptitle, fig_w_in, fontsize=suptitle_fontsize)
+    sup_lines = wrapped_sup.count("\n") + 1
+    sup_line_in = suptitle_fontsize * 1.35 / 72.0
+    top_frac = 1.0 - (sup_lines * sup_line_in + 0.18) / fig_h_in
+    bottom_frac = 0.05
+
+    x_left = 0.03
+    box_w_frac = 0.60  # leaves room at right for the subtraction icon
+    box_w_in = box_w_frac * fig_w_in
+    x_pad_in = 0.15
+    text_w_in = box_w_in - 2 * x_pad_in
+
+    title_fs, body_fs = 13, 11
+    title_line_in = title_fs * 1.35 / 72.0
+    body_line_in = body_fs * 1.35 / 72.0
+    pad_in = 0.14  # top/bottom padding inside each box
+    title_body_gap_in = 0.06
+    gap_in = 0.22  # vertical gap between boxes, for the connecting arrow
+
+    pad_frac = pad_in / fig_h_in
+    title_body_gap_frac = title_body_gap_in / fig_h_in
+    title_line_frac = title_line_in / fig_h_in
+    body_line_frac = body_line_in / fig_h_in
+    gap_frac = gap_in / fig_h_in
+    x_pad_frac = x_pad_in / fig_w_in
+
+    laid_out = []  # (wrapped_title, wrapped_body, color, n_title, height_frac)
+    for title, body, color in stages:
+        wrapped_title = wrap_to_width(title, text_w_in, fontsize=title_fs)
+        wrapped_body = wrap_to_width(body, text_w_in, fontsize=body_fs)
+        n_title = wrapped_title.count("\n") + 1
+        n_body = wrapped_body.count("\n") + 1
+        height_frac = (
+            2 * pad_frac
+            + n_title * title_line_frac
+            + title_body_gap_frac
+            + n_body * body_line_frac
+        )
+        laid_out.append((wrapped_title, wrapped_body, color, n_title, height_frac))
+
+    total_h_frac = sum(h for *_, h in laid_out) + gap_frac * (len(laid_out) - 1)
+    avail_frac = top_frac - bottom_frac
+    y_cursor = top_frac - max(0.0, (avail_frac - total_h_frac) / 2)
+
+    box_ys = []  # (y_top, y_bottom) per stage, top to bottom
+    for wrapped_title, wrapped_body, color, n_title, h_frac in laid_out:
+        y_top = y_cursor
+        y_bottom = y_top - h_frac
         box = mpatches.FancyBboxPatch(
-            (0.05, y - box_h / 2), box_w, box_h,
-            boxstyle="round,pad=0.012", facecolor=color, edgecolor="black",
+            (x_left, y_bottom), box_w_frac, h_frac,
+            boxstyle="round,pad=0.008", facecolor=color, edgecolor="black",
         )
         ax.add_patch(box)
-        ax.text(0.09, y + box_h / 2 - 0.022, title, ha="left", va="top",
-                 fontsize=11, fontweight="bold")
-        ax.text(0.09, y - 0.012, body, ha="left", va="top", fontsize=9)
+        title_y = y_top - pad_frac
+        ax.text(
+            x_left + x_pad_frac, title_y, wrapped_title,
+            ha="left", va="top", fontsize=title_fs, fontweight="bold",
+            linespacing=1.35,
+        )
+        body_y = title_y - n_title * title_line_frac - title_body_gap_frac
+        ax.text(
+            x_left + x_pad_frac, body_y, wrapped_body,
+            ha="left", va="top", fontsize=body_fs, linespacing=1.35,
+        )
+        box_ys.append((y_top, y_bottom))
+        y_cursor = y_bottom - gap_frac
 
-        if i < n - 1:
-            y_next = ys[i + 1]
-            is_subtraction = i == 2  # arrow FROM stage 3 INTO stage 4
-            color_arrow = "#cc2222" if is_subtraction else "#555555"
-            ax.annotate(
-                "", xy=(0.20, y_next + box_h / 2), xytext=(0.20, y - box_h / 2),
-                arrowprops=dict(
-                    arrowstyle="-|>", color=color_arrow,
-                    lw=2.0 if is_subtraction else 1.4,
-                ),
-            )
+    x_arrow = x_left + 0.04
+    for i in range(len(box_ys) - 1):
+        y_bottom_prev = box_ys[i][1]
+        y_top_next = box_ys[i + 1][0]
+        is_subtraction = i == 2  # arrow FROM stage 3 INTO stage 4
+        color_arrow = "#cc2222" if is_subtraction else "#555555"
+        ax.annotate(
+            "", xy=(x_arrow, y_top_next), xytext=(x_arrow, y_bottom_prev),
+            arrowprops=dict(
+                arrowstyle="-|>", color=color_arrow,
+                lw=2.0 if is_subtraction else 1.4,
+            ),
+        )
 
     # Stage 4 is a SUBTRACTION, not another additive stage: a nested-set icon
     # (endorheic carved OUT of the on-stream union) makes "can only shrink,
-    # never grow" visible rather than merely asserted in text.
-    subtract_y = ys[3]
+    # never grow" visible rather than merely asserted in text. Anchored to
+    # stage 4's vertical center, in the column to the right of the ladder.
+    subtract_y = (box_ys[3][0] + box_ys[3][1]) / 2
+    icon_x0 = x_left + box_w_frac + 0.05
+    icon_w = 1.0 - icon_x0 - 0.02
+    outer_h = 0.20
     outer = mpatches.FancyBboxPatch(
-        (0.78, subtract_y - 0.045), 0.30, 0.09,
+        (icon_x0, subtract_y - outer_h / 2), icon_w, outer_h,
         boxstyle="round,pad=0.01", facecolor="none", edgecolor="#08519c", lw=1.6,
     )
     ax.add_patch(outer)
-    ax.text(0.93, subtract_y + 0.032, "on-stream (union)", ha="center", va="bottom",
-             fontsize=7.5, color="#08519c")
+    ax.text(
+        icon_x0 + icon_w / 2, subtract_y + outer_h / 2 + 0.015, "on-stream (union)",
+        ha="center", va="bottom", fontsize=9, color="#08519c",
+    )
+    inner_w, inner_h = icon_w * 0.5, 0.09
+    inner_x0 = icon_x0 + (icon_w - inner_w) / 2
     inner = mpatches.FancyBboxPatch(
-        (0.855, subtract_y - 0.028), 0.12, 0.056,
+        (inner_x0, subtract_y - inner_h / 2), inner_w, inner_h,
         boxstyle="round,pad=0.008", facecolor="#cc2222", alpha=0.35,
         edgecolor="#cc2222", lw=1.2, linestyle="--",
     )
     ax.add_patch(inner)
-    ax.text(0.915, subtract_y, "− endorheic", ha="center", va="center",
-             fontsize=7.5, color="#cc2222", fontweight="bold")
-    ax.annotate(
-        "", xy=(1.15, subtract_y), xytext=(1.08, subtract_y),
-        arrowprops=dict(arrowstyle="-|>", color="#cc2222", lw=1.6),
+    ax.text(
+        inner_x0 + inner_w / 2, subtract_y, "− endorheic",
+        ha="center", va="center", fontsize=9, color="#cc2222", fontweight="bold",
     )
     ax.text(
-        1.17, subtract_y, "can only REMOVE a\nCOMID — never add one",
-        ha="left", va="center", fontsize=7.5, color="#cc2222", style="italic",
+        icon_x0 + icon_w / 2, subtract_y - outer_h / 2 - 0.03,
+        "can only REMOVE a COMID —\nnever add one",
+        ha="center", va="top", fontsize=8.5, color="#cc2222", style="italic",
     )
-
-    ax.set_xlim(0, 1.42)
-    ax.set_ylim(0, 1.0)
-    ax.axis("off")
 
     out_path = OUT / "rule_ladder.png"
     return finish_figure(
         fig,
         out_path,
-        suptitle=(
-            "The dprst / on-stream decision ladder — five stages, top to bottom. Stage 4 "
-            "is a strict subtraction: it can only remove a COMID from the on-stream set, "
-            "never add one."
-        ),
+        suptitle=suptitle,
+        suptitle_fontsize=suptitle_fontsize,
     )
 
 
@@ -1371,6 +1478,9 @@ def fig_burnadd_purpcode() -> Path:
 
     ftype_colors = {"LakePond": "#3182bd", "Playa": "#e6550d", "SwampMarsh": "#31a354"}
     ftypes = ["LakePond", "Playa", "SwampMarsh"]
+
+    # Fail loud rather than silently omitting a bar segment -- see docstring.
+    assert_ftype_coverage(ftype_counts, ftypes, kept_total)
 
     fig, ax = plt.subplots(figsize=(9, 6.5))
 

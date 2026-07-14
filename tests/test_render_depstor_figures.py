@@ -105,3 +105,17 @@ def test_split_terminal_cells_by_polygon_handles_empty_input():
         np.array([]), np.array([]), square
     )
     assert len(in_xs) == len(in_ys) == len(out_xs) == len(out_ys) == 0
+
+
+def test_assert_ftype_coverage_passes_when_fully_covered():
+    counts = pd.Series({"LakePond": 1550, "Playa": 103, "SwampMarsh": 5})
+    rdf.assert_ftype_coverage(counts, ["LakePond", "Playa", "SwampMarsh"], 1658)
+
+
+def test_assert_ftype_coverage_raises_on_unplotted_ftype():
+    """This is the failure mode fig_burnadd_purpcode exists to warn about:
+    a future data refresh introduces e.g. Reservoir, and it must not be
+    silently dropped from the chart."""
+    counts = pd.Series({"LakePond": 1550, "Playa": 103, "SwampMarsh": 5, "Reservoir": 7})
+    with pytest.raises(ValueError, match="Reservoir"):
+        rdf.assert_ftype_coverage(counts, ["LakePond", "Playa", "SwampMarsh"], 1665)
