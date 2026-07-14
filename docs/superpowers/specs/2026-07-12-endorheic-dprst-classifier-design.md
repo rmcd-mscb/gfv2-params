@@ -135,6 +135,16 @@ The FDR has one miss: **Walker Lake** (144 km²) contains no code-0 cell, so the
 never sees it. The full WBD types its HUC12 `C` and catches it at `frac = 1.000`. The
 two signals are complementary, not redundant.
 
+**Post-CONUS-rollout correction:** the "complement" framing above understates how much
+work Signal B actually does. Measured on the shipped CONUS tables, of 818 total
+demotions, 543 are Signal-B-only, 112 Signal-A-only, and 163 both — **by COUNT, Signal
+B dominates**. **By AREA it does not**: Signal-B-only demotions are small (median
+~0.09 km², ~1,400 km² total — ponds and playas sitting inside a closed basin, not large
+lakes), while Signal A carries the overwhelming majority of the demoted area, including
+the Great Salt Lake itself (4,369 km²). Read "earns its place because Walker Lake"
+above as "earns its place, and turns out to matter far more broadly than Walker Lake
+alone" — Signal B is not a rare-case patch, it is the majority-by-count contributor.
+
 **`closed_huc12.gpkg` is an incomplete extract — use the full WBD.** It has 23 type-C
 HUC12s in the Great Basin against **141** in NHDPlus's `WBDSnapshot`, and resolves
 only **1 of the 10** classic terminal lakes (the full WBD resolves 5). abock's file is

@@ -16,8 +16,14 @@ Signal A (primary) -- terminus-inside-itself, on the FDR grid.
     terminates-at-a-sink: the latter demotes every on-stream reservoir in a closed
     basin.)
 
-Signal B (complement) -- majority-inside a WBD type-C (closed) HUC12. Earns its place
-    because Walker Lake contains no FDR terminal cell, so Signal A misses it.
+Signal B -- majority-inside a WBD type-C (closed) HUC12. Earns its place because
+    Walker Lake contains no FDR terminal cell, so Signal A misses it -- but on the
+    shipped CONUS tables it is not a minor complement: of 818 total demotions, 543
+    are Signal-B-only, 112 Signal-A-only, and 163 both. BY COUNT, Signal B dominates.
+    BY AREA it does not: Signal-B-only demotions are small (median ~0.09 km2,
+    ~1,400 km2 total) -- ponds and playas sitting inside a closed basin, not large
+    lakes -- while Signal A carries the overwhelming majority of the demoted area,
+    including the Great Salt Lake itself (4,369 km2).
 
 Signal A reads the same grid -- and runs the same kernel -- that `routing` reads, so
 the classifier and the router agree BY CONSTRUCTION: d8_routing treats code 0 as a

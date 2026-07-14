@@ -371,26 +371,42 @@ These are hard-won; violating them silently corrupts outputs.
   Signal A is a waterbody whose D8 terminus (on the same FDR grid `routing`
   reads) lies INSIDE itself; Signal B is a waterbody majority-inside a closed
   (type-C) WBD HUC12, needed because some closed-basin waterbodies (e.g.
-  Walker Lake) contain no FDR terminal cell. Signal A needs only `fdr_raster`
-  (already required on every fabric) and runs everywhere; Signal B activates
-  only when `wbd_huc12_table` is configured (and the builder re-applies the
-  type-C filter itself). An EMPTY result is legitimate — a domain with no closed
-  basin has no endorheic waterbody (`tjc`, Texas-Gulf: 4 FDR code-0 cells, 0
-  flagged; against 15,262 / thousands on `gfv2` and 1,438 / 680 on `oregon`) —
-  so the builder writes an empty table and `wbody_connectivity` subtracts the
-  empty set, a correct no-op. What fails loud is BREAKAGE: a waterbody layer that
-  doesn't overlap the FDR grid, an all-null geometry set, and a result below the
-  fabric's optional `min_endorheic_comids` floor (declared by `gfv2`, and checked
-  on the output-exists skip path too) — so a silently-empty CONUS result, which
+  Walker Lake) contain no FDR terminal cell. On the shipped CONUS tables Signal
+  B is not a minor complement: of 818 total demotions, 543 are Signal-B-only,
+  112 Signal-A-only, 163 both — BY COUNT Signal B dominates. BY AREA it does
+  not: Signal-B-only demotions are small (median ~0.09 km², ~1,400 km² total,
+  mostly ponds/playas inside a closed basin), while Signal A carries the
+  overwhelming majority of the demoted area, including the Great Salt Lake
+  itself (4,369 km²). Signal A needs only `fdr_raster` (already required on
+  every fabric) and runs everywhere; Signal B activates only when
+  `wbd_huc12_table` is configured (and the builder re-applies the type-C
+  filter itself). The emitted table also carries every Signal-A-EVALUATED
+  candidate that was NOT flagged (both `by_terminus`/`by_closed_huc12` false),
+  not only demotions, so a threshold sweep over `frac_own` (see
+  `scripts/diagnose/endorheic_fixtures.py`) measures the real candidate
+  distribution instead of only the rows a 0.5 threshold already flagged;
+  `load_endorheic_comids` still filters to flagged rows only, so this does not
+  change which COMIDs get demoted. An EMPTY (zero-FLAGGED) result is
+  legitimate — a domain with no closed basin has no endorheic waterbody
+  (`tjc`, Texas-Gulf: 4 FDR code-0 cells, 0 flagged; against 15,262 /
+  thousands on `gfv2` and 1,438 / 680 on `oregon`) — so `wbody_connectivity`
+  subtracts the empty (flagged) set, a correct no-op. What fails loud is
+  BREAKAGE: a waterbody layer that doesn't overlap the FDR grid, an all-null
+  geometry set, and a flagged-row count below the fabric's optional
+  `min_endorheic_comids` floor (declared by `gfv2`, and checked on the
+  output-exists skip path too) — so a silently-empty CONUS result, which
   would leave the Great Salt Lake on-stream, is still impossible to miss.
   `wbody_connectivity` subtracts this COMID set from the unioned on-stream set
   — a STRICT SUBTRACTION, so it can only remove COMIDs, never add one — which
   is what finally takes the Great Salt Lake off-stream (both WBAREACOMI and
   flow-through otherwise promote it, because NHD draws Network artificial paths
   between its arms). If `endorheic_comids` is absent from the build context
-  (the `endorheic` step hasn't run for this fabric), `wbody_connectivity` warns
-  loudly and proceeds without the demotion rather than failing — terminal/
-  closed-basin lakes stay on-stream until the step is run. See
+  (the `endorheic` step hasn't run for this fabric), `wbody_connectivity`
+  **raises** rather than proceeding without the demotion — every fabric that
+  can reach `wbody_connectivity` has both a COMID-keyed waterbody layer and
+  `fdr_raster`, so it can always run the `endorheic` step first; a *present but
+  empty* endorheic table (the `tjc` case above) is unaffected and stays a
+  legitimate no-op. See
   [`docs/superpowers/specs/2026-07-12-endorheic-dprst-classifier-design.md`](superpowers/specs/2026-07-12-endorheic-dprst-classifier-design.md).
 - **`carea_max`/`smidx_coef` threshold mode.** The legacy `absolute`
   thresholds (8.0/15.6) are only calibrated against VPU 01's ArcPy TWI
