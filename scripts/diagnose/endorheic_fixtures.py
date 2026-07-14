@@ -26,6 +26,7 @@ from pathlib import Path
 import pandas as pd
 
 from gfv2_params.config import load_config
+from gfv2_params.endorheic import flagged
 
 # Genuinely endorheic — their water has nowhere to go.
 MUST_BE_DPRST = {
@@ -72,9 +73,9 @@ def main() -> int:
     # `df` carries every Signal-A-EVALUATED candidate (flagged or not), not just the
     # demotions -- see gfv2_params.endorheic.endorheic_frame. A demotion is a row
     # flagged by at least one signal; `demoted` must apply that filter rather than
-    # treat every persisted row as endorheic.
-    flagged = df["by_terminus"] | df["by_closed_huc12"]
-    demoted = set(df.loc[flagged, "comid"].astype(int))
+    # treat every persisted row as endorheic. Use the shared predicate so this stays
+    # in step with what `load_endorheic_comids` actually demotes.
+    demoted = set(df.loc[flagged(df), "comid"].astype(int))
     print(f"{path}")
     print(f"  {len(demoted):,} endorheic COMIDs "
           f"({int(df.by_terminus.sum()):,} by terminus, "

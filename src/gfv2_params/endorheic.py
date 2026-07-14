@@ -55,6 +55,95 @@ MIN_PAD_M = 20_000.0
 # the demotion set moves ~3% across thresholds 0.3-0.7.
 MIN_FRAC = 0.5
 
+# The signal columns of the endorheic table. A row is a DEMOTION iff at least one of
+# them is True; a row with all-False columns is a Signal-A-EVALUATED candidate that did
+# not clear MIN_FRAC (persisted for the threshold sweep -- see `endorheic_frame`).
+#
+# Every consumer must agree on this predicate, which is why it lives here once rather
+# than being spelled out at each site. The failure it prevents is asymmetric and silent:
+# a new signal column that `check_endorheic_floor` counted but `load_endorheic_comids`
+# did not would let a collapsed demotion clear the floor while demoting nothing.
+SIGNAL_COLUMNS = ("by_terminus", "by_closed_huc12")
+
+
+def flagged(df: pd.DataFrame) -> pd.Series:
+    """Rows at least one signal actually flagged (a demotion), vs merely evaluated."""
+    return df[list(SIGNAL_COLUMNS)].astype(bool).any(axis=1)
+
+
+def signal_counts(df: pd.DataFrame) -> dict[str, int]:
+    """Flagged-row counts: `total` (the union) plus one entry per signal column."""
+    counts = {"total": int(flagged(df).sum())}
+    counts.update({c: int(df[c].astype(bool).sum()) for c in SIGNAL_COLUMNS})
+    return counts
+
+
+def read_signal_counts(path: Path) -> dict[str, int]:
+    """`signal_counts` for a persisted endorheic table."""
+    return signal_counts(pd.read_parquet(path, columns=["comid", *SIGNAL_COLUMNS]))
+
+
+def check_endorheic_floor(
+    counts: dict[str, int],
+    *,
+    fabric: str,
+    floor: int | None,
+    signal_b_active: bool,
+    source,
+) -> None:
+    """Raise if a fabric that declares `min_endorheic_comids` has a collapsed result.
+
+    An EMPTY endorheic table is legitimate for a domain with no closed basin (`tjc`,
+    Texas-Gulf), so this cannot be a blanket raise — it is opt-in per fabric. `gfv2`
+    declares the floor, so a silently-empty or collapsed CONUS result can never slip
+    through: the demotion would be a no-op and the Great Salt Lake would stay on-stream.
+
+    Each SIGNAL is floored as well as the union, because the union alone cannot see one
+    signal die. Signal B contributes 543 of the 818 CONUS demotions BY COUNT while
+    Signal A carries almost all of the demoted AREA (the Great Salt Lake alone is
+    4,369 km2 of it), so a TOTAL collapse of Signal A still leaves the union far above
+    any count-based floor while ~75% of the demoted area silently disappears.
+
+    Called from BOTH the producing end (`depstor_builders/endorheic.py`) and the
+    consuming end (`depstor_builders/wbody_connectivity.py`). The consuming end is not
+    redundant: `--from wbody_connectivity --force` — the documented cascade-rebuild
+    recipe (slurm_batch/RUNME.md) — does not run the `endorheic` step at all. The
+    orchestrator hydrates its table straight off disk with no validation, so a check
+    that lives only in the producing builder never executes on that path.
+    """
+    if floor is None:
+        return
+    if counts["total"] < floor:
+        raise ValueError(
+            f"endorheic table for fabric '{fabric}' carries {counts['total']} flagged "
+            f"COMIDs, below its declared `min_endorheic_comids` floor of {floor} "
+            f"({source}). That is a collapsed or no-op demotion — the Great Salt Lake "
+            f"would stay on-stream. Check that fdr_raster has code-0 cells, that the "
+            f"waterbody layer overlaps it, and that wbd_huc12_table is staged; re-run "
+            f"the `endorheic` step with --force. Lower/remove `min_endorheic_comids` in "
+            f"the fabric profile ONLY if this domain genuinely has no closed basin."
+        )
+    if counts["by_terminus"] == 0:
+        raise ValueError(
+            f"endorheic table for fabric '{fabric}' has {counts['total']} flagged COMIDs "
+            f"but NOT ONE from Signal A (terminus-inside-itself) ({source}). Signal A "
+            f"always runs and carries almost all of the demoted area — the Great Salt "
+            f"Lake is a Signal-A demotion — so a total Signal-A collapse leaves the "
+            f"count-based `min_endorheic_comids` floor satisfied by Signal B alone while "
+            f"the demoted AREA silently vanishes. Check that fdr_raster has code-0 cells "
+            f"and shares a CRS with the waterbody layer, then re-run `endorheic --force`."
+        )
+    if signal_b_active and counts["by_closed_huc12"] == 0:
+        raise ValueError(
+            f"endorheic table for fabric '{fabric}' has {counts['total']} flagged COMIDs "
+            f"but NOT ONE from Signal B (majority-inside a closed HUC12) ({source}), "
+            f"even though `wbd_huc12_table` is configured — i.e. the operator asserted "
+            f"Signal B should run. On CONUS it flags the majority of demotions by count "
+            f"(543 of 818). A zero here means the staged WBD yielded no type-C rows "
+            f"(check HU_12_TYPE) or the table is stale; re-stage with "
+            f"`python -m gfv2_params.download.wbd_huc12` and re-run `endorheic --force`."
+        )
+
 
 def closed_basin_comids(
     wb_gdf: gpd.GeoDataFrame,
@@ -192,9 +281,36 @@ def terminus_own_fraction(
     waterbodies contain one).
 
     Returns columns: comid, n_terminal, frac_own.
+
+    Everything below works in the FDR's CRS. The read window AND the `inside` mask are
+    computed against the FDR's transform from bounds taken in the waterbody's CRS, so on
+    a mismatch every window lands at arbitrary coordinates -- and `boundless=True`
+    returns an all-nodata block rather than raising, which makes `frac_own` come out 0.0
+    for EVERY candidate. Signal A would then flag nothing, silently, and be
+    indistinguishable from a domain with no closed basin. `_assert_overlaps_fdr` cannot
+    catch that (it reprojects the FDR bbox into the waterbody CRS before testing
+    overlap, so a mismatch passes it cleanly), so reproject up front rather than trust
+    the caller -- `depstor.rasterize_binary` guards the same way for the same reason.
     """
+    with rasterio.open(fdr_path) as src:
+        fdr_crs, fdr_nodata = src.crs, src.nodata
+    if fdr_crs is None or wb_gdf.crs is None:
+        raise ValueError(
+            f"Signal A needs a CRS on both the FDR grid ({fdr_path}: {fdr_crs}) and the "
+            f"waterbody layer ({wb_gdf.crs}) to place its read windows. Without one, "
+            f"every window would land off-grid and the classifier would flag nothing, "
+            f"silently."
+        )
+    if wb_gdf.crs != fdr_crs:
+        if logger:
+            logger.info(
+                "  reprojecting waterbodies from %s to the FDR's %s for Signal A",
+                wb_gdf.crs, fdr_crs,
+            )
+        wb_gdf = wb_gdf.to_crs(fdr_crs)
+
     hits = gpd.sjoin(
-        terminal.to_crs(wb_gdf.crs), wb_gdf[["COMID", "geometry"]],
+        terminal.to_crs(fdr_crs), wb_gdf[["COMID", "geometry"]],
         how="inner", predicate="within",
     )
     counts = hits.groupby("COMID").size()
@@ -211,8 +327,10 @@ def terminus_own_fraction(
     cand = cand.dissolve(by="COMID", as_index=False)
 
     rows = []
+    n_degenerate_window = 0
+    n_no_raster_terminus = 0
     with rasterio.open(fdr_path) as src:
-        nodata = int(src.nodata) if src.nodata is not None else 255
+        nodata = int(fdr_nodata) if fdr_nodata is not None else 255
         for i, rec in enumerate(cand.itertuples()):
             b = rec.geometry.bounds
             pad = max(MIN_PAD_M, 0.5 * max(b[2] - b[0], b[3] - b[1]))
@@ -220,12 +338,24 @@ def terminus_own_fraction(
                 b[0] - pad, b[1] - pad, b[2] + pad, b[3] + pad, transform=src.transform
             ).round_offsets().round_lengths()
             if win.width < 3 or win.height < 3:
+                # Structurally impossible on a sane grid (MIN_PAD_M alone is 20 km), so
+                # this means a degenerate transform or NaN bounds -- count it rather
+                # than dropping the candidate out of the table unremarked.
+                n_degenerate_window += 1
                 continue
             fdr = src.read(1, window=win, boundless=True, fill_value=nodata)
             inside = geometry_mask(
                 [rec.geometry], out_shape=fdr.shape,
                 transform=src.window_transform(win), invert=True,
             )
+            # `sjoin` put a terminal point INSIDE this polygon, so the rasterized view
+            # of the same polygon disagreeing with the vector one is an inconsistency,
+            # not a hydrologic result -- frac_own is forced to 0.0 either way, which is
+            # indistinguishable from "legitimately not endorheic". A few are expected
+            # (geometry_mask is cell-centre based, so a sub-cell polygon can rasterize
+            # to nothing); a large share means the grid and the layer are misaligned.
+            if not bool((inside & (fdr == 0)).any()):
+                n_no_raster_terminus += 1
             rows.append({
                 "comid": int(rec.COMID),
                 "n_terminal": int(counts.loc[rec.COMID]),
@@ -233,6 +363,19 @@ def terminus_own_fraction(
             })
             if logger and (i + 1) % 500 == 0:
                 logger.info("  terminus scan: %d/%d waterbodies", i + 1, len(cand))
+    if logger and n_degenerate_window:
+        logger.warning(
+            "  %d of %d Signal-A candidates produced a sub-3-cell read window and were "
+            "DROPPED from the table — expect 0; a degenerate transform or NaN bounds.",
+            n_degenerate_window, len(cand),
+        )
+    if logger and n_no_raster_terminus:
+        logger.warning(
+            "  %d of %d Signal-A candidates contain a terminal cell by vector test but "
+            "none once rasterized (frac_own forced to 0.0). A handful is expected for "
+            "sub-cell polygons; a large share means the waterbody layer and the FDR "
+            "grid are misaligned.", n_no_raster_terminus, len(cand),
+        )
     return pd.DataFrame(rows, columns=["comid", "n_terminal", "frac_own"])
 
 
@@ -321,8 +464,7 @@ def load_endorheic_comids(path: Path) -> set[int]:
     distribution is possible (see `scripts/diagnose/endorheic_fixtures.py`) — and
     this filter is what keeps that from silently changing the demotion set.
     """
-    df = pd.read_parquet(path, columns=["comid", "by_terminus", "by_closed_huc12"])
+    df = pd.read_parquet(path, columns=["comid", *SIGNAL_COLUMNS])
     if df.empty:
         return set()
-    flagged = df[df["by_terminus"].astype(bool) | df["by_closed_huc12"].astype(bool)]
-    return {int(c) for c in flagged["comid"].to_numpy()}
+    return {int(c) for c in df.loc[flagged(df), "comid"].to_numpy()}
