@@ -266,16 +266,22 @@ def build(step_cfg: dict, ctx: BuildContext, logger) -> dict:
             f"COMID/member_comid join keys align with the waterbody layer."
         )
 
-    # Read the land mask once and reuse for both rasters below -- each call
-    # allocates a 16.9 GB bool array plus a 16.9 GB `~` temporary at CONUS
-    # scale, so reading it twice doubles that cost for no reason.
+    # Read the land mask once and reuse for both rasters below -- each call allocates a
+    # 16.9 GB bool array at CONUS scale, so reading it twice doubles that cost for no
+    # reason. Materialise `~land` once too, for the same reason: it is another 16.9 GB
+    # and both rasters need exactly the same one.
     land = read_land_mask(landmask_path)
+    not_land = ~land
+    del land
 
     binary = rasterize_binary(sel, info, all_touched=False)
-    binary[~land] = 255  # drop off-land (ocean) cells
+    binary[not_land] = 255  # drop off-land (ocean) cells
     write_uint8_binary(binary, info, connected_path)
     n_in = int((binary == 1).sum())
     logger.info("  %d connected-waterbody cells after land mask", n_in)
+    # 16.9 GB at CONUS and unused past this point. Free it BEFORE rasterizing the
+    # endorheic mask below, so the two full-grid uint8 arrays are never live at once.
+    del binary
 
     # Endorheic raster: positive hydrologic evidence, independent of on-stream
     # status. Rasterize the FULL endorheic set (not just the ones that were
@@ -291,7 +297,7 @@ def build(step_cfg: dict, ctx: BuildContext, logger) -> dict:
         len(endorheic), len(sel_endorheic), len(wb_gdf),
     )
     endorheic_binary = rasterize_binary(sel_endorheic, info, all_touched=False)
-    endorheic_binary[~land] = 255  # drop off-land (ocean) cells
+    endorheic_binary[not_land] = 255  # drop off-land (ocean) cells
     write_uint8_binary(endorheic_binary, info, endorheic_path)
     n_endorheic_cells = int((endorheic_binary == 1).sum())
     logger.info("  %d endorheic-waterbody cells after land mask", n_endorheic_cells)

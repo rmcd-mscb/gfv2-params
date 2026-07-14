@@ -994,3 +994,65 @@ def test_endorheic_raster_cannot_gain_a_comid_the_classifier_never_flagged(tmp_p
     )
     with pytest.raises(ValueError, match="without their own COMID being flagged"):
         wbody_connectivity.build(_STEP_CFG, ctx, logging.getLogger("test"))
+
+
+def test_endorheic_wbody_raster_is_land_masked(tmp_path):
+    """`endorheic_wbody.tif` must be masked against `land_mask.tif` like every other
+    depstor raster. The land-mask test above only inspected `connected_wbody`, so
+    deleting the endorheic raster's `[not_land] = 255` left the suite green.
+    """
+    from shapely.geometry import box
+
+    from gfv2_params.depstor_builders import wbody_connectivity
+    from gfv2_params.depstor_builders.context import BuildContext
+
+    n = 10
+    template = tmp_path / "template.tif"
+    landmask = tmp_path / "land_mask.tif"
+    wb_gpkg = tmp_path / "wb.gpkg"
+    connected_table = tmp_path / "connected.parquet"
+    _write_template(template, n)
+
+    # Land only in the TOP half; the bottom half is ocean.
+    transform = from_origin(0, n * 30, 30, 30)
+    land = np.zeros((n, n), dtype=np.uint8)
+    land[0:5, :] = 1
+    with rasterio.open(
+        landmask, "w", driver="GTiff", height=n, width=n, count=1, dtype="uint8",
+        crs="EPSG:5070", transform=transform, nodata=255,
+    ) as dst:
+        dst.write(land, 1)
+
+    # COMID 10 on-stream (top-left, on land). COMID 20 endorheic, straddling the
+    # land/ocean boundary: rows 3-6, so its bottom half must be masked off.
+    gpd.GeoDataFrame(
+        {"COMID": [10, 20], "member_comid": [10, 20],
+         "FTYPE": ["LakePond", "LakePond"]},
+        geometry=[box(0, 270, 60, 300), box(0, 120, 60, 210)],
+        crs="EPSG:5070",
+    ).to_file(wb_gpkg, layer="waterbodies", driver="GPKG")
+    pd.DataFrame({"comid": pd.array([10], dtype="int64")}).to_parquet(
+        connected_table, index=False
+    )
+
+    endo = tmp_path / "endorheic.parquet"
+    pd.DataFrame(
+        {"comid": pd.array([20], dtype="int64"), "frac_own": [1.0],
+         "by_terminus": [True], "by_closed_huc12": [False]}
+    ).to_parquet(endo, index=False)
+
+    ctx = BuildContext(
+        fabric="t", template_path=template, output_dir=tmp_path,
+        hru_gpkg=wb_gpkg, hru_layer="waterbodies",
+        waterbody_gpkg=wb_gpkg, waterbody_layer="waterbodies",
+        connected_comids_table=connected_table,
+    )
+    ctx.paths["landmask"] = landmask
+    ctx.paths["endorheic_comids"] = endo
+
+    produced = wbody_connectivity.build(_STEP_CFG, ctx, logging.getLogger("test"))
+    with rasterio.open(produced["endorheic_wbody"]) as src:
+        arr = src.read(1)
+
+    assert (arr[3:5, 0:2] == 1).any(), "endorheic cells on LAND must be burned"
+    assert not (arr[5:, :] == 1).any(), "endorheic cells over OCEAN must be masked off"
