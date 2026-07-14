@@ -446,6 +446,24 @@ def _legend_handles(
 
 GREAT_SALT_LAKE = 946020001
 LEWIS_AND_CLARK = 11758154
+WALKER_LAKE = 10734232
+MONO_LAKE = 120053921
+LAKE_MICHIGAN = 904140248
+LAKE_CHAMPLAIN = 15447630
+EVERGLADES = 120055431
+LARGEST_PLAYA = 120050227
+LARGEST_ICE_MASS = 120050242
+GSL_VETOING_MARSH = 10273192
+# NOT in the brief's constant list -- added after the brief's Mono Lake choice
+# for fig_network_gate turned out to have zero flowlines of any kind (Network
+# or Non-Network) touching its polygon anywhere in VPU 16 (verified: a whole-
+# VPU attribute search on WBAreaComI for both Mono's merged COMID and its raw
+# MEMBER_COMID returns 0 rows, and a geometric intersection against its
+# padded bbox also returns 0). Pyramid Lake is an equally-valid MUST_BE_DPRST
+# fixture (scripts/diagnose/endorheic_fixtures.py) that genuinely has 7
+# Non-Network ArtificialPath segments threading it (of 46 flowlines
+# intersecting its polygon) -- verified empirically before this substitution.
+PYRAMID_LAKE = 11310757
 
 
 def fig_terminus_gsl() -> Path:
@@ -575,6 +593,306 @@ def fig_terminus_gsl() -> Path:
     return out_path
 
 
+def fig_network_gate() -> Path:
+    """The Network-Flowline gate (#161).
+
+    NHD draws a Non-Network cartographic artificial path through essentially
+    every closed-basin lake. Only Network membership (PlusFlowlineVAA) counts
+    as connectivity; the dashed path threading a correctly-blue Pyramid Lake
+    in the `after` snapshot IS the figure -- it shows the trap the gate
+    exists to ignore.
+
+    Uses Pyramid Lake, not the brief's originally-specified Mono Lake: a
+    whole-VPU attribute search (``WBAreaComI`` for both Mono's merged COMID
+    120053921 and its raw MEMBER_COMID 20286504) and a geometric intersection
+    against its polygon both return ZERO flowlines -- Mono Lake has no
+    ArtificialPath of any kind threading it in this data, Network or
+    Non-Network, so the rule cannot be shown firing there. Pyramid Lake is an
+    equally-valid MUST_BE_DPRST fixture and genuinely has 7 Non-Network
+    ArtificialPath segments threading it (of 46 flowlines intersecting its
+    polygon) -- verified before this substitution, not assumed.
+    """
+    p = paths()
+    wb = read_waterbodies(comids=[PYRAMID_LAKE])
+    bbox = waterbody_bbox(wb)
+
+    fig, ax = plt.subplots(figsize=(8, 6.5))
+    draw_tile(ax, bbox, p["after"], outlines=wb, vpu="16", show_terminals=False)
+    ax.legend(handles=_legend_handles(flowlines=True), loc="lower left", fontsize=8, frameon=True)
+    ax.set_title("Pyramid Lake -- dprst despite Non-Network paths threading it", fontsize=11)
+    fig.suptitle(
+        "The Network-Flowline gate (#161) — NHD draws Non-Network artificial paths "
+        "through essentially every closed-basin lake. Only Network membership counts "
+        "as connectivity.",
+        fontsize=12,
+    )
+    fig.tight_layout(rect=(0, 0, 1, 0.88))
+    out_path = OUT / "rule_network_gate.png"
+    fig.savefig(out_path, dpi=150)
+    plt.close(fig)
+    return out_path
+
+
+def fig_flowthrough() -> Path:
+    """On-stream evidence B -- the geometric flow-through topology test.
+
+    A Network flowline must demonstrably enter AND exit a waterbody for the
+    flow-through test to promote it on-stream. Lewis and Clark Lake (a
+    Missouri mainstem reservoir) has both -- verified: 57 of the 144 Network
+    flowlines intersecting its polygon actually cross its boundary (enter one
+    side, exit the other), not merely touch it. Terminal sinks (inflow only)
+    and locally-spilling potholes (outflow only) both stay dprst under this
+    rule -- only demonstrated in-AND-out flow counts.
+
+    Mono Lake is the negative control, but not "inflow only" as the brief
+    first framed it: verified zero Network flowlines intersect its polygon at
+    all in this VPU 16 window -- the nearby streams visibly approach from the
+    north but stop short of the shoreline. That's an even starker illustration
+    of the same point (no demonstrated connectivity at all, let alone in AND
+    out), so the panel is labeled accordingly rather than claiming an inflow
+    that isn't there.
+    """
+    p = paths()
+    fig, axes = plt.subplots(1, 2, figsize=(12, 5.6))
+    for ax, comid, vpu, name in (
+        (axes[0], LEWIS_AND_CLARK, "10U", "Lewis and Clark Lake — in AND out"),
+        (axes[1], MONO_LAKE, "16", "Mono Lake — no Network flowline touches it"),
+    ):
+        wb = read_waterbodies(comids=[comid])
+        bbox = waterbody_bbox(wb)
+        draw_tile(ax, bbox, p["after"], outlines=wb, vpu=vpu, show_terminals=False, title=name)
+
+    fig.legend(
+        handles=_legend_handles(flowlines=True), loc="lower center", ncol=2,
+        frameon=False, fontsize=9,
+    )
+    fig.suptitle(
+        "On-stream evidence B — a Network flowline must demonstrably enter AND exit. "
+        "Terminal sinks (inflow only) and locally-spilling potholes (outflow only) "
+        "stay dprst.",
+        fontsize=12,
+    )
+    fig.tight_layout(rect=(0, 0.07, 1, 0.90))
+    out_path = OUT / "rule_flowthrough.png"
+    fig.savefig(out_path, dpi=150)
+    plt.close(fig)
+    return out_path
+
+
+def fig_wbareacomi() -> Path:
+    """On-stream evidence A: the WBAREACOMI artificial-path join.
+
+    NHD tags a flowline with the COMID of the waterbody it threads
+    (``WBAREACOMI``). If any Network flowline carries this waterbody's COMID,
+    the waterbody is on-stream. The gate on Network membership is what stops
+    this from promoting closed-basin lakes (#161).
+    """
+    p = paths()
+    wb = read_waterbodies(comids=[LEWIS_AND_CLARK])
+    bbox = waterbody_bbox(wb)
+    fl = read_flowlines("10U", bbox)
+    threading = fl[
+        (fl["WBAREACOMI"].astype("int64") == LEWIS_AND_CLARK) & fl["network"]
+    ]
+
+    fig, ax = plt.subplots(figsize=(8, 6.5))
+    draw_tile(ax, bbox, p["after"], outlines=wb, title=None)
+    fl.plot(ax=ax, color="#999999", linewidth=0.6, zorder=3)
+    if len(threading):
+        threading.plot(ax=ax, color=NETWORK_COLOR, linewidth=2.6, zorder=5)
+    ax.set_title(
+        f"Lewis and Clark Lake — {len(threading)} Network flowline(s) carry "
+        f"WBAREACOMI = {LEWIS_AND_CLARK}\n→ on-stream",
+        fontsize=11,
+    )
+    fig.suptitle("On-stream evidence A — the WBAREACOMI artificial-path join")
+    fig.tight_layout(rect=(0, 0, 1, 0.93))
+    out_path = OUT / "rule_wbareacomi.png"
+    fig.savefig(out_path, dpi=150)
+    plt.close(fig)
+    return out_path
+
+
+def fig_closed_huc12_walker() -> Path:
+    """Signal B -- majority-inside a closed (type-C) HUC12.
+
+    Walker Lake's own D8 terminus never lands inside its own polygon
+    (frac_own = 0.000) -- Signal A misses it entirely. Signal B catches it
+    because the lake lies majority-inside a closed HUC12. Containment must be
+    tested by MAJORITY AREA, never ``intersects`` (a zero-interior-overlap
+    boundary touch returns True -- Eagle Lake and Middle Alkali Lake graze a
+    closed basin at frac = 0.000) and never ``within`` (it drops Great Salt
+    Lake, which spills 1.1% into a neighbouring HUC12 at frac = 0.989).
+
+    Verified against the FDR raster (not assumed): Walker Lake's bbox has 5
+    code-0 terminal cells, and one genuinely sits inside its polygon --
+    exactly the same "raw containment isn't the test" situation
+    ``fig_terminus_gsl`` found for Lewis and Clark (2 in-polygon cells,
+    frac_own 0.007). Walker's single in-polygon cell isn't reached by the
+    lake's own D8 drainage either (frac_own = 0.000, even lower), so it's
+    shown split -- bold if inside, faint if outside -- exactly like the
+    marquee figure, rather than claiming no in-polygon marker exists at all.
+    """
+    import matplotlib.lines as mlines
+
+    p = paths()
+    wb = read_waterbodies(comids=[WALKER_LAKE])
+    bbox = waterbody_bbox(wb)
+    # `wbd_huc12.parquet` has no bbox-covering column, so geopandas can't push
+    # the bbox down into the Parquet read (unlike the waterbody GPKG/FDR
+    # reads). It's a small CONUS-wide table of only the ~2,000 type-C closed
+    # HUC12s though -- not a full-grid raster -- so a full read + client-side
+    # `.cx[]` bbox filter is cheap and keeps the "never load a full-grid
+    # array" rule intact.
+    minx, miny, maxx, maxy = bbox
+    huc12 = gpd.read_parquet(p["huc12"]).cx[minx:maxx, miny:maxy]
+
+    fig, ax = plt.subplots(figsize=(8, 6.5))
+    draw_tile(ax, bbox, p["after"], outlines=wb, show_terminals=False)
+    if len(huc12):
+        huc12.boundary.plot(ax=ax, color="black", linewidth=1.4, linestyle="--", zorder=6)
+
+    xs, ys = read_terminal_cells(bbox)
+    geom = wb.geometry.union_all()
+    in_xs, in_ys, out_xs, out_ys = split_terminal_cells_by_polygon(xs, ys, geom)
+    if len(out_xs):
+        ax.scatter(
+            out_xs, out_ys, s=6, c=TERMINUS_OUTSIDE_COLOR, marker="x",
+            linewidths=0.6, alpha=0.5, zorder=2,
+        )
+    if len(in_xs):
+        ax.scatter(
+            in_xs, in_ys, s=90, c=TERMINUS_COLOR, marker="x", linewidths=2.4, zorder=7,
+        )
+
+    handles = _legend_handles(terminals_split=True) + [
+        mlines.Line2D(
+            [], [], color="black", lw=1.4, ls="--", label="closed (type-C) HUC12"
+        ),
+    ]
+    ax.legend(handles=handles, loc="lower left", fontsize=7.5, frameon=True)
+    ax.set_title(
+        f"Walker Lake — {len(in_xs)} in-polygon terminal cell, but frac_own = 0.000 "
+        "(none of the lake's own water reaches it)\n"
+        "majority-inside a closed HUC12 → dprst (Signal B)",
+        fontsize=10,
+    )
+    fig.suptitle(
+        "Signal B — majority-AREA containment, never `intersects` (Eagle Lake grazes "
+        "a closed basin at frac = 0.000) and never `within` (drops Great Salt Lake, "
+        "which spills 1.1% out at frac = 0.989)",
+        fontsize=11,
+    )
+    fig.tight_layout(rect=(0, 0, 1, 0.88))
+    out_path = OUT / "rule_closed_huc12_walker.png"
+    fig.savefig(out_path, dpi=150)
+    plt.close(fig)
+    return out_path
+
+
+def fig_domain_exits() -> Path:
+    """Guardrail -- domain exits stay on-stream regardless of the classifier.
+
+    Lake Michigan, Lake Champlain, and the Everglades SwampMarsh are terminal
+    only because the CONUS model ends there, not because their basin is
+    closed. All three are in the 20 named MUST_STAY_ONSTREAM fixtures the
+    endorheic classifier is graded against; demoting Lake Michigan to a
+    pothole would be catastrophic. The point of this figure is what did NOT
+    move -- no flowlines needed, since it's a negative control on the
+    classification raster itself.
+
+    Verified per-pixel (not assumed): Champlain and the Everglades render
+    ~orange fill as expected (99.7% / 99.9% of in-polygon cells). Lake
+    Michigan does NOT -- only 0.1% of its polygon is orange; 99.9% is nodata
+    (white, indistinguishable from "land" in this colormap), because the
+    HRU fabric that the depstor rasters are built from doesn't extend into
+    the Great Lakes' deep open water -- no HRU exists there to classify.
+    Critically, 0 of Lake Michigan's in-polygon cells are dprst (blue) either
+    -- the guardrail holds everywhere the fabric has an opinion; it simply
+    has no opinion over most of the open lake. Each panel is annotated with
+    the real in-polygon pixel breakdown so this isn't glossed over.
+    """
+    import shapely
+
+    p = paths()
+    fig, axes = plt.subplots(1, 3, figsize=(15, 5.6))
+    for ax, comid, name in (
+        (axes[0], LAKE_MICHIGAN, "Lake Michigan"),
+        (axes[1], LAKE_CHAMPLAIN, "Lake Champlain"),
+        (axes[2], EVERGLADES, "Everglades SwampMarsh"),
+    ):
+        wb = read_waterbodies(comids=[comid])
+        bbox = waterbody_bbox(wb)
+        draw_tile(ax, bbox, p["after"], outlines=wb, vpu=None, show_terminals=False, title=name)
+
+        # Ground the "stayed on-stream" claim in the actual in-polygon pixel
+        # counts rather than relying on the fill color alone -- Lake Michigan's
+        # deep water is nodata (outside HRU domain), not literally orange.
+        cat = read_classification(p["after"], bbox)
+        h, w = cat.shape
+        minx, miny, maxx, maxy = bbox
+        xs = minx + (np.arange(w) + 0.5) * (maxx - minx) / w
+        ys = maxy - (np.arange(h) + 0.5) * (maxy - miny) / h
+        xx, yy = np.meshgrid(xs, ys)
+        geom = wb.geometry.union_all()
+        inside = shapely.contains(geom, shapely.points(xx.ravel(), yy.ravel())).reshape(cat.shape)
+        n_dprst = int(((cat == 1) & inside).sum())
+        n_onstream = int(((cat == 2) & inside).sum())
+        n_outside_domain = int(((cat == 0) & inside).sum())
+        ax.set_xlabel(
+            f"{n_onstream:,} on-stream / {n_outside_domain:,} outside HRU domain / "
+            f"{n_dprst:,} dprst (own cells)",
+            fontsize=8,
+        )
+
+    fig.legend(handles=_legend_handles(), loc="lower center", ncol=3, frameon=False, fontsize=9)
+    fig.suptitle(
+        "Guardrail — domain exits stay on-stream. These are terminal only because the "
+        "CONUS model ends there. Demoting Lake Michigan to a pothole would be "
+        "catastrophic; all three are in the 20 named fixtures.",
+        fontsize=12,
+    )
+    fig.tight_layout(rect=(0, 0.08, 1, 0.88))
+    out_path = OUT / "rule_domain_exits.png"
+    fig.savefig(out_path, dpi=150)
+    plt.close(fig)
+    return out_path
+
+
+def fig_playa_guardrail() -> Path:
+    """Two hard guardrails -- and they are NOT equivalent.
+
+    Playa IS depression storage: FORCE_DPRST_FTYPES makes it dprst
+    unconditionally, never promoted on-stream regardless of WBAREACOMI or
+    flow-through evidence. Ice Mass is NOT depression storage: it is excluded
+    from the waterbody classification entirely (EXCLUDE_WATERBODY_FTYPES) --
+    its cells fall back to land, classified perv/imperv via LULC upstream of
+    this raster.
+    """
+    p = paths()
+    fig, axes = plt.subplots(1, 2, figsize=(12, 5.6))
+    for ax, comid, name in (
+        (axes[0], LARGEST_PLAYA, "Largest Playa — force-dprst"),
+        (axes[1], LARGEST_ICE_MASS, "Largest Ice Mass — excluded, falls back to land"),
+    ):
+        wb = read_waterbodies(comids=[comid])
+        bbox = waterbody_bbox(wb)
+        draw_tile(ax, bbox, p["after"], outlines=wb, vpu=None, show_terminals=False, title=name)
+
+    fig.legend(handles=_legend_handles(), loc="lower center", ncol=3, frameon=False, fontsize=9)
+    fig.suptitle(
+        "Two hard guardrails, and they are NOT equivalent: Playa IS depression storage "
+        "(force-dprst, never promoted on-stream). Ice Mass is NOT depression storage — "
+        "it is excluded from the classification and falls back to land.",
+        fontsize=11,
+    )
+    fig.tight_layout(rect=(0, 0.08, 1, 0.88))
+    out_path = OUT / "rule_playa_guardrail.png"
+    fig.savefig(out_path, dpi=150)
+    plt.close(fig)
+    return out_path
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--only", help="render just this figure (stem, no .png)")
@@ -585,6 +903,12 @@ def main() -> None:
     # `--only <stem>` always matches the filename the deck references.
     figures = {
         "rule_terminus_gsl": fig_terminus_gsl,
+        "rule_network_gate": fig_network_gate,
+        "rule_flowthrough": fig_flowthrough,
+        "rule_wbareacomi": fig_wbareacomi,
+        "rule_closed_huc12_walker": fig_closed_huc12_walker,
+        "rule_domain_exits": fig_domain_exits,
+        "rule_playa_guardrail": fig_playa_guardrail,
     }
     if args.only:
         if args.only not in figures:
