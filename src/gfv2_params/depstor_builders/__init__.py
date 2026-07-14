@@ -64,7 +64,10 @@ BUILDERS = {
 #   endorheic          -> "endorheic_comids"       endorheic_waterbody_comids.parquet
 #                                                   (comid, frac_own, by_terminus,
 #                                                    by_closed_huc12)
-#   wbody_connectivity -> "connected_wbody"        connected_wbody.tif (uint8, 1=connected)
+#   wbody_connectivity -> "connected_wbody",       connected_wbody.tif (uint8, 1=connected),
+#                         "endorheic_wbody"        endorheic_wbody.tif (uint8, 1=endorheic;
+#                                                   full endorheic-classified set, regardless
+#                                                   of on-stream status — see dprst's exemption)
 #   dprst              -> "dprst",                 dprst_binary.tif,
 #                         "onstream"               onstream_binary.tif
 #   perv               -> "perv"                   perv_binary.tif

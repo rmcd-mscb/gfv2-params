@@ -14,6 +14,15 @@ from shapely.geometry import Polygon
 
 from gfv2_params.depstor import load_connected_comids, select_connected_waterbodies
 
+# step_cfg for wbody_connectivity.build() — two outputs (connected + endorheic),
+# mirroring how the `dprst`/`waterbody` steps declare `outputs:`.
+_STEP_CFG = {
+    "outputs": {
+        "connected_wbody": "connected_wbody.tif",
+        "endorheic_wbody": "endorheic_wbody.tif",
+    }
+}
+
 
 def _sq(x):
     return Polygon([(x, 0), (x + 1, 0), (x + 1, 1), (x, 1)])
@@ -157,7 +166,7 @@ def test_wbody_connectivity_rasterizes_only_connected(tmp_path):
     ctx.paths["endorheic_comids"] = _write_empty_endorheic(tmp_path)
 
     produced = wbody_connectivity.build(
-        {"output": "connected_wbody.tif"}, ctx, logging.getLogger("test")
+        _STEP_CFG, ctx, logging.getLogger("test")
     )
 
     out = produced["connected_wbody"]
@@ -184,7 +193,7 @@ def test_wbody_connectivity_requires_table(tmp_path):
         connected_comids_table=None,
     )
     with pytest.raises(KeyError):
-        wbody_connectivity.build({"output": "connected_wbody.tif"}, ctx, logging.getLogger("test"))
+        wbody_connectivity.build(_STEP_CFG, ctx, logging.getLogger("test"))
 
 
 def test_wbody_connectivity_zero_match_raises(tmp_path):
@@ -221,7 +230,7 @@ def test_wbody_connectivity_zero_match_raises(tmp_path):
     ctx.paths["endorheic_comids"] = _write_empty_endorheic(tmp_path)
 
     with pytest.raises(ValueError, match="matched 0 of"):
-        wbody_connectivity.build({"output": "connected_wbody.tif"}, ctx, logging.getLogger("test"))
+        wbody_connectivity.build(_STEP_CFG, ctx, logging.getLogger("test"))
 
 
 def test_wbody_connectivity_drops_non_land_cells(tmp_path):
@@ -266,7 +275,7 @@ def test_wbody_connectivity_drops_non_land_cells(tmp_path):
     ctx.paths["endorheic_comids"] = _write_empty_endorheic(tmp_path)
 
     produced = wbody_connectivity.build(
-        {"output": "connected_wbody.tif"}, ctx, logging.getLogger("test")
+        _STEP_CFG, ctx, logging.getLogger("test")
     )
     with rasterio.open(produced["connected_wbody"]) as src:
         arr = src.read(1)
@@ -330,7 +339,7 @@ def test_wbody_connectivity_flowthrough_only_waterbody_burned(tmp_path):
     ctx.paths["endorheic_comids"] = _write_empty_endorheic(tmp_path)
 
     produced = wbody_connectivity.build(
-        {"output": "connected_wbody.tif"}, ctx, logging.getLogger("test")
+        _STEP_CFG, ctx, logging.getLogger("test")
     )
 
     with rasterio.open(produced["connected_wbody"]) as src:
@@ -359,7 +368,7 @@ def test_wbody_connectivity_flowthrough_missing_raises(tmp_path):
         flowthrough_comids_table=tmp_path / "does_not_exist.parquet",
     )
     with pytest.raises(FileNotFoundError):
-        wbody_connectivity.build({"output": "connected_wbody.tif"}, ctx, logging.getLogger("test"))
+        wbody_connectivity.build(_STEP_CFG, ctx, logging.getLogger("test"))
 
 
 def test_wbody_connectivity_flowthrough_empty_raises(tmp_path):
@@ -401,7 +410,7 @@ def test_wbody_connectivity_flowthrough_empty_raises(tmp_path):
     ctx.paths["landmask"] = landmask
 
     with pytest.raises(ValueError, match="empty"):
-        wbody_connectivity.build({"output": "connected_wbody.tif"}, ctx, logging.getLogger("test"))
+        wbody_connectivity.build(_STEP_CFG, ctx, logging.getLogger("test"))
 
 
 def test_wbody_connectivity_force_dprst_ftypes_excluded(tmp_path):
@@ -459,7 +468,7 @@ def test_wbody_connectivity_force_dprst_ftypes_excluded(tmp_path):
     ctx.paths["endorheic_comids"] = _write_empty_endorheic(tmp_path)
 
     produced = wbody_connectivity.build(
-        {"output": "connected_wbody.tif"}, ctx, logging.getLogger("test")
+        _STEP_CFG, ctx, logging.getLogger("test")
     )
 
     with rasterio.open(produced["connected_wbody"]) as src:
@@ -516,7 +525,7 @@ def test_wbody_connectivity_missing_ftype_column_raises(tmp_path):
 
     with pytest.raises(KeyError, match="FTYPE"):
         wbody_connectivity.build(
-            {"output": "connected_wbody.tif"}, ctx, logging.getLogger("test")
+            _STEP_CFG, ctx, logging.getLogger("test")
         )
 
 
@@ -554,7 +563,7 @@ def test_wbody_connectivity_flowthrough_none_is_silent_noop(tmp_path):
     ctx.paths["endorheic_comids"] = _write_empty_endorheic(tmp_path)
 
     produced = wbody_connectivity.build(
-        {"output": "connected_wbody.tif"}, ctx, logging.getLogger("test")
+        _STEP_CFG, ctx, logging.getLogger("test")
     )
     assert "connected_wbody" in produced
 
@@ -617,7 +626,7 @@ def test_endorheic_comid_is_demoted_from_the_connected_raster(tmp_path):
     ctx.paths["endorheic_comids"] = endo
 
     wbody_connectivity.build(
-        {"output": "connected_wbody.tif"}, ctx, logging.getLogger("t")
+        _STEP_CFG, ctx, logging.getLogger("t")
     )
     with rasterio.open(tmp_path / "connected_wbody.tif") as src:
         arr = src.read(1)
@@ -668,7 +677,7 @@ def test_endorheic_comids_missing_from_context_raises(tmp_path):
 
     with pytest.raises(KeyError, match="endorheic"):
         wbody_connectivity.build(
-            {"output": "connected_wbody.tif"}, ctx, logging.getLogger("test")
+            _STEP_CFG, ctx, logging.getLogger("test")
         )
 
 
@@ -714,7 +723,7 @@ def test_endorheic_comids_empty_table_is_a_legitimate_noop(tmp_path):
     ctx.paths["endorheic_comids"] = endo
 
     produced = wbody_connectivity.build(
-        {"output": "connected_wbody.tif"}, ctx, logging.getLogger("test")
+        _STEP_CFG, ctx, logging.getLogger("test")
     )
     with rasterio.open(produced["connected_wbody"]) as src:
         arr = src.read(1)
@@ -777,7 +786,7 @@ def test_endorheic_subtraction_never_widens_the_onstream_set(tmp_path):
     ctx.paths["endorheic_comids"] = endo
 
     wbody_connectivity.build(
-        {"output": "connected_wbody.tif"}, ctx, logging.getLogger("t")
+        _STEP_CFG, ctx, logging.getLogger("t")
     )
     with rasterio.open(tmp_path / "connected_wbody.tif") as src:
         arr = src.read(1)
@@ -785,3 +794,72 @@ def test_endorheic_subtraction_never_widens_the_onstream_set(tmp_path):
     assert not (arr[4:6, 4:6] == 1).any(), (
         "COMID 999 was never on-stream; a union-regression would wrongly burn it"
     )
+
+
+# ---------------------------------------------------------------------------
+# endorheic_wbody.tif (the second output — GSL-clump-veto fix)
+# ---------------------------------------------------------------------------
+
+
+def test_wbody_connectivity_writes_endorheic_wbody_raster(tmp_path):
+    """`endorheic_wbody.tif` must burn the FULL endorheic set, on-stream or not.
+
+    COMID 2 is both on-stream (WBAREACOMI) AND endorheic — the Great Salt Lake
+    case: it is demoted from `connected_wbody.tif` by the subtraction, but it
+    must still appear in `endorheic_wbody.tif`, since that raster carries
+    positive hydrologic evidence independent of on-stream status (this is what
+    lets `dprst.py` exempt it later even though its clump also touches an
+    on-stream neighbour). COMID 1 is on-stream and NOT endorheic, so it must be
+    in `connected_wbody.tif` but absent from `endorheic_wbody.tif`.
+    """
+    from shapely.geometry import box
+
+    from gfv2_params.depstor_builders import wbody_connectivity
+    from gfv2_params.depstor_builders.context import BuildContext
+
+    wb = gpd.GeoDataFrame(
+        {"COMID": [1, 2], "member_comid": [1, 2], "FTYPE": ["LakePond", "LakePond"]},
+        geometry=[box(0, 270, 60, 300), box(120, 150, 180, 180)],
+        crs="EPSG:5070",
+    )
+    wb_path = tmp_path / "wb.gpkg"
+    wb.to_file(wb_path, layer="waterbodies", driver="GPKG")
+
+    template = tmp_path / "template.tif"
+    landmask = tmp_path / "land_mask.tif"
+    _write_template(template)
+    _write_landmask(landmask)
+
+    conn = tmp_path / "connected.parquet"
+    pd.DataFrame({"comid": [1, 2]}).to_parquet(conn, index=False)
+
+    endo = tmp_path / "endorheic.parquet"
+    pd.DataFrame(
+        {"comid": [2], "frac_own": [1.0], "by_terminus": [True],
+         "by_closed_huc12": [False]}
+    ).to_parquet(endo, index=False)
+
+    ctx = BuildContext(
+        fabric="test", template_path=template, output_dir=tmp_path,
+        hru_gpkg=wb_path, hru_layer="waterbodies",
+        waterbody_gpkg=wb_path, waterbody_layer="waterbodies",
+        connected_comids_table=conn,
+    )
+    ctx.paths["landmask"] = landmask
+    ctx.paths["endorheic_comids"] = endo
+
+    produced = wbody_connectivity.build(_STEP_CFG, ctx, logging.getLogger("t"))
+    assert "endorheic_wbody" in produced
+
+    with rasterio.open(produced["connected_wbody"]) as src:
+        connected_arr = src.read(1)
+    with rasterio.open(produced["endorheic_wbody"]) as src:
+        endorheic_arr = src.read(1)
+
+    # COMID 1: on-stream, not endorheic.
+    assert (connected_arr[0:1, 0:2] == 1).any()
+    assert not (endorheic_arr[0:1, 0:2] == 1).any()
+    # COMID 2: endorheic-demoted out of connected_wbody, but present in
+    # endorheic_wbody regardless (positive evidence, independent of on-stream).
+    assert not (connected_arr[4:6, 4:6] == 1).any()
+    assert (endorheic_arr[4:6, 4:6] == 1).any()

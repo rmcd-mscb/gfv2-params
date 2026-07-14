@@ -144,9 +144,9 @@ def _fabric_tree(fabric: str) -> list:
                           Per-fabric depression-storage intermediate rasters
                           produced by build_depstor_rasters.py
                           (imperv_binary.tif, connected_wbody.tif,
-                           wbody_binary.tif, wbody_regions.tif,
-                           dprst_binary.tif, onstream_binary.tif,
-                           drains_to_dprst.tif)
+                           endorheic_wbody.tif, wbody_binary.tif,
+                           wbody_regions.tif, dprst_binary.tif,
+                           onstream_binary.tif, drains_to_dprst.tif)
               params/     Per-VPU and merged parameter CSVs produced by
                           create_zonal_params.py, create_soils_params.py,
                           create_ssflux_params.py, merge_params.py, and

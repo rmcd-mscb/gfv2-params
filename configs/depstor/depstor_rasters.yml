@@ -43,7 +43,9 @@ steps:
     output: endorheic_waterbody_comids.parquet
 
   - name: wbody_connectivity
-    output: connected_wbody.tif
+    outputs:
+      connected_wbody: connected_wbody.tif
+      endorheic_wbody: endorheic_wbody.tif
 
   - name: dprst
     outputs:

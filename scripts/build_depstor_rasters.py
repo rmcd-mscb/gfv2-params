@@ -144,12 +144,11 @@ def _expected_outputs(step: dict) -> dict:
             return {"drains_perv": step["output"]}
         if name == "drains_imperv":
             return {"drains_imperv": step["output"]}
-        # landmask, imperv, wbody_connectivity, perv, routing each map to a single key.
+        # landmask, imperv, perv, routing each map to a single key.
         single_key = {
             "landmask": "landmask",
             "imperv": "imperv",
             "endorheic": "endorheic_comids",
-            "wbody_connectivity": "connected_wbody",
             "perv": "perv",
             "routing": "drains_to_dprst",
             "vpu_id": "vpu_id",
@@ -160,6 +159,11 @@ def _expected_outputs(step: dict) -> dict:
     outputs = step["outputs"]
     if name == "waterbody":
         return {"wbody_binary": outputs["binary"], "wbody_regions": outputs["regions"]}
+    if name == "wbody_connectivity":
+        return {
+            "connected_wbody": outputs["connected_wbody"],
+            "endorheic_wbody": outputs["endorheic_wbody"],
+        }
     if name == "dprst":
         return {"dprst": outputs["dprst"], "onstream": outputs["onstream"]}
     if name == "carea_map":

@@ -4,6 +4,14 @@ Connectivity comes from NHD's WBAREACOMI artificial-path topology (staged by
 gfv2_params.download.nhd_flowlines into a connected-COMID parquet), joined to the
 waterbody polygons by COMID / member_comid. Replaces the old streambuffer mask as
 the on-stream signal consumed by the dprst step.
+
+Also rasterises a SECOND mask, `endorheic_wbody.tif`: every waterbody the
+`endorheic` classifier flagged (Signal A and/or B), regardless of whether it is
+on-stream. This is direct hydrologic evidence ("this waterbody's water terminates
+inside itself"), not a proxy — `dprst.py` uses it to exempt an endorheic
+waterbody from the region-level on-stream exclusion when `clump_regions`' 8-connected
+labelling has merged it with an on-stream neighbour (e.g. the Great Salt Lake's
+49 km2 inflow marsh, COMID 10273192). See `dprst.py` for the exemption itself.
 """
 
 from __future__ import annotations
@@ -34,7 +42,9 @@ def build(step_cfg: dict, ctx: BuildContext, logger) -> dict:
             "profile. Stage it first: "
             "`python -m gfv2_params.download.nhd_flowlines`."
         )
-    output_path = ctx.resolve_output(step_cfg["output"])
+    outputs = step_cfg["outputs"]
+    connected_path = ctx.resolve_output(outputs["connected_wbody"])
+    endorheic_path = ctx.resolve_output(outputs["endorheic_wbody"])
     landmask_path = ctx.require("landmask")
 
     logger.info("--- wbody_connectivity ---")
@@ -42,11 +52,12 @@ def build(step_cfg: dict, ctx: BuildContext, logger) -> dict:
     logger.info("  Connected table: %s", ctx.connected_comids_table)
     if ctx.flowthrough_comids_table is not None:
         logger.info("  Flow-through table: %s", ctx.flowthrough_comids_table)
-    logger.info("  Output         : %s", output_path)
+    logger.info("  Output (connected): %s", connected_path)
+    logger.info("  Output (endorheic): %s", endorheic_path)
 
-    if output_path.exists() and not ctx.force:
-        logger.info("  Output already exists — skipping (pass --force to rebuild)")
-        return {"connected_wbody": output_path}
+    if connected_path.exists() and endorheic_path.exists() and not ctx.force:
+        logger.info("  Both outputs exist — skipping (pass --force to rebuild)")
+        return {"connected_wbody": connected_path, "endorheic_wbody": endorheic_path}
 
     if not ctx.connected_comids_table.exists():
         raise FileNotFoundError(
@@ -182,8 +193,26 @@ def build(step_cfg: dict, ctx: BuildContext, logger) -> dict:
 
     binary = rasterize_binary(sel, info, all_touched=False)
     binary[~read_land_mask(landmask_path)] = 255  # drop off-land (ocean) cells
-    write_uint8_binary(binary, info, output_path)
+    write_uint8_binary(binary, info, connected_path)
     n_in = int((binary == 1).sum())
     logger.info("  %d connected-waterbody cells after land mask", n_in)
 
-    return {"connected_wbody": output_path}
+    # Endorheic raster: positive hydrologic evidence, independent of on-stream
+    # status. Rasterize the FULL endorheic set (not just the ones that were
+    # on-stream before the subtraction above) -- "this waterbody's water
+    # terminates inside itself" applies regardless of whether it happened to
+    # also be on-stream. `dprst.py` uses this to exempt an endorheic waterbody
+    # from the region-level on-stream exclusion when clump_regions has merged
+    # it with an on-stream neighbour.
+    sel_endorheic = select_connected_waterbodies(wb_gdf, endorheic)
+    logger.info(
+        "  %d endorheic COMIDs; %d of %d waterbody polygons flagged endorheic",
+        len(endorheic), len(sel_endorheic), len(wb_gdf),
+    )
+    endorheic_binary = rasterize_binary(sel_endorheic, info, all_touched=False)
+    endorheic_binary[~read_land_mask(landmask_path)] = 255  # drop off-land (ocean) cells
+    write_uint8_binary(endorheic_binary, info, endorheic_path)
+    n_endorheic_cells = int((endorheic_binary == 1).sum())
+    logger.info("  %d endorheic-waterbody cells after land mask", n_endorheic_cells)
+
+    return {"connected_wbody": connected_path, "endorheic_wbody": endorheic_path}
