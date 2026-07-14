@@ -1,34 +1,42 @@
 """Render the depression-storage workflow figures for the presentation deck.
 
-Makes four PNGs under ``docs/figures/depstor/``:
+Emits the 14 PNGs under ``docs/figures/depstor/`` that back
+``docs/presentations/2026-07-depression-storage-workflow.slides.md``.
 
-- ``decision_schematic.png`` — legacy 60 m segment-buffer split vs. the
-  NHD-network-connectivity split now used to decide dprst vs. on-stream.
-- ``pipeline_dag.png`` — the depstor builder DAG (inputs through PRMS params).
-- ``great_basin_before_after.png`` — VPU 16 (Great Basin) dprst/on-stream
-  classification (``dprst_binary.tif`` + ``onstream_binary.tif``). The
-  pre_flowthrough→current snapshot spans the cumulative connectivity-grounding
-  fixes (#145 + #152 + #158/#159 + #161/#163); Great Basin specifically
-  showcases endorheic waterbodies kept as depression storage via the
-  Non-Network / Network-Flowline gate (#161/#163).
-- ``lower_miss_before_after.png`` — VPU 08 (Lower Mississippi) land-draining-
-  to-depression-storage footprint (``drains_to_dprst.tif`` presence) before
-  vs. after: the ``drains_to_dprst`` over-extension into humid open-drainage
-  terrain is removed (this is the over-extension showcase, so it maps
-  ``drains_to_dprst`` itself, not the waterbody-level ``dprst_binary``).
+The deck is rule-first: each classification rule gets a real map tile at a named
+waterbody, with the evidence the rule actually reads drawn on top. The workhorse
+is ``tile()``, which composites four layers for any COMID:
 
-The two before/after maps read CONUS-scale rasters from both the current
-``depstor_rasters/`` directory and the ``depstor_rasters_pre_flowthrough_
-2026-06-26/`` snapshot. The CONUS grid is ~16.9 billion cells (see
-CLAUDE.md's CONUS-memory-rule), so this script NEVER loads a full-grid
-array: it windows every read to a region bounding box via
-``rasterio.windows.from_bounds`` and, for the wide VPU-scale windows here,
-also decimates the read with ``out_shape`` so GDAL streams a downsampled
-array directly rather than materializing the full-resolution window.
+1. the land / dprst / on-stream classification raster,
+2. the waterbody outline (from the profile's ``waterbody_gpkg`` -- see below),
+3. NHD flowlines colored by Network vs. Non-Network membership,
+4. FDR code-0 (terminal) cells, which is what Signal A actually reads.
 
-Run (default pixi env has matplotlib + rasterio):
+Three data gotchas this module exists to respect
+------------------------------------------------
+**Waterbody geometry comes from the profile's ``waterbody_gpkg``**
+(``conus_waterbodies.gpkg``), not ``nhd_waterbodies.parquet``. The rasters were
+built from the former; the latter is staged-from-source but not yet wired into
+the profile. Their shorelines differ (Great Salt Lake: 4,368.9 vs. 4,309.7 km2),
+so drawing from the parquet would misalign outlines with pixels.
 
-    pixi run python scripts/render_depstor_figures.py
+**NHDFlowline field casing varies by VPU** -- VPU 16 ships ``ComID`` /
+``WBAreaComI``; VPUs 01 and 08 ship ``COMID`` / ``WBAREACOMI``. Everything is
+upper-cased on read (the same gotcha ``download/nhd_flowlines.py`` handles).
+Flowlines are EPSG:4269 and are reprojected to the raster CRS, EPSG:5070.
+
+**Never load a full-grid array.** The CONUS template is 153,830 x 109,901 ~ 16.9
+billion cells (CLAUDE.md's CONUS-memory rule). Every read here is windowed to a
+bounding box AND decimated via ``out_shape``, so GDAL streams a small array
+rather than materializing the window.
+
+Run (under SLURM -- never on the login node):
+
+    srun --account=impd --time=60 --mem=64G \\
+        pixi run --as-is python scripts/render_depstor_figures.py
+
+    # or a single figure while iterating:
+    srun ... python scripts/render_depstor_figures.py --only rule_terminus_gsl
 """
 
 from __future__ import annotations
@@ -37,11 +45,14 @@ import matplotlib
 
 matplotlib.use("Agg")
 
+import argparse  # noqa: E402
+import glob  # noqa: E402
 from pathlib import Path  # noqa: E402
 
-import matplotlib.patches as mpatches  # noqa: E402
+import geopandas as gpd  # noqa: E402
 import matplotlib.pyplot as plt  # noqa: E402
 import numpy as np  # noqa: E402
+import pandas as pd  # noqa: E402
 import rasterio  # noqa: E402
 from matplotlib.colors import ListedColormap  # noqa: E402
 from rasterio.windows import from_bounds  # noqa: E402
@@ -49,35 +60,127 @@ from rasterio.windows import from_bounds  # noqa: E402
 REPO_ROOT = Path(__file__).resolve().parents[1]
 OUT = REPO_ROOT / "docs" / "figures" / "depstor"
 
-_FALLBACK_DATA_ROOT = "/caldera/hovenweep/projects/usgs/water/impd/nhgf/gfv2_param_v2"
+RASTER_CRS = "EPSG:5070"
 
-try:
-    from gfv2_params.config import load_base_config
+# The "before" snapshot: the CONUS product as it stood before the endorheic
+# classifier (PR #178) landed. Kept alongside the live product on disk.
+BEFORE_DIRNAME = "depstor_rasters_pre_endorheic_2026-07-13"
 
-    DATA_ROOT = Path(load_base_config()["data_root"])
-except Exception:  # pragma: no cover - fallback for a config-less checkout
-    DATA_ROOT = Path(_FALLBACK_DATA_ROOT)
-
-CURRENT_DIR = DATA_ROOT / "gfv2" / "depstor_rasters"
-PRE_FIX_DIR = DATA_ROOT / "gfv2" / "depstor_rasters_pre_flowthrough_2026-06-26"
-
-# Region bounding boxes in the raster CRS (EPSG:5070, CONUS Albers), resolved
-# in Step 3 from a decimated read of vpu_id.tif (VPU 16 = Great Basin, VPU 08
-# = Lower Mississippi). (minx, miny, maxx, maxy).
-GREAT_BASIN = (-2059337.07, 1533691.97, -1195168.54, 2362453.61)
-LOWER_MISS = (161095.96, 680908.25, 689198.95, 1659807.87)
-
-# Target max array side for the decimated windowed reads below (a VPU window
-# is tens of thousands of native 30 m cells per side; this keeps the read --
-# and the in-memory array -- small regardless of window size).
+# Target max array side for every decimated read. A VPU window is tens of
+# thousands of native 30 m cells per side; this keeps the read -- and the
+# in-memory array -- small regardless of window size.
 _MAX_SIDE = 900
 
+_FALLBACK_DATA_ROOT = "/caldera/hovenweep/projects/usgs/water/impd/nhgf/gfv2_param_v2"
 
-def read_window(path: Path, bbox: tuple[float, float, float, float], max_side: int = _MAX_SIDE):
+
+# --------------------------------------------------------------------------
+# Pure helpers (no I/O -- gated by tests/test_render_depstor_figures.py)
+# --------------------------------------------------------------------------
+
+
+def normalize_fields(gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
+    """Upper-case every non-geometry column name.
+
+    NHDPlus ships different field casing per VPU: VPU 16's NHDFlowline has
+    ``ComID`` / ``WBAreaComI`` / ``FCode``, while VPUs 01 and 08 have ``COMID``
+    / ``WBAREACOMI`` / ``FCODE``. Callers index by the upper-case name.
+    """
+    renames = {c: c.upper() for c in gdf.columns if c != gdf.geometry.name}
+    return gdf.rename(columns=renames)
+
+
+def classification_array(dprst, dprst_nodata, onstream, onstream_nodata) -> np.ndarray:
+    """Composite a 0/1/2 categorical array: land / dprst / on-stream.
+
+    dprst is written LAST and therefore wins a tie. That mirrors the product:
+    the clump-veto exemption recovers an endorheic waterbody's own cells as
+    dprst even where its 8-connected region touches the on-stream mask.
+    """
+    cat = np.zeros(dprst.shape, dtype=np.uint8)
+    cat[onstream != onstream_nodata] = 2
+    cat[dprst != dprst_nodata] = 1
+    return cat
+
+
+def frac_own_stats(df: pd.DataFrame) -> dict:
+    """Summarise the Signal-A distribution behind the deck's bimodality claim.
+
+    ``candidates`` counts waterbodies with a computed ``frac_own`` (> 0) -- not
+    every row in the table, most of which are Signal-B-only (flagged by a closed
+    HUC12, never evaluated for a terminus).
+
+    ``swing`` is how much the answer moves across a 0.3 -> 0.7 threshold sweep,
+    relative to the count at 0.5. A small swing is the evidence that 0.5 is not
+    a tuned knob.
+    """
+    candidates = df[df["frac_own"] > 0]
+    sweep = {t: int((df["frac_own"] > t).sum()) for t in (0.3, 0.5, 0.7)}
+    swing = (sweep[0.3] - sweep[0.7]) / max(sweep[0.5], 1)
+    return {
+        "candidates": int(len(candidates)),
+        "at_or_above_95": int((df["frac_own"] >= 0.95).sum()),
+        "in_band_45_55": int(df["frac_own"].between(0.45, 0.55).sum()),
+        "sweep": sweep,
+        "swing": swing,
+    }
+
+
+# --------------------------------------------------------------------------
+# Config-driven paths
+# --------------------------------------------------------------------------
+
+
+def paths(fabric: str = "gfv2") -> dict:
+    """Resolve every input path from the active fabric profile.
+
+    Paths live in the profile (CLAUDE.md: never hardcode a data path). Falls
+    back to the known data root only for a config-less checkout, matching the
+    pattern this script already used.
+    """
+    try:
+        from gfv2_params.config import load_config, require_config_key
+
+        cfg = load_config(
+            REPO_ROOT / "configs" / "depstor" / "depstor_rasters.yml", fabric=fabric
+        )
+        data_root = Path(cfg["data_root"])
+        after = Path(cfg["output_dir"])
+        waterbody_gpkg = Path(require_config_key(cfg, "waterbody_gpkg", "render_depstor_figures"))
+        waterbody_layer = require_config_key(cfg, "waterbody_layer", "render_depstor_figures")
+        fdr = Path(require_config_key(cfg, "fdr_raster", "render_depstor_figures"))
+    except Exception:  # pragma: no cover - config-less checkout
+        data_root = Path(_FALLBACK_DATA_ROOT)
+        after = data_root / "gfv2" / "depstor_rasters"
+        waterbody_gpkg = data_root / "input" / "nhd" / "conus_waterbodies.gpkg"
+        waterbody_layer = "waterbodies"
+        fdr = data_root / "gfv2" / "shared" / "gfv2_fdr.vrt"
+
+    return {
+        "data_root": data_root,
+        "after": after,
+        "before": after.parent / BEFORE_DIRNAME,
+        "waterbody_gpkg": waterbody_gpkg,
+        "waterbody_layer": waterbody_layer,
+        "fdr": fdr,
+        "endorheic": after / "endorheic_waterbody_comids.parquet",
+        "topology": data_root / "input" / "nhd" / "flowline_topology.parquet",
+        "burn_add": data_root / "input" / "nhd" / "burn_add_waterbodies.parquet",
+        "huc12": data_root / "input" / "wbd" / "wbd_huc12.parquet",
+        "source_root": data_root / "shared" / "source",
+    }
+
+
+# --------------------------------------------------------------------------
+# Readers (all windowed / bbox-filtered -- never a full read)
+# --------------------------------------------------------------------------
+
+
+def read_window(path: Path, bbox, max_side: int = _MAX_SIDE):
     """Read *path* windowed to *bbox*, decimated so neither side exceeds *max_side*.
 
-    Uses ``out_shape`` so GDAL performs the decimation while reading (never
-    materializes the full-resolution window in memory).
+    Uses ``out_shape`` so GDAL decimates while reading and never materializes
+    the full-resolution window in memory.
     """
     minx, miny, maxx, maxy = bbox
     with rasterio.open(path) as ds:
@@ -89,258 +192,109 @@ def read_window(path: Path, bbox: tuple[float, float, float, float], max_side: i
         return arr, ds.nodata
 
 
-def _dprst_onstream_category(depstor_dir: Path, bbox):
-    """Return a 0/1/2 categorical array: land / dprst / on-stream, windowed to *bbox*."""
+def read_classification(depstor_dir: Path, bbox) -> np.ndarray:
+    """land / dprst / on-stream categorical array, windowed to *bbox*."""
     dprst, dprst_nodata = read_window(depstor_dir / "dprst_binary.tif", bbox)
     onstream, onstream_nodata = read_window(depstor_dir / "onstream_binary.tif", bbox)
-    cat = np.zeros(dprst.shape, dtype=np.uint8)
-    cat[onstream != onstream_nodata] = 2
-    cat[dprst != dprst_nodata] = 1
-    return cat
+    return classification_array(dprst, dprst_nodata, onstream, onstream_nodata)
 
 
-def _drains_presence_category(depstor_dir: Path, bbox):
-    """Return a 0/1 array: land / drains-to-dprst, windowed to *bbox*.
+def read_waterbodies(comids: list[int] | None = None, bbox=None) -> gpd.GeoDataFrame:
+    """Read the profile's waterbody layer, filtered by COMID or bbox.
 
-    ``drains_to_dprst.tif`` is a plain binary uint8 presence raster and is
-    HRU-agnostic (0 = the cell does not drain to any depression; 1 = it does;
-    ``nodata`` = off-fabric) — the separate ``drains_to_dprst_hru.tif`` is the
-    HRU-valued raster. So "drains to a depression" is any valid, nonzero cell.
+    Never reads all 448,124 rows: pyogrio pushes both the ``where`` clause and
+    the ``bbox`` down to OGR.
     """
-    drains, nodata = read_window(depstor_dir / "drains_to_dprst.tif", bbox)
-    cat = np.zeros(drains.shape, dtype=np.uint8)
-    cat[(drains != nodata) & (drains != 0)] = 1
-    return cat
-
-
-_DPRST_CMAP = ListedColormap(["#f0f0f0", "#3182bd", "#e6550d"])  # land, dprst, on-stream
-_DPRST_LEGEND = [
-    mpatches.Patch(color="#f0f0f0", label="land"),
-    mpatches.Patch(color="#3182bd", label="depression storage (dprst)"),
-    mpatches.Patch(color="#e6550d", label="on-stream waterbody"),
-]
-
-_DRAINS_CMAP = ListedColormap(["#f0f0f0", "#3182bd"])  # land, drains-to-dprst
-_DRAINS_LEGEND = [
-    mpatches.Patch(color="#f0f0f0", label="land"),
-    mpatches.Patch(color="#3182bd", label="land draining to depression storage"),
-]
-
-
-def _draw_before_after(before, after, cmap, legend, vmax, region_name, subtitle, change_note, out_name):
-    """Draw and save a 2-panel (before | after) categorical map."""
-    fig, axes = plt.subplots(1, 2, figsize=(11, 6))
-    for ax, arr, title in zip(axes, (before, after), ("before", "after")):
-        ax.imshow(arr, cmap=cmap, vmin=0, vmax=vmax, interpolation="nearest")
-        ax.set_title(title)
-        ax.set_xticks([])
-        ax.set_yticks([])
-    fig.legend(handles=legend, loc="lower center", ncol=len(legend), frameon=False)
-    fig.suptitle(f"{region_name}: {subtitle}\n{change_note}")
-    fig.tight_layout(rect=(0, 0.06, 1, 0.94))
-
-    out_path = OUT / out_name
-    fig.savefig(out_path, dpi=150)
-    plt.close(fig)
-    return out_path
-
-
-def fig_dprst_before_after(region_name: str, bbox, out_name: str, change_note: str) -> Path:
-    """2-panel dprst/on-stream classification map (before vs. after the flow-through fix)."""
-    before = _dprst_onstream_category(PRE_FIX_DIR, bbox)
-    after = _dprst_onstream_category(CURRENT_DIR, bbox)
-    return _draw_before_after(
-        before,
-        after,
-        _DPRST_CMAP,
-        _DPRST_LEGEND,
-        2,
-        region_name,
-        "dprst / on-stream classification",
-        change_note,
-        out_name,
+    p = paths()
+    where = None
+    if comids:
+        where = "COMID IN (" + ",".join(str(int(c)) for c in comids) + ")"
+    gdf = gpd.read_file(
+        p["waterbody_gpkg"], layer=p["waterbody_layer"], where=where, bbox=bbox
     )
+    return normalize_fields(gdf)
 
 
-def fig_drains_before_after(region_name: str, bbox, out_name: str, change_note: str) -> Path:
-    """2-panel land-draining-to-dprst footprint map (before vs. after the flow-through fix)."""
-    before = _drains_presence_category(PRE_FIX_DIR, bbox)
-    after = _drains_presence_category(CURRENT_DIR, bbox)
-    return _draw_before_after(
-        before,
-        after,
-        _DRAINS_CMAP,
-        _DRAINS_LEGEND,
-        1,
-        region_name,
-        "land draining to depression storage",
-        change_note,
-        out_name,
+def read_flowlines(vpu: str, bbox) -> gpd.GeoDataFrame:
+    """Read NHDFlowline for *vpu*, bbox-filtered, with a ``network`` bool column.
+
+    ``network`` is membership in ``flowline_topology.parquet`` (NHDPlus
+    PlusFlowlineVAA). Non-Network flowlines are the cartographic artificial
+    paths NHD draws through essentially every closed-basin lake -- the ones the
+    #161 gate exists to ignore. Reprojected from EPSG:4269 to the raster CRS.
+    """
+    p = paths()
+    pattern = str(p["source_root"] / vpu / "NHDSnapshot" / "**" / "Hydrography" / "NHDFlowline.shp")
+    hits = glob.glob(pattern, recursive=True)
+    if not hits:
+        raise FileNotFoundError(f"No NHDFlowline.shp for VPU {vpu} under {p['source_root']}")
+
+    # bbox is in EPSG:5070; the shapefile is EPSG:4269. Convert the box, don't
+    # reproject the layer (that would read all of it).
+    box_4269 = (
+        gpd.GeoSeries.from_wkt([f"POLYGON(({bbox[0]} {bbox[1]},{bbox[2]} {bbox[1]},"
+                                f"{bbox[2]} {bbox[3]},{bbox[0]} {bbox[3]},{bbox[0]} {bbox[1]}))"],
+                               crs=RASTER_CRS)
+        .to_crs("EPSG:4269")
+        .total_bounds
     )
+    gdf = normalize_fields(gpd.read_file(hits[0], bbox=tuple(box_4269)))
+    topo = pd.read_parquet(p["topology"], columns=["comid"])
+    network = set(topo["comid"].astype("int64"))
+    gdf["network"] = gdf["COMID"].astype("int64").isin(network)
+    return gdf.to_crs(RASTER_CRS)
 
 
-def fig_decision_schematic() -> Path:
-    """Legacy 60 m segment-buffer split vs. NHD-network-connectivity split."""
-    fig, axes = plt.subplots(1, 2, figsize=(11, 5.5))
+def read_terminal_cells(bbox) -> tuple[np.ndarray, np.ndarray]:
+    """Return (x, y) coords of FDR code-0 (terminal) cells inside *bbox*.
 
-    # -- Left panel: legacy 60 m stream-segment buffer --
-    ax = axes[0]
-    ax.set_title("Legacy: 60 m segment buffer")
-    stream = mpatches.FancyArrow(0.05, 0.5, 0.9, 0.0, width=0.01, color="#3182bd", length_includes_head=True)
-    ax.add_patch(stream)
-    buffer_band = mpatches.Rectangle((0.05, 0.42), 0.9, 0.16, color="#9ecae1", alpha=0.6, label="60 m buffer")
-    ax.add_patch(buffer_band)
-    wb_in = mpatches.Circle((0.3, 0.5), 0.09, color="#e6550d", label="waterbody touching buffer\n→ on-stream")
-    wb_out = mpatches.Circle((0.7, 0.75), 0.09, color="#31a354", label="waterbody outside buffer\n→ dprst")
-    ax.add_patch(wb_in)
-    ax.add_patch(wb_out)
-    ax.text(0.3, 0.5, "on-\nstream", ha="center", va="center", fontsize=8, color="white")
-    ax.text(0.7, 0.75, "dprst", ha="center", va="center", fontsize=8, color="white")
-    ax.text(
-        0.5,
-        0.15,
-        "Geometric distance only: any waterbody\nwithin 60 m of a stream segment is on-stream\n"
-        "(mislabels endorheic lakes an NHD artificial\npath happens to pass through)",
-        ha="center",
-        va="center",
-        fontsize=8,
-        wrap=True,
-    )
-    ax.set_xlim(0, 1)
-    ax.set_ylim(0, 1)
-    ax.set_xticks([])
-    ax.set_yticks([])
-
-    # -- Right panel: NHD network-connectivity split --
-    ax = axes[1]
-    ax.set_title("Current: NHD network connectivity")
-    net = mpatches.FancyArrow(0.05, 0.5, 0.9, 0.0, width=0.01, color="#3182bd", length_includes_head=True)
-    ax.add_patch(net)
-    ax.text(0.5, 0.58, "Network-Flowline (topology-gated)", ha="center", fontsize=7)
-    wb_endorheic = mpatches.Circle((0.3, 0.5), 0.09, color="#31a354")
-    wb_flowthrough = mpatches.Circle((0.7, 0.5), 0.09, color="#e6550d")
-    ax.add_patch(wb_endorheic)
-    ax.add_patch(wb_flowthrough)
-    ax.text(0.3, 0.5, "dprst", ha="center", va="center", fontsize=8, color="white")
-    ax.text(0.7, 0.5, "on-\nstream", ha="center", va="center", fontsize=8, color="white")
-    ax.text(0.3, 0.28, "inflow only /\nno outflow\n(endorheic sink)", ha="center", fontsize=7)
-    ax.text(0.7, 0.28, "WBAREACOMI or\nflow-through:\ninflow + outflow", ha="center", fontsize=7)
-    ax.text(
-        0.5,
-        0.08,
-        "Both COMID sources gate on Network-Flowline membership (issue #161);\n"
-        "Playa forced dprst and Ice Mass excluded upstream are separate guardrails",
-        ha="center",
-        va="center",
-        fontsize=8,
-        wrap=True,
-    )
-    ax.set_xlim(0, 1)
-    ax.set_ylim(0, 1)
-    ax.set_xticks([])
-    ax.set_yticks([])
-
-    fig.suptitle("dprst vs. on-stream decision: legacy buffer vs. network-connectivity split")
-    fig.tight_layout(rect=(0, 0, 1, 0.94))
-
-    out_path = OUT / "decision_schematic.png"
-    fig.savefig(out_path, dpi=150)
-    plt.close(fig)
-    return out_path
+    Code 0 is what makes Signal A possible: the NHDPlus FdrFac is depression-
+    filled EVERYWHERE EXCEPT at NHDPlus's own sinks, which it leaves unfilled by
+    design. Those 15,262 code-0 cells ARE the sink set, and ``d8_routing``
+    already treats code 0 as a terminus -- so the classifier and the router read
+    the same grid.
+    """
+    p = paths()
+    minx, miny, maxx, maxy = bbox
+    with rasterio.open(p["fdr"]) as ds:
+        win = from_bounds(minx, miny, maxx, maxy, ds.transform)
+        # Terminal cells are sparse and single-pixel -- decimating would drop
+        # them, so read this window at FULL resolution. Safe because tiles are
+        # single-waterbody windows, not CONUS. Callers must not pass a CONUS bbox.
+        arr = ds.read(1, window=win)
+        transform = ds.window_transform(win)
+    rows, cols = np.nonzero(arr == 0)
+    xs, ys = rasterio.transform.xy(transform, rows, cols)
+    return np.asarray(xs), np.asarray(ys)
 
 
-def fig_pipeline_dag() -> Path:
-    """The depstor builder DAG: inputs through PRMS params."""
-    # (label, x, y, half_width)
-    nodes = {
-        "nhd": ("NHD\n(waterbodies, flowlines)", 0.08, 0.82, 0.075),
-        "fdr": ("FDR\n(fdr.vrt)", 0.08, 0.58, 0.075),
-        "twi": ("TWI", 0.08, 0.34, 0.075),
-        "lulc": ("LULC\n(NLCD)", 0.08, 0.10, 0.075),
-        "waterbody": ("waterbody", 0.27, 0.82, 0.075),
-        "wbody_conn": ("wbody_\nconnectivity", 0.46, 0.70, 0.075),
-        "dprst": ("dprst", 0.65, 0.55, 0.07),
-        "routing": ("routing", 0.65, 0.85, 0.07),
-        "drains": ("drains_perv /\ndrains_imperv", 0.84, 0.70, 0.08),
-        "params": ("PRMS params\n(sro_to_dprst_*)", 0.965, 0.70, 0.075),
-    }
-    edges = [
-        ("nhd", "waterbody"),
-        ("fdr", "waterbody"),
-        ("nhd", "wbody_conn"),
-        ("waterbody", "wbody_conn"),
-        ("wbody_conn", "dprst"),
-        ("lulc", "dprst"),
-        ("fdr", "routing"),
-        ("dprst", "routing"),
-        ("twi", "routing"),
-        ("routing", "drains"),
-        ("lulc", "drains"),
-        ("drains", "params"),
-    ]
+# --------------------------------------------------------------------------
+# Styling
+# --------------------------------------------------------------------------
 
-    fig, ax = plt.subplots(figsize=(13, 5.5))
-    for key, (label, x, y, hw) in nodes.items():
-        is_input = key in ("nhd", "fdr", "twi", "lulc")
-        is_output = key == "params"
-        color = "#deebf7" if is_input else ("#31a354" if is_output else "#9ecae1")
-        box = mpatches.FancyBboxPatch(
-            (x - hw, y - 0.065),
-            2 * hw,
-            0.13,
-            boxstyle="round,pad=0.01",
-            facecolor=color,
-            edgecolor="black",
-        )
-        ax.add_patch(box)
-        ax.text(x, y, label, ha="center", va="center", fontsize=8)
+CLASS_CMAP = ListedColormap(["#f0f0f0", "#3182bd", "#e6550d"])  # land, dprst, on-stream
+CLASS_LABELS = ["land", "depression storage (dprst)", "on-stream waterbody"]
 
-    for src, dst in edges:
-        x0, y0, hw0 = nodes[src][1], nodes[src][2], nodes[src][3]
-        x1, y1, hw1 = nodes[dst][1], nodes[dst][2], nodes[dst][3]
-        # Clip the arrow to just outside each node's box, capped so the two
-        # ends can never cross (which would silently invert the arrowhead).
-        gap = min(hw0 + 0.015, hw1 + 0.015, abs(x1 - x0) * 0.4)
-        dx = gap if x1 >= x0 else -gap
-        ax.annotate(
-            "",
-            xy=(x1 - dx, y1),
-            xytext=(x0 + dx, y0),
-            arrowprops=dict(arrowstyle="->", color="#555555", lw=1.2, connectionstyle="arc3,rad=0.08"),
-        )
-
-    ax.set_xlim(-0.03, 1.05)
-    ax.set_ylim(0, 1)
-    ax.axis("off")
-    ax.set_title("Depression-storage builder DAG")
-    fig.tight_layout()
-
-    out_path = OUT / "pipeline_dag.png"
-    fig.savefig(out_path, dpi=150)
-    plt.close(fig)
-    return out_path
+NETWORK_COLOR = "#08519c"      # Network Flowline -- counts as connectivity
+NONNETWORK_COLOR = "#cc44aa"   # Non-Network cartographic path -- does NOT
+TERMINUS_COLOR = "#111111"     # FDR code-0 terminal cell
 
 
 def main() -> None:
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("--only", help="render just this figure (stem, no .png)")
+    args = ap.parse_args()
+
     OUT.mkdir(parents=True, exist_ok=True)
-    written = [
-        fig_decision_schematic(),
-        fig_pipeline_dag(),
-        fig_dprst_before_after(
-            "Great Basin (VPU 16)",
-            GREAT_BASIN,
-            "great_basin_before_after.png",
-            "endorheic waterbodies correctly retained as depression storage (issue #161)",
-        ),
-        fig_drains_before_after(
-            "Lower Mississippi (VPU 08)",
-            LOWER_MISS,
-            "lower_miss_before_after.png",
-            "drains_to_dprst over-extension removed by the through-flow reclassification (#145)",
-        ),
-    ]
-    for p in written:
-        print(p)
+    # CONTRACT: each key is exactly the PNG stem the function writes, so
+    # `--only <stem>` always matches the filename the deck references.
+    figures = {}  # populated by later tasks
+    if args.only:
+        if args.only not in figures:
+            raise SystemExit(f"Unknown figure {args.only!r}. Known: {sorted(figures)}")
+        figures = {args.only: figures[args.only]}
+    for fn in figures.values():
+        print(fn())
 
 
 if __name__ == "__main__":
