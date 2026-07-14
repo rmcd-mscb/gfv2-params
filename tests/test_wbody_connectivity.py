@@ -108,6 +108,22 @@ def _write_landmask(path: Path, n: int = 10) -> None:
         dst.write(np.ones((n, n), dtype=np.uint8), 1)  # all land
 
 
+def _write_empty_endorheic(tmp_path: Path) -> Path:
+    """A present-but-zero-row endorheic table — the no-closed-basin no-op case.
+
+    `wbody_connectivity` now raises if `endorheic_comids` is missing from the
+    build context entirely (see test_endorheic_comids_missing_from_context_raises).
+    Every builder test in this module that doesn't specifically exercise that
+    raise needs a *present* endorheic table wired in, so an empty one (rather
+    than a populated one) keeps these fixtures' on-stream sets unchanged.
+    """
+    path = tmp_path / "endorheic.parquet"
+    pd.DataFrame(
+        columns=["comid", "frac_own", "by_terminus", "by_closed_huc12"]
+    ).to_parquet(path, index=False)
+    return path
+
+
 def test_wbody_connectivity_rasterizes_only_connected(tmp_path):
     from shapely.geometry import box
 
@@ -138,6 +154,7 @@ def test_wbody_connectivity_rasterizes_only_connected(tmp_path):
         connected_comids_table=table,
     )
     ctx.paths["landmask"] = landmask
+    ctx.paths["endorheic_comids"] = _write_empty_endorheic(tmp_path)
 
     produced = wbody_connectivity.build(
         {"output": "connected_wbody.tif"}, ctx, logging.getLogger("test")
@@ -201,6 +218,7 @@ def test_wbody_connectivity_zero_match_raises(tmp_path):
         connected_comids_table=table,
     )
     ctx.paths["landmask"] = landmask
+    ctx.paths["endorheic_comids"] = _write_empty_endorheic(tmp_path)
 
     with pytest.raises(ValueError, match="matched 0 of"):
         wbody_connectivity.build({"output": "connected_wbody.tif"}, ctx, logging.getLogger("test"))
@@ -245,6 +263,7 @@ def test_wbody_connectivity_drops_non_land_cells(tmp_path):
         connected_comids_table=table,
     )
     ctx.paths["landmask"] = landmask
+    ctx.paths["endorheic_comids"] = _write_empty_endorheic(tmp_path)
 
     produced = wbody_connectivity.build(
         {"output": "connected_wbody.tif"}, ctx, logging.getLogger("test")
@@ -308,6 +327,7 @@ def test_wbody_connectivity_flowthrough_only_waterbody_burned(tmp_path):
         flowthrough_comids_table=flowthrough_table,
     )
     ctx.paths["landmask"] = landmask
+    ctx.paths["endorheic_comids"] = _write_empty_endorheic(tmp_path)
 
     produced = wbody_connectivity.build(
         {"output": "connected_wbody.tif"}, ctx, logging.getLogger("test")
@@ -436,6 +456,7 @@ def test_wbody_connectivity_force_dprst_ftypes_excluded(tmp_path):
         connected_comids_table=connected_table,
     )
     ctx.paths["landmask"] = landmask
+    ctx.paths["endorheic_comids"] = _write_empty_endorheic(tmp_path)
 
     produced = wbody_connectivity.build(
         {"output": "connected_wbody.tif"}, ctx, logging.getLogger("test")
@@ -491,8 +512,9 @@ def test_wbody_connectivity_missing_ftype_column_raises(tmp_path):
         connected_comids_table=connected_table,
     )
     ctx.paths["landmask"] = landmask
+    ctx.paths["endorheic_comids"] = _write_empty_endorheic(tmp_path)
 
-    with pytest.raises(KeyError):
+    with pytest.raises(KeyError, match="FTYPE"):
         wbody_connectivity.build(
             {"output": "connected_wbody.tif"}, ctx, logging.getLogger("test")
         )
@@ -529,6 +551,7 @@ def test_wbody_connectivity_flowthrough_none_is_silent_noop(tmp_path):
         flowthrough_comids_table=None,
     )
     ctx.paths["landmask"] = landmask
+    ctx.paths["endorheic_comids"] = _write_empty_endorheic(tmp_path)
 
     produced = wbody_connectivity.build(
         {"output": "connected_wbody.tif"}, ctx, logging.getLogger("test")
@@ -602,6 +625,100 @@ def test_endorheic_comid_is_demoted_from_the_connected_raster(tmp_path):
     # COMID 1 (on-stream, not endorheic) is rasterised; COMID 2 (demoted) is not.
     assert (arr[0:1, 0:2] == 1).any(), "COMID 1 should still be on-stream"
     assert not (arr[4:6, 4:6] == 1).any(), "COMID 2 was endorheic and must be demoted"
+
+
+def test_endorheic_comids_missing_from_context_raises(tmp_path):
+    """A MISSING endorheic table (the `endorheic` step never ran) must fail loud.
+
+    Distinct from an EMPTY table (tjc — a legitimate no-op, see the test below):
+    this is the case where `endorheic_comids` was never produced at all, and
+    silently proceeding would leave terminal lakes like the Great Salt Lake
+    classified on-stream with no signal beyond a log line.
+    """
+    import pytest
+    from shapely.geometry import box
+
+    from gfv2_params.depstor_builders import wbody_connectivity
+    from gfv2_params.depstor_builders.context import BuildContext
+
+    template = tmp_path / "template.tif"
+    landmask = tmp_path / "land_mask.tif"
+    wb_gpkg = tmp_path / "wb.gpkg"
+    connected_table = tmp_path / "connected.parquet"
+    _write_template(template)
+    _write_landmask(landmask)
+
+    gpd.GeoDataFrame(
+        {"COMID": [10], "member_comid": ["10"], "FTYPE": ["LakePond"]},
+        geometry=[box(0, 270, 60, 300)],
+        crs="EPSG:5070",
+    ).to_file(wb_gpkg, layer="waterbodies", driver="GPKG")
+    pd.DataFrame({"comid": pd.array([10], dtype="int64")}).to_parquet(
+        connected_table, index=False
+    )
+
+    ctx = BuildContext(
+        fabric="t", template_path=template, output_dir=tmp_path,
+        hru_gpkg=wb_gpkg, hru_layer="waterbodies",
+        waterbody_gpkg=wb_gpkg, waterbody_layer="waterbodies",
+        connected_comids_table=connected_table,
+    )
+    ctx.paths["landmask"] = landmask
+    # NOTE: `endorheic_comids` deliberately NOT set in ctx.paths.
+
+    with pytest.raises(KeyError, match="endorheic"):
+        wbody_connectivity.build(
+            {"output": "connected_wbody.tif"}, ctx, logging.getLogger("test")
+        )
+
+
+def test_endorheic_comids_empty_table_is_a_legitimate_noop(tmp_path):
+    """An EMPTY endorheic table (e.g. tjc, no closed basin) must NOT raise.
+
+    Distinct from the missing-table case above: the `endorheic` step ran and
+    produced a present-but-zero-row table, which is a correct no-op subtraction.
+    """
+    from shapely.geometry import box
+
+    from gfv2_params.depstor_builders import wbody_connectivity
+    from gfv2_params.depstor_builders.context import BuildContext
+
+    template = tmp_path / "template.tif"
+    landmask = tmp_path / "land_mask.tif"
+    wb_gpkg = tmp_path / "wb.gpkg"
+    connected_table = tmp_path / "connected.parquet"
+    _write_template(template)
+    _write_landmask(landmask)
+
+    gpd.GeoDataFrame(
+        {"COMID": [10], "member_comid": ["10"], "FTYPE": ["LakePond"]},
+        geometry=[box(0, 270, 60, 300)],
+        crs="EPSG:5070",
+    ).to_file(wb_gpkg, layer="waterbodies", driver="GPKG")
+    pd.DataFrame({"comid": pd.array([10], dtype="int64")}).to_parquet(
+        connected_table, index=False
+    )
+
+    endo = tmp_path / "endorheic.parquet"
+    pd.DataFrame(
+        columns=["comid", "frac_own", "by_terminus", "by_closed_huc12"]
+    ).to_parquet(endo, index=False)
+
+    ctx = BuildContext(
+        fabric="t", template_path=template, output_dir=tmp_path,
+        hru_gpkg=wb_gpkg, hru_layer="waterbodies",
+        waterbody_gpkg=wb_gpkg, waterbody_layer="waterbodies",
+        connected_comids_table=connected_table,
+    )
+    ctx.paths["landmask"] = landmask
+    ctx.paths["endorheic_comids"] = endo
+
+    produced = wbody_connectivity.build(
+        {"output": "connected_wbody.tif"}, ctx, logging.getLogger("test")
+    )
+    with rasterio.open(produced["connected_wbody"]) as src:
+        arr = src.read(1)
+    assert arr[0, 0] == 1  # on-stream waterbody untouched by an empty subtraction
 
 
 def test_endorheic_subtraction_never_widens_the_onstream_set(tmp_path):

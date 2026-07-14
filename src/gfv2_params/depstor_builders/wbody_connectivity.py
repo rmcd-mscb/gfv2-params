@@ -82,10 +82,14 @@ def build(step_cfg: dict, ctx: BuildContext, logger) -> dict:
     # Great Salt Lake off-stream: both local classifiers promote it, because NHD
     # draws Network artificial paths between its arms.
     #
-    # An EMPTY endorheic set is a legitimate no-op, not an error: a domain with no
-    # closed basin (e.g. tjc, Texas-Gulf) has no endorheic waterbody. The guard
-    # against a *silently* empty set on a fabric that should have demotions is the
-    # `min_endorheic_comids` floor in the `endorheic` builder, not a raise here.
+    # A MISSING `endorheic_comids` (the `endorheic` step never ran) raises below —
+    # every fabric that can reach this line has both a COMID-keyed waterbody layer
+    # and `fdr_raster` (required on every depstor fabric), so it can always run that
+    # step first. An EMPTY endorheic table is different and IS a legitimate no-op: a
+    # domain with no closed basin (e.g. tjc, Texas-Gulf) has no endorheic waterbody.
+    # The guard against a *silently* empty table on a fabric that should have
+    # demotions is the `min_endorheic_comids` floor in the `endorheic` builder, not
+    # a raise here.
     #
     # NOTE: `select_connected_waterbodies` promotes a waterbody on COMID **or**
     # `member_comid`, but this subtraction removes COMIDs only (the endorheic table is
@@ -94,45 +98,35 @@ def build(step_cfg: dict, ctx: BuildContext, logger) -> dict:
     # are on-stream via `member_comid` alone. If those keys ever diverge, a waterbody
     # could be demoted by COMID here and then re-promoted through its `member_comid`
     # below, silently disabling the demotion — subtract on both keys if that happens.
-    n_endorheic = 0
-    endorheic_applied = False
-    if "endorheic_comids" in ctx.paths:
-        endorheic = load_endorheic_comids(ctx.require("endorheic_comids"))
-        n_endorheic = len(connected & endorheic)
-        connected = connected - endorheic
-        endorheic_applied = True
-        logger.info(
-            "  endorheic demotion: %d of %d endorheic COMIDs were on-stream → dprst",
-            n_endorheic, len(endorheic),
+    if "endorheic_comids" not in ctx.paths:
+        raise KeyError(
+            "wbody_connectivity step needs `endorheic_comids` in the build context, "
+            "but the `endorheic` step has not run and produced no output on disk for "
+            "this fabric. Without it, terminal/closed-basin lakes — including the "
+            "Great Salt Lake — would remain classified ON-STREAM. Run the `endorheic` "
+            "step first (e.g. `--from endorheic`), or run the full DAG so it runs "
+            "in order. An EMPTY endorheic table (a domain with no closed basin, e.g. "
+            "`tjc`) is a legitimate no-op and does NOT hit this branch — this only "
+            "fires when the step's output is missing entirely."
         )
-        if not endorheic:
-            logger.info(
-                "  (the endorheic table is empty — expected only for a domain with no "
-                "closed basin; the demotion is a no-op)"
-            )
-    else:
-        logger.warning(
-            "  ENDORHEIC DEMOTION NOT APPLIED: `endorheic_comids` is not present in "
-            "the build context (the `endorheic` step has not run and produced no "
-            "output on disk for this fabric). Terminal/closed-basin lakes — "
-            "including the Great Salt Lake — will remain classified ON-STREAM. "
-            "Run the `endorheic` step first (e.g. `--from endorheic`) if this "
-            "fabric supports it; if it genuinely can't (e.g. no COMID column), "
-            "this is expected and safe to ignore."
+    endorheic = load_endorheic_comids(ctx.require("endorheic_comids"))
+    n_endorheic = len(connected & endorheic)
+    connected = connected - endorheic
+    logger.info(
+        "  endorheic demotion: %d of %d endorheic COMIDs were on-stream → dprst",
+        n_endorheic, len(endorheic),
+    )
+    if not endorheic:
+        logger.info(
+            "  (the endorheic table is empty — expected only for a domain with no "
+            "closed basin; the demotion is a no-op)"
         )
 
-    if endorheic_applied:
-        logger.info(
-            "  on-stream COMIDs: %d WBAREACOMI + %d new flow-through - %d endorheic "
-            "= %d total",
-            n_wbareacomi, n_flowthrough, n_endorheic, len(connected),
-        )
-    else:
-        logger.info(
-            "  on-stream COMIDs: %d WBAREACOMI + %d new flow-through "
-            "(endorheic demotion NOT APPLIED — see warning above) = %d total",
-            n_wbareacomi, n_flowthrough, len(connected),
-        )
+    logger.info(
+        "  on-stream COMIDs: %d WBAREACOMI + %d new flow-through - %d endorheic "
+        "= %d total",
+        n_wbareacomi, n_flowthrough, n_endorheic, len(connected),
+    )
     # NOTE: this re-reads the raw waterbody_gpkg from disk, NOT the merged frame
     # `waterbody.build()` produces (which unions in BurnAddWaterbody rows). So
     # BurnAdd rows are never present here, and the NEVER_ONSTREAM_FTYPES filter
