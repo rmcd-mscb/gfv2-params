@@ -1040,6 +1040,407 @@ def fig_playa_guardrail() -> Path:
     )
 
 
+def fig_rule_ladder() -> Path:
+    """The five-stage dprst/on-stream decision ladder.
+
+    Replaces the old two-panel ``fig_decision_schematic`` (legacy 60 m
+    segment buffer vs. NHD network connectivity), which predates the
+    endorheic classifier (#178) and no longer describes the pipeline. Same
+    style as that figure -- a pure schematic, no data I/O -- because every
+    count drawn here is a static, verified figure (CLAUDE.md / PR #178), not
+    something re-derived per render.
+
+    Stage 4 (endorheic demotion) is a STRICT SUBTRACTION: the nested-set icon
+    to its right shows why -- carving a subset OUT of the on-stream union can
+    only shrink it, never grow it. That is the load-bearing visual claim this
+    figure exists to make (CLAUDE.md: "the subtraction can only ever remove
+    COMIDs, never add one").
+    """
+    import matplotlib.patches as mpatches
+
+    fig, ax = plt.subplots(figsize=(10, 11))
+
+    stages = [
+        (
+            "1 — Every NHD waterbody",
+            "448,124 waterbodies\n"
+            "− Ice Mass (1,220 → land, excluded entirely)\n"
+            "+ BurnAdd sink-purpose rows (1,658)",
+            "#deebf7",
+        ),
+        (
+            "2 — Default: dprst",
+            "A waterbody is depression storage UNLESS proven on-stream.",
+            "#9ecae1",
+        ),
+        (
+            "3 — On-stream evidence (UNION), both Network-gated",
+            "WBAREACOMI join  ∪  geometric flow-through (in AND out)\n"
+            "Non-Network cartographic paths do not count (#161)",
+            "#e6550d",
+        ),
+        (
+            "4 — Endorheic demotion",
+            "STRICT SUBTRACTION\n"
+            "Signal A (terminus-inside-itself) ∪ Signal B\n"
+            "(majority-inside a closed HUC12) → 725 demotions",
+            "#fee6ce",
+        ),
+        (
+            "5 — Guardrails",
+            "Playa force-dprst · Ice Mass excluded · domain exits stay on-stream\n"
+            "→ Products: dprst_binary.tif, onstream_binary.tif, endorheic_wbody.tif",
+            "#c7e9c0",
+        ),
+    ]
+
+    n = len(stages)
+    box_h = 0.14
+    box_w = 0.67
+    ys = np.linspace(0.90, 0.10, n)  # top to bottom
+
+    for i, ((title, body, color), y) in enumerate(zip(stages, ys)):
+        box = mpatches.FancyBboxPatch(
+            (0.05, y - box_h / 2), box_w, box_h,
+            boxstyle="round,pad=0.012", facecolor=color, edgecolor="black",
+        )
+        ax.add_patch(box)
+        ax.text(0.09, y + box_h / 2 - 0.022, title, ha="left", va="top",
+                 fontsize=11, fontweight="bold")
+        ax.text(0.09, y - 0.012, body, ha="left", va="top", fontsize=9)
+
+        if i < n - 1:
+            y_next = ys[i + 1]
+            is_subtraction = i == 2  # arrow FROM stage 3 INTO stage 4
+            color_arrow = "#cc2222" if is_subtraction else "#555555"
+            ax.annotate(
+                "", xy=(0.20, y_next + box_h / 2), xytext=(0.20, y - box_h / 2),
+                arrowprops=dict(
+                    arrowstyle="-|>", color=color_arrow,
+                    lw=2.0 if is_subtraction else 1.4,
+                ),
+            )
+
+    # Stage 4 is a SUBTRACTION, not another additive stage: a nested-set icon
+    # (endorheic carved OUT of the on-stream union) makes "can only shrink,
+    # never grow" visible rather than merely asserted in text.
+    subtract_y = ys[3]
+    outer = mpatches.FancyBboxPatch(
+        (0.78, subtract_y - 0.045), 0.30, 0.09,
+        boxstyle="round,pad=0.01", facecolor="none", edgecolor="#08519c", lw=1.6,
+    )
+    ax.add_patch(outer)
+    ax.text(0.93, subtract_y + 0.032, "on-stream (union)", ha="center", va="bottom",
+             fontsize=7.5, color="#08519c")
+    inner = mpatches.FancyBboxPatch(
+        (0.855, subtract_y - 0.028), 0.12, 0.056,
+        boxstyle="round,pad=0.008", facecolor="#cc2222", alpha=0.35,
+        edgecolor="#cc2222", lw=1.2, linestyle="--",
+    )
+    ax.add_patch(inner)
+    ax.text(0.915, subtract_y, "− endorheic", ha="center", va="center",
+             fontsize=7.5, color="#cc2222", fontweight="bold")
+    ax.annotate(
+        "", xy=(1.15, subtract_y), xytext=(1.08, subtract_y),
+        arrowprops=dict(arrowstyle="-|>", color="#cc2222", lw=1.6),
+    )
+    ax.text(
+        1.17, subtract_y, "can only REMOVE a\nCOMID — never add one",
+        ha="left", va="center", fontsize=7.5, color="#cc2222", style="italic",
+    )
+
+    ax.set_xlim(0, 1.42)
+    ax.set_ylim(0, 1.0)
+    ax.axis("off")
+
+    out_path = OUT / "rule_ladder.png"
+    return finish_figure(
+        fig,
+        out_path,
+        suptitle=(
+            "The dprst / on-stream decision ladder — five stages, top to bottom. Stage 4 "
+            "is a strict subtraction: it can only remove a COMID from the on-stream set, "
+            "never add one."
+        ),
+    )
+
+
+def fig_pipeline_dag() -> Path:
+    """The depstor builder DAG: inputs through PRMS params.
+
+    Recovered from the pre-rewrite renderer (``git show
+    f73e74a:scripts/render_depstor_figures.py``, ``fig_pipeline_dag``) and
+    extended with the steps PR #178 introduced: ``nhd_topology`` (highlighted
+    orange -- it MUST precede both ``nhd_flowlines`` and ``nhd_flowthrough``,
+    which fail loud without it), ``endorheic``, and its clump-veto exemption
+    edge straight into ``dprst`` (dashed red, distinct from the solid
+    ``endorheic -> wbody_connectivity`` subtraction edge feeding the union).
+    """
+    import matplotlib.patches as mpatches
+
+    # (label, x, y, half_width)
+    nodes = {
+        # inputs
+        "nhd": ("NHD\n(waterbodies, flowlines)", 0.06, 0.92, 0.075),
+        "wbd": ("WBD\n(closed HUC12s)", 0.06, 0.74, 0.075),
+        "fdr": ("FDR\n(fdr.vrt, code 0=sink)", 0.06, 0.56, 0.085),
+        "twi": ("TWI", 0.06, 0.38, 0.05),
+        "lulc": ("LULC\n(NLCD)", 0.06, 0.20, 0.065),
+        # staging -- nhd_topology MUST precede both COMID steps
+        "topology": ("nhd_topology", 0.25, 0.92, 0.07),
+        "flowlines": ("nhd_flowlines\n(WBAREACOMI)", 0.29, 0.68, 0.085),
+        "flowthrough": ("nhd_flowthrough\n(geometric)", 0.21, 0.44, 0.085),
+        # classification
+        "waterbody": ("waterbody", 0.44, 0.92, 0.065),
+        "endorheic": ("endorheic\n(Signal A + B)", 0.46, 0.30, 0.08),
+        "wbody_conn": ("wbody_connectivity\n(union − endorheic)", 0.64, 0.56, 0.095),
+        "dprst": ("dprst\n(+ clump-veto exemption)", 0.68, 0.30, 0.095),
+        # routing -> params
+        "routing": ("routing\n(D8 + on-stream barrier)", 0.86, 0.56, 0.095),
+        "same_hru": ("same_hru_drains", 0.82, 0.38, 0.08),
+        "depth": ("dprst_depth", 0.90, 0.20, 0.065),
+        "params": ("PRMS params\n(6 spatial)", 1.04, 0.38, 0.07),
+    }
+
+    inputs = {"nhd", "wbd", "fdr", "twi", "lulc"}
+    edges = [
+        ("nhd", "topology"),
+        ("nhd", "waterbody"),
+        ("fdr", "waterbody"),
+        ("topology", "flowlines"),
+        ("topology", "flowthrough"),
+        ("nhd", "flowlines"),
+        ("nhd", "flowthrough"),
+        ("waterbody", "flowthrough"),
+        ("fdr", "endorheic"),
+        ("wbd", "endorheic"),
+        ("waterbody", "endorheic"),
+        ("flowlines", "wbody_conn"),
+        ("flowthrough", "wbody_conn"),
+        ("endorheic", "wbody_conn"),
+        ("wbody_conn", "dprst"),
+        ("endorheic", "dprst"),
+        ("lulc", "dprst"),
+        ("fdr", "routing"),
+        ("twi", "routing"),
+        ("dprst", "routing"),
+        ("routing", "same_hru"),
+        ("lulc", "same_hru"),
+        ("same_hru", "params"),
+        ("dprst", "depth"),
+        ("depth", "params"),
+    ]
+    # Edges needing a style distinct from the default -- the hard ordering
+    # constraint (topology before either COMID step) and the clump-veto
+    # exemption path (endorheic straight into dprst, NOT via wbody_conn).
+    edge_style = {
+        ("topology", "flowlines"): dict(color="#e6550d", lw=2.2),
+        ("topology", "flowthrough"): dict(color="#e6550d", lw=2.2),
+        ("endorheic", "dprst"): dict(
+            color="#cc2222", lw=2.0, linestyle="--", connectionstyle="arc3,rad=0.35"
+        ),
+    }
+
+    fig, ax = plt.subplots(figsize=(15, 7))
+    for key, (label, x, y, hw) in nodes.items():
+        if key in inputs:
+            color = "#deebf7"
+        elif key == "topology":
+            color = "#fdae6b"  # highlighted -- the hard ordering constraint
+        elif key == "params":
+            color = "#31a354"
+        else:
+            color = "#9ecae1"
+        box = mpatches.FancyBboxPatch(
+            (x - hw, y - 0.07), 2 * hw, 0.14,
+            boxstyle="round,pad=0.01", facecolor=color, edgecolor="black",
+        )
+        ax.add_patch(box)
+        ax.text(x, y, label, ha="center", va="center", fontsize=7.5)
+
+    for src, dst in edges:
+        x0, y0, hw0 = nodes[src][1], nodes[src][2], nodes[src][3]
+        x1, y1, hw1 = nodes[dst][1], nodes[dst][2], nodes[dst][3]
+        # Clip the arrow to just outside each node's box, capped so the two
+        # ends can never cross (which would silently invert the arrowhead).
+        gap = min(hw0 + 0.015, hw1 + 0.015, max(abs(x1 - x0) * 0.4, 0.001))
+        dx = 0.0 if abs(x1 - x0) < 1e-9 else (gap if x1 >= x0 else -gap)
+        style = dict(color="#555555", lw=1.2, connectionstyle="arc3,rad=0.08")
+        style.update(edge_style.get((src, dst), {}))
+        connectionstyle = style.pop("connectionstyle")
+        ax.annotate(
+            "",
+            xy=(x1 - dx, y1),
+            xytext=(x0 + dx, y0),
+            arrowprops=dict(arrowstyle="->", connectionstyle=connectionstyle, **style),
+        )
+
+    ax.annotate(
+        "must precede\nboth COMID steps", xy=(0.25, 0.92), xytext=(0.25, 1.04),
+        ha="center", fontsize=7.5, color="#e6550d", fontweight="bold",
+        arrowprops=dict(arrowstyle="-", color="#e6550d", lw=0.8),
+    )
+    ax.text(
+        0.535, 0.14, "clump-veto exemption\n(endorheic_wbody.tif)",
+        ha="center", fontsize=7.5, color="#cc2222", style="italic",
+    )
+
+    ax.set_xlim(-0.05, 1.20)
+    ax.set_ylim(0.05, 1.10)
+    ax.axis("off")
+
+    out_path = OUT / "pipeline_dag.png"
+    return finish_figure(
+        fig,
+        out_path,
+        suptitle=(
+            "Depression-storage builder DAG — nhd_topology (orange) must precede BOTH "
+            "nhd_flowlines and nhd_flowthrough (they fail loud without it); the dashed red "
+            "edge is the endorheic_wbody.tif clump-veto exemption straight into dprst, "
+            "distinct from the endorheic − wbody_connectivity subtraction feeding the "
+            "on-stream union."
+        ),
+        suptitle_fontsize=11,
+    )
+
+
+def fig_frac_own_bimodal() -> Path:
+    """frac_own is bimodal, so the 0.5 threshold is inert -- not a tuned knob.
+
+    Reads the classifier table directly rather than transcribing the PR body,
+    so the deck's numbers cannot drift from the product.
+    """
+    p = paths()
+    df = pd.read_parquet(p["endorheic"])
+    stats = frac_own_stats(df)
+    candidates = df[df["frac_own"] > 0]["frac_own"]
+
+    fig, ax = plt.subplots(figsize=(10, 5.5))
+    ax.hist(candidates, bins=np.linspace(0, 1, 51), color="#3182bd", edgecolor="white")
+    ax.axvline(0.5, color="#cc2222", lw=2, ls="--", label="threshold = 0.5")
+    ax.axvspan(0.45, 0.55, color="#cc2222", alpha=0.10)
+    ax.set_yscale("log")
+    ax.set_xlabel("frac_own  (share of the waterbody's cells whose D8 path ends inside itself)")
+    ax.set_ylabel("waterbodies (log scale)")
+    ax.legend(loc="upper center")
+    ax.set_title(
+        f"{stats['candidates']:,} Signal-A candidates · "
+        f"{stats['at_or_above_95']:,} at frac_own ≥ 0.95 · "
+        f"only {stats['in_band_45_55']:,} in the 0.45–0.55 band\n"
+        f"threshold sweep 0.3→0.7: {stats['sweep'][0.3]:,} → {stats['sweep'][0.7]:,} "
+        f"({stats['swing']:.1%} swing) — the threshold is inert",
+        fontsize=11,
+    )
+    fig.tight_layout()
+    out_path = OUT / "frac_own_bimodal.png"
+    fig.savefig(out_path, dpi=150)
+    plt.close(fig)
+    print(f"  frac_own stats (put these in the deck): {stats}")
+    return out_path
+
+
+def fig_burnadd_purpcode() -> Path:
+    """``BurnAddWaterbody`` is NOT a sink layer -- only sink-purpose rows are kept.
+
+    It is every waterbody NHDPlus added to the DEM burn; only rows with a
+    sink ``PurpCode`` (4 Playa, 5/8 closed lake) are sinks.
+    ``download/nhd_burn_components.py`` keeps only those rows and takes
+    ``FTYPE`` from ``FCODE``, not ``PurpCode`` (``PurpCode`` 5 spans both
+    Playa and SwampMarsh -- a Playa mislabelled LakePond loses force-dprst).
+
+    The VPU 01 counts (702 NULL-PurpCode rows / 503 on-network / 0 sinks in
+    VPU 01's own ``Sink.shp``) are static, verified numbers from PR #178,
+    hardcoded here per the task-4 brief -- VPU 01's raw, pre-filter
+    ``BurnAddWaterbody`` rows and its ``Sink.shp`` are not staged in this
+    checkout, so they cannot be re-derived. The 1,658 kept rows and their
+    FTYPE mix (LakePond 1,550 / Playa 103 / SwampMarsh 5) ARE derived from
+    ``paths()["burn_add"]`` below, so those numbers cannot drift from the
+    product.
+    """
+    import matplotlib.patches as mpatches
+
+    p = paths()
+    burn_add = pd.read_parquet(p["burn_add"])
+    ftype_counts = burn_add["FTYPE"].value_counts()
+    kept_total = int(len(burn_add))
+
+    # Static, verified counts from PR #178 (VPU 01) -- see docstring.
+    vpu01_null_purpcode = 702
+    vpu01_null_purpcode_on_network = 503
+    vpu01_sinks_in_sink_shp = 0
+
+    ftype_colors = {"LakePond": "#3182bd", "Playa": "#e6550d", "SwampMarsh": "#31a354"}
+    ftypes = ["LakePond", "Playa", "SwampMarsh"]
+
+    fig, ax = plt.subplots(figsize=(9, 6.5))
+
+    # Bar 1: all BurnAdd rows in VPU 01 -- mostly NULL PurpCode, most of
+    # those on-network (StreamRiver, CanalDitch), against zero sinks in
+    # VPU 01's own Sink.shp.
+    ax.bar(0, vpu01_null_purpcode, width=0.5, color="#bbbbbb", edgecolor="black")
+    ax.bar(0, vpu01_null_purpcode_on_network, width=0.5, color="#888888",
+           edgecolor="black", hatch="//")
+    ax.annotate(
+        f"{vpu01_sinks_in_sink_shp} sinks in VPU 01's own Sink.shp",
+        xy=(0, 2), xytext=(0, 90), textcoords="offset points",
+        ha="center", fontsize=9, color="#cc2222", fontweight="bold",
+        arrowprops=dict(arrowstyle="-", color="#cc2222", lw=1.2),
+    )
+
+    # Bar 2: what's actually kept CONUS-wide -- only the sink-purpose rows,
+    # stacked by FTYPE (derived from the parquet, not hardcoded).
+    bottom = 0
+    for ftype in ftypes:
+        n = int(ftype_counts.get(ftype, 0))
+        ax.bar(1, n, width=0.5, bottom=bottom, color=ftype_colors[ftype], edgecolor="black")
+        bottom += n
+
+    ax.set_xticks([0, 1])
+    ax.set_xticklabels(
+        [
+            f"all BurnAdd rows\n(VPU 01, n={vpu01_null_purpcode:,} NULL-PurpCode)",
+            f"kept sink-purpose rows\n(CONUS-wide, n={kept_total:,})",
+        ]
+    )
+    ax.set_ylabel("rows")
+    ax.set_title(
+        "Merging BurnAddWaterbody wholesale would turn canals into depression storage",
+        fontsize=10.5,
+    )
+
+    handles = [
+        mpatches.Patch(color="#bbbbbb", label=f"VPU 01 NULL PurpCode ({vpu01_null_purpcode:,})"),
+        mpatches.Patch(
+            facecolor="#888888", hatch="//", edgecolor="black",
+            label=f"...of which on-network, e.g. StreamRiver/CanalDitch ({vpu01_null_purpcode_on_network:,})",
+        ),
+    ] + [
+        mpatches.Patch(color=ftype_colors[f], label=f"kept {f} ({int(ftype_counts.get(f, 0)):,})")
+        for f in ftypes
+    ]
+
+    out_path = OUT / "rule_burnadd_purpcode.png"
+    return finish_figure(
+        fig,
+        out_path,
+        suptitle=(
+            "BurnAddWaterbody is every waterbody NHDPlus added to the DEM burn — only "
+            "sink-purpose rows (PurpCode 4 Playa, 5/8 closed lake) are sinks. VPU 01 ships "
+            "702 NULL-PurpCode rows against 0 sinks in its own Sink.shp (503 on-network); "
+            "FTYPE comes from FCODE, not PurpCode."
+        ),
+        legend_handles=handles,
+        legend_ncol=2,
+        legend_fontsize=8,
+        # The two-line xticklabels ("all BurnAdd rows\n(VPU 01, n=...)") sit
+        # right below the axes, in the same reserved strip finish_figure
+        # otherwise gives only to the legend -- every prior caller has
+        # `ax.set_xticks([])`, so this is the first real collision. Reserve
+        # room for both.
+        extra_bottom_in=0.55,
+    )
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--only", help="render just this figure (stem, no .png)")
@@ -1056,6 +1457,10 @@ def main() -> None:
         "rule_closed_huc12_walker": fig_closed_huc12_walker,
         "rule_domain_exits": fig_domain_exits,
         "rule_playa_guardrail": fig_playa_guardrail,
+        "rule_ladder": fig_rule_ladder,
+        "pipeline_dag": fig_pipeline_dag,
+        "frac_own_bimodal": fig_frac_own_bimodal,
+        "rule_burnadd_purpcode": fig_burnadd_purpcode,
     }
     if args.only:
         if args.only not in figures:
