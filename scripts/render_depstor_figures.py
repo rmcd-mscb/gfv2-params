@@ -47,6 +47,7 @@ matplotlib.use("Agg")
 
 import argparse  # noqa: E402
 import glob  # noqa: E402
+import sys  # noqa: E402
 from pathlib import Path  # noqa: E402
 
 import geopandas as gpd  # noqa: E402
@@ -135,27 +136,60 @@ def paths(fabric: str = "gfv2") -> dict:
     """Resolve every input path from the active fabric profile.
 
     Paths live in the profile (CLAUDE.md: never hardcode a data path). Falls
-    back to the known data root only for a config-less checkout, matching the
-    pattern this script already used.
+    back to the known data root ONLY for a genuinely config-less checkout --
+    ``gfv2_params.config`` unimportable, or ``configs/base_config.yml``
+    missing outright -- and emits a stderr warning when it does. Any other
+    failure (a bad/renamed profile key, a malformed YAML value, etc.)
+    propagates: a wrong path must be loud, not silently swallowed into the
+    fallback, since every figure downstream is derived from whatever `paths()`
+    resolves.
     """
     try:
         from gfv2_params.config import load_config, require_config_key
-
-        cfg = load_config(
-            REPO_ROOT / "configs" / "depstor" / "depstor_rasters.yml", fabric=fabric
+    except ImportError as exc:
+        print(
+            f"paths(): gfv2_params.config not importable ({exc}); "
+            f"falling back to {_FALLBACK_DATA_ROOT}",
+            file=sys.stderr,
         )
-        data_root = Path(cfg["data_root"])
-        after = Path(cfg["output_dir"])
-        waterbody_gpkg = Path(require_config_key(cfg, "waterbody_gpkg", "render_depstor_figures"))
-        waterbody_layer = require_config_key(cfg, "waterbody_layer", "render_depstor_figures")
-        fdr = Path(require_config_key(cfg, "fdr_raster", "render_depstor_figures"))
-    except Exception:  # pragma: no cover - config-less checkout
-        data_root = Path(_FALLBACK_DATA_ROOT)
-        after = data_root / "gfv2" / "depstor_rasters"
-        waterbody_gpkg = data_root / "input" / "nhd" / "conus_waterbodies.gpkg"
-        waterbody_layer = "waterbodies"
-        fdr = data_root / "gfv2" / "shared" / "gfv2_fdr.vrt"
+        return _fallback_paths()
 
+    base_config_path = REPO_ROOT / "configs" / "base_config.yml"
+    if not base_config_path.exists():
+        print(
+            f"paths(): {base_config_path} not found; "
+            f"falling back to {_FALLBACK_DATA_ROOT}",
+            file=sys.stderr,
+        )
+        return _fallback_paths()
+
+    cfg = load_config(
+        REPO_ROOT / "configs" / "depstor" / "depstor_rasters.yml", fabric=fabric
+    )
+    data_root = Path(cfg["data_root"])
+    after = Path(cfg["output_dir"])
+    waterbody_gpkg = Path(require_config_key(cfg, "waterbody_gpkg", "render_depstor_figures"))
+    waterbody_layer = require_config_key(cfg, "waterbody_layer", "render_depstor_figures")
+    fdr = Path(require_config_key(cfg, "fdr_raster", "render_depstor_figures"))
+
+    return _build_paths(data_root, after, waterbody_gpkg, waterbody_layer, fdr)
+
+
+def _fallback_paths() -> dict:
+    """The hardcoded path set used only for a genuinely config-less checkout.
+
+    Values are unchanged from the pre-fix fallback -- only when it fires
+    changed (see `paths()`).
+    """
+    data_root = Path(_FALLBACK_DATA_ROOT)
+    after = data_root / "gfv2" / "depstor_rasters"
+    waterbody_gpkg = data_root / "input" / "nhd" / "conus_waterbodies.gpkg"
+    waterbody_layer = "waterbodies"
+    fdr = data_root / "gfv2" / "shared" / "gfv2_fdr.vrt"
+    return _build_paths(data_root, after, waterbody_gpkg, waterbody_layer, fdr)
+
+
+def _build_paths(data_root: Path, after: Path, waterbody_gpkg: Path, waterbody_layer: str, fdr: Path) -> dict:
     return {
         "data_root": data_root,
         "after": after,

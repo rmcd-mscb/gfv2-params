@@ -10,30 +10,13 @@ No HPC data, no I/O — CI runs these.
 
 from __future__ import annotations
 
-import importlib.util
-import sys
-from pathlib import Path
-
 import geopandas as gpd
 import numpy as np
 import pandas as pd
 import pytest
 from shapely.geometry import LineString
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
-
-
-def _load_renderer():
-    """Import the renderer by path (it lives in scripts/, not the package)."""
-    path = REPO_ROOT / "scripts" / "render_depstor_figures.py"
-    spec = importlib.util.spec_from_file_location("render_depstor_figures", path)
-    module = importlib.util.module_from_spec(spec)
-    sys.modules["render_depstor_figures"] = module
-    spec.loader.exec_module(module)
-    return module
-
-
-rdf = _load_renderer()
+import scripts.render_depstor_figures as rdf
 
 
 def test_normalize_fields_uppercases_vpu16_casing():
