@@ -408,6 +408,31 @@ These are hard-won; violating them silently corrupts outputs.
   empty* endorheic table (the `tjc` case above) is unaffected and stays a
   legitimate no-op. See
   [`docs/superpowers/specs/2026-07-12-endorheic-dprst-classifier-design.md`](superpowers/specs/2026-07-12-endorheic-dprst-classifier-design.md).
+- **`wbody_connectivity` emits a SECOND raster, `endorheic_wbody.tif`** — every
+  waterbody the `endorheic` classifier flagged (Signal A and/or B), rasterized
+  from the FULL endorheic set regardless of on-stream status (not just the ones
+  the subtraction above demoted). `dprst.py` needs this because the demotion
+  alone doesn't fix the CONUS product: `clump_regions` labels 8-connected
+  waterbody components, and `regions_touching_mask` excludes a WHOLE region if
+  any one cell touches the on-stream mask. The Great Salt Lake (4,369 km²,
+  correctly demoted to dprst by `endorheic`) is 8-connected to a 49.1 km²
+  SwampMarsh (COMID 10273192) whose water flows INTO the lake and is correctly
+  left on-stream — so the region-level exclusion vetoed the entire merged
+  region, silently excluding all 4,854,156 Great Salt Lake cells from
+  depression storage even though `connected_wbody.tif` no longer contains it.
+  The fix, in `dprst.py`, exempts a waterbody's own cells from the
+  region-level exclusion wherever `endorheic_wbody == 1 AND connected_wbody !=
+  1` — i.e. direct hydrologic evidence (terminus-inside-itself) overrides the
+  clump proxy, but only for the waterbody's own (not itself on-stream) cells;
+  the marsh's own cells stay excluded because they ARE on-stream. This runs
+  **before** the impervious carve and land mask so both still apply to
+  recovered cells (the imperv/dprst/perv partition stays disjoint). Fabrics
+  that have not run `endorheic` (no `endorheic_wbody` in the build context)
+  get no exemption — a pure no-op, so this cannot re-open the
+  `drains_to_dprst` over-extension #145/#158/#161 fixed. This is intentionally
+  narrower than a global per-cell on-stream carve (which would recover a
+  further ~8,471 km² of non-endorheic waterbodies whose clump merely abuts an
+  on-stream feature) — those keep today's clump behaviour exactly.
 - **`carea_max`/`smidx_coef` threshold mode.** The legacy `absolute`
   thresholds (8.0/15.6) are only calibrated against VPU 01's ArcPy TWI
   distribution. For any other fabric, use `threshold_mode: percentile` (the

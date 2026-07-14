@@ -128,6 +128,30 @@ These are hard-won; violating them silently corrupts outputs.
   `regions_touching_mask` would delete the whole clump, silently destroying the
   BurnAdd playa's depression area — so the guard buffers by `cell_size *
   sqrt(2)` and **raises** instead of silently dropping it.
+- **Endorheic demotion alone does not fix the CONUS dprst product — the
+  region-level on-stream exclusion still vetoes it.** `clump_regions` labels
+  8-connected waterbody components, and `regions_touching_mask` excludes a
+  WHOLE region from `dprst` if any one cell touches the on-stream mask. The
+  Great Salt Lake (4,369 km², correctly demoted to dprst by `endorheic`) is
+  8-connected to a 49.1 km² SwampMarsh (COMID 10273192) whose water flows INTO
+  the lake and is correctly left on-stream — so without a fix, that one
+  marsh's on-stream status vetoed the entire merged region, silently
+  excluding all 4,854,156 Great Salt Lake cells from depression storage even
+  though `connected_wbody.tif` no longer contains it. The fix:
+  `wbody_connectivity` rasterizes a SECOND mask, `endorheic_wbody.tif` (the
+  FULL endorheic set, regardless of on-stream status), and `dprst.py` exempts a
+  waterbody's own cells from the region-level exclusion wherever
+  `endorheic_wbody == 1 AND connected_wbody != 1` — direct hydrologic evidence
+  (terminus-inside-itself) overrides the clump proxy, but ONLY for the
+  waterbody's own not-on-stream cells; a cell that is itself on-stream (the
+  marsh) always stays excluded. Runs before the impervious carve and land
+  mask so both still apply to recovered cells. `endorheic_wbody` is optional
+  — absent (a fabric that hasn't run `endorheic`) is a pure no-op, so this
+  cannot re-open the `drains_to_dprst` over-extension #145/#158/#161 fixed.
+  Deliberately narrower than a global per-cell on-stream carve, which was
+  considered and rejected — it would recover a further ~8,471 km² of
+  non-endorheic waterbodies whose clump merely abuts an on-stream feature,
+  and those must keep today's clump behaviour exactly.
 - **`BurnAddWaterbody` is NOT a sink layer.** It is every waterbody NHDPlus added
   to the DEM burn; only the rows with a sink `PurpCode` (4 Playa, 5/8 closed
   lake) are sinks and become depression area. VPU 01 ships **702 NULL-`PurpCode`

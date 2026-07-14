@@ -148,6 +148,16 @@ waterbody layer or the on-stream COMID set re-runs `waterbody → endorheic →
 wbody_connectivity → dprst → routing → drains_perv/drains_imperv`
 (`--mem=384G` for `waterbody`/`dprst`, `96G` for `routing`).
 
+`wbody_connectivity` also writes a second raster, `endorheic_wbody.tif` (the
+full endorheic-classified set, regardless of on-stream status). `dprst`
+consumes it to exempt an endorheic waterbody's own cells from the
+region-level on-stream exclusion when `clump_regions`' 8-connected labelling
+has merged it with a genuinely on-stream neighbour — e.g. the Great Salt Lake
+is 8-connected to a 49.1 km² inflow SwampMarsh, and without the exemption that
+one marsh vetoed the whole 4,369 km² lake out of depression storage. Optional:
+a fabric that hasn't run `endorheic` (no `endorheic_wbody` on disk) gets no
+exemption, a pure no-op.
+
 `dprst_depth` (3b) is split out of the single whole-stack job (3c) because its
 compute cost scales with the ~286k CONUS dprst **polygons** (one windowed DEM
 read each), not the CONUS grid — see `docs/ARCHITECTURE.md`'s "CONUS-scale
