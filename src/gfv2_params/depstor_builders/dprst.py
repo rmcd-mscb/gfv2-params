@@ -124,6 +124,10 @@ def build(step_cfg: dict, ctx: BuildContext, logger) -> dict:
             "on-stream exclusion overridden by direct evidence the waterbody's "
             "own water terminates inside itself)", n_exempted,
         )
+        # Both are ~16.9 GB at CONUS and unused past this point -- free them
+        # promptly rather than holding to the end of build(), which pays for
+        # the extra `wbody_binary` term in the exemption above.
+        del exempt, endorheic_binary
     else:
         logger.info(
             "  endorheic exemption: `endorheic_wbody` not in build context — "

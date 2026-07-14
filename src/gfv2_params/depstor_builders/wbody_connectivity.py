@@ -191,8 +191,13 @@ def build(step_cfg: dict, ctx: BuildContext, logger) -> dict:
             f"COMID/member_comid join keys align with the waterbody layer."
         )
 
+    # Read the land mask once and reuse for both rasters below -- each call
+    # allocates a 16.9 GB bool array plus a 16.9 GB `~` temporary at CONUS
+    # scale, so reading it twice doubles that cost for no reason.
+    land = read_land_mask(landmask_path)
+
     binary = rasterize_binary(sel, info, all_touched=False)
-    binary[~read_land_mask(landmask_path)] = 255  # drop off-land (ocean) cells
+    binary[~land] = 255  # drop off-land (ocean) cells
     write_uint8_binary(binary, info, connected_path)
     n_in = int((binary == 1).sum())
     logger.info("  %d connected-waterbody cells after land mask", n_in)
@@ -210,7 +215,7 @@ def build(step_cfg: dict, ctx: BuildContext, logger) -> dict:
         len(endorheic), len(sel_endorheic), len(wb_gdf),
     )
     endorheic_binary = rasterize_binary(sel_endorheic, info, all_touched=False)
-    endorheic_binary[~read_land_mask(landmask_path)] = 255  # drop off-land (ocean) cells
+    endorheic_binary[~land] = 255  # drop off-land (ocean) cells
     write_uint8_binary(endorheic_binary, info, endorheic_path)
     n_endorheic_cells = int((endorheic_binary == 1).sum())
     logger.info("  %d endorheic-waterbody cells after land mask", n_endorheic_cells)
