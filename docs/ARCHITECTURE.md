@@ -416,8 +416,17 @@ These are hard-won; violating them silently corrupts outputs.
   Signal A is a waterbody whose D8 terminus (on the same FDR grid `routing`
   reads) lies INSIDE itself; Signal B is a waterbody majority-inside a closed
   (type-C) WBD HUC12, needed because some closed-basin waterbodies (e.g.
-  Walker Lake) contain no FDR terminal cell. On the shipped CONUS tables Signal
-  B is not a minor complement: of 818 total demotions, 543 are Signal-B-only,
+  Walker Lake) contain no FDR terminal cell.
+
+  Two counts, easy to confuse: a COMID is **flagged** when a signal calls it
+  endorheic (**22,942** on CONUS — this is what `min_endorheic_comids` floors
+  and what `endorheic_wbody.tif` rasterizes), and **demoted** when a flagged
+  COMID was *also* on-stream, so `wbody_connectivity`'s subtraction actually
+  removed it (**818** on CONUS). Most flagged COMIDs were never on-stream, so
+  the subtraction is a no-op for them.
+
+  On the shipped CONUS tables Signal
+  B is not a minor complement: of the 818 demotions, 543 are Signal-B-only,
   112 Signal-A-only, 163 both — BY COUNT Signal B dominates. BY AREA it does
   not: Signal-B-only demotions are small (median ~0.09 km², ~1,400 km² total,
   mostly ponds/playas inside a closed basin), while Signal A carries the
@@ -488,8 +497,10 @@ These are hard-won; violating them silently corrupts outputs.
   carve and land mask so both still apply to recovered cells (the
   imperv/dprst/perv partition stays disjoint). It is intentionally narrower than
   a global per-cell on-stream carve — dropping the `endorheic_wbody` term alone
-  *is* that carve, and it would recover a further ~8,471 km² of non-endorheic
-  waterbodies whose clump merely abuts an on-stream feature; those must keep the
+  *is* that carve, and it would recover a further ~6,518 km² of non-endorheic
+  waterbodies whose clump merely abuts an on-stream feature (reproduce with
+  [`scripts/diagnose/measure_global_carve.py`](../scripts/diagnose/measure_global_carve.py));
+  those must keep the
   unexempted clump behaviour exactly, which is what the `drains_to_dprst`
   over-extension #145/#158/#161 fixed. `endorheic_wbody` is **required** by
   `dprst`, not optional: `wbody_connectivity` always writes it alongside

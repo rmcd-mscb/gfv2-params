@@ -168,8 +168,9 @@ These are hard-won; violating them silently corrupts outputs.
   the impervious carve and land mask so both still apply to recovered cells.
   Deliberately narrower than a global per-cell on-stream carve, which was
   considered and rejected — dropping the `endorheic_wbody` term alone *is* that
-  carve, and it would recover a further ~8,471 km² of non-endorheic waterbodies
-  whose clump merely abuts an on-stream feature; those must keep the unexempted
+  carve, and it would recover a further ~6,518 km² of non-endorheic waterbodies
+  whose clump merely abuts an on-stream feature (reproduce with
+  `scripts/diagnose/measure_global_carve.py`); those must keep the unexempted
   clump behaviour exactly, which is what `drains_to_dprst` over-extension
   #145/#158/#161 fixed. `endorheic_wbody` is **required**, not optional:
   `wbody_connectivity` always writes it alongside `connected_wbody`, so having one

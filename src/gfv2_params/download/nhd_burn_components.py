@@ -59,7 +59,7 @@ logger = configure_logging("download_nhd_burn_components")
 #   PurpCode  PurpDesc                                      rows  FCODEs
 #   4         BurnAddWaterbody Playa                          86  36100
 #   5         NHD Waterbody closed lake                       21  36100 (17), 46600 (4)
-#   8         BurnAddWaterbody closed lake                  1550  39000/39001/39004/39009 (1550), 46600 (1)
+#   8         BurnAddWaterbody closed lake                  1551  39000/39001/39004/39009 (1550), 46600 (1)
 #   NT        Canada National Topographic Data Base (NTDB)     3  39004 (2), 46006 (1)
 #   (NULL)    —                                              704  39004/39000/46006/44500/33600
 #

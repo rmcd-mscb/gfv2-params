@@ -16,10 +16,21 @@ Signal A (primary) -- terminus-inside-itself, on the FDR grid.
     terminates-at-a-sink: the latter demotes every on-stream reservoir in a closed
     basin.)
 
+Two terms, used consistently throughout this module and the docs, because they name
+different sets and are easy to confuse:
+
+  FLAGGED  -- a signal called this COMID endorheic. 22,942 on the shipped CONUS table.
+              This is what `min_endorheic_comids` floors and what `endorheic_wbody.tif`
+              rasterizes.
+  DEMOTED  -- a FLAGGED COMID that was also ON-STREAM, so the subtraction in
+              `wbody_connectivity` actually removed it. 818 on CONUS. Every demoted
+              COMID is flagged; most flagged COMIDs were never on-stream to begin with,
+              so the subtraction is a no-op for them.
+
 Signal B -- majority-inside a WBD type-C (closed) HUC12. Earns its place because
     Walker Lake contains no FDR terminal cell, so Signal A misses it -- but on the
-    shipped CONUS tables it is not a minor complement: of 818 total demotions, 543
-    are Signal-B-only, 112 Signal-A-only, and 163 both. BY COUNT, Signal B dominates.
+    shipped CONUS tables it is not a minor complement: of the 818 DEMOTIONS, 543 are
+    Signal-B-only, 112 Signal-A-only, and 163 both. BY COUNT, Signal B dominates.
     BY AREA it does not: Signal-B-only demotions are small (median ~0.09 km2,
     ~1,400 km2 total) -- ponds and playas sitting inside a closed basin, not large
     lakes -- while Signal A carries the overwhelming majority of the demoted area,
@@ -263,7 +274,6 @@ def frac_own_for_window(
     if n_inside == 0 or pour.sum() == 0:
         return 0.0
     barrier = np.zeros(fdr.shape, dtype=np.uint8)
-    # NOTE: drains_to_dprst_kernel returns a TUPLE (out, n_cycles).
     reach, _n_cycles = drains_to_dprst_kernel(fdr, pour, barrier, fdr_nodata=fdr_nodata)
     return float(((reach == 1) & inside).sum()) / n_inside
 
@@ -390,17 +400,18 @@ def endorheic_frame(
 
     Columns: comid, frac_own, by_terminus, by_closed_huc12.
 
-    Every waterbody Signal A EVALUATED (>= 1 FDR terminal cell inside it -- the
-    cheap Signal-A prefilter in `terminus_own_fraction`) appears here, whether or
-    not it cleared `min_frac` -- plus any additional COMID Signal B flags. This is
-    load-bearing for `scripts/diagnose/endorheic_fixtures.py`'s threshold sweep: if
-    only the FLAGGED union were persisted (as this used to do), a candidate at
-    frac_own = 0.40 would never be written, and a sweep at threshold 0.3 would
+    Every waterbody Signal A EVALUATED (>= 1 FDR terminal cell inside it -- the cheap
+    Signal-A prefilter in `terminus_own_fraction`) appears here, whether or not it
+    cleared `min_frac`, plus any additional COMID Signal B flags. Persisting the
+    unflagged candidates too is load-bearing for the threshold sweep in
+    `scripts/diagnose/endorheic_fixtures.py`: with only the flagged union on disk, a
+    candidate at frac_own = 0.40 would be absent, and a sweep at threshold 0.3 would
     structurally undercount -- unable to tell an inert threshold from a broken one.
-    `by_terminus`/`by_closed_huc12` are both False on an evaluated-but-unflagged
-    row, so `load_endorheic_comids`'s existing `by_terminus | by_closed_huc12`
-    filter still excludes it from the demotion set -- persisting the full
-    distribution changes nothing about which COMIDs get demoted.
+
+    It costs nothing downstream: both signal columns are False on an
+    evaluated-but-unflagged row, so `flagged()` -- the single predicate the loader, the
+    floor and the sweep all share -- excludes it from the demotion set. Which COMIDs get
+    demoted is unaffected by what else is persisted alongside them.
     """
     terminal = terminal_cells(fdr_path)
     if logger:
@@ -449,20 +460,19 @@ def load_endorheic_comids(path: Path) -> set[int]:
 
     A domain with no closed basin has no endorheic waterbody — `tjc` (Texas-Gulf) is
     exactly that, with 4 FDR code-0 cells and 0 flagged waterbodies against 15,262 /
-    thousands on `gfv2`. Raising here (as this used to) conflated "the classifier is
-    broken" with "this domain legitimately has none" and bricked the whole `tjc`
-    depstor DAG. The demotion then subtracts the empty set: a correct no-op.
+    thousands on `gfv2`. An empty set must therefore NOT raise here: it would conflate
+    "the classifier is broken" with "this domain legitimately has none" and brick the
+    whole `tjc` depstor DAG, which lives in the fabric-independent depstor config. The
+    demotion simply subtracts the empty set — a correct no-op.
 
-    The protection against a SILENTLY empty result on a fabric that should have
-    demotions (where a no-op would leave the Great Salt Lake on-stream) lives at the
-    producing end instead — `depstor_builders/endorheic.py`'s `min_endorheic_comids`
-    floor, which `gfv2` declares.
+    The protection against a SILENTLY empty result on a fabric that SHOULD have
+    demotions (where the no-op would leave the Great Salt Lake on-stream) is the
+    `min_endorheic_comids` floor instead — see `check_endorheic_floor`, which is applied
+    at both the producing and the consuming end.
 
-    A row only counts as a demotion if at least one signal actually flagged it.
-    `endorheic_frame` also persists every Signal-A-EVALUATED candidate that was NOT
-    flagged (both columns false) — so a threshold sweep over the full `frac_own`
-    distribution is possible (see `scripts/diagnose/endorheic_fixtures.py`) — and
-    this filter is what keeps that from silently changing the demotion set.
+    Only FLAGGED rows count (`flagged()`): `endorheic_frame` also persists every
+    Signal-A-evaluated candidate that no signal flagged, and this filter is what keeps
+    those out of the demotion set.
     """
     df = pd.read_parquet(path, columns=["comid", *SIGNAL_COLUMNS])
     if df.empty:
