@@ -343,7 +343,7 @@ def main() -> None:
             # Legitimate: a VPU can ship BurnAddWaterbody rows with no sink PurpCode
             # at all (VPU 01 ships 702 such rows and zero sinks). They add no
             # depression area — see burn_add_to_waterbody_frame.
-            logger.info(f"VPU {vpu}: 0 of {len(b)} are sink-purpose (PurpCode 4/8)")
+            logger.info(f"VPU {vpu}: 0 of {len(b)} are sink-purpose (PurpCode 4/5/8)")
             continue
         logger.info(f"VPU {vpu}: {len(sink_purpose)} sink-purpose BurnAddWaterbody kept")
         burns.append(sink_purpose.to_crs(5070))
