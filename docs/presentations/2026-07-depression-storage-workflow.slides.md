@@ -250,7 +250,7 @@ real reservoirs.
 ![](../figures/depstor/rule_network_gate.png)
 
 <span class="caption">
-Sheepy Lake: <strong>8 Non-Network paths thread it, 3 carrying its own WBAREACOMI, ZERO Network flowlines.</strong> Ungated, both sources fire → on-stream.
+Sheepy Lake: <strong>8 Non-Network paths thread it, 3 carrying its own WBAREACOMI, ZERO Network flowlines.</strong> Ungated, both sources fire → on-stream. Necessary — but not sufficient: with this gate in place, Great Salt Lake was <em>still</em> 0% dprst (Rule 6).
 </span>
 
 <!--
@@ -444,7 +444,8 @@ constant of 132 in, and the NHM-calibrated median of 49 in.
 </div>
 
 <!--
-Endorheic set breakdown: 6,364 by terminus, 21,503 by closed HUC12, 4,925 by both.
+Endorheic set breakdown: 6,364 by terminus, 21,503 by closed HUC12, 4,925 by both →
+22,942 unique COMIDs (the table has 22,970 rows; 28 are duplicate-COMID rows).
 725 demotions = 8,735 km²; plus 1,658 BurnAdd sink-purpose polygons = 722 km².
 -->
 
