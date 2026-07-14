@@ -200,7 +200,7 @@ def test_frac_own_stats_reports_bimodality_and_sweep():
 
 ```bash
 cd "$(git rev-parse --show-toplevel)"
-srun --account=impd --time=10 --mem=8G pixi run --as-is python -m pytest tests/test_render_depstor_figures.py -v
+srun --account=impd --time=10 --mem=8G pixi run -e dev --as-is python -m pytest tests/test_render_depstor_figures.py -v
 ```
 Expected: FAIL — `AttributeError: module 'render_depstor_figures' has no attribute 'normalize_fields'`.
 
@@ -516,7 +516,7 @@ if __name__ == "__main__":
 
 ```bash
 cd "$(git rev-parse --show-toplevel)"
-srun --account=impd --time=10 --mem=8G pixi run --as-is python -m pytest tests/test_render_depstor_figures.py -v
+srun --account=impd --time=10 --mem=8G pixi run -e dev --as-is python -m pytest tests/test_render_depstor_figures.py -v
 ```
 Expected: 5 passed.
 
@@ -752,7 +752,7 @@ Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>"
 
 **Interfaces:**
 - Consumes: `draw_tile`, `waterbody_bbox`, `read_waterbodies`, `paths` (Tasks 1–2).
-- Produces: `fig_icemass`, `fig_wbareacomi`, `fig_flowthrough`, `fig_network_gate`, `fig_closed_huc12_walker`, `fig_domain_exits`, `fig_playa_guardrail` — each returns a `Path`.
+- Produces: `fig_network_gate`, `fig_flowthrough`, `fig_wbareacomi`, `fig_closed_huc12_walker`, `fig_domain_exits`, `fig_playa_guardrail` — each returns a `Path`. **Six functions, six PNGs.** Ice Mass is one half of `fig_playa_guardrail`, NOT its own figure — there is no `fig_icemass` and no `rule_icemass.png`. (The spec's inventory still says 14 figures including `rule_icemass`; Task 7 corrects it to 13.)
 
 Each figure follows the Task-2 pattern: resolve COMID(s) → `read_waterbodies` → `waterbody_bbox` → `draw_tile` → legend → suptitle stating the rule → save.
 
@@ -820,9 +820,7 @@ def fig_wbareacomi() -> Path:
 
 **`fig_playa_guardrail()`** → `rule_playa_guardrail.png`. Two panels: the largest Playa (`120050227`) rendering dprst, and the largest Ice Mass (`120050242`) rendering **land** (grey — excluded from the waterbody classification entirely, falls back to perv/imperv via LULC). Suptitle: *"Two hard guardrails, and they are NOT equivalent: Playa IS depression storage (force-dprst, never promoted on-stream). Ice Mass is NOT depression storage — it is excluded from the classification and falls back to land."*
 
-**`fig_icemass()`** → fold into `fig_playa_guardrail` (they are the same slide's two halves). **Do not** emit a separate `rule_icemass.png` — update the spec's figure count from 14 to 13 in Task 7.
-
-Register all of them in `main`'s `figures` dict.
+Register all six in `main`'s `figures` dict, keyed by PNG stem.
 
 - [ ] **Step 2: Render them**
 
