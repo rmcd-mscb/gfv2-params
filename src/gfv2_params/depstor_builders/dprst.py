@@ -5,6 +5,23 @@ NHD-connected mask). Impervious is NOT a region-level exclusion: a single
 impervious cell must not remove a whole clump. Impervious cells are carved out
 of dprst per-cell so imperv/dprst/perv stay a disjoint partition (no cell is
 counted as both impervious and depression storage).
+
+The region-level on-stream exclusion is a HEURISTIC PROXY for connectivity:
+`clump_regions` merges any 8-connected waterbody cells into one region, and
+`regions_touching_mask` excludes the WHOLE region if any one cell touches the
+on-stream mask. That proxy fails when an endorheic waterbody is physically
+adjacent to a genuinely on-stream one -- e.g. the Great Salt Lake (4,369 km2,
+demoted to dprst by the `endorheic` classifier) is 8-connected to a 49.1 km2
+SwampMarsh (COMID 10273192) whose water flows INTO the lake and is correctly
+left on-stream. Without correction, that one marsh's on-stream status vetoes
+the entire merged region, excluding all 4,854,156 Great Salt Lake cells from
+depression storage. The `endorheic_wbody` mask (see `wbody_connectivity.py`)
+is DIRECT hydrologic evidence -- "this waterbody's own water terminates inside
+itself" -- rather than a proxy, so it exempts a waterbody's own (not-on-stream)
+cells from the region-level exclusion. Evidence overrides proxy, but only
+where we have evidence: a waterbody with no endorheic evidence keeps today's
+clump behaviour exactly, so this cannot re-open the `drains_to_dprst`
+over-extension that #145/#158/#161 fixed.
 """
 
 from __future__ import annotations
@@ -66,6 +83,33 @@ def build(step_cfg: dict, ctx: BuildContext, logger) -> dict:
     all_ids = set(int(v) for v in np.unique(regions) if v != 0)
     kept_ids = all_ids - excluded
     dprst_binary = regions_to_binary(regions, kept_ids)
+
+    # A waterbody with DIRECT hydrologic evidence that its water terminates inside
+    # itself is depression storage even if its 8-connected clump also contains a
+    # feature that merely DRAINS INTO it. Without this, a 49 km2 inflow marsh
+    # (COMID 10273192) vetoes all 4,369 km2 of the Great Salt Lake, because
+    # clump_regions merges them and regions_touching_mask excludes the whole region.
+    # Only cells that are themselves on-stream stay carved out.
+    #
+    # `endorheic_wbody` is OPTIONAL: absent (a fabric that has not run `endorheic`)
+    # means no exemption is possible and this is a pure no-op, matching today's
+    # behaviour exactly.
+    if "endorheic_wbody" in ctx.paths:
+        endorheic_binary = read_aligned_uint8(ctx.require("endorheic_wbody"), info)
+        exempt = (endorheic_binary == 1) & (connected_binary != 1)
+        n_exempted = int((exempt & (dprst_binary != 1)).sum())
+        dprst_binary[exempt] = 1
+        logger.info(
+            "  endorheic exemption: %d cells recovered into dprst (region-level "
+            "on-stream exclusion overridden by direct evidence the waterbody's "
+            "own water terminates inside itself)", n_exempted,
+        )
+    else:
+        logger.info(
+            "  endorheic exemption: `endorheic_wbody` not in build context — "
+            "no exemption applied, today's clump behaviour unchanged"
+        )
+
     n_carved = int(((dprst_binary == 1) & (imperv_binary == 1)).sum())
     dprst_binary[imperv_binary == 1] = 255  # carve impervious cells (no imperv/dprst double-count)
     dprst_binary[~land_valid] = 255  # drop off-land (ocean) cells
