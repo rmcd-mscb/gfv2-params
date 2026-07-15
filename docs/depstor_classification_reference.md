@@ -286,45 +286,64 @@ product is rebuilt).
 
 ## 5. One-page map
 
+Sources feed the four-stage gate ladder; the ladder's `dprst_binary.tif` (and the
+sibling rasters) become the parameters. The endorheic classifier feeds the
+connectivity stage as a **strict subtraction** — it can only ever move a
+waterbody toward depression storage.
+
+```mermaid
+flowchart TD
+    subgraph SRC["1. Data sources (base_config.yml, gfv2 profile)"]
+      WB["nhd_waterbodies.gpkg"]
+      TOPO["flowline_topology (Network gate, staged first)"]
+      CONN["connected COMIDs (WBAREACOMI)"]
+      FLOW["flow-through COMIDs"]
+      HUC["closed type-C HUC12s"]
+      BURN["BurnAdd sink polygons"]
+      FDR["FDR grid (code-0 = sinks)"]
+      IMP["NLCD impervious + HRU land mask"]
+    end
+
+    subgraph LAD["2. Gate ladder (depstor_builders)"]
+      W["waterbody: +BurnAdd, -Ice Mass, -slivers"]
+      E["endorheic: A terminus-in-self, B closed HUC12"]
+      C["wbody_connectivity: C1 or C2 Network-gated, Playa never"]
+      D["dprst: D1 clump exclude, D2 endorheic exempt, D3 imperv carve, D4 land"]
+      W --> E
+      E -->|"strict subtract"| C
+      C --> D
+    end
+
+    subgraph OUT["3. Products to params (depstor_params.yml)"]
+      DP["dprst_binary.tif"]
+      PAR["6 spatial params + dprst_depth_avg"]
+      DP --> PAR
+    end
+
+    WB --> W
+    BURN --> W
+    FDR --> E
+    HUC --> E
+    TOPO --> CONN
+    TOPO --> FLOW
+    CONN --> C
+    FLOW --> C
+    IMP --> D
+    D --> DP
 ```
- DATA SOURCES (base_config.yml gfv2 profile)          STAGED BY (download/)
- ─────────────────────────────────────────           ─────────────────────
- nhd_waterbodies.gpkg .......... waterbody_gpkg        nhd_waterbodies
- flowline_topology.parquet ..... (by path) ── gate ──▶ nhd_topology   (FIRST)
- connected_…comids.parquet ..... connected_comids ──┐  nhd_flowlines
- flowthrough_…comids.parquet ... flowthrough_comids ─┤  nhd_flowthrough
- wbd_huc12.parquet ............. wbd_huc12_table ────┤  wbd_huc12
- burn_add_waterbodies.parquet .. burn_add_waterbody ─┤  nhd_burn_components
- gfv2_fdr.vrt (code-0 = sinks) . fdr_raster ─────────┤  clip_shared_to_fabric
- NLCD impervious ............... imperv_source ──────┤  (external)
- HRU fabric .................... hru_gpkg ───────────┘  (landmask step)
-                                                        │
-        ┌───────────────────────────────────────────────┘
-        ▼   THE GATE LADDER   (depstor_rasters.yml steps → depstor_builders/)
- ┌──────────────┐   ┌───────────────┐   ┌──────────────────────┐   ┌───────────┐
- │  waterbody   │──▶│   endorheic   │──▶│  wbody_connectivity  │──▶│   dprst   │
- ├──────────────┤   ├───────────────┤   ├──────────────────────┤   ├───────────┤
- │ + BurnAdd    │   │ Signal A:     │   │ C1 WBAREACOMI  ─┐     │   │ D1 clump  │
- │ − Ice Mass   │   │  terminus-in- │   │ C2 flow-through ┴ ∪   │   │  on-strm  │
- │   (→ land)   │   │  self >0.5    │   │        (Network-gated)│   │  exclude  │
- │ − slivers    │   │ Signal B:     │   │ C3 − endorheic (strict│   │ D2 endorh │
- │ → clumps     │   │  closed HUC12 │   │       subtraction)    │   │  EXEMPT   │
- │              │   │  majority-area│   │ C4 Playa/IceMass never│   │ D3 imperv │
- │              │   │               │   │ → connected_wbody.tif │   │  carve/cel│
- │              │   │ → COMID table │   │ → endorheic_wbody.tif │   │ D4 land   │
- └──────────────┘   └───────────────┘   └──────────────────────┘   └─────┬─────┘
-   default = a waterbody is DEPRESSION STORAGE unless proven on-stream    │
-                                                                          ▼
-   PRODUCTS → PARAMETERS   (depstor_params.yml: fractions ÷ ratios)   dprst_binary.tif
-   ────────────────────────────────────────────────────────────────
-   dprst_binary        ÷ land_mask     → dprst_frac
-   imperv_binary       ÷ land_mask     → hru_percent_imperv
-   drains_perv_binary  ÷ perv_binary   → sro_to_dprst_perv    (same-HRU: drains_to_dprst_hru==hru_id)
-   drains_imperv_binary÷ imperv_binary → sro_to_dprst_imperv  (same-HRU)
-   carea_map_t8_binary ÷ perv_binary   → carea_max            (clamp ≤1)
-   carea_map_t156_binary÷perv_binary   → smidx_coef           (clamp ≤1)
-   dprst_depth.tif (mean, masked to dprst_binary) → dprst_depth_avg
-```
+
+The raster-to-parameter arithmetic (each param is a per-HRU ratio of two zonal
+counts; see [§3b](#3b-the-six-spatial-parameters-depstor_paramsyml)):
+
+| numerator raster | ÷ denominator raster | → parameter |
+|---|---|---|
+| `dprst_binary` | `land_mask` | `dprst_frac` |
+| `imperv_binary` | `land_mask` | `hru_percent_imperv` |
+| `drains_perv_binary` | `perv_binary` | `sro_to_dprst_perv` *(same-HRU)* |
+| `drains_imperv_binary` | `imperv_binary` | `sro_to_dprst_imperv` *(same-HRU)* |
+| `carea_map_t8_binary` | `perv_binary` | `carea_max` *(clamp ≤ 1)* |
+| `carea_map_t156_binary` | `perv_binary` | `smidx_coef` *(clamp ≤ 1)* |
+| `dprst_depth.tif` (mean, masked to `dprst_binary`) | — | `dprst_depth_avg` |
 
 ---
 
