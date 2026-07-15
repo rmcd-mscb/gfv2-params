@@ -112,7 +112,7 @@ def _load_dprst_polygons(ctx: BuildContext, logger) -> gpd.GeoDataFrame:
     fabric clip to `topo.load_fabric_dprst_polygons` — the SAME shared helper
     the SLURM plan hook (`tiling.py::_load_and_tag_for_plan`) calls, so the
     in-process builder path and the array/plan path can't diverge (both
-    reconstruct from `conus_waterbodies.gpkg` + the COMID union and clip to
+    reconstruct from the profile's `waterbody_gpkg` layer + the COMID union and clip to
     the fabric's HRU extent — without that clip a regional fabric would
     process the whole CONUS dprst set).
     """

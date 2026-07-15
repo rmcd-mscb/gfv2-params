@@ -166,7 +166,7 @@ def closed_basin_comids(
     Dissolve first, then measure: a lake straddling two *adjacent* closed HUC12s is
     fully inside the closed system but majority-inside neither polygon on its own.
 
-    A waterbody is a COMID, not a row: `conus_waterbodies.gpkg` stores multi-part
+    A waterbody is a COMID, not a row: the waterbody layer stores multi-part
     waterbodies as multiple rows sharing one COMID (448,124 rows, strictly fewer
     unique COMIDs). Area and intersection-area are summed across all of a COMID's
     rows BEFORE dividing, so a COMID is never decided on the strength of one row

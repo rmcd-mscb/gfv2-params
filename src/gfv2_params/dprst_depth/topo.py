@@ -63,9 +63,9 @@ def _read_vector_arrow(path, layer, columns, logger):
 def _clip_dprst_to_fabric(dprst, hru_gpkg, hru_layer, logger):
     """Keep only dprst polygons that intersect the fabric's HRU geometry.
 
-    The dprst polygon set is reconstructed from the SHARED CONUS
-    `conus_waterbodies.gpkg` (every fabric profile points `waterbody_gpkg`
-    there), so without this clip a regional fabric (e.g. oregon) would
+    The dprst polygon set is reconstructed from the profile's `waterbody_gpkg`
+    layer (the shared CONUS NHDPlus waterbodies), so without this clip a regional
+    fabric (e.g. oregon) would
     reconstruct and process the ENTIRE CONUS dprst set (~321k polygons),
     not its own — defeating the "prove it on a small fabric first" workflow
     and making a regional run cost the same as CONUS. Bbox-prefilter against
@@ -112,7 +112,7 @@ def load_fabric_dprst_polygons(
 
       1. Union the connected(WBAREACOMI) COMID set with the optional
          flow-through COMID set.
-      2. Load `conus_waterbodies.gpkg` and reconstruct the dprst polygon set
+      2. Load the profile's `waterbody_gpkg` layer and reconstruct the dprst polygon set
          (`dprst_polygons`: drop on-stream, force-Playa-dprst, exclude Ice Mass).
       3. Clip to the fabric's HRU geometry (`_clip_dprst_to_fabric`) — the
          fix for the CONUS-scope bug (a regional fabric would otherwise
@@ -487,7 +487,7 @@ def read_window(geom, best_topo: str, wesm_row=None, rim_buffer_m: float = 200.0
     caller has provenance for Phase 1 bucketing.
 
     `geom` is expected in EPSG:5070 — the CRS of the shipped dprst polygon set
-    (`conus_waterbodies.gpkg`), which is also this function's `dst_crs`, so
+    (the profile's `waterbody_gpkg` layer), which is also this function's `dst_crs`, so
     `rim_buffer_m` (metres) adds directly to `geom.bounds` with no reprojection.
     The 10 m tile grid is named by lon/lat, so only the centroid is reprojected
     to EPSG:4326 (via `transform_geom`) to resolve the tile name; the 1 m grid
