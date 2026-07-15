@@ -179,7 +179,12 @@ def build(step_cfg: dict, ctx: BuildContext, logger) -> dict:
             "`tjc`) is a legitimate no-op and does NOT hit this branch — this only "
             "fires when the step's output is missing entirely."
         )
-    endorheic_path = ctx.require("endorheic_comids")
+    # NOTE: distinct name from `endorheic_path` (the endorheic_wbody.tif OUTPUT resolved
+    # at the top). This is the endorheic COMID *table* this step consumes; reusing the
+    # `endorheic_path` name here would rebind it and make the final
+    # `write_uint8_binary(endorheic_binary, ..., endorheic_path)` write the raster onto
+    # the COMID parquet — corrupting the table and never writing the raster.
+    endorheic_table = ctx.require("endorheic_comids")
     # Apply the fabric's floor HERE, not just in the `endorheic` builder that wrote the
     # table. `--from wbody_connectivity --force` — the documented cascade-rebuild recipe
     # (slurm_batch/RUNME.md) — leaves `endorheic` out of the run list entirely, so the
@@ -188,13 +193,13 @@ def build(step_cfg: dict, ctx: BuildContext, logger) -> dict:
     # empty set, write an all-nodata `endorheic_wbody.tif`, and take the whole CONUS
     # cascade green with the Great Salt Lake still on-stream.
     check_endorheic_floor(
-        read_signal_counts(endorheic_path),
+        read_signal_counts(endorheic_table),
         fabric=ctx.fabric,
         floor=ctx.min_endorheic_comids,
         signal_b_active=ctx.wbd_huc12_table is not None,
-        source=endorheic_path,
+        source=endorheic_table,
     )
-    endorheic = load_endorheic_comids(endorheic_path)
+    endorheic = load_endorheic_comids(endorheic_table)
     n_endorheic = len(connected & endorheic)
     connected = connected - endorheic
     logger.info(

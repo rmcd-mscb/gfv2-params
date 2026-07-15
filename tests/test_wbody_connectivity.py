@@ -851,6 +851,17 @@ def test_wbody_connectivity_writes_endorheic_wbody_raster(tmp_path):
     produced = wbody_connectivity.build(_STEP_CFG, ctx, logging.getLogger("t"))
     assert "endorheic_wbody" in produced
 
+    # The raster must land on the CONFIG-declared endorheic_wbody.tif path -- NOT on the
+    # endorheic COMID table it consumes. A variable-name collision between the output
+    # path and the input-table path once wrote the raster onto the parquet, corrupting
+    # the table and leaving endorheic_wbody.tif stale; assert the exact path and that
+    # the input table survives as a readable parquet.
+    assert produced["endorheic_wbody"] == tmp_path / "endorheic_wbody.tif"
+    assert produced["endorheic_wbody"].exists()
+    assert produced["connected_wbody"] == tmp_path / "connected_wbody.tif"
+    surviving = pd.read_parquet(endo)  # must still be the COMID table, not a raster
+    assert list(surviving["comid"]) == [2]
+
     with rasterio.open(produced["connected_wbody"]) as src:
         connected_arr = src.read(1)
     with rasterio.open(produced["endorheic_wbody"]) as src:
