@@ -429,6 +429,65 @@ def test_derive_depstor_params_mean_modes_wired():
         module._find_mean(config, "not_a_real_mean")
 
 
+# ---------------------------------------------------------------------------
+# Robustness guard 2: `run_mean_finalize`'s provenance_source resolution must
+# RAISE FileNotFoundError when a *configured* provenance_source is missing on
+# disk -- shipping dprst_depth_avg with every HRU silently mislabeled
+# "unknown" is exactly the failure to stop. Extracted as `_resolve_provenance_df`
+# (the tightest testable seam -- `run_mean_finalize` itself reads batch CSVs +
+# the master HRU gpkg via `_load_resolved_config`, which needs a real fabric
+# profile to exercise end-to-end).
+# ---------------------------------------------------------------------------
+
+
+def _load_derive_depstor_params_module():
+    """Load scripts/derive_depstor_params.py as a module -- mirrors
+    tests/test_dprst_depth_probe.py's importlib pattern (the script isn't a
+    package, so pytest can't `import` it directly)."""
+    spec = importlib.util.spec_from_file_location(
+        "derive_depstor_params",
+        Path(__file__).resolve().parent.parent / "scripts" / "derive_depstor_params.py",
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_resolve_provenance_df_raises_on_missing_path(tmp_path):
+    module = _load_derive_depstor_params_module()
+    hru_gdf = gpd.GeoDataFrame({"hru_id": [1], "geometry": [box(0, 0, 1, 1)]}, crs=_CRS)
+    missing_path = tmp_path / "does_not_exist.parquet"
+
+    with pytest.raises(FileNotFoundError, match=str(missing_path)):
+        module._resolve_provenance_df(str(missing_path), hru_gdf, "hru_id")
+
+
+def test_resolve_provenance_df_returns_none_when_unconfigured():
+    module = _load_derive_depstor_params_module()
+    hru_gdf = gpd.GeoDataFrame({"hru_id": [1], "geometry": [box(0, 0, 1, 1)]}, crs=_CRS)
+
+    assert module._resolve_provenance_df(None, hru_gdf, "hru_id") is None
+    assert module._resolve_provenance_df("", hru_gdf, "hru_id") is None
+
+
+def test_resolve_provenance_df_reads_real_parquet(tmp_path):
+    """Positive path: an existing provenance_source is read and aggregated
+    via `area_weighted_provenance` (same shape as
+    `test_area_weighted_provenance_dominant_by_area`)."""
+    module = _load_derive_depstor_params_module()
+    polygons_gdf = gpd.GeoDataFrame(
+        {"method": ["measured"], "geometry": [box(0, 0, 40, 40)]}, crs=_CRS,
+    )
+    prov_path = tmp_path / "dprst_depth_polygons.parquet"
+    polygons_gdf.to_parquet(prov_path)
+    hru_gdf = gpd.GeoDataFrame({"hru_id": [1], "geometry": [box(-10, -10, 110, 110)]}, crs=_CRS)
+
+    out = module._resolve_provenance_df(str(prov_path), hru_gdf, "hru_id")
+
+    assert out is not None
+    assert out.set_index("hru_id").loc[1, "dprst_depth_provenance"] == "measured"
+
+
 def test_dprst_depth_skips_when_outputs_exist(tmp_path, monkeypatch):
     tmpl, lm, dm = _write_template_and_landmask(tmp_path)
     depth_out = tmp_path / "dprst_depth.tif"
@@ -460,6 +519,102 @@ def test_dprst_depth_skips_when_outputs_exist(tmp_path, monkeypatch):
 # (tiling.py --plan) populates batch_dir, previously exercised only by the
 # in-process branch (test_dprst_depth_build_end_to_end, no batch_dir).
 # ---------------------------------------------------------------------------
+
+
+# ---------------------------------------------------------------------------
+# Robustness guard 1: `_fill_and_join`'s measured_fraction completeness gate
+# must RAISE (not just warn) on a mass read-failure, with a configurable
+# threshold (`ctx.dprst_depth_min_measured_frac`, default 0.5) and a `0`/
+# negative escape hatch.
+# ---------------------------------------------------------------------------
+
+
+def _make_dprst_gdf(comids):
+    """Minimal fabric-clipped dprst polygon set, post-`_tag_polygons` shape:
+    carries `ecoregion`/`ftype` (which `_tag_polygons` normally sets from the
+    EPA ecoregions gpkg / `FTYPE` before `_fill_and_join` ever runs)."""
+    n = len(comids)
+    return gpd.GeoDataFrame(
+        {
+            "COMID": comids,
+            "ecoregion": ["17"] * n,
+            "ftype": ["LakePond"] * n,
+        },
+        geometry=[box(i * 10, 0, i * 10 + 1, 1) for i in range(n)],
+        crs=_CRS,
+    )
+
+
+def _make_depth_df(comids):
+    """A `depth_df` row per COMID -- non-flat, genuinely measured."""
+    return pd.DataFrame(
+        {
+            "COMID": comids,
+            "dprst_depth_m": [1.0] * len(comids),
+            "measured_max_m": [1.5] * len(comids),
+            "hollister_max_m": [1.2] * len(comids),
+            "flat": [False] * len(comids),
+            "resolution": ["10m"] * len(comids),
+            "method": ["measured"] * len(comids),
+        }
+    )
+
+
+def test_fill_and_join_raises_on_mass_read_failure():
+    """10 polygons, only 3 with a computed depth -> 30% measured, well below
+    the default 0.5 threshold -- must RAISE, not warn."""
+    dprst = _make_dprst_gdf(list(range(1, 11)))
+    depth_df = _make_depth_df([1, 2, 3])  # only COMIDs 1-3 got a computed depth
+
+    ctx = BuildContext(
+        fabric="t", template_path=Path("unused"), output_dir=Path("unused"),
+        hru_gpkg=Path("unused"), hru_layer="nhru",
+    )
+
+    with pytest.raises(RuntimeError, match=r"30\.0%|3/10|measured"):
+        dprst_depth._fill_and_join(dprst, depth_df, ctx, _L())
+
+
+def test_fill_and_join_does_not_raise_on_healthy_fraction():
+    """10 polygons, 8 with a computed depth -> 80% measured, comfortably
+    above the default 0.5 threshold -- must NOT raise."""
+    dprst = _make_dprst_gdf(list(range(1, 11)))
+    depth_df = _make_depth_df(list(range(1, 9)))  # COMIDs 1-8 computed
+
+    ctx = BuildContext(
+        fabric="t", template_path=Path("unused"), output_dir=Path("unused"),
+        hru_gpkg=Path("unused"), hru_layer="nhru",
+    )
+
+    out = dprst_depth._fill_and_join(dprst, depth_df, ctx, _L())
+    assert len(out) == 10
+    assert out["dprst_depth_m"].notna().all()
+
+
+def test_fill_and_join_escape_hatch_disables_guard():
+    """Same mass-read-failure inputs as the raising test above, but
+    `dprst_depth_min_measured_frac=0` (the documented escape hatch) must
+    disable the guard entirely -- no raise."""
+    dprst = _make_dprst_gdf(list(range(1, 11)))
+    depth_df = _make_depth_df([1, 2, 3])
+
+    ctx = BuildContext(
+        fabric="t", template_path=Path("unused"), output_dir=Path("unused"),
+        hru_gpkg=Path("unused"), hru_layer="nhru",
+        dprst_depth_min_measured_frac=0.0,
+    )
+
+    out = dprst_depth._fill_and_join(dprst, depth_df, ctx, _L())
+    assert len(out) == 10
+    assert out["dprst_depth_m"].notna().all()
+
+
+def test_build_context_dprst_depth_min_measured_frac_default():
+    ctx = BuildContext(
+        fabric="t", template_path=Path("unused"), output_dir=Path("unused"),
+        hru_gpkg=Path("unused"), hru_layer="nhru",
+    )
+    assert ctx.dprst_depth_min_measured_frac == pytest.approx(0.5)
 
 
 def test_compute_depths_ingests_and_dedupes_batch_parquets(tmp_path):

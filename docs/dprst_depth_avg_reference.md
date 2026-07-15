@@ -31,7 +31,7 @@ storage*, this decides *how deep each one is* — it runs **after** `dprst`
 | File | Declares (for depth) | Read by |
 |---|---|---|
 | [`base_config.yml`](../configs/base_config.yml) | the `gfv2` profile keys the builder reads: `waterbody_gpkg`, `connected_comids_table`, `flowthrough_comids_table`, `hru_gpkg`, `wesm_index`, `ecoregions_gpkg`, `template_raster` | the builder |
-| [`depstor/depstor_rasters.yml`](../configs/depstor/depstor_rasters.yml) | the `dprst_depth` **step** (`batch_dir`, outputs) + two top-level knobs: `dprst_depth_floor_in: 49.0` ([:25](../configs/depstor/depstor_rasters.yml#L25)) and `dprst_hollister_n_min: 5` ([:26](../configs/depstor/depstor_rasters.yml#L26)) | `build_depstor_rasters.py` |
+| [`depstor/depstor_rasters.yml`](../configs/depstor/depstor_rasters.yml) | the `dprst_depth` **step** (`batch_dir`, outputs) + three top-level knobs: `dprst_depth_floor_in: 49.0` ([:25](../configs/depstor/depstor_rasters.yml#L25)), `dprst_hollister_n_min: 5` ([:26](../configs/depstor/depstor_rasters.yml#L26)), and `dprst_depth_min_measured_frac: 0.5` ([:27](../configs/depstor/depstor_rasters.yml#L27)) | `build_depstor_rasters.py` |
 | [`depstor/depstor_params.yml`](../configs/depstor/depstor_params.yml) | the `means:` `dprst_depth_avg` entry — `source_raster` (`dprst_depth.tif`), `provenance_source` (`dprst_depth_polygons.parquet`), `floor_in: 49.0` ([:109](../configs/depstor/depstor_params.yml#L109)) | `derive_depstor_params.py` |
 
 `dprst_depth_avg` is the pipeline's only **`means:`** parameter — a continuous
@@ -64,9 +64,11 @@ A depth physically comes from one of two 3DEP products, chosen per polygon:
 
 There is **no staged DEM and no elevation config key** — all elevation is live
 `/vsicurl` S3. Consequences the doc calls out under [§4](#4-staleness--maintenance):
-a network/firewall regression does not crash the builder — it degrades to a
-**mass-floored** product, because the builder only **warns** (never aborts) when
-under 50% of polygons get a measured depth.
+a network/firewall regression no longer produces a silently **mass-floored**
+product — `_fill_and_join` **raises `RuntimeError`** when under
+`dprst_depth_min_measured_frac` (default 0.5, `depstor_rasters.yml`) of
+polygons get a measured depth. Set the knob to `0` to disable (escape hatch
+for a legitimately high-flattening small fabric).
 
 ---
 
@@ -229,18 +231,6 @@ batches):
 
 ### Operational risks — *not* defects, but worth guarding
 
-- **Silent mass-floor on network failure.** Because elevation is live `/vsicurl`
-  S3 and the builder only **warns** (never aborts) when < 50% of polygons get a
-  measured depth, a firewall/S3 outage produces a product where everything is the
-  49-in floor — numerically valid, physically meaningless. This is the same class
-  of failure as the PROJ-network firewall issue already in the project's memory.
-  A CONUS run should be sanity-checked against the `method` distribution in
-  `dprst_depth_polygons.parquet` (expect `measured` to dominate).
-- **Provenance can silently degrade to `unknown`.** If
-  `dprst_depth_polygons.parquet` is missing at finalize time, `dprst_depth_avg`
-  is still computed correctly but every HRU's `dprst_depth_provenance` becomes
-  `unknown` (warn, not raise). The numeric param is robust; the provenance column
-  is the fragile part.
 - **`op_flow_thres` is a placeholder constant (1.0), not a derived product.** It
   is a per-HRU CSV in shape only, matching legacy ArcPy. No spatial computation
   stands behind it; nothing in the depstor DAG consumes it.
@@ -251,10 +241,24 @@ batches):
   `dprst_depth.py` and `topo.py` docstrings had named `conus_waterbodies.gpkg`;
   they now reference the profile's `waterbody_gpkg` layer, so they stay correct
   across the #179 repoint and across fabrics.
-- **The two operational risks above are not yet guarded in code.** A
-  measured-fraction hard-fail (so a 3DEP/S3 outage aborts rather than shipping a
-  mass-floored product) and a raise-on-missing-provenance are open follow-ups —
-  see the risk bullets, not yet implemented.
+- **Silent mass-floor on network failure — fixed (robustness guards).** Because
+  elevation is live `/vsicurl` S3, a firewall/S3 outage used to only **warn**
+  (never abort) when < 50% of polygons got a measured depth, silently shipping a
+  product where everything is the 49-in floor — numerically valid, physically
+  meaningless. This is the same class of failure as the PROJ-network firewall
+  issue already in the project's memory. `_fill_and_join` now **raises
+  `RuntimeError`** below `dprst_depth_min_measured_frac` (default 0.5; `0`
+  disables it as an escape hatch). A CONUS run should still be sanity-checked
+  against the `method` distribution in `dprst_depth_polygons.parquet` (expect
+  `measured` to dominate).
+- **Provenance silently degrading to `unknown` — fixed (robustness guards).**
+  If `dprst_depth_polygons.parquet` (a *configured* `provenance_source`) is
+  missing at finalize time, `run_mean_finalize` now **raises
+  `FileNotFoundError`** instead of warning and silently marking every HRU's
+  `dprst_depth_provenance` as `unknown` — a declared-but-missing
+  `provenance_source` means the builder run is incomplete/broken. Unconfigured
+  `provenance_source` (not this parameter's case) is unaffected: provenance
+  stays simply absent, no raise.
 
 ---
 

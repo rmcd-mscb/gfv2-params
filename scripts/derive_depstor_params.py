@@ -119,6 +119,41 @@ def _find_mean(config: dict, name: str) -> dict:
     raise ValueError(f"Mean aggregation '{name}' not in config; available: {available}")
 
 
+def _resolve_provenance_df(provenance_source, hru_gdf, id_feature):
+    """Resolve `run_mean_finalize`'s per-HRU `provenance_df`, or raise.
+
+    `provenance_source` (a `means[].provenance_source` config value, e.g.
+    `dprst_depth`'s companion `dprst_depth_polygons.parquet`) is optional —
+    `None`/empty means no provenance is expected for this mean, and this
+    returns `None` (provenance stays absent downstream, unchanged behavior).
+
+    But if a `provenance_source` IS configured, it declares that a builder
+    run was supposed to produce that parquet. A missing file at that point
+    means the builder run is incomplete/broken — silently shipping
+    `dprst_depth_avg` with `dprst_depth_provenance` == "unknown" for every
+    HRU hides exactly that failure, so this raises `FileNotFoundError`
+    instead of warning.
+    """
+    import geopandas as gpd
+
+    from gfv2_params.dprst_depth.aggregate import area_weighted_provenance
+
+    if not provenance_source:
+        return None
+    prov_path = Path(provenance_source)
+    if not prov_path.exists():
+        raise FileNotFoundError(
+            f"provenance_source configured but not found: {prov_path} -- "
+            f"the builder run that should have produced this parquet appears "
+            f"incomplete or broken. Refusing to silently ship "
+            f"dprst_depth_avg with dprst_depth_provenance='unknown' for "
+            f"every HRU. Re-run the builder (dprst_depth) before finalizing, "
+            f"or fix the provenance_source path if it's stale."
+        )
+    polygons_gdf = gpd.read_parquet(prov_path)
+    return area_weighted_provenance(polygons_gdf, hru_gdf, id_feature)
+
+
 def _merge_paths(config: dict) -> tuple[Path, Path]:
     """Return (intermediates_dir, ratios_dir).
 
@@ -276,7 +311,7 @@ def run_mean_finalize(args, logger) -> None:
     """
     import geopandas as gpd
 
-    from gfv2_params.dprst_depth.aggregate import area_weighted_provenance, finalize_depth_params
+    from gfv2_params.dprst_depth.aggregate import finalize_depth_params
 
     config = _load_resolved_config(args)
     defaults = config["defaults"]
@@ -324,19 +359,8 @@ def run_mean_finalize(args, logger) -> None:
     hru_gdf = gpd.read_file(hru_gpkg, layer=hru_layer, columns=[id_feature])
     hru_ids = hru_gdf[id_feature]
 
-    provenance_df = None
     provenance_source = spec.get("provenance_source")
-    if provenance_source:
-        prov_path = Path(provenance_source)
-        if prov_path.exists():
-            polygons_gdf = gpd.read_parquet(prov_path)
-            provenance_df = area_weighted_provenance(polygons_gdf, hru_gdf, id_feature)
-        else:
-            logger.warning(
-                "  provenance_source configured but not found: %s -- "
-                "dprst_depth_provenance will be '%s' for every HRU with dprst cells",
-                prov_path, "unknown",
-            )
+    provenance_df = _resolve_provenance_df(provenance_source, hru_gdf, id_feature)
 
     out_df = finalize_depth_params(
         zonal_df, hru_ids, id_feature, floor_in=floor_in, provenance_df=provenance_df,

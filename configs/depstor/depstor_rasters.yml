@@ -24,6 +24,7 @@ imperv_source: "{data_root}/input/lulc/nlcd_annual_imperv/Annual_NLCD_FctImp_201
 # base_config.yml alongside waterbody_gpkg/connected_comids_table).
 dprst_depth_floor_in: 49.0 # NHM calibrated dprst_depth_avg median fallback (in)
 dprst_hollister_n_min: 5 # min donors/group before a calibrated-Hollister fit is attempted
+dprst_depth_min_measured_frac: 0.5 # measured_fraction floor below which a mass read-failure RAISEs; 0 disables
 
 steps:
   - name: landmask
