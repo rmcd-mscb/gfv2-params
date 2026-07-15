@@ -110,10 +110,48 @@ Then `burn.burn_depth` rasterizes the settled per-polygon depth onto
 > regression** anywhere in the code — it was evaluated in the #173 spike, found
 > unusable (R²≈0), and never built; the only trace is a docstring explaining why.
 
-`hollister_max_m` is computed for **every** polygon (flat or not) — it is both
-the calibration training signal (from non-flat donors) and the rung-3 predictor
-(for flat rows). `shape_factor(⅓)` converts a max depth to a mean under a
-paraboloid-basin assumption.
+`hollister_max_m` is computed for **every** polygon (flat or not) — it is both the
+calibration training signal (from non-flat donors) and the predictor the
+`calibrated_hollister` rung reads (for flat rows).
+
+### The Hollister max-depth model, in detail
+
+The `calibrated_hollister` rung rests on a terrain-morphometry estimate of lake
+depth from the surrounding topography — the approach of Hollister et al. and its
+`lakeMorpho` implementation. Three steps:
+
+1. **Max depth from shoreline slope** (`topo.lake_max_depth`). Take the mean
+   terrain slope in a 2-cell ring *just outside* the polygon (the shoreline) and
+   project it inward to the lake's **point of maximum distance-to-shore**:
+   `hollister_max_m = mean_shoreline_slope × max_distance_to_shore`. The intuition:
+   a lake set into steep terrain is deep, one in flat terrain is shallow, and its
+   deepest point sits farthest from any shore. (Void/nodata cells are neutralised
+   first — a real elevation dropping to the −9999 sentinel across one pixel would
+   otherwise yield an absurd gradient and an absurd max; issue #173 T6.)
+
+2. **Max → mean** (`topo.max_to_mean`). `dprst_depth_avg` is a *mean* (V/A), so the
+   max is scaled down by a basin shape factor. The code assumes a **conical** basin:
+   `mean = max / 3` (the ⅓ shape factor). (`paraboloid` = ½ and `cylinder` = 1 exist
+   in the helper but are unused.)
+
+3. **Per-group calibration** (`fill._group_model`). Raw Hollister max-depth is a
+   weak *absolute* predictor — the module docstring records **R² ≈ 0.17** — so it
+   is never used raw. Instead, for each `(ecoregion, FTYPE)` group with enough
+   measured donors, a single slope `k` is fit by least squares **through the
+   origin** on `x = hollister_max_m`, `y = measured mean depth`, giving
+   `mean = shape_factor · k · hollister_max_m`. `k` absorbs whatever the raw
+   cone-Hollister estimate gets wrong for that group (`k = 1` would mean it is
+   already unbiased). The calibrated model is used **only if it beats the group's
+   plain median** in a paired K-fold cross-validation (lower CV RMSE); otherwise
+   the group falls back to the median (`regional_fill`). That gate is why
+   `calibrated_hollister` wins only ~1,900 HRUs — it must earn each group.
+
+**References.** J.W. Hollister, W.B. Milstead & M.A. Urrutia (2011), "Predicting
+maximum lake depth from surrounding topography," *PLoS ONE* 6(9): e25764 — the
+method; and the `lakeMorpho` R package (Hollister & Stachelek 2017,
+*F1000Research* 6:1718), whose `lakeMaxDepth` this mirrors. The #173 Phase-0 spike
+([`dprst_depth_spike.md`](dprst_depth_spike.md)) records the local evaluation
+behind the raw-vs-calibrated decision.
 
 ---
 
@@ -207,13 +245,16 @@ batches):
   is a per-HRU CSV in shape only, matching legacy ArcPy. No spatial computation
   stands behind it; nothing in the depstor DAG consumes it.
 
-### Doc drift to fix in the code
+### Resolved / tracked
 
-- **Stale docstrings name the retired waterbody layer.** `dprst_depth.py` and
-  `topo.py` comments still reference `conus_waterbodies.gpkg`, but the `gfv2`
-  profile now points `waterbody_gpkg` at `nhd_waterbodies.gpkg` (PR #179). The
-  code reads whatever the config says (correct); only the prose is stale. Same
-  drift class flagged in the classification reference.
+- **Stale docstrings naming the retired waterbody layer — fixed (PR #183).**
+  `dprst_depth.py` and `topo.py` docstrings had named `conus_waterbodies.gpkg`;
+  they now reference the profile's `waterbody_gpkg` layer, so they stay correct
+  across the #179 repoint and across fabrics.
+- **The two operational risks above are not yet guarded in code.** A
+  measured-fraction hard-fail (so a 3DEP/S3 outage aborts rather than shipping a
+  mass-floored product) and a raise-on-missing-provenance are open follow-ups —
+  see the risk bullets, not yet implemented.
 
 ---
 
