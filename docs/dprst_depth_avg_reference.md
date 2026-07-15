@@ -215,19 +215,29 @@ batches):
 
 ## 4. Staleness / maintenance
 
-### Confirmed dead / by-design
+### Looks removable — but load-bearing (don't delete)
 
+Each of these reads like dead code at a glance; each is actually live or
+by-design. Recorded so a future cleanup doesn't remove them by mistake.
+
+- **`tile_batches`** (`tiling.py`) — looks like a lone, heavily-tested primitive
+  with no production caller, but `component_tile_batches` (the production packer)
+  calls it internally (`tiling.py`, in `component_tile_batches`) to pack each
+  connected component's tiles. It is the inner bin-packing step, not a
+  test-only relic. **Removing it breaks the production plan.**
+- **The `DEPTH_CAP` over-cap clamp in `finalize_depth_params`** — looks
+  unreachable, since per-polygon capping in `fill.fill_flat` already bounds every
+  depth. But it still fires on **float32 rounding noise just past the cap** (e.g.
+  `300.001`; `aggregate.py` FIX 5), and is a deliberate backstop against a future
+  upstream that burns an uncapped polygon set. Live and purposeful.
+- **`flat_pending`** — a method label `compute.py` stamps that `fill.fill_flat`
+  overwrites before the *final* provenance parquet, so it is absent there (zero
+  hits is expected). It is **not** absent from the persisted per-batch parquets,
+  where it correctly marks "flat, awaiting its fill method." By-design
+  intermediate state, not dead.
 - **No depth–area regression exists.** Evaluated in the #173 spike, found
-  unusable, never built. The only reference is a `fill.py` docstring explaining
-  the decision. Not reachable — nothing to remove, but don't go looking for it.
-- **`flat_pending`** is a transient label `compute.py` stamps and `fill.fill_flat`
-  **always overwrites** — it never appears in the shipped provenance parquet.
-  Zero hits there is expected, not a bug.
-- **`tile_batches`** (`tiling.py`) is a directly-tested primitive; production
-  always calls `component_tile_batches`. Kept for tests, off the production path.
-- The `DEPTH_CAP` over-cap branch in `finalize_depth_params` is a defensive
-  backstop that per-polygon capping already makes unreachable — retained against
-  a future uncapped upstream.
+  unusable, never built — the only trace is a `fill.py` docstring explaining the
+  decision. Nothing to remove; don't go looking for it.
 
 ### Operational risks — *not* defects, but worth guarding
 
