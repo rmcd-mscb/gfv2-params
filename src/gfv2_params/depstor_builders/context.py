@@ -72,6 +72,13 @@ class BuildContext:
     # fit_ecoregion_models attempts a CV-compared calibrated-Hollister fit
     # (fill.N_MIN_DEFAULT).
     dprst_hollister_n_min: int = 5
+    # Completeness gate on `_fill_and_join`'s measured_fraction (n_computed /
+    # n_total polygons with a real computed depth, before the fallback
+    # ladder). Below this, RAISE — a systemic read failure (S3 outage, HPC
+    # firewall regression), not genuine hydro-flattening. `0` (or negative)
+    # disables the guard (escape hatch for a legitimately high-flattening
+    # small fabric).
+    dprst_depth_min_measured_frac: float = 0.5
     paths: dict[str, Path] = field(default_factory=dict)
     force: bool = False
 

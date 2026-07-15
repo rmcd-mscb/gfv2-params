@@ -291,17 +291,33 @@ def _fill_and_join(dprst: gpd.GeoDataFrame, depth_df: pd.DataFrame, ctx: BuildCo
         n_computed, n_total,
     )
 
-    # (#173 FIX 3) Completeness gate: a mass read-failure (S3 outage / HPC
-    # firewall regression — this project has hit this class before, see
-    # proj_network_firewall_inf) would otherwise ship a mostly-floored
-    # product with only INFO-level breadcrumbs. Flag loudly, don't abort.
+    # (#173 FIX 3, hardened by the robustness guards) Completeness gate: a
+    # mass read-failure (S3 outage / HPC firewall regression — this project
+    # has hit this class before, see proj_network_firewall_inf) would
+    # otherwise ship a mostly-floored product with only INFO-level
+    # breadcrumbs. Originally "flag loudly, don't abort" (a WARNING); now
+    # FAILS HARD by default — at CONUS scale genuine hydro-flattening only
+    # takes out ~11-22%, so a legitimate run sits near ~0.8 measured, and
+    # `< 0.5` means a systemic read failure, not flattening. Configurable via
+    # `ctx.dprst_depth_min_measured_frac` (`dprst_depth_min_measured_frac` in
+    # depstor_rasters.yml, default 0.5); set it to `0` (or negative) to
+    # disable the guard as an escape hatch for a legitimately
+    # high-flattening small fabric.
     measured_fraction = n_computed / n_total if n_total else 1.0
-    if measured_fraction < 0.5:
-        logger.warning(
-            "  only %.1f%% (%d/%d) of polygons have a computed depth — "
-            "investigate: possible systemic read failure (S3 outage, HPC "
-            "network/firewall regression) rather than genuine hydro-flattening",
-            100 * measured_fraction, n_computed, n_total,
+    threshold = ctx.dprst_depth_min_measured_frac
+    if threshold > 0 and measured_fraction < threshold:
+        raise RuntimeError(
+            f"only {100 * measured_fraction:.1f}% ({n_computed}/{n_total}) of "
+            f"dprst polygons have a computed depth — below the "
+            f"dprst_depth_min_measured_frac threshold ({threshold:.2f}). This "
+            f"almost certainly indicates a systemic read failure (S3 outage, "
+            f"HPC network/firewall regression — this project has hit this "
+            f"class before, see proj_network_firewall_inf) rather than "
+            f"genuine hydro-flattening, which fails only ~11-22% of polygons "
+            f"at CONUS scale. Investigate the 3DEP /vsicurl/ reads before "
+            f"re-running. Set dprst_depth_min_measured_frac to 0 (or "
+            f"negative) in depstor_rasters.yml to disable this guard, only "
+            f"if this fabric is legitimately high-flattening."
         )
 
     _log_achieved_resolution(dprst, merged, logger)

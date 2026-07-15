@@ -113,6 +113,7 @@ def _build_context(config: dict, force: bool) -> BuildContext:
         ecoregions_gpkg=Path(config["ecoregions_gpkg"]) if config.get("ecoregions_gpkg") else None,
         dprst_depth_floor_in=float(config.get("dprst_depth_floor_in", 49.0)),
         dprst_hollister_n_min=int(config.get("dprst_hollister_n_min", 5)),
+        dprst_depth_min_measured_frac=float(config.get("dprst_depth_min_measured_frac", 0.5)),
         force=force,
     )
 
