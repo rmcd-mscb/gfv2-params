@@ -26,7 +26,7 @@ style: |
 ### The classification rules, and what they look like on real hydrography
 
 <span class="footnote">
-gfv2-params · Part 2a (depstor) · CONUS production (gfv2 fabric) · includes PR #178 (open)
+gfv2-params · Part 2a (depstor) · CONUS production (gfv2 fabric) · includes PR #178 (merged)
 </span>
 
 <!--
@@ -479,16 +479,18 @@ the classifier exists to get right, and the ones a bad fix would destroy:
 
 ---
 
-## Not in PR #178, and open issues
+## Status, and open issues
 
-**PR #178 is open and unmerged.** Two things it deliberately does *not* do:
+**PR #178 (the endorheic classifier) is merged to `main`.** Two follow-ups it
+deliberately left as separate changes:
 
-- **The profile still points at the hand-made waterbody layer.**
-  `nhd_waterbodies.parquet` is staged from source and verified, but its shoreline
-  vintage differs by **2.2% in area** — repointing would shift the validated
-  product, so it is a separate change.
-- **`dprst_depth` (#173) must be regenerated.** It is masked to `dprst_binary`,
-  which now includes Great Salt Lake and 1,658 new polygons.
+- **The waterbody-layer repoint — now done (PR #179).** `#178` shipped on the
+  hand-made `conus_waterbodies.gpkg`; `#179` repointed the `gfv2` profile to the
+  source-derived `nhd_waterbodies.gpkg` (shorelines differ **~2.2% in area**).
+  The figures in this deck were rendered on the pre-repoint rasters.
+- **`dprst_depth` (#173) must be regenerated against the grown product** — it is
+  masked to `dprst_binary`, which now includes Great Salt Lake and 1,658 new
+  polygons.
 
 | Issue | Open refinement |
 |---|---|
