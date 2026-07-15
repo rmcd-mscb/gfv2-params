@@ -4,7 +4,7 @@
 #SBATCH --job-name=depstor_zonal
 #SBATCH --output=logs/job_%A_%a.out
 #SBATCH --error=logs/job_%A_%a.err
-#SBATCH --time=02:00:00
+#SBATCH --time=04:00:00
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=2
 #SBATCH --mem=32G

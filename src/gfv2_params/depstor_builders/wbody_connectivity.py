@@ -17,6 +17,7 @@ labelling has merged it with an on-stream neighbour (e.g. the Great Salt Lake's
 from __future__ import annotations
 
 import geopandas as gpd
+import pandas as pd
 
 from ..depstor import (
     RasterInfo,
@@ -26,9 +27,71 @@ from ..depstor import (
     select_connected_waterbodies,
     write_uint8_binary,
 )
-from ..endorheic import load_endorheic_comids
+from ..endorheic import (
+    check_endorheic_floor,
+    load_endorheic_comids,
+    read_signal_counts,
+)
 from ..nhd_ftypes import NEVER_ONSTREAM_FTYPES
 from .context import BuildContext
+
+
+def _selected_comids(sel) -> set[int]:
+    return {
+        int(c) for c in pd.to_numeric(sel["COMID"], errors="coerce").dropna().to_numpy()
+    }
+
+
+def _assert_no_endorheic_repromotion(sel, endorheic: set[int]) -> None:
+    """No waterbody DEMOTED by COMID may come back on-stream through its member_comid.
+
+    `select_connected_waterbodies` promotes on COMID **or** `member_comid`, which is
+    legitimate — a waterbody merged from several COMIDs is on-stream if any member is.
+    But the endorheic demotion is COMID-keyed (`endorheic_frame` groups by COMID), so a
+    lake subtracted from `connected` by COMID could still be re-selected here through a
+    `member_comid` that stayed in the set, silently undoing the demotion and putting the
+    Great Salt Lake back on-stream.
+
+    Inert on the real layer today (COMID == member_comid on every numeric row, and 0
+    rows are on-stream via member_comid alone) — this is what makes that a checked fact
+    rather than a comment. If it ever fires, subtract the endorheic set on both keys.
+    """
+    if "COMID" not in sel.columns or not endorheic:
+        return
+    leaked = _selected_comids(sel) & endorheic
+    if leaked:
+        raise ValueError(
+            f"{len(leaked)} endorheic COMID(s) were demoted from the on-stream set but "
+            f"re-promoted through `member_comid` (e.g. {sorted(leaked)[:5]}) — the "
+            f"demotion is COMID-keyed and has been silently undone. COMID and "
+            f"member_comid have diverged in the waterbody layer; subtract the endorheic "
+            f"set on `member_comid` too."
+        )
+
+
+def _assert_endorheic_selection_is_comid_faithful(sel, endorheic: set[int]) -> None:
+    """Only a COMID a signal actually flagged may enter `endorheic_wbody.tif`.
+
+    Reusing `select_connected_waterbodies` for the endorheic mask inherits its
+    match-on-`member_comid` behaviour — but here that behaviour is NOT legitimate.
+    `dprst.py` exempts these cells from the region-level on-stream exclusion, so a
+    polygon selected via a `member_comid` its own COMID never earned would be ADDED to
+    depression storage on the strength of a key the classifier never evaluated. The
+    whole design rests on the signals being able only to SUBTRACT from the on-stream
+    set; this is the one place that property could invert.
+    """
+    if "COMID" not in sel.columns:
+        return
+    extra = _selected_comids(sel) - endorheic
+    if extra:
+        raise ValueError(
+            f"{len(extra)} waterbody polygon(s) entered the endorheic raster via "
+            f"`member_comid` without their own COMID being flagged endorheic (e.g. "
+            f"{sorted(extra)[:5]}). `dprst` would exempt their cells from the "
+            f"region-level on-stream exclusion on evidence the classifier never "
+            f"produced for them — an ADDITION, which the endorheic signals must never "
+            f"make. COMID and member_comid have diverged in the waterbody layer."
+        )
 
 
 def build(step_cfg: dict, ctx: BuildContext, logger) -> dict:
@@ -102,13 +165,9 @@ def build(step_cfg: dict, ctx: BuildContext, logger) -> dict:
     # demotions is the `min_endorheic_comids` floor in the `endorheic` builder, not
     # a raise here.
     #
-    # NOTE: `select_connected_waterbodies` promotes a waterbody on COMID **or**
-    # `member_comid`, but this subtraction removes COMIDs only (the endorheic table is
-    # COMID-keyed — `endorheic_frame` groups by COMID). Verified inert on the real
-    # layer today: COMID and member_comid are equal on every numeric row, and 0 rows
-    # are on-stream via `member_comid` alone. If those keys ever diverge, a waterbody
-    # could be demoted by COMID here and then re-promoted through its `member_comid`
-    # below, silently disabling the demotion — subtract on both keys if that happens.
+    # The COMID-vs-member_comid hazard this subtraction carries is enforced below, at
+    # the two selections it could corrupt — see `_assert_no_endorheic_repromotion` and
+    # `_assert_endorheic_selection_is_comid_faithful`.
     if "endorheic_comids" not in ctx.paths:
         raise KeyError(
             "wbody_connectivity step needs `endorheic_comids` in the build context, "
@@ -120,7 +179,27 @@ def build(step_cfg: dict, ctx: BuildContext, logger) -> dict:
             "`tjc`) is a legitimate no-op and does NOT hit this branch — this only "
             "fires when the step's output is missing entirely."
         )
-    endorheic = load_endorheic_comids(ctx.require("endorheic_comids"))
+    # NOTE: distinct name from `endorheic_path` (the endorheic_wbody.tif OUTPUT resolved
+    # at the top). This is the endorheic COMID *table* this step consumes; reusing the
+    # `endorheic_path` name here would rebind it and make the final
+    # `write_uint8_binary(endorheic_binary, ..., endorheic_path)` write the raster onto
+    # the COMID parquet — corrupting the table and never writing the raster.
+    endorheic_table = ctx.require("endorheic_comids")
+    # Apply the fabric's floor HERE, not just in the `endorheic` builder that wrote the
+    # table. `--from wbody_connectivity --force` — the documented cascade-rebuild recipe
+    # (slurm_batch/RUNME.md) — leaves `endorheic` out of the run list entirely, so the
+    # orchestrator hydrates its table off disk unvalidated and the producing builder's
+    # floor never runs. A collapsed table left by an aborted run would then subtract the
+    # empty set, write an all-nodata `endorheic_wbody.tif`, and take the whole CONUS
+    # cascade green with the Great Salt Lake still on-stream.
+    check_endorheic_floor(
+        read_signal_counts(endorheic_table),
+        fabric=ctx.fabric,
+        floor=ctx.min_endorheic_comids,
+        signal_b_active=ctx.wbd_huc12_table is not None,
+        source=endorheic_table,
+    )
+    endorheic = load_endorheic_comids(endorheic_table)
     n_endorheic = len(connected & endorheic)
     connected = connected - endorheic
     logger.info(
@@ -157,6 +236,7 @@ def build(step_cfg: dict, ctx: BuildContext, logger) -> dict:
     wb_gdf = wb_gdf[wb_gdf.geometry.notna() & ~wb_gdf.geometry.is_empty]
 
     sel = select_connected_waterbodies(wb_gdf, connected)
+    _assert_no_endorheic_repromotion(sel, endorheic)
     if "FTYPE" in sel.columns:
         n_before = len(sel)
         sel = sel[~sel["FTYPE"].isin(NEVER_ONSTREAM_FTYPES)].copy()
@@ -191,16 +271,22 @@ def build(step_cfg: dict, ctx: BuildContext, logger) -> dict:
             f"COMID/member_comid join keys align with the waterbody layer."
         )
 
-    # Read the land mask once and reuse for both rasters below -- each call
-    # allocates a 16.9 GB bool array plus a 16.9 GB `~` temporary at CONUS
-    # scale, so reading it twice doubles that cost for no reason.
+    # Read the land mask once and reuse for both rasters below -- each call allocates a
+    # 16.9 GB bool array at CONUS scale, so reading it twice doubles that cost for no
+    # reason. Materialise `~land` once too, for the same reason: it is another 16.9 GB
+    # and both rasters need exactly the same one.
     land = read_land_mask(landmask_path)
+    not_land = ~land
+    del land
 
     binary = rasterize_binary(sel, info, all_touched=False)
-    binary[~land] = 255  # drop off-land (ocean) cells
+    binary[not_land] = 255  # drop off-land (ocean) cells
     write_uint8_binary(binary, info, connected_path)
     n_in = int((binary == 1).sum())
     logger.info("  %d connected-waterbody cells after land mask", n_in)
+    # 16.9 GB at CONUS and unused past this point. Free it BEFORE rasterizing the
+    # endorheic mask below, so the two full-grid uint8 arrays are never live at once.
+    del binary
 
     # Endorheic raster: positive hydrologic evidence, independent of on-stream
     # status. Rasterize the FULL endorheic set (not just the ones that were
@@ -210,12 +296,13 @@ def build(step_cfg: dict, ctx: BuildContext, logger) -> dict:
     # from the region-level on-stream exclusion when clump_regions has merged
     # it with an on-stream neighbour.
     sel_endorheic = select_connected_waterbodies(wb_gdf, endorheic)
+    _assert_endorheic_selection_is_comid_faithful(sel_endorheic, endorheic)
     logger.info(
         "  %d endorheic COMIDs; %d of %d waterbody polygons flagged endorheic",
         len(endorheic), len(sel_endorheic), len(wb_gdf),
     )
     endorheic_binary = rasterize_binary(sel_endorheic, info, all_touched=False)
-    endorheic_binary[~land] = 255  # drop off-land (ocean) cells
+    endorheic_binary[not_land] = 255  # drop off-land (ocean) cells
     write_uint8_binary(endorheic_binary, info, endorheic_path)
     n_endorheic_cells = int((endorheic_binary == 1).sum())
     logger.info("  %d endorheic-waterbody cells after land mask", n_endorheic_cells)

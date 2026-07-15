@@ -6,6 +6,7 @@ import math
 from pathlib import Path
 
 import geopandas as gpd
+import numpy as np
 import pandas as pd
 
 from ..depstor import (
@@ -50,11 +51,92 @@ def _load_onstream_comids(ctx: BuildContext, logger) -> set[int] | None:
     return connected
 
 
+def _burn_clumps_reaching_onstream(
+    burn: gpd.GeoDataFrame,
+    wb_gdf: gpd.GeoDataFrame,
+    onstream_comids: set[int],
+    buffer_dist: float,
+    logger=None,
+) -> dict[int, int]:
+    """BurnAdd COMIDs whose clump TRANSITIVELY contains an on-stream waterbody.
+
+    `clump_regions` labels 8-connected components, and connectivity is TRANSITIVE:
+    BurnAdd -> dprst waterbody `W` -> on-stream waterbody `X` puts all three in ONE
+    region, and `regions_touching_mask` then excludes the whole region — silently
+    deleting the BurnAdd playa's depression area. A guard that only tests BurnAdd
+    against its DIRECT on-stream neighbours cannot see that chain, so this walks the
+    adjacency graph outward from each BurnAdd polygon until it stops growing.
+
+    Only polygons that actually RASTERIZE can carry a clump, so Ice Mass
+    (`EXCLUDE_WATERBODY_FTYPES`, dropped from the layer entirely by `build()`) cannot
+    propagate one. Sub-`min_area_threshold` polygons are NOT excluded here — including
+    them can only make the walk reach further, which is the safe (over-approximating)
+    direction, consistent with the cell-diagonal buffer itself.
+
+    Returns `{burn_comid: an on-stream waterbody COMID its clump reaches}`. Empty means
+    no BurnAdd polygon is at risk. Measured on the real CONUS layer: 113 waterbodies sit
+    within one cell diagonal of a BurnAdd polygon, the walk closes after ONE hop (none
+    of those 113 has a further neighbour of its own), and NONE of them is on-stream — so
+    this is inert today. What is wrong in general is the premise that "merging into an
+    already-dprst neighbour is harmless"; today's measurement only happens to be safe
+    because those clumps stop at one hop, which no data refresh guarantees.
+    """
+    prop = wb_gdf
+    if "FTYPE" in prop.columns:
+        prop = prop[~prop["FTYPE"].isin(EXCLUDE_WATERBODY_FTYPES)]
+    prop = prop.reset_index(drop=True)
+    if prop.empty or burn.empty:
+        return {}
+
+    sel = select_connected_waterbodies(prop, onstream_comids)
+    if "FTYPE" in sel.columns:
+        sel = sel[~sel["FTYPE"].isin(NEVER_ONSTREAM_FTYPES)]
+    is_onstream = np.zeros(len(prop), dtype=bool)
+    is_onstream[prop.index.get_indexer(sel.index)] = True
+
+    sidx = prop.sindex
+    visited = np.zeros(len(prop), dtype=bool)
+    # Which BurnAdd polygon pulled each waterbody into a clump. A separate `visited`
+    # array is required: BurnAdd COMIDs are NEGATIVE (NHDPlus PolyID), so no negative
+    # sentinel can mark "unvisited" here.
+    seed = np.zeros(len(prop), dtype=np.int64)
+    frontier = burn.geometry.buffer(buffer_dist).to_numpy()
+    frontier_seed = burn["COMID"].to_numpy()
+
+    hops = 0
+    while len(frontier):
+        hops += 1
+        fi, wj = sidx.query(
+            gpd.GeoSeries(frontier, crs=prop.crs), predicate="intersects"
+        )
+        fresh = ~visited[wj]
+        fi, wj = fi[fresh], wj[fresh]
+        if len(wj) == 0:
+            break
+        # One frontier polygon can reach the same waterbody twice; first writer wins.
+        _, first = np.unique(wj, return_index=True)
+        fi, wj = fi[first], wj[first]
+        visited[wj] = True
+        seed[wj] = frontier_seed[fi]
+        if logger:
+            logger.info(
+                "  BurnAdd clump walk, hop %d: +%d waterbodies", hops, len(wj)
+            )
+        frontier = prop.geometry.iloc[wj].buffer(buffer_dist).to_numpy()
+        frontier_seed = seed[wj]
+
+    hits = np.flatnonzero(visited & is_onstream)
+    return {
+        int(seed[i]): int(prop["COMID"].iloc[i]) for i in hits
+    }
+
+
 def merge_burn_add(
     wb_gdf: gpd.GeoDataFrame,
     burn_gdf: gpd.GeoDataFrame | None,
     cell_size: float = 30.0,
     onstream_comids: set[int] | None = None,
+    logger=None,
 ) -> gpd.GeoDataFrame:
     """Union NHDPlus BurnAddWaterbody polygons into the waterbody layer.
 
@@ -88,17 +170,24 @@ def merge_burn_add(
     `clump_regions` will actually rasterize against, so pass the real template
     cell size (`RasterInfo.from_path(ctx.template_path)`), not the default.
 
-    `onstream_comids` (see `_load_onstream_comids`) narrows the overlap guard below
-    to real on-stream neighbours only — measured against real CONUS data, 112 of
-    1,658 BurnAdd polygons genuinely overlap an existing waterbody, but all 112
-    neighbour an already-dprst waterbody and NONE neighbour an on-stream one.
-    Merging into an already-dprst clump is harmless (the clump simply stays dprst
-    and the BurnAdd area is preserved); only an on-stream neighbour causes the harm
-    this guard exists to catch. Pass `None` (the default) when the on-stream set is
-    unknown (tables not configured / not staged) — the guard then falls back to
-    raising on ANY overlap, the old broad behaviour, since a false negative here
-    (silently letting a real on-stream merge slip through) is worse than a false
-    positive.
+    `onstream_comids` (see `_load_onstream_comids`) narrows the overlap guard below to
+    clumps that actually reach an on-stream waterbody. Measured on the real CONUS layer,
+    the 1,658 BurnAdd polygons pull 113 existing waterbodies into their clumps and none
+    of those clumps reaches an on-stream feature — the guard is inert on today's data.
+
+    The harm is a clump-level property, NOT a neighbour-level one: `clump_regions` is
+    transitive, so BurnAdd -> already-dprst waterbody -> on-stream waterbody merges all
+    three into one region and `regions_touching_mask` deletes it. Merging into an
+    already-dprst neighbour is therefore NOT automatically harmless — being "dprst by
+    COMID" does not mean a waterbody's REGION survives the on-stream exclusion, which is
+    precisely what the Great Salt Lake / COMID 10273192 marsh case demonstrates. So the
+    guard walks the adjacency graph outward (`_burn_clumps_reaching_onstream`) rather
+    than testing direct neighbours only.
+
+    Pass `None` (the default) when the on-stream set is unknown (tables not configured /
+    not staged) — the guard then falls back to raising on ANY overlap, the old broad
+    behaviour, since a false negative here (silently letting a real on-stream merge slip
+    through) is worse than a false positive.
     """
     if burn_gdf is None or len(burn_gdf) == 0:
         return wb_gdf
@@ -110,51 +199,62 @@ def merge_burn_add(
         )
     burn = burn_gdf.to_crs(wb_gdf.crs) if burn_gdf.crs != wb_gdf.crs else burn_gdf
 
-    # A BurnAdd polygon overlapping an existing waterbody would be MERGED with it by
-    # clump_regions (8-connected labelling). The harm only occurs if that neighbour
-    # is ON-STREAM: regions_touching_mask then excludes the whole clump — silently
-    # DELETING the BurnAdd playa's depression area, the opposite of why we staged
-    # it. Merging into an already-dprst neighbour is harmless — the clump simply
-    # stays dprst and the BurnAdd area is preserved — so the guard is restricted to
-    # on-stream waterbodies when `onstream_comids` is available, and falls back to
-    # the broad "any overlap" guard when it is not (on-stream status unknowable).
-    if onstream_comids is not None:
-        overlap_target = select_connected_waterbodies(wb_gdf, onstream_comids)
-        if "FTYPE" in overlap_target.columns:
-            overlap_target = overlap_target[
-                ~overlap_target["FTYPE"].isin(NEVER_ONSTREAM_FTYPES)
-            ].copy()
-        descriptor = "on-stream "
-    else:
-        overlap_target = wb_gdf
-        descriptor = ""
-
     # This must test what clump_regions actually does to the RASTERIZED cells, not
     # vector intersection: 8-connectivity merges cells whose centres are up to
     # `cell_size * sqrt(2)` apart (a diagonal neighbour), so two polygons that do NOT
     # intersect in vector space can still land in adjacent, 8-connected cells and be
-    # clump-merged anyway. Buffering the BurnAdd geometry by one cell diagonal before
-    # the join is a conservative over-approximation of that adjacency test — it can
-    # flag a near-miss that wouldn't actually rasterize into the same clump, but it
-    # can never miss a real one. Fail loud on the near-miss; never miss the real thing.
+    # clump-merged anyway. Buffering by one cell diagonal is a conservative
+    # over-approximation of that adjacency test — it can flag a near-miss that wouldn't
+    # actually rasterize into the same clump, but it can never miss a real one. Fail
+    # loud on the near-miss; never miss the real thing.
     buffer_dist = cell_size * math.sqrt(2)
+
+    if onstream_comids is not None:
+        # The harm is a CLUMP-level property: clump_regions is transitive, so a BurnAdd
+        # polygon adjacent to a dprst waterbody that is itself adjacent to an on-stream
+        # one lands in a single region that regions_touching_mask then deletes whole.
+        # Walk the adjacency graph rather than testing direct neighbours only.
+        at_risk = _burn_clumps_reaching_onstream(
+            burn, wb_gdf, onstream_comids, buffer_dist, logger=logger
+        )
+        if at_risk:
+            sample = sorted(at_risk.items())[:10]
+            raise ValueError(
+                f"{len(at_risk)} BurnAddWaterbody polygon(s) sit in an 8-connected "
+                f"clump (within one rasterized cell diagonal, {buffer_dist:.1f} m) that "
+                f"reaches an ON-STREAM waterbody — possibly transitively, through an "
+                f"intermediate dprst waterbody. e.g. "
+                f"{[f'BurnAdd {b} -> on-stream {w}' for b, w in sample]}. "
+                f"clump_regions merges the whole chain into one region, so "
+                f"regions_touching_mask would silently drag the BurnAdd depression out "
+                f"of dprst. Investigate — do not suppress this."
+            )
+        return _concat_burn(wb_gdf, burn)
+
+    # On-stream status unknowable (tables not configured / not staged): fall back to the
+    # broad guard — raise on ANY overlap. A false negative (silently letting a real
+    # on-stream merge through) is worse than a false positive.
     buffered = burn[["COMID", "geometry"]].copy()
     buffered["geometry"] = buffered.geometry.buffer(buffer_dist)
     hits = gpd.sjoin(
-        buffered, overlap_target[["COMID", "geometry"]],
-        how="inner", predicate="intersects",
+        buffered, wb_gdf[["COMID", "geometry"]], how="inner", predicate="intersects",
     )
     if not hits.empty:
         bad = sorted(set(hits["COMID_left"]))[:10]
         raise ValueError(
             f"{hits['COMID_left'].nunique()} BurnAddWaterbody polygon(s) overlap or "
             f"lie within one rasterized cell diagonal ({buffer_dist:.1f} m) of an "
-            f"existing {descriptor}waterbody (e.g. {bad}). clump_regions would merge "
-            f"them into one 8-connected region, so an on-stream neighbour would "
-            f"silently drag the BurnAdd depression out of dprst. Investigate the "
-            f"overlap — do not suppress this."
+            f"existing waterbody (e.g. {bad}). clump_regions would merge them into one "
+            f"8-connected region, so an on-stream neighbour would silently drag the "
+            f"BurnAdd depression out of dprst. The on-stream COMID tables are not "
+            f"staged, so this guard cannot tell an on-stream neighbour from a harmless "
+            f"dprst one — stage them, or investigate the overlap. Do not suppress this."
         )
+    return _concat_burn(wb_gdf, burn)
 
+
+def _concat_burn(wb_gdf: gpd.GeoDataFrame, burn: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
+    """Append the (guard-cleared) BurnAdd rows to the waterbody frame."""
     burn = burn[wb_gdf.columns].copy()
     # `member_comid` is a plain string in the real conus_waterbodies.gpkg, but
     # burn_add_to_waterbody_frame (Task 1) emits it as int64 (same value as COMID).
@@ -165,12 +265,11 @@ def merge_burn_add(
     # on. Normalise to whatever dtype wb_gdf already uses before concatenating.
     if "member_comid" in wb_gdf.columns:
         target_dtype = wb_gdf["member_comid"].dtype
-        # `pd.api.types.is_object_dtype` compares dtype identity correctly, unlike
-        # `target_dtype is object` (always False for a pandas dtype instance — that
-        # comparison never fires, so this branch was previously dead code). A plain
-        # `.astype(object)` on an int64 column wraps the raw ints rather than
-        # stringifying them, reproducing the exact mixed str/int column this
-        # normalisation exists to prevent.
+        # Must be `pd.api.types.is_object_dtype`, NOT `target_dtype is object`: the
+        # latter is always False for a pandas dtype instance, so the branch would never
+        # fire. And the cast must stringify explicitly — a plain `.astype(object)` on an
+        # int64 column wraps the raw ints rather than stringifying them, reproducing the
+        # exact mixed str/int column this normalisation exists to prevent.
         if pd.api.types.is_object_dtype(target_dtype):
             burn["member_comid"] = burn["member_comid"].astype(str)
         else:
@@ -228,6 +327,22 @@ def build(step_cfg: dict, ctx: BuildContext, logger) -> dict:
                 f"remove `burn_add_waterbody_table` from the profile."
             )
         burn = gpd.read_parquet(ctx.burn_add_waterbody_table)
+        if burn.empty:
+            # A zero-row table is NOT a legitimate result: nhd_burn_components.main()
+            # itself raises on it ("0 BurnAddWaterbody polygons staged across all VPUs
+            # -- that would add no depression area at all"), so a configured, present,
+            # EMPTY table means the staging was truncated or corrupted after the fact.
+            # merge_burn_add would quietly return wb_gdf unchanged and ~722 km2 of
+            # playa / closed-lake depression area would vanish from dprst behind an
+            # INFO line reading "merged 0 BurnAddWaterbody polygons".
+            raise ValueError(
+                f"{ctx.burn_add_waterbody_table} is configured but has ZERO rows. "
+                f"That is not a legitimate result — the staging step refuses to write "
+                f"an empty table — so it has been truncated or corrupted. Re-stage "
+                f"with `python -m gfv2_params.download.nhd_burn_components`, or remove "
+                f"`burn_add_waterbody_table` from the profile to run without BurnAdd "
+                f"depression area deliberately."
+            )
         onstream_comids = _load_onstream_comids(ctx, logger)
         if onstream_comids is None:
             logger.warning(
@@ -239,7 +354,8 @@ def build(step_cfg: dict, ctx: BuildContext, logger) -> dict:
             )
         n_before = len(wb_gdf)
         wb_gdf = merge_burn_add(
-            wb_gdf, burn, cell_size=abs(info.transform.a), onstream_comids=onstream_comids,
+            wb_gdf, burn, cell_size=abs(info.transform.a),
+            onstream_comids=onstream_comids, logger=logger,
         )
         logger.info(
             "  merged %d BurnAddWaterbody polygons (%.1f km2) into %d waterbodies",

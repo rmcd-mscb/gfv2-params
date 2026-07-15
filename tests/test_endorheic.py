@@ -13,6 +13,7 @@ from rasterio.transform import from_origin
 from shapely.geometry import Polygon
 
 from gfv2_params.endorheic import (
+    check_endorheic_floor,
     closed_basin_comids,
     endorheic_frame,
     frac_own_for_window,
@@ -565,3 +566,148 @@ def test_builder_raises_when_the_waterbodies_dont_overlap_the_fdr(tmp_path):
     gpkg = _wb_gpkg(tmp_path / "wb.gpkg", _wb([[555, far]]))
     with pytest.raises(ValueError, match="does not overlap the FDR grid"):
         _build(_ctx(tmp_path, fdr, gpkg))
+
+
+def _closed_huc12_covering_the_lake(path):
+    """A WBD table whose single type-C HUC12 contains the `_lake()` block."""
+    gpd.GeoDataFrame(
+        {"HUC_12": ["160000000000"], "HU_12_TYPE": ["C"]},
+        geometry=[_box(0, 0, NY * PIXEL, NY * PIXEL)],
+        crs=CRS,
+    ).to_parquet(path)
+    return path
+
+
+def test_builder_flags_a_signal_b_only_lake(tmp_path):
+    """Signal B's POSITIVE path, end to end through the builder.
+
+    `closed_basin_comids` is unit-tested thoroughly, but nothing drove `endorheic_frame`
+    or `build()` with a WBD that actually flags a COMID — so dropping `b` from the union
+    in `endorheic_frame`, or inverting the `closed_gdf is not None` guard, left the whole
+    suite green. Signal B is 543 of the 818 CONUS demotions by count (Walker Lake,
+    Pyramid, Lake Abert, Summer), not a minor complement.
+
+    The FDR is through-flowing, so Signal A finds nothing: only Signal B can flag here.
+    """
+    fdr = _through_flowing_fdr(tmp_path / "fdr.tif")
+    gpkg = _wb_gpkg(tmp_path / "wb.gpkg", _wb([[555, _lake()]]))
+    wbd = _closed_huc12_covering_the_lake(tmp_path / "wbd.parquet")
+
+    out = _build(_ctx(tmp_path, fdr, gpkg, wbd_huc12_table=wbd))["endorheic_comids"]
+
+    assert load_endorheic_comids(out) == {555}
+    row = pd.read_parquet(out).set_index("comid").loc[555]
+    assert bool(row["by_closed_huc12"])
+    assert not bool(row["by_terminus"])  # Signal A never flagged it
+    assert row["frac_own"] == 0.0        # Signal A never even evaluated it
+
+
+def test_builder_raises_when_the_staged_wbd_has_no_type_c_rows(tmp_path):
+    """Configuring `wbd_huc12_table` asserts Signal B should run.
+
+    A staged WBD with zero type-C rows (a truncated re-stage, or an HU_12_TYPE whose
+    values don't match 'C' exactly) silently switches Signal B back off: the type-C
+    filter empties the frame, `closed_basin_comids` returns the empty set, and the
+    majority of CONUS demotions vanish behind an INFO line.
+    """
+    fdr = _endorheic_fdr(tmp_path / "fdr.tif")
+    gpkg = _wb_gpkg(tmp_path / "wb.gpkg", _wb([[555, _lake()]]))
+    wbd = tmp_path / "wbd.parquet"
+    gpd.GeoDataFrame(
+        {"HUC_12": ["120000000000"], "HU_12_TYPE": ["S"]},  # contributing, not closed
+        geometry=[_box(0, 0, NY * PIXEL, NY * PIXEL)], crs=CRS,
+    ).to_parquet(wbd)
+
+    with pytest.raises(ValueError, match="NOT ONE of type 'C'"):
+        _build(_ctx(tmp_path, fdr, gpkg, wbd_huc12_table=wbd))
+
+
+# ---------------------------------------------------------------------------
+# Signal A's CRS contract
+# ---------------------------------------------------------------------------
+
+
+def test_signal_a_reprojects_a_waterbody_layer_in_a_foreign_crs(tmp_path):
+    """A CRS mismatch must not silently zero Signal A.
+
+    The read window and the `inside` mask are both computed against the FDR's transform
+    from bounds taken in the waterbody layer's CRS. On a mismatch every window lands
+    off-grid — and `boundless=True` returns an all-nodata block rather than raising, so
+    frac_own comes out 0.0 for EVERY candidate and the classifier flags nothing at all.
+    `_assert_overlaps_fdr` cannot catch it (it reprojects the FDR bbox into the
+    waterbody CRS before testing overlap, so a mismatch passes cleanly).
+    """
+    fdr = _endorheic_fdr(tmp_path / "fdr.tif")
+    lake_5070 = _wb([[555, _lake()]])
+    lake_4326 = lake_5070.to_crs("EPSG:4326")
+
+    matched = endorheic_frame(lake_5070, fdr)
+    foreign = endorheic_frame(lake_4326, fdr)
+
+    assert set(matched.loc[matched["by_terminus"], "comid"]) == {555}
+    # The same lake, described in a different CRS, must classify the same way.
+    assert set(foreign.loc[foreign["by_terminus"], "comid"]) == {555}
+    assert foreign["frac_own"].iloc[0] == pytest.approx(
+        matched["frac_own"].iloc[0], abs=1e-9
+    )
+
+
+def test_signal_a_raises_on_a_waterbody_layer_with_no_crs(tmp_path):
+    fdr = _endorheic_fdr(tmp_path / "fdr.tif")
+    crsless = gpd.GeoDataFrame({"COMID": [555]}, geometry=[_lake()], crs=None)
+    with pytest.raises(ValueError, match="needs a CRS"):
+        endorheic_frame(crsless, fdr)
+
+
+# ---------------------------------------------------------------------------
+# The `min_endorheic_comids` floor (shared by the producing and consuming ends)
+# ---------------------------------------------------------------------------
+
+
+def _counts(total, by_terminus, by_closed):
+    return {"total": total, "by_terminus": by_terminus, "by_closed_huc12": by_closed}
+
+
+def test_floor_is_inert_without_a_declared_minimum():
+    # `tjc` (Texas-Gulf) has no closed basin and declares no floor: zero is legitimate.
+    check_endorheic_floor(
+        _counts(0, 0, 0), fabric="tjc", floor=None, signal_b_active=False, source="x"
+    )
+
+
+def test_floor_rejects_a_collapsed_union():
+    with pytest.raises(ValueError, match="min_endorheic_comids"):
+        check_endorheic_floor(
+            _counts(3, 3, 0), fabric="gfv2", floor=100, signal_b_active=False, source="x"
+        )
+
+
+def test_floor_rejects_a_total_signal_a_collapse_the_union_cannot_see():
+    """The union floor alone cannot detect one signal dying.
+
+    Signal B dominates BY COUNT (543 of 818 CONUS demotions) while Signal A carries
+    almost all the demoted AREA (the Great Salt Lake is 4,369 km2 of it). So a Signal A
+    that collapses to zero — the exact presentation of a CRS mismatch — still leaves the
+    union far above any count-based floor while ~75% of the demoted area vanishes.
+    """
+    with pytest.raises(ValueError, match="NOT ONE from Signal A"):
+        check_endorheic_floor(
+            _counts(706, 0, 706), fabric="gfv2", floor=100,
+            signal_b_active=True, source="x",
+        )
+
+
+def test_floor_rejects_a_total_signal_b_collapse_when_signal_b_is_configured():
+    with pytest.raises(ValueError, match="NOT ONE from Signal B"):
+        check_endorheic_floor(
+            _counts(275, 275, 0), fabric="gfv2", floor=100,
+            signal_b_active=True, source="x",
+        )
+
+
+def test_floor_ignores_signal_b_when_it_is_not_configured():
+    # Signal B off (no wbd_huc12_table) is a deliberate configuration, not a collapse.
+    check_endorheic_floor(
+        _counts(275, 275, 0), fabric="oregon", floor=100,
+        signal_b_active=False, source="x",
+    )

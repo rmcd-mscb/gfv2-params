@@ -388,8 +388,12 @@ exemption" below). If `endorheic` hasn't been run for a fabric (no
 rather than proceeding without the demotion. A fabric whose domain has no closed basin (e.g.
 `tjc`, Texas-Gulf) legitimately produces an EMPTY endorheic table and carries on
 — the demotion is then a no-op. On a fabric that DOES expect demotions, set
-`min_endorheic_comids` in its profile (gfv2: 100): the `endorheic` step then
-fails loud if the classifier collapses below that floor. Selective re-runs via `--step <name>` or
+`min_endorheic_comids` in its profile (gfv2: 100): both the `endorheic` step
+**and** `wbody_connectivity` then fail loud if the classifier has collapsed
+below that floor, or if either signal has died entirely. Checking it at the
+consuming end too is what covers `--from wbody_connectivity` — that recipe
+skips the `endorheic` step, so the orchestrator hydrates its table off disk
+and the producing builder's own check never runs. Selective re-runs via `--step <name>` or
 `--from <name>` passed through to the Python script. `dprst_depth` (issue
 #173) is a CONUS-scale compute outlier in this DAG — see "Stage 2d'" below; it
 needs its own SLURM array run **before** a full unfiltered
@@ -466,16 +470,29 @@ vetoed the entire merged region — silently excluding all 4,854,156 Great Salt
 Lake cells from depression storage even after the COMID demotion.
 `dprst.py` fixes this using `endorheic_wbody.tif`: it exempts a waterbody's
 own cells from the region-level exclusion wherever `endorheic_wbody == 1 AND
-connected_wbody != 1` — direct hydrologic evidence (terminus-inside-itself)
-overrides the clump proxy, but only for the waterbody's own not-on-stream
-cells; the marsh's own cells stay excluded because they ARE on-stream. Runs
-before the impervious carve and land mask, so both still apply to recovered
-cells. `endorheic_wbody` is optional in the build context — a fabric that
-hasn't run `endorheic` gets no exemption, a pure no-op, matching pre-fix
-behaviour exactly. This is deliberately narrower than a global per-cell
-on-stream carve (which would additionally recover ~8,471 km² of
-non-endorheic waterbodies whose clump merely abuts an on-stream feature) —
-those keep today's clump behaviour.
+connected_wbody != 1 AND wbody_binary == 1` — direct hydrologic evidence
+(terminus-inside-itself) overrides the clump proxy, but only for the
+waterbody's own not-on-stream cells (the marsh's own cells stay excluded
+because they ARE on-stream), and only where `waterbody` already calls the cell
+a waterbody (without that term the 2 Mt Shasta Ice Mass COMIDs, which
+`waterbody` deliberately excluded, would come back as depression storage).
+Runs before the impervious carve and land mask, so both still apply to
+recovered cells. This is deliberately narrower than a global per-cell
+on-stream carve — dropping the `endorheic_wbody` term alone *is* that carve,
+and it would additionally recover ~6,518 km² of non-endorheic waterbodies
+whose clump merely abuts an on-stream feature (reproduce with
+`scripts/diagnose/measure_global_carve.py`); those keep the unexempted clump
+behaviour.
+
+**`endorheic_wbody` is required, not optional.** `wbody_connectivity` always
+writes it alongside `connected_wbody`, so an output directory with one and not
+the other is always STALE — written before the classifier existed — never a
+valid configuration. `dprst` therefore **raises** when it is missing. This
+matters for the recovery recipes below: a `--from dprst --force` rebuild
+against a pre-classifier `depstor_rasters/` would otherwise silently re-emit
+the old product (the marsh's clump veto returns, all 4,854,156 Great Salt Lake
+cells drop back out of depression storage) and exit 0. If you hit that raise,
+re-run `wbody_connectivity` first.
 
 **waterbody/endorheic rebuild cascade.** Changing the waterbody layer (e.g. a
 new BurnAddWaterbody union) or the on-stream COMID set re-runs

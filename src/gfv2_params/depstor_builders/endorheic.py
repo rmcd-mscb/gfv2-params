@@ -21,33 +21,34 @@ Lake. Instead, breakage is gated on things that actually indicate breakage:
 from __future__ import annotations
 
 import geopandas as gpd
-import pandas as pd
 import rasterio
 from shapely.geometry import box
 
-from ..endorheic import endorheic_frame, write_endorheic_comids
+from ..endorheic import (
+    check_endorheic_floor,
+    endorheic_frame,
+    read_signal_counts,
+    signal_counts,
+    write_endorheic_comids,
+)
 from .context import BuildContext
 
 
-def _check_floor(n: int, ctx: BuildContext, output_path) -> None:
-    """Raise if the fabric declares a `min_endorheic_comids` floor and `n` is under it.
+def _check_floor(counts: dict[str, int], ctx: BuildContext, output_path) -> None:
+    """Apply the fabric's `min_endorheic_comids` floor (see `endorheic.check_endorheic_floor`).
 
-    This is the real protection the old "raise on 0 rows" guard was reaching for, but
-    scoped to the fabrics that can actually assert an expectation. On `gfv2` a
-    collapsed or silently-empty classifier result can never slip through unnoticed:
-    the demotion would be a no-op and the Great Salt Lake would stay on-stream.
+    `wbody_connectivity` applies the SAME floor to the same table at the consuming end,
+    which is what covers the `--from wbody_connectivity` path that skips this builder
+    entirely. Checking here too keeps the failure adjacent to the step that can actually
+    fix it.
     """
-    floor = ctx.min_endorheic_comids
-    if floor is not None and n < floor:
-        raise ValueError(
-            f"endorheic classifier produced {n} COMIDs for fabric '{ctx.fabric}', "
-            f"below its declared `min_endorheic_comids` floor of {floor} "
-            f"({output_path}). That is a collapsed or no-op demotion — the Great Salt "
-            f"Lake would stay on-stream. Check that fdr_raster has code-0 cells, that "
-            f"the waterbody layer overlaps it, and that wbd_huc12_table is staged. "
-            f"Lower/remove the floor in the fabric profile ONLY if this domain "
-            f"genuinely has no closed basin."
-        )
+    check_endorheic_floor(
+        counts,
+        fabric=ctx.fabric,
+        floor=ctx.min_endorheic_comids,
+        signal_b_active=ctx.wbd_huc12_table is not None,
+        source=output_path,
+    )
 
 
 def _assert_overlaps_fdr(wb: gpd.GeoDataFrame, fdr_path, logger) -> None:
@@ -93,13 +94,7 @@ def build(step_cfg: dict, ctx: BuildContext, logger) -> dict:
         # The table may carry unflagged evaluated candidates (see endorheic_frame),
         # so the floor must count only the FLAGGED (actually-demoted) rows, not
         # every row on disk.
-        existing = pd.read_parquet(
-            output_path, columns=["comid", "by_terminus", "by_closed_huc12"]
-        )
-        n_existing_flagged = int(
-            (existing["by_terminus"] | existing["by_closed_huc12"]).sum()
-        )
-        _check_floor(n_existing_flagged, ctx, output_path)
+        _check_floor(read_signal_counts(output_path), ctx, output_path)
         return {"endorheic_comids": output_path}
     if not ctx.fdr_raster.exists():
         raise FileNotFoundError(f"FDR raster not found: {ctx.fdr_raster}")
@@ -147,6 +142,22 @@ def build(step_cfg: dict, ctx: BuildContext, logger) -> dict:
         logger.info(
             "  WBD: %d of %d HUC12s are type-C (closed basin)", len(closed), n_all
         )
+        if closed.empty:
+            # Configuring `wbd_huc12_table` is an assertion that Signal B should run.
+            # A staged WBD with zero type-C rows silently switches it back off --
+            # `closed_basin_comids` returns the empty set -- costing the majority of
+            # CONUS demotions by count with nothing but an INFO line. Any of: a stale
+            # or truncated re-stage, or an HU_12_TYPE whose values don't match 'C'
+            # exactly (NHDPlus field CASING already varies by VPU, see
+            # download/wbd_huc12.py). Mirrors the empty-flowthrough raise in
+            # wbody_connectivity.
+            raise ValueError(
+                f"{ctx.wbd_huc12_table} carries {n_all} HUC12s but NOT ONE of type 'C' "
+                f"(closed basin) — Signal B is configured and would silently degrade to "
+                f"a no-op. Re-stage with `python -m gfv2_params.download.wbd_huc12`, or "
+                f"remove `wbd_huc12_table` from the profile to turn Signal B off "
+                f"deliberately."
+            )
 
     df = endorheic_frame(wb, ctx.fdr_raster, closed_gdf=closed, logger=logger)
     # `df` now carries every Signal-A-EVALUATED candidate (flagged or not), so the
@@ -154,8 +165,9 @@ def build(step_cfg: dict, ctx: BuildContext, logger) -> dict:
     # frac_own distribution -- NOT just the demotions. `len(df)` is therefore the
     # wrong count for both the floor and the "is this domain endorheic at all?"
     # check below; both must count only the FLAGGED (actually-demoted) rows.
-    n_flagged = int((df["by_terminus"] | df["by_closed_huc12"]).sum())
-    _check_floor(n_flagged, ctx, output_path)
+    counts = signal_counts(df)
+    n_flagged = counts["total"]
+    _check_floor(counts, ctx, output_path)
     if n_flagged == 0:
         # A domain with no closed basin (e.g. `tjc`, Texas-Gulf). Legitimate: write the
         # table (possibly with unflagged evaluated candidates, but zero demotions) so
@@ -171,6 +183,6 @@ def build(step_cfg: dict, ctx: BuildContext, logger) -> dict:
     logger.info(
         "  %d endorheic COMIDs (%d by terminus, %d by closed basin) out of %d "
         "evaluated candidates persisted",
-        n_flagged, int(df.by_terminus.sum()), int(df.by_closed_huc12.sum()), len(df),
+        n_flagged, counts["by_terminus"], counts["by_closed_huc12"], len(df),
     )
     return {"endorheic_comids": output_path}

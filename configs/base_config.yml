@@ -39,9 +39,14 @@ fabrics:
     # Run: pixi run --as-is python scripts/merge_vpu_segments.py --fabric gfv2
     segments_gpkg: "{data_root}/{fabric}/fabric/{fabric}_nsegment_merged.gpkg"
     segments_layer: nsegment
-    # Waterbodies: shared CONUS NHDPlusV2 polygons (same source as oregon). The
-    # waterbody builder reprojects to the template grid and clips to land_mask.
-    waterbody_gpkg: "{data_root}/input/nhd/conus_waterbodies.gpkg"
+    # Waterbodies: CONUS NHDPlusV2 polygons staged from source by
+    # gfv2_params.download.nhd_waterbodies (converted to gpkg from the verified
+    # nhd_waterbodies.parquet — the builders read an OGR gpkg layer, and the
+    # geoparquet needs libduckdb which is absent from the env). Same 448,124 COMIDs
+    # as the retired hand-made conus_waterbodies.gpkg, but a fresher shoreline vintage
+    # (~2.2% total-area difference); the waterbody builder reprojects to the template
+    # grid and clips to land_mask. The retired layer stays on disk for A/B reference.
+    waterbody_gpkg: "{data_root}/input/nhd/nhd_waterbodies.gpkg"
     waterbody_layer: waterbodies
     # Connected-waterbody COMIDs distilled from NHD WBAREACOMI artificial paths
     # (see gfv2_params.download.nhd_flowlines). Drives wbody_connectivity.
@@ -169,9 +174,11 @@ fabrics:
     waterbody_gpkg: "{data_root}/input/fabric/NHM_01_draft.gpkg"
     waterbody_layer: wbs
     # No `connected_comids_table`: the `wbs` layer has no COMID/member_comid
-    # column, so the WBAREACOMI join cannot run. The depstor
-    # `wbody_connectivity`/`dprst` steps therefore fail-fast on this profile —
-    # use the `gfv2` profile for depstor validation.
+    # column, so neither the WBAREACOMI join nor the COMID-keyed endorheic
+    # classifier can run. The depstor DAG therefore fail-fasts on this profile
+    # — at the `endorheic` step first, which now precedes `wbody_connectivity`
+    # and raises on a waterbody layer with no COMID column. Use the `gfv2`
+    # profile for depstor validation.
     hru_gpkg: "{data_root}/{fabric}/fabric/gfv2_vpu01_nhru.gpkg"
     hru_layer: nhru
     id_feature: nat_hru_id

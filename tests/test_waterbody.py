@@ -249,7 +249,7 @@ def test_merge_burn_add_rejects_overlap_with_onstream_neighbor():
     """
     base = _frame([[None, None, 111, "LakePond", 111, 0.01, _sq(0, 0)]])
     burn = _frame([[None, None, -367111, "Playa", -367111, 0.01, _sq(50, 50)]])  # overlaps
-    with pytest.raises(ValueError, match="overlap"):
+    with pytest.raises(ValueError, match="reaches an ON-STREAM waterbody"):
         merge_burn_add(base, burn, onstream_comids={111})
 
 
@@ -374,3 +374,121 @@ def test_merge_burn_add_normalises_object_dtype_member_comid():
     merged_burn_row = out[out["COMID"] == -367111].iloc[0]
     assert isinstance(merged_burn_row["member_comid"], str)
     assert merged_burn_row["member_comid"] == "-367111"
+
+
+# ---------------------------------------------------------------------------
+# The BurnAdd clump guard is TRANSITIVE (clump_regions is 8-connected labelling,
+# and connectivity chains through intermediate waterbodies).
+# ---------------------------------------------------------------------------
+
+# 30 m cells -> one cell diagonal is 42.4 m, so squares 20 m apart clump-merge
+# without vector-intersecting.
+_GAP = 20
+
+
+def test_merge_burn_add_raises_on_a_clump_that_reaches_onstream_TRANSITIVELY():
+    """BurnAdd -> dprst waterbody -> on-stream waterbody is ONE 8-connected region.
+
+    The direct-neighbour guard could not see this chain: the BurnAdd polygon's only
+    neighbour (COMID 111) is a perfectly ordinary dprst waterbody. But `clump_regions`
+    merges all three into one region, and `regions_touching_mask` then excludes the
+    whole region -- silently deleting the BurnAdd playa's depression area, which is the
+    exact harm this guard exists to prevent.
+
+    The premise the old guard rested on -- "merging into an already-dprst neighbour is
+    harmless, the clump simply stays dprst" -- is what the Great Salt Lake / COMID
+    10273192 marsh case disproves: being dprst by COMID does not mean your REGION
+    survives the on-stream exclusion.
+    """
+    base = _frame([
+        # Chain: burn(-500) ~ 111 (dprst) ~ 222 (ON-STREAM)
+        [None, None, 111, "LakePond", 111, 0.01, _sq(0, 0)],
+        [None, None, 222, "StreamRiver", 222, 0.01, _sq(100 + _GAP, 0)],
+    ])
+    burn = _frame([[None, None, -500, "Playa", -500, 0.01, _sq(-100 - _GAP, 0)]])
+
+    with pytest.raises(ValueError, match="transitively"):
+        merge_burn_add(base, burn, cell_size=30.0, onstream_comids={222})
+
+
+def test_merge_burn_add_allows_a_clump_that_never_reaches_onstream():
+    """The same chain, but nothing in it is on-stream -> the clump stays dprst.
+
+    This is the case the guard must NOT block: 112 of 1,658 real BurnAdd polygons
+    neighbour an existing waterbody, and none of their clumps reaches an on-stream
+    feature, so the guard has to stay inert on real CONUS data.
+    """
+    base = _frame([
+        [None, None, 111, "LakePond", 111, 0.01, _sq(0, 0)],
+        [None, None, 222, "LakePond", 222, 0.01, _sq(100 + _GAP, 0)],
+    ])
+    burn = _frame([[None, None, -500, "Playa", -500, 0.01, _sq(-100 - _GAP, 0)]])
+
+    out = merge_burn_add(base, burn, cell_size=30.0, onstream_comids=set())
+    assert set(out.COMID) == {111, 222, -500}  # merged, nothing dropped
+
+
+def test_merge_burn_add_clump_walk_does_not_chain_through_ice_mass():
+    """Ice Mass is dropped from the waterbody layer entirely, so it cannot carry a clump.
+
+    `waterbody.build()` removes EXCLUDE_WATERBODY_FTYPES before rasterizing, so an Ice
+    Mass polygon never becomes a cell and cannot 8-connect a BurnAdd polygon to an
+    on-stream one. Chaining through it would be a false positive that blocks the build.
+    """
+    base = _frame([
+        [None, None, 111, "Ice Mass", 111, 0.01, _sq(0, 0)],          # never rasterized
+        [None, None, 222, "StreamRiver", 222, 0.01, _sq(100 + _GAP, 0)],
+    ])
+    burn = _frame([[None, None, -500, "Playa", -500, 0.01, _sq(-100 - _GAP, 0)]])
+
+    out = merge_burn_add(base, burn, cell_size=30.0, onstream_comids={222})
+    assert set(out.COMID) == {111, 222, -500}
+
+
+def test_build_raises_on_a_configured_but_empty_burn_add_table(tmp_path):
+    """A zero-row BurnAdd table means truncated/corrupted staging, not "no playas".
+
+    `nhd_burn_components.main()` itself refuses to write an empty table, so a
+    configured, present, EMPTY one can only mean corruption. `merge_burn_add` would
+    quietly return the frame unchanged and ~722 km2 of playa / closed-lake depression
+    area would vanish from dprst behind an INFO line reading "merged 0 polygons".
+    """
+    import rasterio
+    from rasterio.transform import from_origin
+
+    from gfv2_params.depstor_builders import waterbody
+    from gfv2_params.depstor_builders.context import BuildContext
+
+    n = 10
+    template = tmp_path / "template.tif"
+    landmask = tmp_path / "land_mask.tif"
+    for path, arr, dt, nd in (
+        (template, np.full((n, n), 100.0, dtype=np.float32), "float32", -9999.0),
+        (landmask, np.ones((n, n), dtype=np.uint8), "uint8", 255),
+    ):
+        with rasterio.open(
+            path, "w", driver="GTiff", height=n, width=n, count=1, dtype=dt,
+            crs=CRS, transform=from_origin(0, n * 30, 30, 30), nodata=nd,
+        ) as dst:
+            dst.write(arr, 1)
+
+    wb_gpkg = tmp_path / "wb.gpkg"
+    _frame([[None, None, 111, "LakePond", "111", 0.01, _sq(0, 0)]]).to_file(
+        wb_gpkg, layer="waterbodies", driver="GPKG"
+    )
+    empty_burn = tmp_path / "burn.parquet"
+    _frame([]).to_parquet(empty_burn)
+
+    ctx = BuildContext(
+        fabric="t", template_path=template, output_dir=tmp_path,
+        hru_gpkg=wb_gpkg, hru_layer="waterbodies",
+        waterbody_gpkg=wb_gpkg, waterbody_layer="waterbodies",
+        burn_add_waterbody_table=empty_burn,
+    )
+    ctx.paths["landmask"] = landmask
+
+    with pytest.raises(ValueError, match="ZERO rows"):
+        waterbody.build(
+            {"outputs": {"binary": "wbody_binary.tif", "regions": "wbody_regions.tif"}},
+            ctx, logging.getLogger("test"),
+        )

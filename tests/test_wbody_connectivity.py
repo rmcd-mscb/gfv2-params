@@ -851,6 +851,17 @@ def test_wbody_connectivity_writes_endorheic_wbody_raster(tmp_path):
     produced = wbody_connectivity.build(_STEP_CFG, ctx, logging.getLogger("t"))
     assert "endorheic_wbody" in produced
 
+    # The raster must land on the CONFIG-declared endorheic_wbody.tif path -- NOT on the
+    # endorheic COMID table it consumes. A variable-name collision between the output
+    # path and the input-table path once wrote the raster onto the parquet, corrupting
+    # the table and leaving endorheic_wbody.tif stale; assert the exact path and that
+    # the input table survives as a readable parquet.
+    assert produced["endorheic_wbody"] == tmp_path / "endorheic_wbody.tif"
+    assert produced["endorheic_wbody"].exists()
+    assert produced["connected_wbody"] == tmp_path / "connected_wbody.tif"
+    surviving = pd.read_parquet(endo)  # must still be the COMID table, not a raster
+    assert list(surviving["comid"]) == [2]
+
     with rasterio.open(produced["connected_wbody"]) as src:
         connected_arr = src.read(1)
     with rasterio.open(produced["endorheic_wbody"]) as src:
@@ -863,3 +874,196 @@ def test_wbody_connectivity_writes_endorheic_wbody_raster(tmp_path):
     # endorheic_wbody regardless (positive evidence, independent of on-stream).
     assert not (connected_arr[4:6, 4:6] == 1).any()
     assert (endorheic_arr[4:6, 4:6] == 1).any()
+
+
+# ---------------------------------------------------------------------------
+# The `min_endorheic_comids` floor at the CONSUMING end, and the COMID-keyed
+# contract between the endorheic table and the member_comid join.
+# ---------------------------------------------------------------------------
+
+
+def _endorheic_fixture(tmp_path, *, endorheic_rows, comids=(10, 20), member=None):
+    """A two-waterbody fixture wired for wbody_connectivity, with a chosen endorheic table."""
+    from shapely.geometry import box
+
+    template = tmp_path / "template.tif"
+    landmask = tmp_path / "land_mask.tif"
+    wb_gpkg = tmp_path / "wb.gpkg"
+    connected_table = tmp_path / "connected.parquet"
+    _write_template(template)
+    _write_landmask(landmask)
+
+    member = member if member is not None else [str(c) for c in comids]
+    gpd.GeoDataFrame(
+        {"COMID": list(comids), "member_comid": member,
+         "FTYPE": ["LakePond"] * len(comids)},
+        geometry=[box(0, 270, 60, 300), box(240, 0, 300, 30)],
+        crs="EPSG:5070",
+    ).to_file(wb_gpkg, layer="waterbodies", driver="GPKG")
+    pd.DataFrame({"comid": pd.array(list(comids), dtype="int64")}).to_parquet(
+        connected_table, index=False
+    )
+
+    endo = tmp_path / "endorheic.parquet"
+    pd.DataFrame(
+        endorheic_rows,
+        columns=["comid", "frac_own", "by_terminus", "by_closed_huc12"],
+    ).astype(
+        {"comid": "int64", "frac_own": "float64",
+         "by_terminus": "bool", "by_closed_huc12": "bool"}
+    ).to_parquet(endo, index=False)
+    return template, landmask, wb_gpkg, connected_table, endo
+
+
+def _endorheic_ctx(tmp_path, *, endorheic_rows, member=None, **kw):
+    from gfv2_params.depstor_builders.context import BuildContext
+
+    template, landmask, wb_gpkg, connected_table, endo = _endorheic_fixture(
+        tmp_path, endorheic_rows=endorheic_rows, member=member
+    )
+    ctx = BuildContext(
+        fabric="gfv2", template_path=template, output_dir=tmp_path,
+        hru_gpkg=wb_gpkg, hru_layer="waterbodies",
+        waterbody_gpkg=wb_gpkg, waterbody_layer="waterbodies",
+        connected_comids_table=connected_table, **kw,
+    )
+    ctx.paths["landmask"] = landmask
+    ctx.paths["endorheic_comids"] = endo
+    return ctx
+
+
+def test_endorheic_floor_is_enforced_at_the_consuming_end(tmp_path):
+    """The floor must fire HERE, not only in the `endorheic` builder that wrote the table.
+
+    `--from wbody_connectivity --force` is the documented cascade-rebuild recipe
+    (slurm_batch/RUNME.md), and it leaves `endorheic` out of the run list entirely — the
+    orchestrator hydrates its table straight off disk with no validation. A collapsed
+    table left behind by an aborted run would then subtract the empty set, write an
+    all-nodata `endorheic_wbody.tif`, and take the whole CONUS cascade green with the
+    Great Salt Lake still on-stream. The producing builder's floor never executes on
+    that path, so it cannot be the only guard.
+    """
+    import pytest
+
+    from gfv2_params.depstor_builders import wbody_connectivity
+
+    ctx = _endorheic_ctx(tmp_path, endorheic_rows=[], min_endorheic_comids=100)
+    with pytest.raises(ValueError, match="min_endorheic_comids"):
+        wbody_connectivity.build(_STEP_CFG, ctx, logging.getLogger("test"))
+
+
+def test_endorheic_empty_table_still_a_noop_without_a_floor(tmp_path):
+    """The floor is opt-in: a fabric that declares none (tjc) still tolerates empty."""
+    from gfv2_params.depstor_builders import wbody_connectivity
+
+    ctx = _endorheic_ctx(tmp_path, endorheic_rows=[])
+    produced = wbody_connectivity.build(_STEP_CFG, ctx, logging.getLogger("test"))
+    with rasterio.open(produced["connected_wbody"]) as src:
+        assert src.read(1)[0, 0] == 1  # untouched by an empty subtraction
+
+
+def test_endorheic_demotion_cannot_be_undone_through_member_comid(tmp_path):
+    """A waterbody demoted by COMID must not return on-stream via its member_comid.
+
+    The demotion is COMID-keyed but `select_connected_waterbodies` promotes on COMID
+    **or** `member_comid`. Inert on the real layer today (the keys agree on every
+    numeric row) — this is what makes that a checked fact rather than a comment. Here
+    COMID 10 is demoted, but its member_comid points at 20, which is still on-stream:
+    without the guard it would be silently re-promoted and the demotion lost.
+    """
+    import pytest
+
+    from gfv2_params.depstor_builders import wbody_connectivity
+
+    ctx = _endorheic_ctx(
+        tmp_path,
+        endorheic_rows=[[10, 1.0, True, False]],
+        member=["20", "20"],  # COMID 10's member_comid points at the on-stream COMID 20
+    )
+    with pytest.raises(ValueError, match="re-promoted through `member_comid`"):
+        wbody_connectivity.build(_STEP_CFG, ctx, logging.getLogger("test"))
+
+
+def test_endorheic_raster_cannot_gain_a_comid_the_classifier_never_flagged(tmp_path):
+    """The endorheic signals may only SUBTRACT — this is where that could invert.
+
+    `endorheic_wbody.tif` is selected with the same COMID-or-member_comid join, but
+    here a member_comid match is NOT legitimate: `dprst` exempts these cells from the
+    region-level on-stream exclusion, so a polygon selected on a key its own COMID
+    never earned would be ADDED to depression storage on evidence the classifier never
+    produced for it. COMID 20 is not endorheic, but its member_comid points at the
+    endorheic COMID 10.
+    """
+    import pytest
+
+    from gfv2_params.depstor_builders import wbody_connectivity
+
+    ctx = _endorheic_ctx(
+        tmp_path,
+        endorheic_rows=[[10, 1.0, True, False]],
+        member=["10", "10"],  # COMID 20's member_comid points at the endorheic COMID 10
+    )
+    with pytest.raises(ValueError, match="without their own COMID being flagged"):
+        wbody_connectivity.build(_STEP_CFG, ctx, logging.getLogger("test"))
+
+
+def test_endorheic_wbody_raster_is_land_masked(tmp_path):
+    """`endorheic_wbody.tif` must be masked against `land_mask.tif` like every other
+    depstor raster. The land-mask test above only inspected `connected_wbody`, so
+    deleting the endorheic raster's `[not_land] = 255` left the suite green.
+    """
+    from shapely.geometry import box
+
+    from gfv2_params.depstor_builders import wbody_connectivity
+    from gfv2_params.depstor_builders.context import BuildContext
+
+    n = 10
+    template = tmp_path / "template.tif"
+    landmask = tmp_path / "land_mask.tif"
+    wb_gpkg = tmp_path / "wb.gpkg"
+    connected_table = tmp_path / "connected.parquet"
+    _write_template(template, n)
+
+    # Land only in the TOP half; the bottom half is ocean.
+    transform = from_origin(0, n * 30, 30, 30)
+    land = np.zeros((n, n), dtype=np.uint8)
+    land[0:5, :] = 1
+    with rasterio.open(
+        landmask, "w", driver="GTiff", height=n, width=n, count=1, dtype="uint8",
+        crs="EPSG:5070", transform=transform, nodata=255,
+    ) as dst:
+        dst.write(land, 1)
+
+    # COMID 10 on-stream (top-left, on land). COMID 20 endorheic, straddling the
+    # land/ocean boundary: rows 3-6, so its bottom half must be masked off.
+    gpd.GeoDataFrame(
+        {"COMID": [10, 20], "member_comid": [10, 20],
+         "FTYPE": ["LakePond", "LakePond"]},
+        geometry=[box(0, 270, 60, 300), box(0, 120, 60, 210)],
+        crs="EPSG:5070",
+    ).to_file(wb_gpkg, layer="waterbodies", driver="GPKG")
+    pd.DataFrame({"comid": pd.array([10], dtype="int64")}).to_parquet(
+        connected_table, index=False
+    )
+
+    endo = tmp_path / "endorheic.parquet"
+    pd.DataFrame(
+        {"comid": pd.array([20], dtype="int64"), "frac_own": [1.0],
+         "by_terminus": [True], "by_closed_huc12": [False]}
+    ).to_parquet(endo, index=False)
+
+    ctx = BuildContext(
+        fabric="t", template_path=template, output_dir=tmp_path,
+        hru_gpkg=wb_gpkg, hru_layer="waterbodies",
+        waterbody_gpkg=wb_gpkg, waterbody_layer="waterbodies",
+        connected_comids_table=connected_table,
+    )
+    ctx.paths["landmask"] = landmask
+    ctx.paths["endorheic_comids"] = endo
+
+    produced = wbody_connectivity.build(_STEP_CFG, ctx, logging.getLogger("test"))
+    with rasterio.open(produced["endorheic_wbody"]) as src:
+        arr = src.read(1)
+
+    assert (arr[3:5, 0:2] == 1).any(), "endorheic cells on LAND must be burned"
+    assert not (arr[5:, :] == 1).any(), "endorheic cells over OCEAN must be masked off"
