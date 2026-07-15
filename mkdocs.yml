@@ -105,6 +105,7 @@ nav:
       - Python patterns: python-patterns.md
   - Pipeline reference:
       - Depstor classification reference: depstor_classification_reference.md
+      - dprst_depth_avg reference: dprst_depth_avg_reference.md
       - Depstor workflow: depstor_workflow.md
       - Depstor port summary: depstor_port_summary.md
       - VPU 01 validation: depstor_vpu01_validation_results.md
