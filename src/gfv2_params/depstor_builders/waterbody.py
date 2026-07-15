@@ -256,7 +256,7 @@ def merge_burn_add(
 def _concat_burn(wb_gdf: gpd.GeoDataFrame, burn: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
     """Append the (guard-cleared) BurnAdd rows to the waterbody frame."""
     burn = burn[wb_gdf.columns].copy()
-    # `member_comid` is a plain string in the real conus_waterbodies.gpkg, but
+    # `member_comid` is a plain string in the real waterbody layer, but
     # burn_add_to_waterbody_frame (Task 1) emits it as int64 (same value as COMID).
     # Left un-normalised, pd.concat below produces an `object` column with mixed
     # str/int rows. Nothing downstream reads it today -- select_connected_waterbodies
