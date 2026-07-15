@@ -104,6 +104,7 @@ nav:
       - Adding a parameter: ADDING_A_PARAMETER.md
       - Python patterns: python-patterns.md
   - Pipeline reference:
+      - Depstor classification reference: depstor_classification_reference.md
       - dprst_depth_avg reference: dprst_depth_avg_reference.md
       - Depstor workflow: depstor_workflow.md
       - Depstor port summary: depstor_port_summary.md

@@ -78,13 +78,11 @@ def build(step_cfg: dict, ctx: BuildContext, logger) -> dict:
     excluded = onstream_regions
     # Impervious is carved per-cell (below), NOT used to exclude whole regions:
     # a single impervious pixel must not drop an entire waterbody clump from
-    # depression storage. regions_touching_mask is kept only for logging.
-    imperv_regions = regions_touching_mask(regions, imperv_binary)
+    # depression storage.
     n_total = int(regions.max())
     logger.info(
-        "  %d total wbody regions; %d touch connected wbody (excluded), "
-        "%d touch imperv (kept; cells carved per-cell)",
-        n_total, len(onstream_regions), len(imperv_regions),
+        "  %d total wbody regions; %d touch connected wbody (excluded)",
+        n_total, len(onstream_regions),
     )
 
     all_ids = set(int(v) for v in np.unique(regions) if v != 0)
