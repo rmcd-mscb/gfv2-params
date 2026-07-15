@@ -100,6 +100,7 @@ nav:
       - Adding a parameter: ADDING_A_PARAMETER.md
       - Python patterns: python-patterns.md
   - Pipeline reference:
+      - Depstor classification reference: depstor_classification_reference.md
       - Depstor workflow: depstor_workflow.md
       - Depstor port summary: depstor_port_summary.md
       - VPU 01 validation: depstor_vpu01_validation_results.md
