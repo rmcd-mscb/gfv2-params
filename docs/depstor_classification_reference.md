@@ -105,7 +105,7 @@ vs. proxy.
 |---|---|---|---|---|
 | **BurnAdd merge** | union NHDPlus BurnAddWaterbody sink polygons (playa / closed-lake depression *area*) into the layer; negative COMIDs, so they can never match a positive on-stream COMID; a clump-overlap guard raises if a BurnAdd clump transitively reaches an on-stream waterbody | `burn_add_waterbody_table` | adds dprst area | structural | `merge_burn_add()` |
 | **Ice Mass exclude** | drop `FTYPE ∈ EXCLUDE_WATERBODY_FTYPES` (Ice Mass) from the layer **entirely** — it becomes land (perv/imperv via LULC), neither dprst nor on-stream | `FTYPE` | → land | **hard override** | `build()`, [waterbody.py:86](../src/gfv2_params/depstor_builders/waterbody.py#L86) |
-| **min-area** | keep polygons ≥ `min_area_threshold` (default 900 m²) | geometry | drops slivers | threshold |
+| **min-area** | keep polygons ≥ `min_area_threshold` (900 m² — one 30 m cell; [depstor_rasters.yml:37](../configs/depstor/depstor_rasters.yml#L37)) | geometry | drops sub-900 m² polygons | threshold |
 | *(rasterize)* | write `wbody_binary.tif`; label 8-connected clumps → `wbody_regions.tif` (`clump_regions`) | — | — | — |
 
 ### Stage 2 — `endorheic.build()` · is the basin closed? *(computes a COMID table; applied in Stage 3)*
@@ -305,7 +305,7 @@ flowchart TD
     end
 
     subgraph LAD["2. Gate ladder (depstor_builders)"]
-      W["waterbody: +BurnAdd, -Ice Mass, -slivers"]
+      W["waterbody: +BurnAdd, -Ice Mass, -sub-900 m2 polygons"]
       E["endorheic: A terminus-in-self, B closed HUC12"]
       C["wbody_connectivity: C1 or C2 Network-gated, Playa never"]
       D["dprst: D1 clump exclude, D2 endorheic exempt, D3 imperv carve, D4 land"]
