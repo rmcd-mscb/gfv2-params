@@ -64,7 +64,8 @@ gfv2_param/
 │   ├── lulc/
 │   │   ├── nlcd_annual_imperv/   # NLCD fractional imperviousness (downloadable)
 │   │   └── nalcms_2020/    # NALCMS 2020 land cover (downloadable)
-│   ├── nhd/                # conus_waterbodies.gpkg (shared NHDPlusV2 waterbodies)
+│   ├── nhd/                # nhd_waterbodies.gpkg (shared NHDPlusV2 waterbodies; source-derived,
+│   │                        #   supersedes the retired hand-made conus_waterbodies.gpkg)
 │   ├── twi/<rpu>/          # Per-RPU TWI (twi.tif + sidecars; staged via stage_twi.sh)
 │   ├── nhm_default/        # NHM default parameter files
 │   └── nhd_downloads/      # Raw NHDPlus zip archives (downloadable)
@@ -98,8 +99,11 @@ Fabric identities and all shared, required per-fabric inputs live as profiles in
 `configs/base_config.yml` under a `fabrics:` mapping. Every profile carries
 `hru_gpkg`/`hru_layer`, `id_feature`, `expected_max_hru_id`, and `batch_size`;
 depstor fabrics add `template_raster`, `fdr_raster`, `twi_raster`,
-`connected_comids_table`, `segments_gpkg`/`segments_layer`, and
-`waterbody_gpkg`/`waterbody_layer`. The
+`segments_gpkg`/`segments_layer` (the model routing network `segment_wbody`
+classifies on-stream against), and `waterbody_gpkg`/`waterbody_layer`.
+`connected_comids_table`/`flowthrough_comids_table` are optional and
+commented out of every fabric profile by default — opt-in NHD comparison
+inputs, not required. The
 active profile is selected via:
 
 1. `--fabric <name>` CLI flag on any script, OR
@@ -172,7 +176,7 @@ Manually-staged files required before `--check`:
 | `input/soils_litho/` | `TEXT_PRMS.tif`, `AWC.tif`, `Lithology_exp_Konly_Project.shp` (+ `.dbf`, `.prj`, `.shx`) |
 | `input/lulc_veg/` | `RootDepth.tif`, `CNPY.tif`, `Imperv.tif` |
 | `input/nhm_default/` | NHM default parameter files |
-| `input/nhd/` | `conus_waterbodies.gpkg` (layer `waterbodies`); `connected_waterbody_comids.parquet` (produced by `download_nhd_flowlines.batch`); `flowline_topology.parquet` (produced by `python -m gfv2_params.download.nhd_topology`; must run before **both** COMID staging steps below — they gate on-stream promotion on Network-Flowline membership); `flowthrough_waterbody_comids.parquet` (produced by `stage_nhd_flowthrough.batch`) |
+| `input/nhd/` | `nhd_waterbodies.gpkg` (layer `waterbodies`; produced by `gfv2_params.download.nhd_waterbodies` — the required waterbody source every CONUS fabric's `waterbody_gpkg` points at; the retired hand-made `conus_waterbodies.gpkg` stays on disk for A/B reference only, not required). `connected_waterbody_comids.parquet`/`flowthrough_waterbody_comids.parquet`/`flowline_topology.parquet` are OPT-IN comparison inputs (see "On-stream staging" below) — not required for `--check`. |
 | `input/twi/<rpu>/` | Per-RPU `twi.tif` + sidecars (staged via `stage_twi.sh`) |
 
 Download jobs (idempotent — already-downloaded files are skipped):
@@ -182,6 +186,14 @@ mkdir -p logs
 sbatch slurm_batch/download_rpu_rasters.batch    # NHDPlus RPU rasters (~112 GB)
 sbatch slurm_batch/download_nalcms.batch         # NALCMS 2020 land cover (~2 GB)
 sbatch slurm_batch/download_nhm_v11.batch        # NHM v1.1 LULC rasters
+srun -p cpu -A impd --time=02:00:00 --ntasks=1 --cpus-per-task=4 --mem=48G \
+  pixi run --as-is python -m gfv2_params.download.nhd_waterbodies  # waterbody source (one-time, CONUS; required)
+```
+
+OPT-IN comparison staging (NOT required for a normal build — see "On-stream
+staging" in Stage 2d below):
+
+```bash
 pixi run --as-is python -m gfv2_params.download.nhd_topology  # flowline topology (one-time, CONUS; run FIRST — gates both COMID steps below)
 sbatch slurm_batch/download_nhd_flowlines.batch  # NHD-connected waterbody COMIDs (one-time, CONUS; needs topology)
 sbatch slurm_batch/stage_nhd_flowthrough.batch   # flow-through waterbody COMIDs (one-time, CONUS; needs topology)
@@ -371,15 +383,20 @@ rejected; never substitute it.
 
 **Other inputs (per-fabric profile):**
 - `twi_raster` — CONUS `shared/conus/vrt/twi.vrt`; warp-windowed onto the template.
-- `hru_gpkg`, `segments_gpkg`/`segments_layer`, `waterbody_gpkg`/`waterbody_layer` (waterbody is required; the step raises if unset).
+- `hru_gpkg`, `segments_gpkg`/`segments_layer` (required — `segment_wbody`'s classifier input), `waterbody_gpkg`/`waterbody_layer` (waterbody is required; the step raises if unset).
+- `min_onstream_comids` — optional per-fabric floor on the `segment_wbody` COMID count (gfv2/gfv2_dev: 30000; oregon: 500); enforced at both the producing `segment_wbody` step and the consuming `wbody_connectivity`.
 - `imperv_source` in `configs/depstor/depstor_rasters.yml` — NLCD fractional-impervious raster.
 
-**DAG order:** landmask → imperv / waterbody → endorheic → wbody_connectivity →
-dprst → perv → hru_id → dprst_depth → vpu_id → routing → routing_hru →
-drains_perv / drains_imperv → carea_map. `endorheic` emits
-`endorheic_waterbody_comids.parquet` (Signal A: FDR terminus-inside-itself;
+**DAG order:** landmask → imperv → segment_wbody → waterbody → endorheic →
+wbody_connectivity → dprst → perv → hru_id → dprst_depth → vpu_id → routing →
+routing_hru → drains_perv → drains_imperv → carea_map. `segment_wbody` (position
+3) emits `segment_waterbody_comids.parquet` (key `segment_wbody_comids`) — the
+on-stream classifier's PRIMARY source: a waterbody is on-stream iff a model
+`nsegment` intersects it with positive length. It runs ahead of `waterbody`
+because `waterbody`'s BurnAdd overlap guard consumes its output. `endorheic`
+emits `endorheic_waterbody_comids.parquet` (Signal A: FDR terminus-inside-itself;
 Signal B: majority-inside a closed WBD HUC12, when `wbd_huc12_table` is
-configured); `wbody_connectivity` subtracts this set from the unioned
+configured); `wbody_connectivity` subtracts this set from the segment-derived
 on-stream COMIDs — a STRICT SUBTRACTION, never additive — and also rasterizes
 the full endorheic set (regardless of on-stream status) to a second output,
 `endorheic_wbody.tif`, which `dprst` consumes (see "Endorheic clump-veto
@@ -417,48 +434,52 @@ subset of NHDPlus's `Sink.shp` — 537 sinks vs 3,222 in VPU 16 — that omits
 141 in the full WBD). Both are incomplete extracts; stage from source via the
 two commands above.
 
-**On-stream staging.** The `wbody_connectivity` builder unions two COMID
-parquets: `connected_waterbody_comids.parquet` (WBAREACOMI, from
-`download_nhd_flowlines.batch`) and `flowthrough_waterbody_comids.parquet`
-(flow-through topology, from
-`python -m gfv2_params.download.nhd_flowthrough`). **Both** staging steps now
-require `input/nhd/flowline_topology.parquet` (distilled NHDPlus
-PlusFlowlineVAA, staged by `python -m gfv2_params.download.nhd_topology` —
-**run it first**; both fail loud if the parquet is missing): on-stream
-promotion is gated on **Network-Flowline membership** (a COMID present in the
-VAA), so a waterbody NHD tagged only via Non-Network flowlines — the artificial
-paths NHD draws through closed-basin lakes — stays depression storage instead
-of being wrongly promoted on-stream (issue #161). Topology also drives the
-flow-through D1 rule, which uses authoritative routed-network direction to
-promote source/headwater lakes and split-pass-through outflows. Both staging
-steps are per-VPU vector operations — sized like `nhd_flowlines` with no CONUS-grid
-array and no 384G concern — and run on the login node or in a lightweight
-SLURM job. Updating either COMID parquet after an initial build requires
-rebuilding from `wbody_connectivity`:
+**On-stream staging.** The on-stream classifier's PRIMARY source is
+`segment_wbody`, and it needs no separate staging step — it reads the fabric's
+own `segments_gpkg`/`waterbody_gpkg`, both already-required profile inputs. A
+waterbody is on-stream iff a model `nsegment` intersects it with **positive
+length**; the resulting `segment_waterbody_comids.parquet`
+(`segment_wbody_comids`) feeds `wbody_connectivity`, `waterbody`'s BurnAdd
+overlap guard, and `dprst_depth` (see `docs/ARCHITECTURE.md`'s "On-stream
+classification comes from the MODEL's own segment network" bullet for the full
+three-consumer breakdown).
+
+NHD flowline topology — `connected_waterbody_comids.parquet` (WBAREACOMI, from
+`download_nhd_flowlines.batch`), `flowthrough_waterbody_comids.parquet`
+(flow-through topology, from `python -m gfv2_params.download.nhd_flowthrough`),
+and `flowline_topology.parquet` (from `python -m gfv2_params.download.nhd_topology`,
+which **must run first** — both COMID steps fail loud if it's missing) — is
+retained as an **OPT-IN comparison union only**. `connected_comids_table`/
+`flowthrough_comids_table` are commented out of every fabric profile by
+default; setting either back in makes `wbody_connectivity` union it into the
+segment-derived set and log a `COMPARISON MODE` warning, because that union is
+NOT the production classifier. Neither staging step, nor `nhd_topology`, is
+needed for a normal depstor run. If you deliberately update a COMID parquet for
+an A/B, rebuild from `wbody_connectivity`:
 
 ```bash
 sbatch slurm_batch/build_depstor_rasters.batch --from wbody_connectivity --force
 ```
 
-**NHDWaterbody polygon staging (source-derived, not yet wired).** The
-`waterbody_gpkg`/`waterbody_layer` profile keys still point at the hand-made
-`input/nhd/conus_waterbodies.gpkg` — the last unverified NHD/WBD input in the
-pipeline. `gfv2_params.download.nhd_waterbodies` stages a reproducible
-replacement from the same per-VPU `NHDSnapshot` archives `nhd_flowlines`
-already downloads:
+**NHDWaterbody polygon staging (source-derived, wired everywhere).** Every
+CONUS-scale fabric's `waterbody_gpkg`/`waterbody_layer` now points at
+`input/nhd/nhd_waterbodies.gpkg` — a reproducible replacement for the retired
+hand-made `input/nhd/conus_waterbodies.gpkg` (the last unverified NHD/WBD input
+in the pipeline before this). `gfv2_params.download.nhd_waterbodies` stages it
+from the same per-VPU `NHDSnapshot` archives `nhd_flowlines` already downloads:
 
 ```bash
 srun -p cpu -A impd --time=02:00:00 --ntasks=1 --cpus-per-task=4 --mem=48G \
   pixi run --as-is python -m gfv2_params.download.nhd_waterbodies
-# writes input/nhd/nhd_waterbodies.parquet
+# writes input/nhd/nhd_waterbodies.parquet, then converts to nhd_waterbodies.gpkg
 pixi run --as-is python scripts/diagnose/verify_nhd_waterbodies.py
 ```
 
 CONUS-scale (~450k raw polygons across 21 VPU archives); run via `srun`/`sbatch`,
-never on the login node. Do not repoint `waterbody_gpkg`/`waterbody_layer` at
-the staged parquet without first running the verify script and reconciling any
-reported difference — the current CONUS product is validated against the
-hand-made layer's exact row/COMID/FTYPE/area numbers.
+never on the login node. `conus_waterbodies.gpkg` stays on disk only as the A/B
+reference the verify script diffs against (exact row/COMID/FTYPE/area match,
+~2.2% total-area difference from a fresher shoreline vintage) — no profile
+points at it any more.
 
 **Endorheic clump-veto exemption.** Demoting the Great Salt Lake's COMIDs out
 of the on-stream set (above) is not sufficient by itself: `clump_regions`
@@ -494,13 +515,33 @@ the old product (the marsh's clump veto returns, all 4,854,156 Great Salt Lake
 cells drop back out of depression storage) and exit 0. If you hit that raise,
 re-run `wbody_connectivity` first.
 
-**waterbody/endorheic rebuild cascade.** Changing the waterbody layer (e.g. a
-new BurnAddWaterbody union) or the on-stream COMID set re-runs
-`waterbody → endorheic → wbody_connectivity → dprst → routing →
-drains_perv/drains_imperv` — `--mem=384G` for `waterbody`/`dprst`, `96G` for
-`routing`. Rebuild with `--from waterbody --force` (or `--from endorheic
---force` if only the endorheic signals/inputs changed and the waterbody layer
-itself did not).
+**segment_wbody/waterbody/endorheic rebuild cascade.** Changing `segments_gpkg`
+or the segment-based classifier logic alone (no waterbody layer change)
+re-runs `segment_wbody → waterbody → endorheic → wbody_connectivity → dprst →
+dprst_depth → routing → drains_perv/drains_imperv` — rebuild with `--from
+segment_wbody --force`; `segment_wbody` itself is cheap (42 s / 2.0 GB at
+CONUS) and doesn't change the job's `--mem` sizing. Changing the waterbody
+layer (e.g. a new BurnAddWaterbody union, or a `waterbody_gpkg` swap) starts
+one step later, `--from waterbody --force`, since `segment_wbody`'s own output
+is unaffected. Changing only the endorheic signals/inputs (waterbody and
+segment layers both unchanged): `--from endorheic --force`. Either way —
+`--mem=384G` for `waterbody`/`dprst`, `96G` for `routing`.
+
+**`dprst_depth` is part of this cascade, not just `dprst_binary.tif`.**
+`STEP_ORDER` places `dprst_depth` after `dprst`, so any of the `--from
+segment_wbody|waterbody|endorheic --force` reruns above already include it —
+but a classifier change invalidates more than the raster: it changes the
+reconstructed dprst *polygon set* (`tiling.py::_load_and_tag_for_plan` /
+`dprst_depth.py::_load_dprst_polygons`, both keyed on the segment/endorheic
+on-stream COMIDs). `dprst_depth_batches/` — the per-tile-batch parquets
+`submit_dprst_depth.sh`'s SLURM array wrote against the OLD polygon set — must
+be wiped, and the full 4-stage `submit_dprst_depth.sh` DAG (plan → array →
+build → mean_zonal → mean_finalize; see "Stage 2d'" below) re-run from
+scratch, after `dprst` completes. Reusing stale batches left-joins the NEW
+polygon set onto the OLD one by COMID: a polygon newly classified dprst has no
+row, silently falls through to the regional-fill ladder instead of a measured
+3DEP depth, and only trips `dprst_depth_min_measured_frac` if enough of them
+do — fewer is a silent quality regression, not a raise.
 
 **dprst rebuild cascade.** Changing `dprst` membership (e.g. the per-cell
 impervious carve-out, or the on-stream COMID set) invalidates everything
@@ -575,13 +616,48 @@ one core.
 gfv2_params.download.wesm`) and `ecoregions_gpkg` (EPA L3 Ecoregions —
 `pixi run python -m gfv2_params.download.epa_ecoregions`, Stage 0). Both are
 already staged for `gfv2`/`gfv2_dev`/`oregon`/`tjc` in
-`configs/base_config.yml`; `gfv2_vpu01` has neither (same reason it lacks
-`connected_comids_table` — its `wbs` waterbody layer has no COMID).
+`configs/base_config.yml`; `gfv2_vpu01` has neither (its `wbs` waterbody layer
+has no COMID).
+
+**On-disk prerequisite.** The Plan stage reconstructs the dprst polygon set
+against the REAL on-stream classifier, not NHD: it needs
+`segment_waterbody_comids.parquet` and `endorheic_waterbody_comids.parquet`
+already present under `{fabric}/depstor_rasters/` — the `segment_wbody` and
+`endorheic` DAG steps' outputs (STEP_ORDER positions 3 and 5) — and raises
+`FileNotFoundError` naming whichever is missing otherwise. It also applies the
+`min_onstream_comids`/`min_endorheic_comids` floors (same doctrine as
+`wbody_connectivity`'s consuming-end check — `--plan` reads both parquets off
+disk with no `BuildContext`/orchestrator, so a collapsed table would otherwise
+slip through unvalidated). If the rest of the stack (Stage 2d) hasn't reached
+those steps yet, run them standalone first:
+`sbatch slurm_batch/build_depstor_rasters.batch --step segment_wbody` then
+`--step endorheic` (neither needs any other step's output — see `RUNME.md`'s
+step 3a, which runs `landmask`, `segment_wbody`, and `endorheic` standalone
+for exactly this reason, before the Plan stage below).
+
+**Second prerequisite, for stage 3 (Build) — `dprst_binary.tif` must already
+be FRESH.** Stage 3 reuses `build_depstor_rasters.batch --step dprst_depth`,
+whose burn (`dprst_depth/burn.py`) masks the per-polygon depths to whatever
+`dprst_binary.tif` is on disk at that moment (`dprst_depth.py` —
+`ctx.require("dprst")`). That is a SEPARATE dependency from the Plan stage's
+segment/endorheic parquets: the polygon *set* comes from those two tables, but
+the per-cell *mask* stage 3 burns into comes from `dprst`, which is built by
+`waterbody → wbody_connectivity → dprst` (STEP_ORDER positions 1/3/5/6 —
+`imperv`, `waterbody`, `wbody_connectivity`, `dprst`). If those haven't run
+yet (e.g. on an EXISTING data_root after a classifier change, before the rest
+of Stage 2d reaches them), stage 3 silently burns against whatever
+`dprst_binary.tif` is already on disk — the PREVIOUS classifier's mask on an
+existing data_root, or a hard `ctx.require` failure on a from-scratch one.
+`RUNME.md`'s step 3b runs `imperv`, `waterbody`, `wbody_connectivity`, and
+`dprst` standalone for exactly this reason, before this DAG (step 3c) starts.
 
 **The 4-stage DAG (`slurm_batch/submit_dprst_depth.sh`):**
 
 1. **Plan** (`plan_dprst_depth_batches.batch`, 1 task) — reconstructs the
-   CONUS dprst polygon set, **clips it to the fabric's HRU extent** (same
+   CONUS dprst polygon set against the on-stream COMID set
+   (`segment_waterbody_comids.parquet` MINUS `endorheic_waterbody_comids.parquet`,
+   read from `{fabric}/depstor_rasters/` — see "On-disk prerequisite" above),
+   **clips it to the fabric's HRU extent** (same
    shared `topo.load_fabric_dprst_polygons` the builder uses — see the
    "Fabric clip" note below), tags it (`best_topo` via WESM, `ecoregion`
    via EPA L3), builds the tile → polygon work-list
@@ -638,7 +714,7 @@ pixi run python -m gfv2_params.dprst_depth.tiling --plan \
 ```
 
 > **Fabric clip.** Every fabric profile's `waterbody_gpkg` points at the
-> shared CONUS `conus_waterbodies.gpkg`, so the dprst polygon set is
+> shared CONUS `nhd_waterbodies.gpkg`, so the dprst polygon set is
 > reconstructed CONUS-wide (~321k polygons) and then **clipped to the
 > fabric's HRU extent** (`topo.load_fabric_dprst_polygons` →
 > `_clip_dprst_to_fabric`: HRU-bbox prefilter + `sjoin(predicate="intersects")`
@@ -695,11 +771,14 @@ sbatch slurm_batch/merge_vpu_segments.batch
 FABRIC=<name> sbatch slurm_batch/merge_vpu_segments.batch
 ```
 
-Idempotent; pass `--force` to rebuild. The `segments_gpkg` is no longer consumed
-by any depstor step — the `streambuffer` step is retired; depstor connectivity
-is now NHD-WBAREACOMI-driven (see `wbody_connectivity` builder). Routing
-connectivity comes from the FDR raster, so merged-segment graph topology is not
-required here.
+Idempotent; pass `--force` to rebuild. This merged file IS consumed by the
+depstor `segment_wbody` step — the on-stream classifier's primary source — as
+positive-length geometry (a waterbody is on-stream iff an `nsegment` intersects
+it with positive length; the old `streambuffer` step this merge fed is still
+retired). What it does NOT need is graph topology: `segment_wbody` only tests
+geometric intersection against individual segment geometries, and D8 routing
+connectivity comes from the FDR raster, so merged-segment graph structure is
+not required here, only the geometry itself.
 
 ### Stage 3c — `prepare_fabric`
 
@@ -1236,9 +1315,10 @@ sacct -j <JOBID> -o JobID,State,Elapsed,MaxRSS
 | `slurm_batch/download_rpu_rasters.batch` | `configs/base_config.yml` | `gfv2_params.download.rpu_rasters` |
 | `slurm_batch/download_nalcms.batch` | `configs/base_config.yml` | `gfv2_params.download.nalcms_lulc` |
 | `slurm_batch/download_nhm_v11.batch` | `configs/base_config.yml` | `gfv2_params.download.nhm_v11_lulc` |
-| `slurm_batch/download_nhd_flowlines.batch` | `configs/base_config.yml` | `gfv2_params.download.nhd_flowlines` — downloads per-VPU NHDPlusV2 `NHDFlowline` attributes and distills distinct non-zero `WBAREACOMI` values to `input/nhd/connected_waterbody_comids.parquet`, keeping only WBAREACOMI carried by a **Network Flowline** (requires `flowline_topology.parquet`; issue #161) (one-time, CONUS) |
-| (run directly) | `configs/base_config.yml` | `gfv2_params.download.nhd_topology` — downloads per-VPU NHDPlusV2 `PlusFlowlineVAA` attributes and distills COMID/DnHydroseq/Hydroseq/TerminalFl/StartFlag/StreamOrde/FromNode/ToNode to `input/nhd/flowline_topology.parquet` (one-time, CONUS); must run before **both** `download_nhd_flowlines.batch` and `stage_nhd_flowthrough.batch` |
-| `stage_nhd_flowthrough.batch` | `configs/base_config.yml` | `gfv2_params.download.nhd_flowthrough` — per-VPU vector spatial join; classifies flow-through NHDWaterbody polygons (T1: boundary crossings ≥2; D1: routed-network upstream endpoint inside the waterbody, from `flowline_topology.parquet`; T3: NHDArea overlap) — T1/D1 candidates are gated to **Network Flowlines** (in `flowline_topology.parquet`) so Non-Network closed-basin lines can't promote endorheic lakes (issue #161); Playa/Ice Mass dropped up front; writes `input/nhd/flowthrough_waterbody_comids.parquet` (one-time, CONUS; no CONUS-grid array) |
+| (run directly, via `srun`) | `configs/base_config.yml` | `gfv2_params.download.nhd_waterbodies` — downloads per-VPU NHDWaterbody polygons from the same `NHDSnapshot` archives `nhd_flowlines` uses, staging the required, source-derived `input/nhd/nhd_waterbodies.gpkg` every CONUS fabric's `waterbody_gpkg` now points at (supersedes the retired hand-made `conus_waterbodies.gpkg`) (one-time, CONUS) |
+| `slurm_batch/download_nhd_flowlines.batch` | `configs/base_config.yml` | **OPT-IN comparison only** (see "On-stream staging" in Stage 2d) — `gfv2_params.download.nhd_flowlines` downloads per-VPU NHDPlusV2 `NHDFlowline` attributes and distills distinct non-zero `WBAREACOMI` values to `input/nhd/connected_waterbody_comids.parquet`, keeping only WBAREACOMI carried by a **Network Flowline** (requires `flowline_topology.parquet`; issue #161) (one-time, CONUS) |
+| (run directly) | `configs/base_config.yml` | **OPT-IN comparison only** — `gfv2_params.download.nhd_topology` downloads per-VPU NHDPlusV2 `PlusFlowlineVAA` attributes and distills COMID/DnHydroseq/Hydroseq/TerminalFl/StartFlag/StreamOrde/FromNode/ToNode to `input/nhd/flowline_topology.parquet` (one-time, CONUS); must run before **both** `download_nhd_flowlines.batch` and `stage_nhd_flowthrough.batch` on that comparison path |
+| `stage_nhd_flowthrough.batch` | `configs/base_config.yml` | **OPT-IN comparison only** — `gfv2_params.download.nhd_flowthrough` per-VPU vector spatial join; classifies flow-through NHDWaterbody polygons (T1: boundary crossings ≥2; D1: routed-network upstream endpoint inside the waterbody, from `flowline_topology.parquet`; T3: NHDArea overlap) — T1/D1 candidates are gated to **Network Flowlines** (in `flowline_topology.parquet`) so Non-Network closed-basin lines can't promote endorheic lakes (issue #161); Playa/Ice Mass dropped up front; writes `input/nhd/flowthrough_waterbody_comids.parquet` (one-time, CONUS; no CONUS-grid array) |
 | `slurm_batch/submit_jobs.sh` | (caller-provided) | generic per-VPU array dispatcher |
 | (run directly) | `configs/base_config.yml` | `scripts/migrate_to_shared_layout.py --data-root <path>` (legacy `work/` layout upgrade) |
 | (run directly) | `configs/base_config.yml` | `scripts/clip_shared_to_fabric.py --fabric <name>` (fabric-bounds FDR/template clip) |

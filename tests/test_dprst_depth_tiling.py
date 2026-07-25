@@ -1,8 +1,11 @@
+import logging
+
 import geopandas as gpd
 import pytest
 from shapely.geometry import box
 
 from gfv2_params.dprst_depth.tiling import (
+    _load_and_tag_for_plan,
     component_tile_batches,
     group_by_tile,
     guard_oversized_windows,
@@ -269,3 +272,58 @@ def test_polygon_window_cost_requires_best_topo_column():
     dprst = gpd.GeoDataFrame({"COMID": [1]}, geometry=[box(0, 0, 10, 10)], crs="EPSG:5070")
     with pytest.raises(KeyError):
         polygon_window_cost(dprst)
+
+
+# --- _load_and_tag_for_plan (Task 9, issue #173: segment-driven on-stream) --
+
+
+def test_load_and_tag_for_plan_required_keys_exclude_nhd_tables():
+    """Neither `connected_comids_table` nor `flowthrough_comids_table` (the
+    retired NHD sources) may appear in the --plan `required` list any more --
+    `output_dir` is required instead, since the segment/endorheic parquets are
+    resolved from it (dprst_depth now reconstructs against the segment
+    classifier, not NHD)."""
+    with pytest.raises(KeyError) as exc:
+        _load_and_tag_for_plan({}, logging.getLogger("t"))
+    missing = exc.value.args[0]
+    assert "connected_comids_table" not in missing
+    assert "flowthrough_comids_table" not in missing
+    assert "output_dir" in missing
+
+
+def test_load_and_tag_for_plan_resolves_segment_and_endorheic_from_output_dir(tmp_path):
+    """`output_dir` (not `connected_comids_table`/`flowthrough_comids_table`)
+    is where the segment + endorheic parquets are resolved from: every other
+    required input present and valid, but neither parquet staged under
+    `output_dir` -- must raise FileNotFoundError naming the missing segment
+    parquet, not silently proceed with an unresolved on-stream set."""
+    waterbody_gpkg = tmp_path / "waterbodies.gpkg"
+    gpd.GeoDataFrame(
+        {"COMID": [1], "member_comid": ["1"], "FTYPE": ["LakePond"]},
+        geometry=[box(0, 0, 1, 1)], crs="EPSG:5070",
+    ).to_file(waterbody_gpkg, layer="waterbodies", driver="GPKG")
+
+    wesm_index = tmp_path / "wesm.gpkg"
+    gpd.GeoDataFrame(
+        {"project": ["unused"]}, geometry=[box(10_000, 10_000, 10_010, 10_010)], crs="EPSG:5070",
+    ).to_file(wesm_index, layer="wesm", driver="GPKG")
+
+    ecoregions_gpkg = tmp_path / "eco.gpkg"
+    gpd.GeoDataFrame(
+        {"US_L3CODE": ["1"]}, geometry=[box(-100, -100, 100, 100)], crs="EPSG:5070",
+    ).to_file(ecoregions_gpkg, layer="eco", driver="GPKG")
+
+    hru_gpkg = tmp_path / "hru.gpkg"
+    gpd.GeoDataFrame(
+        {"nat_hru_id": [1]}, geometry=[box(-100, -100, 100, 100)], crs="EPSG:5070",
+    ).to_file(hru_gpkg, layer="nhru", driver="GPKG")
+
+    config = {
+        "waterbody_gpkg": str(waterbody_gpkg), "waterbody_layer": "waterbodies",
+        "output_dir": str(tmp_path),
+        "wesm_index": str(wesm_index), "ecoregions_gpkg": str(ecoregions_gpkg),
+        "hru_gpkg": str(hru_gpkg), "hru_layer": "nhru",
+    }
+
+    with pytest.raises(FileNotFoundError, match="segment_waterbody_comids.parquet"):
+        _load_and_tag_for_plan(config, logging.getLogger("t"))

@@ -18,6 +18,75 @@ def _wb(rows):
     )
 
 
+def test_load_fabric_dprst_polygons_takes_a_resolved_onstream_set():
+    """The helper must accept a COMID set, not table paths.
+
+    Provenance differs between the builder (ctx.paths) and the --plan path
+    (config["output_dir"]); a resolved set keeps this helper agnostic so the two
+    paths cannot diverge on the classification.
+    """
+    import inspect
+
+    from gfv2_params.dprst_depth.topo import load_fabric_dprst_polygons
+
+    params = inspect.signature(load_fabric_dprst_polygons).parameters
+    assert "onstream_comids" in params
+    assert "connected_comids_table" not in params
+    assert "flowthrough_comids_table" not in params
+
+
+def test_load_fabric_dprst_polygons_reconstructs_and_clips_from_onstream_set(tmp_path):
+    """End-to-end: waterbody_gpkg + a resolved onstream_comids set + an HRU
+    fabric clip -> the same classification `dprst_polygons` performs, clipped
+    to the fabric extent (mirrors `test_clip_dprst_to_fabric_*`'s fixture
+    style: a waterbody gpkg written via `.to_file`, an HRU gpkg covering only
+    part of the candidate set)."""
+    import logging
+
+    from shapely.geometry import box
+
+    wb = gpd.GeoDataFrame(
+        {
+            "COMID": [10, 11, 12, 13],
+            "member_comid": [10, 11, 12, 13],
+            "FTYPE": ["LakePond", "LakePond", "Playa", "Ice Mass"],
+            "geometry": [
+                box(0, 0, 1, 1),      # 10: on-stream LakePond -> dropped
+                box(2, 2, 3, 3),      # 11: off-stream LakePond -> dprst, in fabric
+                box(4, 4, 5, 5),      # 12: on-stream but Playa -> forced dprst, in fabric
+                box(100, 100, 101, 101),  # 13: Ice Mass -> excluded (also out of fabric)
+            ],
+        },
+        crs="EPSG:5070",
+    )
+    waterbody_gpkg = tmp_path / "waterbodies.gpkg"
+    wb.to_file(waterbody_gpkg, layer="waterbodies", driver="GPKG")
+
+    hru = gpd.GeoDataFrame(
+        {"nat_hru_id": [1]}, geometry=[box(-1, -1, 6, 6)], crs="EPSG:5070"
+    )
+    hru_gpkg = tmp_path / "hru.gpkg"
+    hru.to_file(hru_gpkg, layer="nhru", driver="GPKG")
+
+    onstream_comids = {10, 12}  # 10 and 12 are on-stream; 12 is Playa (force-dprst)
+
+    from gfv2_params.dprst_depth.topo import load_fabric_dprst_polygons
+
+    out = load_fabric_dprst_polygons(
+        waterbody_gpkg=waterbody_gpkg,
+        waterbody_layer="waterbodies",
+        onstream_comids=onstream_comids,
+        hru_gpkg=hru_gpkg,
+        hru_layer="nhru",
+        logger=logging.getLogger("t"),
+    )
+
+    comids = set(out["COMID"])
+    assert comids == {11, 12}  # 11 off-stream + 12 Playa-forced, both in fabric
+    assert 10 not in comids    # genuine on-stream LakePond removed
+    assert 13 not in comids    # Ice Mass excluded (would also fail the fabric clip)
+
+
 def test_dprst_polygons_classification():
     wb = _wb(
         [

@@ -24,7 +24,7 @@ from rasterio.warp import calculate_default_transform, transform_bounds, transfo
 from rasterio.windows import from_bounds
 from scipy import ndimage
 
-from ..depstor import load_connected_comids, select_connected_waterbodies
+from ..depstor import select_connected_waterbodies
 from ..nhd_ftypes import EXCLUDE_WATERBODY_FTYPES, FORCE_DPRST_FTYPES
 
 gdal.UseExceptions()
@@ -96,8 +96,8 @@ def _clip_dprst_to_fabric(dprst, hru_gpkg, hru_layer, logger):
 def load_fabric_dprst_polygons(
     waterbody_gpkg,
     waterbody_layer,
-    connected_comids_table,
-    flowthrough_comids_table,
+    *,
+    onstream_comids: set[int],
     hru_gpkg,
     hru_layer,
     logger,
@@ -110,36 +110,45 @@ def load_fabric_dprst_polygons(
     fabric clip can never diverge between the SLURM plan/array path and the
     in-process builder path. Steps:
 
-      1. Union the connected(WBAREACOMI) COMID set with the optional
-         flow-through COMID set.
+      1. Take the caller-supplied `onstream_comids` set as-is -- the resolved
+         on-stream COMID set that matches the classification `dprst`/
+         `wbody_connectivity` use to build `dprst_binary.tif`: the segment
+         classifier's on-stream set (`segment_wbody.load_segment_comids`)
+         MINUS the endorheic set (`endorheic.load_endorheic_comids`). This
+         is the SAME set ONLY while NHD comparison mode is off (the fabric
+         profile leaves `connected_comids_table`/`flowthrough_comids_table`
+         unset, the default). If a fabric re-enables either key,
+         `wbody_connectivity` unions NHD's COMIDs into its on-stream set but
+         this function's caller-supplied `onstream_comids` does not --
+         silently reconstructing a dprst polygon set that diverges from the
+         shipped `dprst_binary.tif`, with no local signal here. This
+         function does not resolve or read those two tables itself. The
+         builder resolves them from `ctx.paths` (orchestrator-tracked); the
+         plan hook resolves them from `config["output_dir"]` -- two different
+         provenances. Accepting a plain set here keeps this helper agnostic
+         about provenance, which is what actually preserves the "both paths
+         use the SAME shared helper, so they can never diverge" property:
+         teaching this function two more table paths would re-introduce the
+         exact divergence risk it exists to prevent.
       2. Load the profile's `waterbody_gpkg` layer and reconstruct the dprst polygon set
          (`dprst_polygons`: drop on-stream, force-Playa-dprst, exclude Ice Mass).
       3. Clip to the fabric's HRU geometry (`_clip_dprst_to_fabric`) — the
          fix for the CONUS-scope bug (a regional fabric would otherwise
          process the whole CONUS set).
 
-    Callers own their own presence/existence validation of the paths before
-    calling this (the builder raises fabric-profile-specific KeyErrors; the
-    plan hook raises its own) — this function assumes the paths are valid.
+    Callers own their own presence/existence validation of their upstream
+    inputs before calling this (the builder raises fabric-profile-specific
+    KeyErrors; the plan hook raises its own) — this function assumes
+    `onstream_comids` is already correctly resolved.
     """
-    connected = load_connected_comids(connected_comids_table)
-    n_wbareacomi = len(connected)
-    n_flowthrough = 0
-    if flowthrough_comids_table is not None:
-        flowthrough = load_connected_comids(flowthrough_comids_table)
-        n_flowthrough = len(flowthrough - connected)
-        connected = connected | flowthrough
-    logger.info(
-        "  connected COMIDs: %d WBAREACOMI + %d new flow-through = %d total",
-        n_wbareacomi, n_flowthrough, len(connected),
-    )
+    logger.info("  %d on-stream COMIDs supplied by the caller", len(onstream_comids))
 
     wb_gdf = _read_vector_arrow(
         waterbody_gpkg, waterbody_layer, ["COMID", "FTYPE", "member_comid"], logger,
     )
     logger.info("  %d waterbody polygons loaded", len(wb_gdf))
 
-    dprst = dprst_polygons(wb_gdf, connected)
+    dprst = dprst_polygons(wb_gdf, onstream_comids)
     logger.info("  reconstructed CONUS dprst set: %d polygons", len(dprst))
 
     clipped = _clip_dprst_to_fabric(dprst, hru_gpkg, hru_layer, logger)

@@ -30,7 +30,7 @@ storage*, this decides *how deep each one is* — it runs **after** `dprst`
 
 | File | Declares (for depth) | Read by |
 |---|---|---|
-| [`base_config.yml`](../configs/base_config.yml) | the `gfv2` profile keys the builder reads: `waterbody_gpkg`, `connected_comids_table`, `flowthrough_comids_table`, `hru_gpkg`, `wesm_index`, `ecoregions_gpkg`, `template_raster` | the builder |
+| [`base_config.yml`](../configs/base_config.yml) | the `gfv2` profile keys the builder reads: `waterbody_gpkg`, `segments_gpkg`/`segments_layer` (via `segment_wbody_comids`), `hru_gpkg`, `wesm_index`, `ecoregions_gpkg`, `template_raster` | the builder |
 | [`depstor/depstor_rasters.yml`](../configs/depstor/depstor_rasters.yml) | the `dprst_depth` **step** (`batch_dir`, outputs) + three top-level knobs: `dprst_depth_floor_in: 49.0` ([:25](../configs/depstor/depstor_rasters.yml#L25)), `dprst_hollister_n_min: 5` ([:26](../configs/depstor/depstor_rasters.yml#L26)), and `dprst_depth_min_measured_frac: 0.5` ([:27](../configs/depstor/depstor_rasters.yml#L27)) | `build_depstor_rasters.py` |
 | [`depstor/depstor_params.yml`](../configs/depstor/depstor_params.yml) | the `means:` `dprst_depth_avg` entry — `source_raster` (`dprst_depth.tif`), `provenance_source` (`dprst_depth_polygons.parquet`), `floor_in: 49.0` ([:109](../configs/depstor/depstor_params.yml#L109)) | `derive_depstor_params.py` |
 
@@ -47,7 +47,7 @@ params. That difference is the whole of [§3](#3-product--parameter).
 | **3DEP elevation (live)** | *(no key — hardcoded S3 URL templates)* | `/vsicurl` → `prd-tnm.s3.amazonaws.com` 1 m project tiles / 10 m seamless | `topo.read_window`, `topo.depth_to_spill` | **The depth itself.** Windowed to each polygon's bbox + 200 m rim, reprojected on read to EPSG:5070. |
 | WESM 1 m footprint index | `wesm_index` | `input/wesm/wesm_1m_footprints.gpkg` | `topo.resolution_class`, `compute._project_lookup` | Decides each polygon's resolution class (1 m vs 10 m) and which 1 m project tiles cover it. |
 | Waterbody polygons | `waterbody_gpkg` / `waterbody_layer` | `input/nhd/nhd_waterbodies.gpkg` | `topo.load_fabric_dprst_polygons` | The polygon universe; the dprst set is rebuilt from it (drop on-stream, force Playa, exclude Ice Mass). The geometry each depth is measured on. |
-| Connected + flow-through COMIDs | `connected_comids_table`, `flowthrough_comids_table` | the two on-stream COMID parquets | same | Union → which waterbodies are on-stream (excluded from the depth set), matching the classifier. |
+| On-stream COMIDs | `segment_wbody_comids` (from the `segment_wbody` step) minus `endorheic_comids` (from `endorheic`) | `segment_waterbody_comids.parquet` − `endorheic_waterbody_comids.parquet` | `topo.load_fabric_dprst_polygons(onstream_comids=...)`, both the in-process `build()` path and the SLURM `--plan` path (`tiling.py`) | Which waterbodies are on-stream (excluded from the depth set) — the SAME on-stream definition `dprst_binary.tif` uses, so the depth polygon set no longer diverges from the dprst raster (a ~769-waterbody divergence measured on `oregon` before this fix). `connected_comids_table`/`flowthrough_comids_table` are no longer read here; they're the classifier's opt-in NHD comparison inputs (see `depstor_classification_reference.md`), not part of `dprst_depth`'s input set at all. |
 | Ecoregions (EPA L3) | `ecoregions_gpkg` | `input/ecoregions/us_eco_l3.gpkg` | `epa_ecoregions.ecoregion_of` | Tags each polygon's ecoregion — the grouping key for the regional fill. |
 | HRU fabric | `hru_gpkg` / `hru_layer` | `gfv2/fabric/…nhru…gpkg` | `topo._clip_dprst_to_fabric`, `_write_op_flow_thres` | Clips the CONUS dprst set to the fabric; supplies HRU ids for `op_flow_thres`. |
 | Template grid | `template_raster` | `gfv2/shared/gfv2_fdr.vrt` | `burn.burn_depth` | **Grid geometry only** — the lattice the depth is burned onto. Not an elevation source. |
@@ -269,6 +269,18 @@ by-design. Recorded so a future cleanup doesn't remove them by mistake.
   `provenance_source` means the builder run is incomplete/broken. Unconfigured
   `provenance_source` (not this parameter's case) is unaffected: provenance
   stays simply absent, no raise.
+- **Polygon-set divergence from `dprst_binary.tif` — fixed (segment-driven
+  on-stream classifier).** `topo.load_fabric_dprst_polygons` reconstructs "which
+  waterbodies are dprst" independently of the `dprst` builder, and used to do so
+  from the NHD `connected_comids_table ∪ flowthrough_comids_table` union — a
+  DIFFERENT on-stream definition than `wbody_connectivity` used once the
+  classifier moved to `segment_wbody`, and one that never subtracted the
+  endorheic set either (so the Great Salt Lake was excluded from the depth
+  polygon set while `dprst_binary.tif` included it). Measured divergence:
+  ~769 waterbodies on `oregon`. Both consumers now resolve on-stream the same
+  way — `segment_wbody_comids − endorheic_comids`, passed in explicitly via
+  `load_fabric_dprst_polygons(onstream_comids=...)` — on both the in-process
+  `build()` path and the SLURM `--plan` path (`tiling.py`).
 
 ---
 

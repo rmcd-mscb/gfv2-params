@@ -26,6 +26,7 @@ from . import (
     routing,
     routing_hru,
     same_hru_drains,
+    segment_wbody,
     vpu_id,
     waterbody,
     wbody_connectivity,
@@ -37,6 +38,7 @@ BUILDERS = {
     "imperv":            imperv.build,
     "waterbody":         waterbody.build,
     "endorheic":         endorheic.build,
+    "segment_wbody":     segment_wbody.build,
     "wbody_connectivity": wbody_connectivity.build,
     "dprst":             dprst.build,
     "perv":              perv.build,
@@ -64,6 +66,12 @@ BUILDERS = {
 #   endorheic          -> "endorheic_comids"       endorheic_waterbody_comids.parquet
 #                                                   (comid, frac_own, by_terminus,
 #                                                    by_closed_huc12)
+#   segment_wbody      -> "segment_wbody_comids"    segment_waterbody_comids.parquet
+#                                                    (comid, n_segments, overlap_m) —
+#                                                    the PRIMARY on-stream source. Runs
+#                                                    before `waterbody` (moved ahead of it
+#                                                    in STEP_ORDER) because waterbody's
+#                                                    BurnAdd overlap guard consumes it.
 #   wbody_connectivity -> "connected_wbody",       connected_wbody.tif (uint8, 1=connected),
 #                         "endorheic_wbody"        endorheic_wbody.tif (uint8, 1=endorheic;
 #                                                   full endorheic-classified set, regardless
@@ -85,6 +93,7 @@ BUILDERS = {
 STEP_ORDER = [
     "landmask",
     "imperv",
+    "segment_wbody",
     "waterbody",
     "endorheic",
     "wbody_connectivity",

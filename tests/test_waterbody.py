@@ -492,3 +492,86 @@ def test_build_raises_on_a_configured_but_empty_burn_add_table(tmp_path):
             {"outputs": {"binary": "wbody_binary.tif", "regions": "wbody_regions.tif"}},
             ctx, logging.getLogger("test"),
         )
+
+
+def test_burnadd_guard_reads_the_segment_onstream_table(tmp_path):
+    """The BurnAdd overlap guard must model the mask `dprst` actually reads.
+
+    That mask is now segment-derived, so the guard's on-stream set comes from
+    `segment_wbody_comids`, not the retired NHD tables. A guard fed NHD's larger
+    union would fire on clumps that are not at risk.
+    """
+    import pandas as pd
+
+    from gfv2_params.depstor_builders.context import BuildContext
+    from gfv2_params.depstor_builders.waterbody import _load_onstream_comids
+
+    seg_table = tmp_path / "segment_waterbody_comids.parquet"
+    pd.DataFrame({
+        "comid": pd.array([11, 22], dtype="int64"),
+        "n_segments": pd.array([1, 1], dtype="int64"),
+        "overlap_m": pd.array([100.0, 100.0], dtype="float64"),
+    }).to_parquet(seg_table, index=False)
+
+    ctx = BuildContext(
+        fabric="t", template_path=tmp_path / "t.tif", output_dir=tmp_path,
+        hru_gpkg=tmp_path / "h.gpkg", hru_layer="nhru",
+    )
+    ctx.paths["segment_wbody_comids"] = seg_table
+    assert _load_onstream_comids(ctx, logging.getLogger("test")) == {11, 22}
+
+
+def test_burnadd_guard_falls_back_when_segment_table_absent(tmp_path):
+    """No segment table -> None, so the caller uses the BROAD guard rather than skipping.
+
+    `waterbody` must stay runnable standalone (e.g. `--step waterbody` on a fresh
+    output dir), so a missing table degrades to the conservative guard instead of
+    raising. Silently SKIPPING the guard would be the unsafe outcome, and is what
+    returning None prevents.
+    """
+    from gfv2_params.depstor_builders.context import BuildContext
+    from gfv2_params.depstor_builders.waterbody import _load_onstream_comids
+
+    ctx = BuildContext(
+        fabric="t", template_path=tmp_path / "t.tif", output_dir=tmp_path,
+        hru_gpkg=tmp_path / "h.gpkg", hru_layer="nhru",
+    )
+    assert _load_onstream_comids(ctx, logging.getLogger("test")) is None
+
+
+def test_burnadd_guard_falls_back_when_segment_table_is_present_but_empty(tmp_path):
+    """A STAGED-but-EMPTY segment table must fall back to the BROAD guard too.
+
+    `_load_onstream_comids` returning `set()` (not `None`) would take
+    `merge_burn_add`'s NARROW branch: `_burn_clumps_reaching_onstream` finds no
+    on-stream polygons to select, `at_risk` is always `{}`, and the overlap
+    guard silently no-ops -- the INVERSE of the safe direction (missing data
+    must degrade to MORE checking, not none at all). So an empty table must be
+    treated the same as an absent one -- both return `None`.
+    """
+    import pandas as pd
+
+    from gfv2_params.depstor_builders.context import BuildContext
+    from gfv2_params.depstor_builders.waterbody import _load_onstream_comids
+
+    seg_table = tmp_path / "segment_waterbody_comids.parquet"
+    pd.DataFrame({
+        "comid": pd.array([], dtype="int64"),
+        "n_segments": pd.array([], dtype="int64"),
+        "overlap_m": pd.array([], dtype="float64"),
+    }).to_parquet(seg_table, index=False)
+
+    ctx = BuildContext(
+        fabric="t", template_path=tmp_path / "t.tif", output_dir=tmp_path,
+        hru_gpkg=tmp_path / "h.gpkg", hru_layer="nhru",
+    )
+    ctx.paths["segment_wbody_comids"] = seg_table
+    assert _load_onstream_comids(ctx, logging.getLogger("test")) is None
+
+
+def test_segment_wbody_precedes_waterbody_in_step_order():
+    """waterbody's guard reads segment_wbody's output, so it must run first."""
+    from gfv2_params.depstor_builders import STEP_ORDER
+
+    assert STEP_ORDER.index("segment_wbody") < STEP_ORDER.index("waterbody")
+    assert STEP_ORDER.index("segment_wbody") < STEP_ORDER.index("wbody_connectivity")

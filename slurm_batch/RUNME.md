@@ -89,56 +89,91 @@ batches it into per-batch geopackages.
 ### 3 · Build depstor rasters
 
 ```bash
-# Stage NHDPlus flowline topology FIRST (one-time, CONUS; required by both NHD
-# COMID steps below for the Network-Flowline gate):
-pixi run --as-is python -m gfv2_params.download.nhd_topology
-# Stage NHD-connected waterbody COMIDs (one-time, CONUS):
-sbatch slurm_batch/download_nhd_flowlines.batch
-# Stage flow-through waterbody COMIDs (one-time, CONUS):
-sbatch slurm_batch/stage_nhd_flowthrough.batch
+# The waterbody source (required): every CONUS fabric's waterbody_gpkg points at
+# this source-derived layer, not the retired hand-made conus_waterbodies.gpkg.
+srun -p cpu -A impd --time=02:00:00 --ntasks=1 --cpus-per-task=4 --mem=48G \
+  pixi run --as-is python -m gfv2_params.download.nhd_waterbodies
 # Endorheic classifier inputs (run once; CONUS-shared, fabric-independent):
 pixi run --as-is python -m gfv2_params.download.nhd_burn_components   # Sink.shp + BurnAddWaterbody
 pixi run --as-is python -m gfv2_params.download.wbd_huc12             # full WBD (type-C closed basins)
-# Source-derived replacement for the hand-made conus_waterbodies.gpkg (staged +
-# verified against it; NOT yet wired into waterbody_gpkg — see ARCHITECTURE.md):
-srun -p cpu -A impd --time=02:00:00 --ntasks=1 --cpus-per-task=4 --mem=48G \
-  pixi run --as-is python -m gfv2_params.download.nhd_waterbodies
 # Stage WESM 1m footprints (one-time, CONUS; dprst_depth's best-available-topo tagging):
 pixi run --as-is python -m gfv2_params.download.wesm
 pixi run --as-is python scripts/clip_shared_to_fabric.py --fabric gfv2   # tiny VRT (login OK)
 
-# 3a. landmask FIRST, standalone — dprst_depth (3b, below) needs land_mask.tif
-# on disk before it can fill+burn, but must itself run BEFORE the rest of the
-# stack (3c) reaches the dprst_depth step (issue #173 — its in-process
-# fallback is a ~250-500 CORE-HOUR CONUS compute, i.e. unbounded wall-clock
-# on one core; see HPC_REFERENCE.md "Stage 2d'"):
-sbatch slurm_batch/build_depstor_rasters.batch --step landmask
+# OPT-IN COMPARISON ONLY -- NOT needed for a normal depstor run. On-stream now
+# comes from segment_wbody (the model's own nsegment network); these three NHD
+# staging steps only matter if you set connected_comids_table/flowthrough_comids_table
+# in a fabric profile to A/B the segment classifier against NHD flowline topology
+# (see CLAUDE.md's "MODEL's own segment network" bullet):
+#   pixi run --as-is python -m gfv2_params.download.nhd_topology       # must run first -- gates both COMID steps below
+#   sbatch slurm_batch/download_nhd_flowlines.batch                    # WBAREACOMI-connected COMIDs
+#   sbatch slurm_batch/stage_nhd_flowthrough.batch                     # flow-through COMIDs
 
-# 3b. dprst_depth's own SLURM array (plan -> array -> build -> mean_zonal ->
-# mean_finalize) -- wait for this to COMPLETE before 3c:
+# 3a. landmask, segment_wbody, and endorheic FIRST, standalone -- each needs
+# only profile-level inputs (segments_gpkg/waterbody_gpkg/template_raster for
+# segment_wbody; waterbody_gpkg/fdr_raster for endorheic), not any other
+# step's output, so all three can run ahead of the rest of the stack (3d):
+#   - landmask: dprst_depth (3c, below) needs land_mask.tif on disk before it
+#     can fill+burn, but must itself run BEFORE the rest of the stack (3d)
+#     reaches the dprst_depth step (issue #173 -- its in-process fallback is a
+#     ~250-500 CORE-HOUR CONUS compute, i.e. unbounded wall-clock on one core;
+#     see HPC_REFERENCE.md "Stage 2d'").
+#   - segment_wbody / endorheic: 3c's `tiling.py --plan` reconstructs the
+#     dprst polygon set against the REAL on-stream classifier (segment_wbody
+#     minus endorheic, not NHD), so it needs `segment_waterbody_comids.parquet`
+#     and `endorheic_waterbody_comids.parquet` already on disk -- both are
+#     STEP_ORDER outputs (positions 3 and 5) that 3d would otherwise only
+#     produce later, after 3c has already tried and failed to read them.
+sbatch slurm_batch/build_depstor_rasters.batch --step landmask
+sbatch slurm_batch/build_depstor_rasters.batch --step segment_wbody
+sbatch slurm_batch/build_depstor_rasters.batch --step endorheic
+
+# 3b. the rest of the stack UP THROUGH dprst -- imperv, waterbody,
+# wbody_connectivity, dprst (STEP_ORDER positions 1, 3, 5, 6; segment_wbody
+# and endorheic already ran in 3a). This MUST complete, and `dprst_binary.tif`
+# MUST be freshly written, before 3c: 3c's burn (`dprst_depth/burn.py`) masks
+# the newly-computed per-polygon depths to whatever `dprst_binary.tif` is ON
+# DISK at the time it runs (`dprst_depth.py` -- `ctx.require("dprst")`). On an
+# EXISTING data_root (the normal case for a classifier change, not a
+# from-scratch build), skipping straight to 3c would burn the new depths
+# against the PREVIOUS run's dprst mask -- built by whatever classifier was in
+# place before -- and exit 0 with `dprst_depth_avg` silently inconsistent with
+# the new `dprst_frac`. `dprst` itself needs `imperv`/`waterbody`
+# (`wbody_binary`/`wbody_regions`)/`wbody_connectivity`
+# (`connected_wbody`/`endorheic_wbody`), so those run here too -- `waterbody`
+# and `dprst` are the ~384G full-grid steps (`--mem=384G`, already the batch
+# default):
+sbatch slurm_batch/build_depstor_rasters.batch --step imperv
+sbatch slurm_batch/build_depstor_rasters.batch --step waterbody
+sbatch slurm_batch/build_depstor_rasters.batch --step wbody_connectivity
+sbatch slurm_batch/build_depstor_rasters.batch --step dprst
+
+# 3c. dprst_depth's own SLURM array (plan -> array -> build -> mean_zonal ->
+# mean_finalize) -- now burns against the FRESH `dprst_binary.tif` from 3b.
+# Wait for this to COMPLETE before 3d:
 BATCHES=$(pixi run --as-is python -c \
   "import yaml;print(yaml.safe_load(open('configs/base_config.yml'))['data_root'])")/gfv2/batches
 slurm_batch/submit_dprst_depth.sh "$BATCHES" gfv2 configs/base_config.yml 150
 
-# 3c. the rest of the depstor raster stack (landmask + dprst_depth both
-# already exist -> skipped fast; imperv/waterbody/endorheic/wbody_connectivity/
-# dprst/perv/hru_id/vpu_id/routing/routing_hru/drains_*/carea_map run normally):
+# 3d. the rest of the depstor raster stack (landmask + imperv + segment_wbody
+# + waterbody + endorheic + wbody_connectivity + dprst + dprst_depth all
+# already exist -> skipped fast; perv/hru_id/vpu_id/routing/routing_hru/
+# drains_*/carea_map run normally):
 sbatch slurm_batch/build_depstor_rasters.batch
 ```
 
 **What it does:** clips the fabric-bounds FDR template, then builds the full
-depression-storage raster stack. The NHD/WBD staging steps + the WESM stage
-are one-time CONUS runs. `nhd_topology` stages the NHDPlus PlusFlowlineVAA
-network (`flowline_topology.parquet`) and **must run first**: both COMID
-steps gate on-stream promotion on Network-Flowline membership, so a waterbody
-NHD tagged only via Non-Network flowlines (closed-basin lakes) stays
-depression storage (issue #161). `nhd_flowlines` then stages
-WBAREACOMI-connected COMIDs and `nhd_flowthrough` adds flow-through COMIDs
-(both fail loud if the topology parquet is missing) — the two COMID sets are
-unioned by the `wbody_connectivity` builder. If you update either NHD staging
-COMID output after an initial build, rerun the depstor stack from
-`wbody_connectivity`
-(`sbatch slurm_batch/build_depstor_rasters.batch --from wbody_connectivity --force`).
+depression-storage raster stack (`landmask → imperv → segment_wbody →
+waterbody → endorheic → wbody_connectivity → dprst → perv → hru_id →
+dprst_depth → vpu_id → routing → routing_hru → drains_perv → drains_imperv →
+carea_map`). `segment_wbody` is the on-stream classifier's PRIMARY source: a
+waterbody is on-stream iff a model `nsegment` (the fabric's `segments_gpkg`)
+intersects it with positive length — see CLAUDE.md's "MODEL's own segment
+network" bullet. It's cheap (42 s / 2.0 GB at CONUS), so it doesn't affect this
+job's `--mem` sizing. `nhd_waterbodies` and the WESM stage above are the only
+one-time CONUS staging runs a normal build needs; the NHD topology/flowlines/
+flowthrough steps are opt-in comparison only (see the block above) and are
+NOT needed here.
 
 `nhd_burn_components` and `wbd_huc12` stage the (optional) inputs to the
 `endorheic` depstor step — Signal A (FDR terminus-inside-itself) needs no
@@ -148,9 +183,21 @@ pre-made `input/nhd/NHD_sink_points.gpkg` or `input/nhd/closed_huc12.gpkg` —
 both are incomplete extracts (see `HPC_REFERENCE.md`'s "Endorheic classifier
 inputs"). `wbody_connectivity` subtracts the `endorheic` output from the
 on-stream set — a strict subtraction, never additive — so changing the
-waterbody layer or the on-stream COMID set re-runs `waterbody → endorheic →
-wbody_connectivity → dprst → routing → drains_perv/drains_imperv`
-(`--mem=384G` for `waterbody`/`dprst`, `96G` for `routing`).
+`segments_gpkg`/classifier logic alone re-runs `segment_wbody → waterbody →
+endorheic → wbody_connectivity → dprst → dprst_depth → routing →
+drains_perv/drains_imperv` (`--from segment_wbody --force`); changing the
+waterbody layer as well (e.g. a new BurnAddWaterbody union, or the layer swap
+this branch made) starts one step later at `waterbody` (`--from waterbody
+--force`) since `segment_wbody` itself is unaffected. Either way
+`waterbody`/`dprst` are the ~384G full-grid steps (`--mem=384G`), `routing` is
+`96G`. **`dprst_depth` is in this cascade too** — it reconstructs the dprst
+polygon set from the on-stream classifier directly (not just the burn mask),
+so a classifier change invalidates `dprst_depth_batches/`, not just
+`dprst_binary.tif`: wipe that directory and re-run the full `submit_dprst_depth.sh`
+DAG (3c) after `dprst` (3b) completes, rather than trusting stale per-tile-batch
+parquets left over from the previous classifier's polygon set (see the `--plan`
+consumer's `min_onstream_comids`/`min_endorheic_comids` floors, which catch a
+collapsed reconstruction but not a merely STALE one).
 
 `wbody_connectivity` also writes a second raster, `endorheic_wbody.tif` (the
 full endorheic-classified set, regardless of on-stream status). `dprst`
@@ -162,7 +209,7 @@ one marsh vetoed the whole 4,369 km² lake out of depression storage. Optional:
 a fabric that hasn't run `endorheic` (no `endorheic_wbody` on disk) gets no
 exemption, a pure no-op.
 
-`dprst_depth` (3b) is split out of the single whole-stack job (3c) because its
+`dprst_depth` (3c) is split out of the single whole-stack job (3d) because its
 compute cost scales with the ~286k CONUS dprst **polygons** (one windowed DEM
 read each), not the CONUS grid — see `docs/ARCHITECTURE.md`'s "CONUS-scale
 COMPUTE" gotcha and `HPC_REFERENCE.md`'s "Stage 2d'" for the full DAG,
@@ -171,9 +218,11 @@ sizing arithmetic, and recovery. `submit_dprst_depth.sh`'s stages produce
 *and* `nhm_dprst_depth_avg_params.csv` (`{fabric}/params/merged/`) — the
 latter does not go through Step 4's depstor-fractions loop below.
 
-**Wait for:** step 3a `COMPLETED`; step 3b's final job (`mean_finalize`)
-`COMPLETED`; then step 3c `COMPLETED`. `{fabric}/depstor_rasters/` holds the
-full stack (through `carea_map_t8/t156_binary.tif`).
+**Wait for:** all three step 3a jobs (`landmask`, `segment_wbody`, `endorheic`)
+`COMPLETED`; all four step 3b jobs (`imperv`, `waterbody`,
+`wbody_connectivity`, `dprst`) `COMPLETED`; step 3c's final job
+(`mean_finalize`) `COMPLETED`; then step 3d `COMPLETED`. `{fabric}/depstor_rasters/`
+holds the full stack (through `carea_map_t8/t156_binary.tif`).
 
 ---
 

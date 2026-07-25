@@ -141,8 +141,11 @@ Runs as **Stage 1c1** (see `slurm_batch/HPC_REFERENCE.md`), before the TWI merge
 
 4. **getSegBuff**
    - **gfv2-params:** Retired — replaced by the `wbody_connectivity` builder, which
-     derives on-stream waterbodies from NHD `WBAREACOMI` artificial-path topology
-     instead of a 60 m segment buffer. See `docs/depstor_port_summary.md`.
+     derives on-stream waterbodies from the `segment_wbody` step: a waterbody is
+     on-stream iff a model `nsegment` intersects it with positive length (NOT a
+     60 m segment buffer, and NOT NHD `WBAREACOMI` topology — that NHD path is now
+     an opt-in comparison union only). See `docs/depstor_port_summary.md` and
+     CLAUDE.md's "MODEL's own segment network" bullet.
    - Buffers the stream segments, converts to grid, assigns HRU IDs within the
      buffer part of grid, NAs outside
    - **Inputs**
@@ -410,7 +413,7 @@ produce, per fabric:
 {fabric}/depstor_rasters/           # 13 generation outputs
 ├── land_mask.tif                   # (built first; every other raster masks against it)
 ├── imperv_binary.tif
-├── connected_wbody.tif             # NHD-WBAREACOMI connected waterbodies (replaces stream_buffer.tif)
+├── connected_wbody.tif             # segment-derived on-stream waterbodies (replaces stream_buffer.tif)
 ├── wbody_binary.tif    wbody_regions.tif
 ├── dprst_binary.tif    onstream_binary.tif
 ├── perv_binary.tif

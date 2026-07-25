@@ -80,10 +80,16 @@ data indicate impervious surfaces exist**.
 The analysis relied on a **30-m DEM associated with NHDPlus**.
 
 **Note for this repo:** the 60-m stream-segment buffer is the *legacy* on-stream
-test. This repo deliberately superseded it with an NHD-topology classifier
-(WBAREACOMI artificial-path topology ∪ geometric flow-through topology, both
-gated on Network-Flowline membership). See `CLAUDE.md` and issues #145/#161.
-The buffer test is documented here for provenance only — **do not reintroduce it.**
+test. This repo deliberately superseded it, first with an NHD-topology
+classifier (WBAREACOMI artificial-path topology ∪ geometric flow-through
+topology, both gated on Network-Flowline membership; issues #145/#161), and
+that classifier has since itself been superseded by `segment_wbody`: a
+waterbody is on-stream iff a model `nsegment` intersects it with **positive
+length**, with the endorheic subtraction and the Playa/Ice Mass guardrail
+retained unchanged. The NHD-topology union is now available only as an
+opt-in comparison mode (commented out of every fabric profile). See
+`CLAUDE.md`'s "MODEL's own segment network" bullet. The buffer test is
+documented here for provenance only — **do not reintroduce it.**
 
 ### Geometry: why `va_open_exp` / `va_clos_exp` = 0.001
 

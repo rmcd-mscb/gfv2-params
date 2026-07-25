@@ -14,10 +14,12 @@ Plus a **[staleness / maintenance](#4-staleness--maintenance)** section (which g
 load-bearing, which are dead, what is in motion) and a **[one-page map](#5-one-page-map)**.
 
 Verified against `main` (post-PR #178 endorheic classifier + PR #179 waterbody
-repoint). Where a claim rests on code, it cites `file:function`; line numbers
-drift, so function names are the durable reference. This supersedes the historical
-planning transcription in [`depstor_workflow.md`](depstor_workflow.md) (the original
-Bock/Russell design PDF) as the description of the *shipped* pipeline.
+repoint + the segment-driven on-stream classifier that replaced C1/C2 below with
+`segment_wbody`). Where a claim rests on code, it cites `file:function`; line
+numbers drift, so function names are the durable reference. This supersedes the
+historical planning transcription in [`depstor_workflow.md`](depstor_workflow.md)
+(the original Bock/Russell design PDF) as the description of the *shipped*
+pipeline.
 
 > **How to read this if you're lost.** The classifier grew one gate at a time
 > across a dozen PRs, each fixing a real bug the previous one exposed, and no
@@ -42,10 +44,11 @@ Placeholders (`{data_root}`, `{fabric}`, `{vpu}`) resolve at load time.
 ([base_config.yml:10](../configs/base_config.yml#L10)).
 
 **Fabric caveat that bites:** the source paths below are the **`gfv2`** profile.
-Other fabrics differ — most notably, `gfv2` now reads the source-derived
-`nhd_waterbodies.gpkg` (PR #179), but `gfv2_dev`, `oregon`, and `tjc` still point
-at the older hand-made `conus_waterbodies.gpkg`. "Which waterbody layer" is a
-per-fabric answer. See [§4](#4-staleness--maintenance).
+Other fabrics differ in file paths, but as of the segment-driven classifier
+work every CONUS fabric (`gfv2`, `gfv2_dev`, `oregon`, `tjc`) reads the
+source-derived `nhd_waterbodies.gpkg` (PR #179 repointed `gfv2`; the others
+followed) — the older hand-made `conus_waterbodies.gpkg` is retired, kept on
+disk only for A/B reference. See [§4](#4-staleness--maintenance).
 
 ---
 
@@ -58,22 +61,25 @@ replacing an earlier set of hand-made files.
 | Source | `gfv2` profile key | Resolves to | Staged by | Role |
 |---|---|---|---|---|
 | NHD waterbody polygons | `waterbody_gpkg` ([:49](../configs/base_config.yml#L49)) | `input/nhd/nhd_waterbodies.gpkg` | `download/nhd_waterbodies.py` | the base geometry every gate runs on |
-| Flowline topology (PlusFlowlineVAA) | *(no key — staged by path)* | `input/nhd/flowline_topology.parquet` | `download/nhd_topology.py` | **Network-membership** truth; must stage first |
-| WBAREACOMI connected COMIDs | `connected_comids_table` ([:48](../configs/base_config.yml#L48)) | `input/nhd/connected_waterbody_comids.parquet` | `download/nhd_flowlines.py` | on-stream promoter #1 |
-| Flow-through COMIDs | `flowthrough_comids_table` ([:53](../configs/base_config.yml#L53)) | `input/nhd/flowthrough_waterbody_comids.parquet` | `download/nhd_flowthrough.py` | on-stream promoter #2 |
-| Closed (type-C) HUC12s | `wbd_huc12_table` ([:61](../configs/base_config.yml#L61)) | `input/wbd/wbd_huc12.parquet` | `download/wbd_huc12.py` | endorheic Signal B |
-| BurnAddWaterbody sink polygons | `burn_add_waterbody_table` ([:71](../configs/base_config.yml#L71)) | `input/nhd/burn_add_waterbodies.parquet` | `download/nhd_burn_components.py` | adds playa/closed-lake depression **area** |
+| Model stream segments (`nsegment`) | `segments_gpkg`/`segments_layer` ([:40](../configs/base_config.yml#L40)) | `gfv2/fabric/gfv2_nsegment_merged.gpkg` | `scripts/merge_vpu_segments.py` | **the on-stream promoter** — a waterbody is on-stream iff a segment intersects it with positive length |
+| Flowline topology (PlusFlowlineVAA) | *(no key — staged by path)* | `input/nhd/flowline_topology.parquet` | `download/nhd_topology.py` | **opt-in comparison only** — Network-membership truth for the two NHD tables below |
+| WBAREACOMI connected COMIDs | `connected_comids_table` (commented out; [:58](../configs/base_config.yml#L58)) | `input/nhd/connected_waterbody_comids.parquet` | `download/nhd_flowlines.py` | **opt-in comparison promoter** — unioned into the segment set only if configured, logs `COMPARISON MODE` |
+| Flow-through COMIDs | `flowthrough_comids_table` (commented out; [:59](../configs/base_config.yml#L59)) | `input/nhd/flowthrough_waterbody_comids.parquet` | `download/nhd_flowthrough.py` | **opt-in comparison promoter**, same as above |
+| Closed (type-C) HUC12s | `wbd_huc12_table` | `input/wbd/wbd_huc12.parquet` | `download/wbd_huc12.py` | endorheic Signal B |
+| BurnAddWaterbody sink polygons | `burn_add_waterbody_table` | `input/nhd/burn_add_waterbodies.parquet` | `download/nhd_burn_components.py` | adds playa/closed-lake depression **area** |
 | FDR grid (code-0 = NHDPlus sinks) | `fdr_raster` ([:27](../configs/base_config.yml#L27)) | `gfv2/shared/gfv2_fdr.vrt` | `scripts/clip_shared_to_fabric.py` | endorheic Signal A **and** all D8 routing |
 | NLCD fractional impervious | `imperv_source` (in `depstor_rasters.yml`) | NLCD annual impervious tif | external | the impervious carve |
 | HRU fabric (land/domain mask) | `hru_gpkg` ([:90](../configs/base_config.yml#L90)) | `gfv2/fabric/…nhru…gpkg` | rasterized by the `landmask` step | the domain mask + the per-HRU denominator |
+| On-stream COMID floor | `min_onstream_comids` (optional; gfv2/gfv2_dev 30000, oregon 500) | — | — | guards `segment_wbody`'s output at both the producing and consuming end |
 
-**The one ordering rule that matters at staging time:** `nhd_topology` must run
-**before** `nhd_flowlines` and `nhd_flowthrough`. Both COMID stagers gate their
-output on Network-Flowline membership, which they read from
-`flowline_topology.parquet` by path; both fail loud if it's missing. This is the
-#161 fix — NHD draws Non-Network "cartographic" artificial paths through
-essentially every closed-basin lake, and without the gate those paths promote
-genuinely endorheic lakes on-stream.
+**The on-stream promoter is now the model's own segment network, not NHD.**
+`segment_wbody` runs before `waterbody` in `STEP_ORDER` and needs no separate
+staging — it reads `segments_gpkg` and `waterbody_gpkg`, both already-required
+profile inputs. `nhd_topology` → `nhd_flowlines`/`nhd_flowthrough` are retained
+purely as an opt-in comparison union (commented out of every fabric profile);
+their #161 Network-Flowline-membership ordering rule (`nhd_topology` must stage
+first) still holds, but only matters on that comparison path — a normal depstor
+run stages none of the three.
 
 **Provenance-only, not a gate:** `sink_points_table`
 ([base_config.yml:79](../configs/base_config.yml#L79), →
@@ -87,17 +93,33 @@ a gate.
 
 ## 2. The gate ladder
 
-A waterbody passes through **four builder stages in fixed order**
+A waterbody passes through **five builder stages in fixed order**
 ([`depstor_rasters.yml`](../configs/depstor/depstor_rasters.yml) `steps:`;
 dispatch order in `depstor_builders/__init__.py` `STEP_ORDER`):
 
 ```
-waterbody  →  endorheic  →  wbody_connectivity  →  dprst
+segment_wbody  →  waterbody  →  endorheic  →  wbody_connectivity  →  dprst
 ```
 
 Each stage's gates, in execution order. **Direction** = which way the gate pushes
 a waterbody (→ dprst or → on-stream). **Kind** = hard override vs. weighed signal
 vs. proxy.
+
+### Stage 0 — `segment_wbody.build()` · which waterbodies are on the model's network
+
+Runs first (ahead of `waterbody`, whose BurnAdd overlap guard consumes this
+output). No raster inputs — cheap (42 s / 2.0 GB at CONUS).
+
+| Gate | Test | Reads | Direction | Kind |
+|---|---|---|---|---|
+| **positive-length intersection** | a waterbody is on-stream iff a model `nsegment` intersects it with length > 0 (a zero-length shoreline graze does not count — 3.1% of candidate pairs CONUS-wide) | `segments_gpkg`, `waterbody_gpkg` | → on-stream | **the primary promoter** |
+| **extent guard** | raise if the segment layer's extent doesn't overlap the template grid — catches a `segments_gpkg` mis-wired to another fabric before it silently promotes zero waterbodies | `segments_gpkg` vs `template_raster` | — | guard, `_assert_overlaps_template()` |
+| **floor guard** | raise if the resulting COMID count is below `min_onstream_comids` (optional per-fabric) | COMID count | — | guard, `check_onstream_floor()` |
+
+Emits `segment_waterbody_comids.parquet` (`comid`/`n_segments`/`overlap_m`,
+registered key `segment_wbody_comids`) — the **required primary** on-stream
+source for Stage 3 below, consumed pre-endorheic by `waterbody`'s BurnAdd
+guard, and (minus endorheic) by `dprst_depth`.
 
 ### Stage 1 — `waterbody.build()` · what counts as a waterbody at all
 
@@ -124,14 +146,16 @@ lake.
 > `frac_own = 1.000`). Signal B catches lakes with **no interior FDR sink** (Walker
 > Lake, `frac_own = 0.000`). They are complementary, not redundant — see [§4](#4-staleness--maintenance).
 
-### Stage 3 — `wbody_connectivity.build()` · on-stream = union of promoters, minus endorheic
+### Stage 3 — `wbody_connectivity.build()` · on-stream = segment set, minus endorheic
 
 | Gate | Test | Reads | Direction | Kind |
 |---|---|---|---|---|
-| **C1 — WBAREACOMI connected** | waterbody COMID is in the NHD artificial-path connected set — **Network-gated** (its flowline must be a Network Flowline) | `connected_comids_table` | → on-stream | promoter |
-| **C2 — flow-through union** | union in the geometric/topology on-stream set: a Network line flows *through* (in **and** out), or is a routed-network source/outflow — also **Network-gated** | `flowthrough_comids_table` | → on-stream | promoter |
-| **C3 — endorheic subtraction** | `on_stream = (C1 ∪ C2) − endorheic`. COMID-keyed; can only ever **remove** | `endorheic` COMID table | → dprst | strict subtraction |
+| **C0 — segment-derived (required)** | the on-stream COMID set from Stage 0 | `segment_wbody_comids` | → on-stream | **the primary promoter** |
+| **C1 — WBAREACOMI connected** *(opt-in comparison)* | waterbody COMID is in the NHD artificial-path connected set — **Network-gated** (its flowline must be a Network Flowline) — unioned in ONLY if `connected_comids_table` is configured; logs `COMPARISON MODE` | `connected_comids_table` | → on-stream | opt-in promoter |
+| **C2 — flow-through union** *(opt-in comparison)* | union in the geometric/topology on-stream set: a Network line flows *through* (in **and** out), or is a routed-network source/outflow — also **Network-gated** — same opt-in/`COMPARISON MODE` behaviour as C1 | `flowthrough_comids_table` | → on-stream | opt-in promoter |
+| **C3 — endorheic subtraction** | `on_stream = (C0 ∪ C1 ∪ C2) − endorheic`. COMID-keyed; can only ever **remove**. With C1/C2 absent (the default), this is the ONLY thing that demotes a terminal lake the positive-length rule promoted (segment intersection has no inflow/outflow test) | `endorheic` COMID table | → dprst | strict subtraction |
 | **C4 — NEVER_ONSTREAM guardrail** | drop `FTYPE ∈ {Playa, Ice Mass}` from the on-stream selection (Playa is force-dprst; Ice Mass is already gone) | `FTYPE` | → dprst / land | **hard override** |
+| *(floor guard)* | raise if the segment-derived COMID count is below `min_onstream_comids` — re-checked here (not just in Stage 0) because `--from wbody_connectivity` skips Stage 0 and hydrates its table off disk unvalidated | `segment_wbody_comids` count | — | guard, `check_onstream_floor()` |
 | *(side output)* | rasterize the **full** endorheic set (regardless of on-stream) → `endorheic_wbody.tif`, for the Stage-4 exemption | endorheic table | evidence for D2 | — |
 
 Outputs: `connected_wbody.tif` (on-stream cells) and `endorheic_wbody.tif`. Two
@@ -166,6 +190,7 @@ Outputs: `dprst_binary.tif` (the depression product) and `onstream_binary.tif`.
 |---|---|---|
 | `land_mask.tif` | 1 = land; the domain mask **and** the per-HRU pixel denominator | `landmask` |
 | `imperv_binary.tif` | 1 = NLCD impervious cell (>50%) | `imperv` |
+| `segment_waterbody_comids.parquet` | COMIDs a model `nsegment` intersects with positive length — the primary on-stream source | `segment_wbody` |
 | `wbody_binary.tif` / `wbody_regions.tif` | waterbody cells / their 8-connected clump labels | `waterbody` |
 | `endorheic_waterbody_comids.parquet` | COMIDs flagged endorheic (Signal A/B, with provenance columns) | `endorheic` |
 | `connected_wbody.tif` | on-stream waterbody cells (after endorheic subtraction) | `wbody_connectivity` |
@@ -225,12 +250,15 @@ product is rebuilt).
 
 ### Confirmed load-bearing — *proven with data*, despite looking redundant
 
-- **C1 (WBAREACOMI) vs C2 (flow-through)** are **not** redundant. Measured on the
-  current tables: `connected − flowthrough` = **7,496 COMIDs** that flow-through
+- **C1 (WBAREACOMI) vs C2 (flow-through)** are **not** redundant *(historical
+  measurement — both are now opt-in comparison sources, not production
+  promoters; C0/`segment_wbody` is)*. Measured on the pre-segment-classifier
+  tables: `connected − flowthrough` = **7,496 COMIDs** that flow-through
   misses (and `flowthrough − connected` = 35,500). Neither subsumes the other;
-  keep both. *(The code computes only flow-through's new contribution, never the
-  reverse, so it can't tell you this itself — this is the `set(connected) −
-  set(flowthrough)` diff on the two parquets.)*
+  keep both if you enable the comparison union. *(The code computes only
+  flow-through's new contribution, never the reverse, so it can't tell you this
+  itself — this is the `set(connected) − set(flowthrough)` diff on the two
+  parquets.)*
 - **Signal A vs Signal B** are complementary. Measured: Signal-A-only = 1,436,
   Signal-B-only = 16,588, both = 4,916. Signal B carries the *count*; Signal A
   carries the *area* (GSL). The per-signal provenance columns + per-signal floor
@@ -268,10 +296,12 @@ product is rebuilt).
 
 ### In motion — decisions, not defects
 
-- **Waterbody layer is now per-fabric.** `gfv2` reads the source-derived
-  `nhd_waterbodies.gpkg` (PR #179); `gfv2_dev`
-  ([:129](../configs/base_config.yml#L129)), `oregon`, and `tjc` still read
-  `conus_waterbodies.gpkg`. Migrate them deliberately, or track the divergence.
+- **Waterbody layer is now uniform across fabrics.** `gfv2` was repointed at the
+  source-derived `nhd_waterbodies.gpkg` first (PR #179); `gfv2_dev`, `oregon`,
+  and `tjc` were migrated to it too as part of the segment-driven classifier
+  work, so every CONUS fabric now reads the same source-derived layer. The
+  retired hand-made `conus_waterbodies.gpkg` is A/B reference only — resolved,
+  no longer "in motion."
 - **Reproducibility gap.** `download/nhd_waterbodies.py` writes
   `nhd_waterbodies.parquet`, but the builders read `nhd_waterbodies.gpkg`, and **no
   script in the repo converts one to the other** — a manual `ogr2ogr`-type step in
@@ -286,18 +316,20 @@ product is rebuilt).
 
 ## 5. One-page map
 
-Sources feed the four-stage gate ladder; the ladder's `dprst_binary.tif` (and the
+Sources feed the five-stage gate ladder; the ladder's `dprst_binary.tif` (and the
 sibling rasters) become the parameters. The endorheic classifier feeds the
 connectivity stage as a **strict subtraction** — it can only ever move a
-waterbody toward depression storage.
+waterbody toward depression storage. The NHD flowline-topology sources (dashed)
+are opt-in comparison inputs only, off the production path by default.
 
 ```mermaid
 flowchart TD
     subgraph SRC["1. Data sources (base_config.yml, gfv2 profile)"]
       WB["nhd_waterbodies.gpkg"]
-      TOPO["flowline_topology (Network gate, staged first)"]
-      CONN["connected COMIDs (WBAREACOMI)"]
-      FLOW["flow-through COMIDs"]
+      SEG["segments_gpkg (model nsegment)"]
+      TOPO["flowline_topology (opt-in comparison, staged first)"]
+      CONN["connected COMIDs (WBAREACOMI, opt-in)"]
+      FLOW["flow-through COMIDs (opt-in)"]
       HUC["closed type-C HUC12s"]
       BURN["BurnAdd sink polygons"]
       FDR["FDR grid (code-0 = sinks)"]
@@ -305,10 +337,12 @@ flowchart TD
     end
 
     subgraph LAD["2. Gate ladder (depstor_builders)"]
+      S["segment_wbody: on-stream iff nsegment intersects with positive length"]
       W["waterbody: +BurnAdd, -Ice Mass, -sub-900 m2 polygons"]
       E["endorheic: A terminus-in-self, B closed HUC12"]
-      C["wbody_connectivity: C1 or C2 Network-gated, Playa never"]
+      C["wbody_connectivity: C0 segment (required) [+ opt-in C1/C2], Playa never"]
       D["dprst: D1 clump exclude, D2 endorheic exempt, D3 imperv carve, D4 land"]
+      S --> W
       W --> E
       E -->|"strict subtract"| C
       C --> D
@@ -320,14 +354,17 @@ flowchart TD
       DP --> PAR
     end
 
+    SEG --> S
+    WB --> S
     WB --> W
     BURN --> W
     FDR --> E
     HUC --> E
-    TOPO --> CONN
-    TOPO --> FLOW
-    CONN --> C
-    FLOW --> C
+    S -->|"segment_wbody_comids (primary)"| C
+    TOPO -.->|"opt-in"| CONN
+    TOPO -.->|"opt-in"| FLOW
+    CONN -.->|"opt-in union"| C
+    FLOW -.->|"opt-in union"| C
     IMP --> D
     D --> DP
 ```

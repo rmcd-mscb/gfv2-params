@@ -43,6 +43,14 @@ steps:
   - name: endorheic
     output: endorheic_waterbody_comids.parquet
 
+  # The PRIMARY on-stream source: COMIDs a model nsegment intersects with positive
+  # length. Replaces NHD flowline topology (WBAREACOMI + flow-through), which is now
+  # an opt-in comparison mode — see the commented-out `connected_comids_table` /
+  # `flowthrough_comids_table` keys in base_config.yml. Cheap (vector sjoin; 42 s /
+  # 2.0 GB at CONUS), so it is not a memory consideration for the depstor batch.
+  - name: segment_wbody
+    output: segment_waterbody_comids.parquet
+
   - name: wbody_connectivity
     outputs:
       connected_wbody: connected_wbody.tif

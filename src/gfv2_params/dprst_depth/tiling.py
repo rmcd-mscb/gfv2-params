@@ -480,19 +480,36 @@ def _load_and_tag_for_plan(config: dict, logger) -> tuple[gpd.GeoDataFrame, gpd.
     builder's `_load_dprst_polygons` calls — so the SLURM plan/array path and
     the in-process builder path can't diverge on the reconstruction OR the
     fabric clip (without the clip a regional fabric like `oregon` would plan
-    the entire CONUS dprst set, not its own). Then applies the same WESM
-    `best_topo` and EPA L3 `ecoregion` tags the builder's `_tag_polygons`
-    does, reading directly off the resolved config dict instead of a
-    `BuildContext` since this runs standalone ahead of any other
-    depstor_rasters step. Every input is a local, pre-staged vector file --
-    no network I/O at all in `--plan` (tile *existence* is a Task 4
-    compute-time concern; `group_by_tile` never probes it).
+    the entire CONUS dprst set, not its own). The on-stream COMID set fed to
+    that helper is the segment classifier's on-stream set
+    (`segment_waterbody_comids.parquet`) MINUS the endorheic set
+    (`endorheic_waterbody_comids.parquet`), resolved from `output_dir` --
+    the SAME two tables `ctx.paths` tracks for the in-process builder, just
+    reached by a different route (this hook runs standalone ahead of any
+    other depstor_rasters step, so it has no `BuildContext`/orchestrator to
+    read `ctx.paths` from). Then applies the same WESM `best_topo` and EPA L3
+    `ecoregion` tags the builder's `_tag_polygons` does, reading directly off
+    the resolved config dict instead of a `BuildContext`. Every input is a
+    local, pre-staged vector file -- no network I/O at all in `--plan` (tile
+    *existence* is a Task 4 compute-time concern; `group_by_tile` never
+    probes it).
+
+    Applies the SAME `min_onstream_comids`/`min_endorheic_comids` floors
+    `wbody_connectivity` enforces at its consuming end
+    (`check_onstream_floor`/`check_endorheic_floor`), because this hook has the
+    identical doctrine gap: it reads both parquets straight off disk with only
+    an existence check, and `submit_dprst_depth.sh` is a documented operator
+    route that bypasses the orchestrator entirely. A collapsed or stale table
+    would otherwise silently reconstruct the wrong dprst polygon set for the
+    whole SLURM array.
     """
     from ..download.epa_ecoregions import ECO_ID_FIELD, ecoregion_of
+    from ..endorheic import check_endorheic_floor, load_endorheic_comids, read_signal_counts
+    from ..segment_wbody import check_onstream_floor, load_segment_comids
     from .topo import load_fabric_dprst_polygons, resolution_class
 
     required = [
-        "waterbody_gpkg", "waterbody_layer", "connected_comids_table",
+        "waterbody_gpkg", "waterbody_layer", "output_dir",
         "wesm_index", "ecoregions_gpkg", "hru_gpkg", "hru_layer",
     ]
     missing = [k for k in required if not config.get(k)]
@@ -502,31 +519,48 @@ def _load_and_tag_for_plan(config: dict, logger) -> tuple[gpd.GeoDataFrame, gpd.
         )
 
     waterbody_gpkg = Path(config["waterbody_gpkg"])
-    connected_comids_table = Path(config["connected_comids_table"])
     wesm_index = Path(config["wesm_index"])
     ecoregions_gpkg = Path(config["ecoregions_gpkg"])
     hru_gpkg = Path(config["hru_gpkg"])
-    flowthrough_comids_table = (
-        Path(config["flowthrough_comids_table"]) if config.get("flowthrough_comids_table") else None
-    )
+    output_dir = Path(config["output_dir"])
+    segment_table = output_dir / "segment_waterbody_comids.parquet"
+    endorheic_table = output_dir / "endorheic_waterbody_comids.parquet"
     checks = [
         ("waterbody_gpkg", waterbody_gpkg),
-        ("connected_comids_table", connected_comids_table),
         ("wesm_index", wesm_index),
         ("ecoregions_gpkg", ecoregions_gpkg),
         ("hru_gpkg", hru_gpkg),
+        ("segment_waterbody_comids.parquet", segment_table),
+        ("endorheic_waterbody_comids.parquet", endorheic_table),
     ]
-    if flowthrough_comids_table is not None:
-        checks.append(("flowthrough_comids_table", flowthrough_comids_table))
     for label, p in checks:
         if not p.exists():
             raise FileNotFoundError(f"--plan: {label} not found on disk: {p}")
 
+    # Apply the same `min_onstream_comids`/`min_endorheic_comids` floors
+    # `wbody_connectivity` enforces at its consuming end. `--plan` reads both
+    # parquets straight off disk (no `BuildContext`/orchestrator), which is the
+    # exact same doctrine gap `wbody_connectivity`'s consuming-end check exists
+    # to close for `--from wbody_connectivity` — a collapsed or stale table
+    # would otherwise silently reconstruct the wrong dprst polygon set here too.
+    segment_comids = load_segment_comids(segment_table)
+    check_onstream_floor(
+        len(segment_comids), fabric=config.get("fabric", "<unknown>"),
+        floor=config.get("min_onstream_comids"), source=segment_table,
+    )
+    check_endorheic_floor(
+        read_signal_counts(endorheic_table),
+        fabric=config.get("fabric", "<unknown>"),
+        floor=config.get("min_endorheic_comids"),
+        signal_b_active=config.get("wbd_huc12_table") is not None,
+        source=endorheic_table,
+    )
+    onstream_comids = segment_comids - load_endorheic_comids(endorheic_table)
+
     dprst = load_fabric_dprst_polygons(
         waterbody_gpkg=waterbody_gpkg,
         waterbody_layer=config["waterbody_layer"],
-        connected_comids_table=connected_comids_table,
-        flowthrough_comids_table=flowthrough_comids_table,
+        onstream_comids=onstream_comids,
         hru_gpkg=hru_gpkg,
         hru_layer=config["hru_layer"],
         logger=logger,
