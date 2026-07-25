@@ -18,6 +18,7 @@ _spec.loader.exec_module(_mod)
 
 find_missing_ids = _mod.find_missing_ids
 fill_missing_values_knn = _mod.fill_missing_values_knn
+maf = _mod
 
 
 class TestFindMissingIds:
@@ -271,3 +272,57 @@ class TestFillMissingValuesKnn:
         # Only id=2 (val=5.0) is in the fit set — both NaN rows must get 5.0
         assert result.loc[result["nat_hru_id"] == 1, "my_param"].iloc[0] == 5.0
         assert result.loc[result["nat_hru_id"] == 3, "my_param"].iloc[0] == 5.0
+
+
+def _frame():
+    """A snarea_curve-shaped frame: real params complete, provenance partly NaN."""
+    return pd.DataFrame({
+        "hru_id": [1, 2, 3],
+        "hru_deplcrv": [1.0, 2.0, np.nan],      # declared param, has a gap
+        "snarea_thresh": [0.1, 0.2, 0.3],        # declared param, complete
+        "cv_empirical": [np.nan, np.nan, 0.4],   # UNDECLARED provenance, NaN by design
+    })
+
+
+def test_only_declared_columns_are_filled():
+    plan = maf.resolve_fill_plan(
+        _frame(), declared=["hru_deplcrv", "snarea_thresh"],
+        missing_ids=set(), id_feature="hru_id", param_name="snarea_curve",
+    )
+    assert plan.fill_columns == ["hru_deplcrv", "snarea_thresh"]
+    assert "cv_empirical" not in plan.fill_columns
+
+
+def test_undeclared_column_with_nan_is_reported_not_filled():
+    plan = maf.resolve_fill_plan(
+        _frame(), declared=["hru_deplcrv", "snarea_thresh"],
+        missing_ids=set(), id_feature="hru_id", param_name="snarea_curve",
+    )
+    # cv_empirical has 2 NaN — surfaced for the caller to warn about, never filled.
+    assert plan.undeclared_with_nan == {"cv_empirical": 2}
+
+
+def test_absent_hru_row_with_no_declaration_raises():
+    """A missing ROW admits no provenance reading — it is a config error, not a result."""
+    with pytest.raises(ValueError, match="fill_columns"):
+        maf.resolve_fill_plan(
+            _frame(), declared=[], missing_ids={4, 5},
+            id_feature="hru_id", param_name="mystery_param",
+        )
+
+
+def test_absent_hru_row_with_declaration_is_fine():
+    plan = maf.resolve_fill_plan(
+        _frame(), declared=["hru_deplcrv"], missing_ids={4},
+        id_feature="hru_id", param_name="snarea_curve",
+    )
+    assert plan.fill_columns == ["hru_deplcrv"]
+
+
+def test_declared_column_absent_from_frame_raises():
+    """A typo'd fill_columns entry must fail loud, not silently fill nothing."""
+    with pytest.raises(ValueError, match="not present"):
+        maf.resolve_fill_plan(
+            _frame(), declared=["hru_deplcrv", "typo_column"], missing_ids=set(),
+            id_feature="hru_id", param_name="snarea_curve",
+        )

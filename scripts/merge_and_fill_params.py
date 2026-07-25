@@ -9,6 +9,7 @@ profile.
 """
 
 import argparse
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import geopandas as gpd
@@ -29,6 +30,74 @@ def find_missing_ids(param_file, expected_max, id_feature, logger):
     missing_ids = sorted(expected_ids - existing_ids)
     logger.info("Found %d missing %s values out of %d", len(missing_ids), id_feature, expected_max)
     return param_df, missing_ids
+
+
+@dataclass
+class FillPlan:
+    """What a param's fill run may touch, and what it found but must not touch.
+
+    `fill_columns` is exactly the caller's declared list, intersected with nothing —
+    a declared column missing from the frame is an error, not a silent skip.
+    `undeclared_with_nan` is the caller's warning material: columns carrying NaN that
+    nobody declared fillable.
+    """
+
+    fill_columns: list[str] = field(default_factory=list)
+    undeclared_with_nan: dict[str, int] = field(default_factory=dict)
+
+
+# Columns that identify an HRU rather than parameterise it. Never fillable, and never
+# reported as an undeclared gap.
+ID_COLUMNS = {"hru_id", "nat_hru_id", "model_hru_idx", "vpu"}
+
+
+def resolve_fill_plan(param_df, declared, missing_ids, id_feature, param_name) -> FillPlan:
+    """Decide what to fill for one param, and what to surface without filling.
+
+    The selection is DECLARATION-driven, not gap-driven, because "has a NaN" does not
+    mean "is missing". `nhm_snarea_curve_params.csv` carries 7,891 rows with NaN, every
+    one in a provenance column -- `cv_empirical` is derivable for only ~42% of HRUs BY
+    DESIGN, and `cv_subgrid` exists to rescue the rest. Filling it would overwrite the
+    record of how each curve was derived with interpolated noise. Before this function
+    existed the column list was "everything except the id columns", which would have
+    done exactly that.
+
+    Two asymmetric guards, because the two kinds of gap differ in what they can mean:
+
+      * an undeclared column with NaN CELLS is ambiguous -- it may be a legitimate
+        "not derivable" -- so it is reported for the caller to WARN about;
+      * an absent HRU ROW is not ambiguous. The HRU is in the file or it is not, and no
+        provenance reading makes a missing HRU correct. With nothing declared fillable,
+        that is a configuration error and RAISES.
+    """
+    declared = list(declared or [])
+
+    absent = [c for c in declared if c not in param_df.columns]
+    if absent:
+        raise ValueError(
+            f"`fill_columns` for '{param_name}' names {absent}, which are not present in "
+            f"the parameter file (columns: {sorted(param_df.columns)}). Fix the config -- "
+            f"a typo here would silently fill nothing."
+        )
+
+    if missing_ids and not declared:
+        raise ValueError(
+            f"'{param_name}' is missing {len(missing_ids)} HRU row(s) but declares no "
+            f"`fill_columns`, so nothing would be filled and the gap would persist "
+            f"unnoticed. An absent HRU row is unambiguous -- unlike a NaN cell, it cannot "
+            f"be a legitimate 'not derivable' result. Add `fill_columns` for this param in "
+            f"its config entry."
+        )
+
+    undeclared_with_nan = {}
+    for col in param_df.columns:
+        if col in declared or col in ID_COLUMNS or col == id_feature:
+            continue
+        n_nan = int(param_df[col].isna().sum())
+        if n_nan:
+            undeclared_with_nan[col] = n_nan
+
+    return FillPlan(fill_columns=declared, undeclared_with_nan=undeclared_with_nan)
 
 
 def fill_missing_values_knn(param_df, missing_ids, merged_gdf, param_columns, k, id_feature, logger):
