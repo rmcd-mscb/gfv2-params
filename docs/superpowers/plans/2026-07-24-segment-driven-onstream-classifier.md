@@ -2140,9 +2140,15 @@ Also update the `min_endorheic_comids` bullet's closing sentence to mention its 
 
 - [ ] **Step 3: Update `docs/ARCHITECTURE.md`**
 
-- Add `segment_wbody` to the depstor step list between `endorheic` and
-  `wbody_connectivity`, with output `segment_waterbody_comids.parquet` and registered key
+- Add `segment_wbody` to the depstor step list **at position 3, before `waterbody`**
+  (it moved there in Task 8 because `waterbody`'s BurnAdd overlap guard consumes its
+  output), with output `segment_waterbody_comids.parquet` and registered key
   `segment_wbody_comids`.
+- Document the on-stream set's THREE consumers, not just one: `wbody_connectivity`
+  (primary source), `waterbody` (BurnAdd overlap guard), and `dprst_depth` (reconstructs
+  the dprst polygon set, via `topo.load_fabric_dprst_polygons(onstream_comids=...)`, on
+  both the in-process and SLURM `--plan` paths). The set every consumer uses is
+  `segment_wbody_comids − endorheic_comids`.
 - Add `min_onstream_comids` to the per-key required-field table as an optional per-fabric
   key.
 - Note that `segments_gpkg`/`segments_layer` are now **required** depstor inputs (they
@@ -2151,9 +2157,18 @@ Also update the `min_endorheic_comids` bullet's closing sentence to mention its 
 
 - [ ] **Step 4: Update the runbooks**
 
-In `slurm_batch/RUNME.md` and `slurm_batch/HPC_REFERENCE.md`:
+**Already done by Task 9's fix round — do NOT redo or contradict these:**
+`slurm_batch/RUNME.md` stage 3a now also runs `--step segment_wbody` and
+`--step endorheic` before 3b, and `slurm_batch/HPC_REFERENCE.md`'s "Stage 2d'" gained an
+"On-disk prerequisite" section plus an updated Plan-stage bullet. That staging fix is
+correct and complete; leave it alone.
 
-- Insert `segment_wbody` into the documented depstor step order.
+In `slurm_batch/RUNME.md` and `slurm_batch/HPC_REFERENCE.md`, do the REST:
+
+- Insert `segment_wbody` into the documented depstor step order **at position 3**
+  (`landmask → imperv → segment_wbody → waterbody → endorheic → wbody_connectivity →
+  dprst → ...`). Note `HPC_REFERENCE.md`'s "### Stage 2d depstor detail" DAG-order prose
+  is known-stale and was deliberately left for you.
 - Change the cascade-rebuild recipe: for a classifier-only change it is
   `--from segment_wbody`; for this change (which also swaps the waterbody layer) it is
   `--from waterbody`, and `waterbody`/`dprst` are the ~384G full-grid steps.
