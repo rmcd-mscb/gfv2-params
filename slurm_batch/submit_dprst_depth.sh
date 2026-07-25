@@ -124,10 +124,17 @@ echo "--- stage 3: fill+burn+op_flow_thres (afterok:$ARRAY_JOB_ID) ---"
 # for the OTHER depstor steps' full-grid ops) -- dprst_depth's own compute is
 # vector-scale (the tagged polygon set) + a streamed row-strip burn
 # (burn_depth's STRIP_ROWS pattern), not a full-CONUS-grid materialization.
+# --force is REQUIRED, not optional: stage 2 has just recomputed every per-tile
+# batch parquet, so this stage MUST regenerate from them. Without it the builder's
+# exists-skip path sees the PREVIOUS run's dprst_depth.tif / op_flow_thres_params.csv
+# and returns in 0s -- and stages 4a/4b then aggregate a STALE raster into
+# nhm_dprst_depth_avg_params.csv with every job reporting COMPLETED. Observed on the
+# oregon 2026-07-25 rebuild: 20/20 array tasks wrote fresh parquets, the build stage
+# skipped, and mean_zonal ran against a depth raster from the previous classifier.
 BUILD_JOB_ID=$(sbatch --dependency=afterok:"$ARRAY_JOB_ID" \
     --mem=64G --time=02:00:00 \
     --export=ALL,BASE_CONFIG="$BASE_CONFIG",FABRIC="$FABRIC" \
-    slurm_batch/build_depstor_rasters.batch --step dprst_depth | awk '{print $NF}')
+    slurm_batch/build_depstor_rasters.batch --step dprst_depth --force | awk '{print $NF}')
 echo "  build: $BUILD_JOB_ID"
 
 echo "--- stage 4a: mean_zonal array (afterok:$BUILD_JOB_ID) ---"
