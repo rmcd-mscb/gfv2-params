@@ -1,5 +1,15 @@
 # gfv2-params — Amazon Q Workspace Rules
 
+## Memory sync
+
+This file (`.amazonq/rules/workflow.md`) and `CLAUDE.md` are kept in sync:
+- **This file** is the single source of truth for the issue+PR workflow,
+  completed/upcoming issues, and repo facts (pixi tasks, CI, branch conventions).
+- **`CLAUDE.md`** holds deep architectural gotchas and code conventions that
+  are too detailed for this file.
+- When either is updated, sync the other. Completed issues and new pixi tasks
+  belong in both; architectural detail belongs only in `CLAUDE.md`.
+
 ## Issue + PR workflow
 
 The established pattern for every work item:

@@ -277,6 +277,12 @@ These are hard-won; violating them silently corrupts outputs.
 
 ## Working in this repo
 
+- **AI assistant memory sync.** `.amazonq/rules/workflow.md` is the single
+  source of truth for the issue+PR workflow, completed/upcoming issues, and
+  repo facts (pixi tasks, CI, branch conventions). When either file is updated,
+  sync the other: completed issues and new pixi tasks belong in both;
+  deep architectural gotchas and code conventions belong only in `CLAUDE.md`.
+
 - **Every code change needs a docs check.** Audit `docs/`, `README.md`, and
   `slurm_batch/RUNME.md` (and `HPC_REFERENCE.md`); update them on the same branch and surface findings
   before merge.
