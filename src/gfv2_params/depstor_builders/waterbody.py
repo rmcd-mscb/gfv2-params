@@ -37,15 +37,24 @@ def _load_onstream_comids(ctx: BuildContext, logger) -> set[int] | None:
     can still only make the overlap guard in `merge_burn_add` fire MORE, never
     less, which is the safe direction.
 
-    Returns `None` if the on-stream set can't be determined — the `segment_wbody`
-    step hasn't run for this fabric and no table is staged on disk — so the
-    caller must fall back to the broad "raise on any overlap" guard rather than
-    silently skip it.
+    Returns `None` if the on-stream set can't be determined — either the
+    `segment_wbody` step hasn't run for this fabric and no table is staged on
+    disk, OR the table is staged but PRESENT-AND-EMPTY. Both cases must fall
+    back to the caller's broad "raise on any overlap" guard, never the narrow
+    on-stream-restricted one: an empty set is not "zero on-stream waterbodies,
+    trust it" — `merge_burn_add`'s narrow branch treats an empty
+    `onstream_comids` as "nothing to guard against" and skips the overlap
+    check ENTIRELY (`at_risk` is always `{}` when there is nothing to select
+    on-stream), which is the unsafe direction. Only a genuinely missing table
+    should mean "unknown"; a present-but-empty table must be treated the same
+    way for safety, not trusted as a real zero.
     """
     table = ctx.paths.get("segment_wbody_comids")
     if table is None or not table.exists():
         return None
     connected = load_segment_comids(table)
+    if not connected:
+        return None
     logger.info(
         "  BurnAdd overlap guard: %d on-stream COMIDs loaded from the segment "
         "classifier (pre-endorheic)", len(connected),
@@ -348,11 +357,11 @@ def build(step_cfg: dict, ctx: BuildContext, logger) -> dict:
         onstream_comids = _load_onstream_comids(ctx, logger)
         if onstream_comids is None:
             logger.warning(
-                "  BurnAdd overlap guard: the segment on-stream table is unavailable "
-                "(the `segment_wbody` step has not run for this fabric) — cannot "
-                "restrict the guard to on-stream neighbours, falling back to the broad "
-                "guard (raises on ANY overlap with an existing waterbody, not just an "
-                "on-stream one)."
+                "  BurnAdd overlap guard: the segment on-stream table is unavailable or "
+                "empty (either the `segment_wbody` step has not run for this fabric, or "
+                "its table is staged but has zero COMIDs) — cannot restrict the guard to "
+                "on-stream neighbours, falling back to the broad guard (raises on ANY "
+                "overlap with an existing waterbody, not just an on-stream one)."
             )
         n_before = len(wb_gdf)
         wb_gdf = merge_burn_add(
