@@ -21,6 +21,8 @@ pixi shell -e dev                # default + pytest, ruff, pre-commit
 pixi run python scripts/foo.py   # one-off command in the default env
 pixi run -e dev pytest tests/ -v # run the test suite
 pixi run -e dev pytest tests/test_config.py::test_resolve_vpu_standard -v  # single test
+pixi run data-root               # print data_root from base_config.yml (use in scripts/RUNME)
+pixi run init-data-root          # scaffold the data directory tree
 ```
 
 After editing `pyproject.toml` or `pixi.lock`, re-run `pixi install`.
@@ -54,7 +56,12 @@ Part 2 split, the **orchestrator + builder + unified-config pattern** for the
 4 pipeline stages, fabric profiles as the single source of truth (with the
 per-key required-field table), and how to add a new pipeline step.
 
-`slurm_batch/RUNME.md` is the step-by-step runbook (the CONUS-gfv2 happy path); `slurm_batch/HPC_REFERENCE.md` holds the per-stage detail, alternate paths, and recovery;
+`slurm_batch/RUNME.md` is the step-by-step runbook (the CONUS-gfv2 happy path) — it opens
+with a **Quick Start for Scientists** section (condensed copy-paste commands), then the full
+per-step reference. Optional steps are marked with `> **Optional:**` blockquotes; Step 4
+leads with the wholesale `submit_zonal_params.sh` / `submit_depstor_params.sh` wrappers
+(manual per-param commands are in a collapsed `<details>` block).
+`slurm_batch/HPC_REFERENCE.md` holds the per-stage detail, alternate paths, and recovery;
 `README.md` covers user-facing setup and usage.
 
 ## Non-obvious conventions & gotchas
