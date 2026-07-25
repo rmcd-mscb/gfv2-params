@@ -526,13 +526,13 @@ _PARAM_ENTRIES = [
     ParamEntry(name="hru_percent_imperv", csv_name="nhm_hru_percent_imperv_params.csv", column="hru_percent_imperv", kind="continuous", units="fraction", cmap="OrRd"),
     ParamEntry(name="dprst_frac", csv_name="nhm_dprst_frac_params.csv", column="dprst_frac", kind="continuous", units="fraction", cmap="GnBu"),
     # ssflux PRMS params (from the gap-filled Stage 7 CSV — PRMS-ready values).
-    ParamEntry(name="soil2gw_max", csv_name="filled_nhm_ssflux_params.csv", column="soil2gw_max", kind="continuous", units="in/day", cmap="Blues"),
-    ParamEntry(name="ssr2gw_rate", csv_name="filled_nhm_ssflux_params.csv", column="ssr2gw_rate", kind="continuous", units="1/day", cmap="BuPu"),
-    ParamEntry(name="fastcoef_lin", csv_name="filled_nhm_ssflux_params.csv", column="fastcoef_lin", kind="continuous", units="1/day", cmap="YlOrRd"),
-    ParamEntry(name="slowcoef_lin", csv_name="filled_nhm_ssflux_params.csv", column="slowcoef_lin", kind="continuous", units="1/day", cmap="YlGn"),
-    ParamEntry(name="gwflow_coef", csv_name="filled_nhm_ssflux_params.csv", column="gwflow_coef", kind="continuous", units="1/day", cmap="Purples"),
-    ParamEntry(name="dprst_seep_rate_open", csv_name="filled_nhm_ssflux_params.csv", column="dprst_seep_rate_open", kind="continuous", units="1/day", cmap="PuBu"),
-    ParamEntry(name="dprst_flow_coef", csv_name="filled_nhm_ssflux_params.csv", column="dprst_flow_coef", kind="continuous", units="1/day", cmap="GnBu"),
+    ParamEntry(name="soil2gw_max", csv_name="nhm_ssflux_params.csv", column="soil2gw_max", kind="continuous", units="in/day", cmap="Blues"),
+    ParamEntry(name="ssr2gw_rate", csv_name="nhm_ssflux_params.csv", column="ssr2gw_rate", kind="continuous", units="1/day", cmap="BuPu"),
+    ParamEntry(name="fastcoef_lin", csv_name="nhm_ssflux_params.csv", column="fastcoef_lin", kind="continuous", units="1/day", cmap="YlOrRd"),
+    ParamEntry(name="slowcoef_lin", csv_name="nhm_ssflux_params.csv", column="slowcoef_lin", kind="continuous", units="1/day", cmap="YlGn"),
+    ParamEntry(name="gwflow_coef", csv_name="nhm_ssflux_params.csv", column="gwflow_coef", kind="continuous", units="1/day", cmap="Purples"),
+    ParamEntry(name="dprst_seep_rate_open", csv_name="nhm_ssflux_params.csv", column="dprst_seep_rate_open", kind="continuous", units="1/day", cmap="PuBu"),
+    ParamEntry(name="dprst_flow_coef", csv_name="nhm_ssflux_params.csv", column="dprst_flow_coef", kind="continuous", units="1/day", cmap="GnBu"),
 ]
 
 

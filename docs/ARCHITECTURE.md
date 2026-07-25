@@ -40,7 +40,9 @@ data_root/
     ├── fabric/                 # Merged fabric gpkg
     ├── batches/                # Per-batch gpkgs + manifest.yml
     ├── depstor_rasters/        # Depression-storage intermediate rasters
-    └── params/                 # Parameter outputs + merged/ + filled
+    └── params/                 # Parameter outputs; merged/ (canonical,
+                                 #   gap-filled) + merged/_unfilled/ (pre-fill
+                                 #   copies) + merged/_intermediates/
 ```
 
 **The invariant: every fabric reuses the same `shared/` rasters.** Per-VPU
@@ -204,6 +206,35 @@ SNODAS SWE NetCDFs. It defaults to the shared datastore path
 (`{data_root}/../nhf-datastore/snodas/daily`) in
 `configs/aggregate/aggregate_sources.yml` and only needs a profile entry if a
 fabric's SNODAS source differs from that default.
+
+### The `merged/` gap-fill convention (`fill_columns`)
+
+`fill_columns` is **not** a fabric-profile key — it is declared per param
+entry in `configs/zonal/zonal_params.yml` (`params:`),
+`configs/depstor/depstor_params.yml` (`means:`/`ratios:`), and the flat
+`configs/snarea/snarea_library.yml` (`snarea_curve`). `scripts/merge_and_fill_params.py`
+(Stage 7 / RUNME Step 5) reads that declaration to decide, per param, which
+columns it may KNN-fill. Two asymmetric guards, both in
+`resolve_fill_plan`: a declared column absent from the CSV raises (a typo
+would otherwise silently fill nothing); a param with no `fill_columns` that
+is nonetheless missing an HRU row also raises (a missing row admits no
+"not derivable" reading). A column that is present but **not** declared and
+carries NaN cells only warns, naming the column and the NaN count — a NaN
+cell can be a legitimate "not derivable" result (`cv_empirical` is derivable
+for only ~42% of HRUs by design; `cv_subgrid` exists to rescue the rest).
+
+`merged/<name>.csv` is the single canonical, always-gap-filled per-HRU file
+for every param that declares `fill_columns` — **consumers read
+`merged/*.csv`**. The retired `filled_` prefix required a consumer to know,
+per param *and* per fabric, which of two files was authoritative (the
+canonical set differed between `gfv2`, 2 files, and `oregon`, 4); only
+`viz.py` encoded that rule, and it is why four `oregon` params went unfilled
+until someone audited them by hand. The pre-fill (raw) copy is preserved
+once at `merged/_unfilled/<name>.csv` (`write_filled_in_place`, never
+overwritten on a re-run — the on-disk `merged/<name>.csv` is by then already
+filled), alongside the existing `merged/_intermediates/` per-fraction/derived
+CSVs. A one-time migration off an existing `filled_`-prefixed product is
+`scripts/migrate_filled_params.py` (dry-run by default, `--apply` required).
 
 ### Common fabrics
 

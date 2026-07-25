@@ -309,7 +309,48 @@ ratios job `COMPLETED`.
 sbatch slurm_batch/merge_and_fill_params.batch
 ```
 
-**What it does:** KNN-fills any missing per-HRU parameter values.
+**What it does:** default (all-params) mode — loops **every** param that
+declares `fill_columns` in `configs/zonal/zonal_params.yml`,
+`configs/depstor/depstor_params.yml`, or `configs/snarea/snarea_library.yml`
+and whose `merged/` CSV already exists for this fabric, and KNN-fills it
+against the fabric's HRU centroids. This replaced an earlier version that
+filled exactly one hardcoded file (`nhm_ssflux_params.csv`) per invocation —
+which is why the canonical set silently differed per fabric (2 files on
+`gfv2`, 4 on `oregon`) and why four `oregon` params went unfilled until
+someone audited them by hand. Pass `--param_file <path>` to fill one file
+instead of the default sweep.
+
+**`merged/<name>.csv` is the single canonical, always-gap-filled per-HRU file
+— read `merged/*.csv`.** The `filled_` prefix is **retired**: there is no
+longer a separate `filled_nhm_*.csv` to look for (an older checkout's docs or
+memory may still mention it). The step writes the filled result **in place**
+over `merged/<name>.csv`; the pre-fill (raw) copy is preserved once at
+`merged/_unfilled/<name>.csv` (never overwritten on a re-run, since the
+on-disk file is by then already filled).
+
+The run logs, per param, how many absent HRU rows and NaN cells it filled.
+Two asymmetric guards fire per param:
+
+- A column **not** declared in that param's `fill_columns` but carrying NaN
+  cells only **warns** (names the column and the NaN count) — a NaN cell can
+  be a legitimate "not derivable" result (e.g. `cv_empirical`, derivable for
+  only ~42% of HRUs by design; `cv_subgrid` exists to rescue the rest), so it
+  is left untouched rather than silently filled.
+- A param that is missing an HRU **row** entirely but declares no
+  `fill_columns` **raises** instead of passing silently — an absent row
+  admits no "not derivable" reading, unlike a NaN cell.
+
+Migrating an existing product off the old `filled_` layout is a one-time,
+separate step — see `scripts/migrate_filled_params.py` (dry-run by default,
+`--apply` to execute).
+
+> **Run the migration BEFORE the first Step 5 run on an existing product.**
+> If a fabric's `merged/` directory still has any `filled_*.csv` files from
+> before this convention existed, migrate it first. Running Step 5 (which
+> writes the new, correct fill in place) and only migrating afterward would
+> have the migration move the stale `filled_` file over top of today's
+> correct fill — refused loudly, not silently, as of the Finding-1 fix, but
+> the ordering above avoids hitting the refusal at all.
 
 **Wait for:** the job `COMPLETED`.
 
@@ -406,13 +447,19 @@ tail -n 200 logs/job_<JOBID>.err
 
 ## Where outputs land
 
-- `{data_root}/gfv2/params/merged/` — final parameter CSVs, including the 6
-  depstor ratios (`sro_to_dprst_perv`, `sro_to_dprst_imperv`, `carea_max`,
-  `smidx_coef`, `hru_percent_imperv`, `dprst_frac`) and
+- `{data_root}/gfv2/params/merged/` — the canonical, always-gap-filled
+  per-HRU parameter CSVs (Step 5 fills every param declaring `fill_columns`
+  in place; consumers read `merged/*.csv`, never a `filled_` prefix — see
+  Step 5). Includes the 6 depstor ratios (`sro_to_dprst_perv`,
+  `sro_to_dprst_imperv`, `carea_max`, `smidx_coef`, `hru_percent_imperv`,
+  `dprst_frac`) and
   `nhm_dprst_depth_avg_params.csv` (issue #173 — derived, NOT the pyWatershed
   132 in default; see `docs/pywatershed_depression_storage_requirements.md`).
 - `{data_root}/gfv2/params/merged/_intermediates/` — 10 per-fraction count
   CSVs (inputs to ratio derivation; `count` is NOT a [0, 1] fraction).
+- `{data_root}/gfv2/params/merged/_unfilled/` — the pre-fill (raw) copy of
+  each `merged/<name>.csv` that Step 5 has gap-filled, preserved once and
+  never overwritten on a re-run.
 - `{data_root}/gfv2/depstor_rasters/dprst_depth.tif`,
   `op_flow_thres_params.csv` — Step 3's `dprst_depth` step output (per-cell
   V/A mean depth raster; `op_flow_thres_params.csv` is the constant-1.0

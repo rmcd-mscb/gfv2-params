@@ -7,6 +7,30 @@ params_file: nhm_snarea_curve_params.csv
 validation_file: nhm_snarea_curve_validation.csv
 netcdf_file: nhm_snarea_curve.nc
 
+# scripts/merge_and_fill_params.py: fill_columns for `params_file` above.
+# Observed on-disk header: hru_id,hru_deplcrv,snarea_thresh,cv_assign,
+# cv_subgrid,cv_empirical,cv_source,sdc_status,sca_class,similarity,
+# n_seasons,n_peak_years,peak_swe_mm,snarea_curve_0..snarea_curve_10.
+# cv_* / cv_source / sdc_status / sca_class / similarity / n_seasons /
+# n_peak_years / peak_swe_mm are DELIBERATELY absent: NaN there means "not
+# derivable" (cv_empirical is derivable for only ~42% of HRUs by design;
+# cv_subgrid rescues the rest), which is a RESULT. Filling them would replace
+# the record of how each curve was derived with noise.
+fill_columns:
+  - hru_deplcrv
+  - snarea_thresh
+  - snarea_curve_0
+  - snarea_curve_1
+  - snarea_curve_2
+  - snarea_curve_3
+  - snarea_curve_4
+  - snarea_curve_5
+  - snarea_curve_6
+  - snarea_curve_7
+  - snarea_curve_8
+  - snarea_curve_9
+  - snarea_curve_10
+
 ndepl_cv: 8 # 8 CV bins + 1 reserved default = ndepl 9 (grouping memory: elbow 5-8)
 calibrate: auto # auto | on | off
 calibrate_bias_tol: 0.1 # |median(cv_subgrid) - median(cv_empirical)| trigger

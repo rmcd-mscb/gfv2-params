@@ -10,8 +10,17 @@
 #SBATCH --mem=64G
 #
 # KNN gap-fill of missing parameter values against the fabric (Stage 7). Fits
-# sklearn NearestNeighbors over every HRU and fills all param columns, so it
-# runs as a SLURM job rather than on the login node.
+# sklearn NearestNeighbors over every HRU and fills every param that declares
+# `fill_columns` in configs/zonal/zonal_params.yml, configs/depstor/
+# depstor_params.yml, or configs/snarea/snarea_library.yml (NOT every column of
+# every param -- undeclared columns carrying NaN are left untouched and only
+# warned about, see RUNME.md Step 5), so it runs as a SLURM job rather than on
+# the login node.
+#
+# IMPORTANT: if this fabric's product still uses the retired `filled_` prefix
+# layout, run `scripts/migrate_filled_params.py --merged_dir <path> --apply`
+# BEFORE the first Step 5 run here -- see RUNME.md Step 5 / HPC_REFERENCE.md
+# Stage 7 for why the order matters.
 #   FABRIC=oregon sbatch slurm_batch/merge_and_fill_params.batch
 # --mem/--time are starting points; right-size from `sacct -j <id> -o MaxRSS`.
 cd "$SLURM_SUBMIT_DIR"
