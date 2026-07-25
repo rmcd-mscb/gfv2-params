@@ -12,6 +12,7 @@ import geopandas as gpd
 import numpy as np
 import pandas as pd
 import pytest
+import shapely
 from shapely.geometry import LineString, Polygon
 
 from gfv2_params.segment_wbody import (
@@ -116,6 +117,39 @@ def test_repair_invalid_is_a_noop_on_valid_geometry():
     gdf, n = repair_invalid(_wb([7]), name="waterbodies")
     assert n == 0
     assert gdf.geometry.iloc[0].equals(_LAKE)
+
+
+@pytest.mark.filterwarnings("ignore:invalid value encountered:RuntimeWarning")
+def test_repair_invalid_raises_when_still_invalid_after_make_valid():
+    # Verified empirically (not assumed): shapely.make_valid does NOT raise on this
+    # NaN-vertex bowtie -- it returns a LINESTRING that still carries the NaN
+    # coordinate, so is_valid stays False afterward. That is exactly the n_still
+    # branch: a geometry make_valid "handles" without actually repairing. (A bare
+    # NaN coordinate without the accompanying self-intersection instead makes
+    # shapely.make_valid itself raise GEOSException -- a different, unguarded
+    # failure mode -- so this specific self-intersecting + NaN combination is
+    # load-bearing for reaching this branch.) NaN flowing through the GEOS ufuncs
+    # also raises a benign numpy RuntimeWarning at construction and at make_valid
+    # time; silenced above since it is not the behaviour under test.
+    bowtie_nan = Polygon([(0, 0), (10, 10), (10, np.nan), (0, 10)])
+    with pytest.raises(ValueError, match="make_valid"):
+        repair_invalid(_wb([7], geoms=[bowtie_nan]), name="waterbodies")
+
+
+def test_unmeasurable_pair_raises_rather_than_zero_length(monkeypatch):
+    # This is the exact failure recorded in repair_invalid's docstring: the real
+    # CONUS measurement run died with `GEOSException: TopologyException: side
+    # location conflict` -- a pair that survives repair_invalid (both geometries
+    # individually valid) but still fails inside the intersection call itself.
+    # The per-row fallback in _overlap_lengths means shapely.intersection must
+    # fail on BOTH the chunked call and the single-pair retry for a NaN to survive
+    # to this check -- patching it unconditionally exercises both call sites.
+    def boom(*a, **k):
+        raise RuntimeError("simulated GEOS failure")
+
+    monkeypatch.setattr(shapely, "intersection", boom)
+    with pytest.raises(ValueError, match="unmeasurable"):
+        segment_waterbody_pairs(_seg([LineString([(-1, 5), (11, 5)])]), _wb([7]))
 
 
 def test_non_numeric_comid_rows_are_dropped():
