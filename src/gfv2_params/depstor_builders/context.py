@@ -50,6 +50,12 @@ class BuildContext:
     # floor so a collapsed/silently-empty CONUS classifier result fails loud instead
     # of quietly leaving the Great Salt Lake on-stream.
     min_endorheic_comids: int | None = None
+    # Optional per-fabric floor on the number of on-stream COMIDs the `segment_wbody`
+    # builder must produce. Same opt-in contract as `min_endorheic_comids`: absent means
+    # "this domain may legitimately have few". `gfv2` measures 48,529 and `oregon` 770,
+    # so both declare one — a collapsed segment/waterbody join would otherwise turn
+    # nearly every waterbody into depression storage and exit 0.
+    min_onstream_comids: int | None = None
     fdr_raster: Path | None = None
     twi_raster: Path | None = None
     vpu: str | None = None  # single-VPU fabric's VPU label (e.g. "17"); None = use fabric `vpu` attr

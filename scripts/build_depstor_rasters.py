@@ -105,6 +105,10 @@ def _build_context(config: dict, force: bool) -> BuildContext:
             int(config["min_endorheic_comids"])
             if config.get("min_endorheic_comids") is not None else None
         ),
+        min_onstream_comids=(
+            int(config["min_onstream_comids"])
+            if config.get("min_onstream_comids") is not None else None
+        ),
         fdr_raster=Path(config["fdr_raster"]) if config.get("fdr_raster") else None,
         twi_raster=Path(config["twi_raster"]) if config.get("twi_raster") else None,
         vpu=config.get("vpu"),
@@ -150,6 +154,7 @@ def _expected_outputs(step: dict) -> dict:
             "landmask": "landmask",
             "imperv": "imperv",
             "endorheic": "endorheic_comids",
+            "segment_wbody": "segment_wbody_comids",
             "perv": "perv",
             "routing": "drains_to_dprst",
             "vpu_id": "vpu_id",

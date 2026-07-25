@@ -8,12 +8,17 @@ waterbody both PROMOTE it.
 
 from __future__ import annotations
 
+import logging
+from pathlib import Path
+
 import geopandas as gpd
 import numpy as np
 import pandas as pd
 import pytest
+import rasterio
 import shapely
-from shapely.geometry import LineString, Polygon
+from rasterio.transform import from_origin
+from shapely.geometry import LineString, Polygon, box
 
 from gfv2_params.segment_wbody import (
     check_onstream_floor,
@@ -228,3 +233,144 @@ def test_check_onstream_floor_passes_at_floor(tmp_path):
     # Boundary: the floor is inclusive, so n == floor must NOT raise. Guards against
     # a `<=` typo that would reject a legitimately-at-floor result.
     check_onstream_floor(30000, fabric="gfv2", floor=30000, source=tmp_path / "t.parquet")
+
+
+# ---------------------------------------------------------------------------
+# Builder tests
+# ---------------------------------------------------------------------------
+
+_STEP_CFG = {"output": "segment_waterbody_comids.parquet"}
+
+
+def _write_template(path, n: int = 10) -> None:
+    transform = from_origin(0, n * 30, 30, 30)
+    with rasterio.open(
+        path, "w", driver="GTiff", height=n, width=n, count=1, dtype="float32",
+        crs="EPSG:5070", transform=transform, nodata=-9999.0,
+    ) as dst:
+        dst.write(np.full((n, n), 100.0, dtype=np.float32), 1)
+
+
+def _builder_ctx(tmp_path, *, seg_geoms, wb_comids, wb_geoms, **kw):
+    from gfv2_params.depstor_builders.context import BuildContext
+
+    template = tmp_path / "template.tif"
+    _write_template(template)
+    seg_gpkg = tmp_path / "seg.gpkg"
+    wb_gpkg = tmp_path / "wb.gpkg"
+    gpd.GeoDataFrame({"seg_id": range(len(seg_geoms))}, geometry=list(seg_geoms),
+                     crs="EPSG:5070").to_file(seg_gpkg, layer="nsegment", driver="GPKG")
+    gpd.GeoDataFrame({"COMID": list(wb_comids), "FTYPE": ["LakePond"] * len(wb_comids)},
+                     geometry=list(wb_geoms),
+                     crs="EPSG:5070").to_file(wb_gpkg, layer="waterbodies", driver="GPKG")
+    return BuildContext(
+        fabric="t", template_path=template, output_dir=tmp_path,
+        hru_gpkg=wb_gpkg, hru_layer="waterbodies",
+        segments_gpkg=seg_gpkg, segments_layer="nsegment",
+        waterbody_gpkg=wb_gpkg, waterbody_layer="waterbodies", **kw,
+    )
+
+
+def test_builder_writes_only_positive_length_comids(tmp_path):
+    from gfv2_params.depstor_builders import segment_wbody as builder
+
+    # COMID 10: crossed through the interior -> on-stream.
+    # COMID 20: grazed at a single boundary point -> NOT on-stream.
+    ctx = _builder_ctx(
+        tmp_path,
+        seg_geoms=[LineString([(-10, 285), (70, 285)]), LineString([(230, -10), (240, 0)])],
+        wb_comids=[10, 20],
+        wb_geoms=[box(0, 270, 60, 300), box(240, 0, 300, 30)],
+    )
+    produced = builder.build(_STEP_CFG, ctx, logging.getLogger("test"))
+    path = produced["segment_wbody_comids"]
+    assert path == tmp_path / "segment_waterbody_comids.parquet"
+    assert load_segment_comids(path) == {10}
+    frame = pd.read_parquet(path)
+    assert sorted(frame.columns) == ["comid", "n_segments", "overlap_m"]
+
+
+def test_builder_requires_segments_gpkg(tmp_path):
+    from gfv2_params.depstor_builders import segment_wbody as builder
+    from gfv2_params.depstor_builders.context import BuildContext
+
+    template = tmp_path / "template.tif"
+    _write_template(template)
+    ctx = BuildContext(
+        fabric="t", template_path=template, output_dir=tmp_path,
+        hru_gpkg=tmp_path / "x.gpkg", hru_layer="nhru",
+        segments_gpkg=None,
+        waterbody_gpkg=tmp_path / "x.gpkg", waterbody_layer="waterbodies",
+    )
+    with pytest.raises(KeyError, match="segments_gpkg"):
+        builder.build(_STEP_CFG, ctx, logging.getLogger("test"))
+
+
+def test_builder_raises_when_segments_do_not_overlap_the_template(tmp_path):
+    # A segments_gpkg mis-wired to another fabric would otherwise make every
+    # waterbody depression storage and exit 0.
+    from gfv2_params.depstor_builders import segment_wbody as builder
+
+    ctx = _builder_ctx(
+        tmp_path,
+        seg_geoms=[LineString([(9_000_000, 9_000_000), (9_000_100, 9_000_100)])],
+        wb_comids=[10],
+        wb_geoms=[box(0, 270, 60, 300)],
+    )
+    with pytest.raises(ValueError, match="does not overlap"):
+        builder.build(_STEP_CFG, ctx, logging.getLogger("test"))
+
+
+def test_builder_enforces_the_floor(tmp_path):
+    from gfv2_params.depstor_builders import segment_wbody as builder
+
+    ctx = _builder_ctx(
+        tmp_path,
+        seg_geoms=[LineString([(-10, 285), (70, 285)])],
+        wb_comids=[10],
+        wb_geoms=[box(0, 270, 60, 300)],
+        min_onstream_comids=500,
+    )
+    with pytest.raises(ValueError, match="min_onstream_comids"):
+        builder.build(_STEP_CFG, ctx, logging.getLogger("test"))
+
+
+def test_builder_floor_also_fires_on_the_skip_path(tmp_path):
+    # A stale/collapsed table left on disk must not sail through the exists-skip.
+    from gfv2_params.depstor_builders import segment_wbody as builder
+
+    ctx = _builder_ctx(
+        tmp_path,
+        seg_geoms=[LineString([(-10, 285), (70, 285)])],
+        wb_comids=[10],
+        wb_geoms=[box(0, 270, 60, 300)],
+    )
+    builder.build(_STEP_CFG, ctx, logging.getLogger("test"))  # writes 1 COMID
+    ctx.min_onstream_comids = 500
+    with pytest.raises(ValueError, match="min_onstream_comids"):
+        builder.build(_STEP_CFG, ctx, logging.getLogger("test"))
+
+
+def test_builder_registers_in_the_dag():
+    from gfv2_params.depstor_builders import BUILDERS, STEP_ORDER
+
+    assert "segment_wbody" in BUILDERS
+    assert STEP_ORDER.index("endorheic") < STEP_ORDER.index("segment_wbody")
+    assert STEP_ORDER.index("segment_wbody") < STEP_ORDER.index("wbody_connectivity")
+
+
+def test_step_is_configured_and_mapped():
+    # `_hydrate_existing_outputs` calls `_expected_outputs` for every step NOT in the
+    # run list, so an unmapped step raises a bare KeyError on any --step/--from run.
+    import yaml
+
+    from scripts.build_depstor_rasters import _expected_outputs
+
+    cfg = yaml.safe_load(
+        (Path(__file__).resolve().parent.parent
+         / "configs" / "depstor" / "depstor_rasters.yml").read_text()
+    )
+    step = next(s for s in cfg["steps"] if s["name"] == "segment_wbody")
+    assert _expected_outputs(step) == {
+        "segment_wbody_comids": "segment_waterbody_comids.parquet"
+    }
