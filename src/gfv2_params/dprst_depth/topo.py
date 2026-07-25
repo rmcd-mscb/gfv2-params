@@ -111,10 +111,17 @@ def load_fabric_dprst_polygons(
     in-process builder path. Steps:
 
       1. Take the caller-supplied `onstream_comids` set as-is -- the resolved
-         on-stream COMID set that is the SAME classification `dprst`/
+         on-stream COMID set that matches the classification `dprst`/
          `wbody_connectivity` use to build `dprst_binary.tif`: the segment
          classifier's on-stream set (`segment_wbody.load_segment_comids`)
          MINUS the endorheic set (`endorheic.load_endorheic_comids`). This
+         is the SAME set ONLY while NHD comparison mode is off (the fabric
+         profile leaves `connected_comids_table`/`flowthrough_comids_table`
+         unset, the default). If a fabric re-enables either key,
+         `wbody_connectivity` unions NHD's COMIDs into its on-stream set but
+         this function's caller-supplied `onstream_comids` does not --
+         silently reconstructing a dprst polygon set that diverges from the
+         shipped `dprst_binary.tif`, with no local signal here. This
          function does not resolve or read those two tables itself. The
          builder resolves them from `ctx.paths` (orchestrator-tracked); the
          plan hook resolves them from `config["output_dir"]` -- two different

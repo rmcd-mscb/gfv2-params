@@ -15,8 +15,12 @@ design doc:
      on-stream COMIDs (`segment_wbody_comids`, from the `segment_wbody`
      step) MINUS the endorheic set (`endorheic_comids`, from the
      `endorheic` step) — the SAME set `wbody_connectivity` uses to build
-     `dprst_binary.tif`, so this reconstruction can't diverge from the
-     shipped raster's classification. This reconstruction step alone does
+     `dprst_binary.tif` ONLY while NHD comparison mode is off (no fabric
+     profile sets `connected_comids_table`/`flowthrough_comids_table` — the
+     default). If a fabric re-enables either key, `wbody_connectivity`
+     unions NHD's COMIDs in but this reconstruction does not, silently
+     reintroducing the exact on-stream divergence this branch exists to
+     remove, with no local signal in `dprst_depth`. This reconstruction step alone does
      NOT read `dprst_binary.tif` — its data dependency is `waterbody_gpkg` +
      `segment_wbody_comids` + `endorheic_comids` + `hru_gpkg`, not the
      raster. STEP_ORDER
@@ -125,8 +129,13 @@ def _load_dprst_polygons(ctx: BuildContext, logger) -> gpd.GeoDataFrame:
     on-stream set is the segment classifier's on-stream COMIDs
     (`segment_wbody_comids`) MINUS the endorheic set (`endorheic_comids`) —
     the SAME set `wbody_connectivity` unions/subtracts to build
-    `dprst_binary.tif`, so this reconstruction can't diverge from the shipped
-    raster's classification.
+    `dprst_binary.tif` ONLY while NHD comparison mode is off (no fabric
+    profile sets `connected_comids_table`/`flowthrough_comids_table` — the
+    default). If a fabric re-enables either key, `wbody_connectivity` unions
+    NHD's COMIDs into ITS on-stream set but this reconstruction does not —
+    silently reintroducing the exact on-stream divergence this branch exists
+    to remove, with no local signal here. See the WARNING logged below when
+    either table is configured.
     """
     if ctx.waterbody_gpkg is None or ctx.waterbody_layer is None:
         raise KeyError(
@@ -149,6 +158,16 @@ def _load_dprst_polygons(ctx: BuildContext, logger) -> gpd.GeoDataFrame:
             "`endorheic` step has not run for this fabric. Without the endorheic "
             "subtraction the reconstructed dprst polygon set would exclude terminal "
             "lakes that `dprst_binary.tif` includes — the Great Salt Lake among them."
+        )
+    if ctx.connected_comids_table is not None or ctx.flowthrough_comids_table is not None:
+        logger.warning(
+            "  COMPARISON MODE: an NHD COMID table is configured (connected=%s, "
+            "flowthrough=%s). `wbody_connectivity` unions NHD's COMIDs into its "
+            "on-stream set, but this dprst polygon reconstruction does NOT — it "
+            "will diverge from `dprst_binary.tif`'s classification. This is NOT "
+            "the production configuration — comment those keys out of the fabric "
+            "profile for a production run.",
+            ctx.connected_comids_table, ctx.flowthrough_comids_table,
         )
     onstream = load_segment_comids(ctx.require("segment_wbody_comids")) - \
         load_endorheic_comids(ctx.require("endorheic_comids"))
