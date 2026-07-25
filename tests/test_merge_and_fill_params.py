@@ -326,3 +326,48 @@ def test_declared_column_absent_from_frame_raises():
             _frame(), declared=["hru_deplcrv", "typo_column"], missing_ids=set(),
             id_feature="hru_id", param_name="snarea_curve",
         )
+
+
+def test_writes_in_place_and_preserves_raw(tmp_path):
+    p = tmp_path / "nhm_x_params.csv"
+    pd.DataFrame({"hru_id": [1, 2], "v": [1.0, np.nan]}).to_csv(p, index=False)
+    original = pd.read_csv(p)
+    filled = pd.DataFrame({"hru_id": [1, 2], "v": [1.0, 9.0]})
+
+    out = maf.write_filled_in_place(filled, p, original, {"v": np.dtype("float64")})
+
+    assert out == p
+    assert pd.read_csv(p)["v"].tolist() == [1.0, 9.0]          # canonical is filled
+    raw = pd.read_csv(tmp_path / "_unfilled" / "nhm_x_params.csv")
+    assert raw["v"].isna().sum() == 1                            # raw preserved
+
+
+def test_second_run_does_not_clobber_the_raw_copy(tmp_path):
+    """The irreversible one: a re-run must not move the FILLED file into _unfilled/."""
+    p = tmp_path / "nhm_x_params.csv"
+    pd.DataFrame({"hru_id": [1, 2], "v": [1.0, np.nan]}).to_csv(p, index=False)
+    original = pd.read_csv(p)
+    filled = pd.DataFrame({"hru_id": [1, 2], "v": [1.0, 9.0]})
+
+    maf.write_filled_in_place(filled, p, original, {"v": np.dtype("float64")})
+    # Run 2: the on-disk file is now already filled. Passing it as "original" is exactly
+    # what the orchestrator does on a re-run.
+    again = pd.read_csv(p)
+    maf.write_filled_in_place(filled, p, again, {"v": np.dtype("float64")})
+
+    raw = pd.read_csv(tmp_path / "_unfilled" / "nhm_x_params.csv")
+    assert raw["v"].isna().sum() == 1, "_unfilled/ must still hold the ORIGINAL raw frame"
+
+
+def test_categorical_dtype_is_restored(tmp_path):
+    """cov_type is an integer class (0-3). k=1 copies a real class, so it must stay int."""
+    p = tmp_path / "nhm_lulc_params.csv"
+    pd.DataFrame({"hru_id": [1, 2], "cov_type": [1, 3]}).to_csv(p, index=False)
+    original = pd.read_csv(p)
+    filled = pd.DataFrame({"hru_id": [1, 2], "cov_type": [1.0, 3.0]})  # KNN returns float
+
+    maf.write_filled_in_place(filled, p, original, {"cov_type": np.dtype("int64")})
+
+    got = pd.read_csv(p)
+    assert got["cov_type"].dtype.kind == "i"
+    assert got["cov_type"].tolist() == [1, 3]

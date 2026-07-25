@@ -200,6 +200,55 @@ def fill_missing_values_knn(param_df, missing_ids, merged_gdf, param_columns, k,
     return full_df
 
 
+UNFILLED_DIRNAME = "_unfilled"
+
+
+def write_filled_in_place(complete_df, param_file, original_df, dtypes, logger=None):
+    """Write the filled frame OVER `param_file`, preserving the pre-fill copy.
+
+    `merged/<name>.csv` is the single canonical per-HRU parameter file -- always
+    gap-filled -- so a consumer's rule is one line: read `merged/*.csv`. The retired
+    `filled_` prefix required a consumer to know, per param AND per fabric, which of two
+    files was authoritative; the set differed between gfv2 (2 filled) and oregon (4), and
+    only `viz.py` encoded the rule.
+
+    The pre-fill copy goes to `merged/_unfilled/`, mirroring `merged/_intermediates/`.
+
+    IDEMPOTENCY, load-bearing: `_unfilled/<name>.csv` is written ONLY if it does not
+    already exist. On a re-run the on-disk file is ALREADY filled, so overwriting the
+    preserved copy with it would destroy the true raw version -- irreversibly, on a
+    shared filesystem with no version control.
+
+    `dtypes` restores each column's pre-fill dtype. KNN returns float64 even at k=1, which
+    silently turned `cov_type` (an integer class 0-3) into 0.0/1.0/2.0/3.0. No averaging
+    occurs at k=1, so the classes are correct -- but the dtype change is visible to any
+    consumer that does not cast.
+    """
+    unfilled_dir = param_file.parent / UNFILLED_DIRNAME
+    unfilled_dir.mkdir(parents=True, exist_ok=True)
+    raw_copy = unfilled_dir / param_file.name
+
+    if raw_copy.exists():
+        if logger:
+            logger.info(
+                "  %s already preserved at %s — not overwriting (a re-run's input is "
+                "already filled)", param_file.name, raw_copy,
+            )
+    else:
+        original_df.to_csv(raw_copy, index=False)
+        if logger:
+            logger.info("  pre-fill copy preserved -> %s", raw_copy)
+
+    out = complete_df.copy()
+    for col, dt in (dtypes or {}).items():
+        if col in out.columns and dt.kind in "iu" and out[col].notna().all():
+            out[col] = out[col].round().astype(dt)
+    out.to_csv(param_file, index=False)
+    if logger:
+        logger.info("  canonical parameter file written -> %s", param_file)
+    return param_file
+
+
 def main():
     parser = argparse.ArgumentParser(description="Fill missing parameter values using KNN interpolation.")
     parser.add_argument("--base_config", default=None, help="Path to base_config.yml")
