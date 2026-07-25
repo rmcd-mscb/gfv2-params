@@ -33,9 +33,9 @@ fabrics:
     # Stream segments: one CONUS nsegment layer assembled by
     # scripts/merge_vpu_segments.py from the input/fabric/NHM_<vpu>_draft.gpkg
     # drafts (the fabric-merge notebook merges only nhru, so segments are merged
-    # separately). NOTE: as of the WBAREACOMI connectivity change, segments no
-    # longer feed any depstor step (the streambuffer step was retired); this layer
-    # is retained for other tooling.
+    # separately). This layer is the ON-STREAM CLASSIFIER's primary input: the
+    # `segment_wbody` depstor step promotes a waterbody to on-stream iff an nsegment
+    # here intersects it with positive length. 186,709 segments / 1,668,778 km.
     # Run: pixi run --as-is python scripts/merge_vpu_segments.py --fabric gfv2
     segments_gpkg: "{data_root}/{fabric}/fabric/{fabric}_nsegment_merged.gpkg"
     segments_layer: nsegment
@@ -48,14 +48,21 @@ fabrics:
     # grid and clips to land_mask. The retired layer stays on disk for A/B reference.
     waterbody_gpkg: "{data_root}/input/nhd/nhd_waterbodies.gpkg"
     waterbody_layer: waterbodies
-    # Connected-waterbody COMIDs distilled from NHD WBAREACOMI artificial paths
-    # (see gfv2_params.download.nhd_flowlines). Drives wbody_connectivity.
-    connected_comids_table: "{data_root}/input/nhd/connected_waterbody_comids.parquet"
-    # Flow-through waterbody COMIDs from NHD stream/area topology (see
-    # gfv2_params.download.nhd_flowthrough). Unioned with connected_comids_table
-    # by wbody_connectivity to catch through-flow swamps NHD never tagged with
-    # WBAREACOMI. Optional: absent -> WBAREACOMI-only behaviour.
-    flowthrough_comids_table: "{data_root}/input/nhd/flowthrough_waterbody_comids.parquet"
+    # --- OPT-IN COMPARISON ONLY — not the production on-stream source ---------
+    # On-stream status now comes from the MODEL's own nsegment network (the
+    # `segment_wbody` depstor step; see
+    # docs/superpowers/specs/2026-07-24-segment-driven-onstream-classifier-design.md).
+    # Uncommenting either key UNIONS NHD flowline topology back into the on-stream set
+    # for an A/B; wbody_connectivity logs a COMPARISON MODE warning when it sees one.
+    # Never leave them enabled for a production run.
+    #   connected_comids_table: "{data_root}/input/nhd/connected_waterbody_comids.parquet"
+    #   flowthrough_comids_table: "{data_root}/input/nhd/flowthrough_waterbody_comids.parquet"
+    # Floor on the on-stream COMIDs the `segment_wbody` builder must produce. CONUS
+    # measures 48,529 (73,343 candidate pairs, 3.1% zero-length grazes dropped); a
+    # result below this floor means the segment/waterbody join collapsed and nearly
+    # every waterbody would become depression storage. Same opt-in contract as
+    # min_endorheic_comids — omit on a fabric that legitimately has few.
+    min_onstream_comids: 30000
     # --- endorheic classifier (see docs/superpowers/specs/2026-07-12-endorheic-*) ---
     # Full WBD HUC12 layer; the `endorheic` builder re-applies the
     # HU_12_TYPE == 'C' (closed-basin) filter itself, so pointing this at a full WBD
@@ -126,14 +133,13 @@ fabrics:
     # Pinned to `gfv2` (not {fabric}) so gfv2_dev reads the shared gfv2 inputs:
     segments_gpkg: "{data_root}/gfv2/fabric/gfv2_nsegment_merged.gpkg"
     segments_layer: nsegment
-    waterbody_gpkg: "{data_root}/input/nhd/conus_waterbodies.gpkg"
+    waterbody_gpkg: "{data_root}/input/nhd/nhd_waterbodies.gpkg"
     waterbody_layer: waterbodies
-    connected_comids_table: "{data_root}/input/nhd/connected_waterbody_comids.parquet"
-    # Flow-through waterbody COMIDs from NHD stream/area topology (see
-    # gfv2_params.download.nhd_flowthrough). Unioned with connected_comids_table
-    # by wbody_connectivity to catch through-flow swamps NHD never tagged with
-    # WBAREACOMI. Optional: absent -> WBAREACOMI-only behaviour.
-    flowthrough_comids_table: "{data_root}/input/nhd/flowthrough_waterbody_comids.parquet"
+    # OPT-IN COMPARISON ONLY — see the gfv2 profile above. Commented out so gfv2_dev
+    # mirrors gfv2's production classifier, which is the whole point of this fabric.
+    #   connected_comids_table: "{data_root}/input/nhd/connected_waterbody_comids.parquet"
+    #   flowthrough_comids_table: "{data_root}/input/nhd/flowthrough_waterbody_comids.parquet"
+    min_onstream_comids: 30000
     # --- endorheic classifier (see docs/superpowers/specs/2026-07-12-endorheic-*) ---
     # Full WBD HUC12 layer; the `endorheic` builder re-applies the
     # HU_12_TYPE == 'C' (closed-basin) filter itself, so pointing this at a full WBD
@@ -174,11 +180,11 @@ fabrics:
     waterbody_gpkg: "{data_root}/input/fabric/NHM_01_draft.gpkg"
     waterbody_layer: wbs
     # No `connected_comids_table`: the `wbs` layer has no COMID/member_comid
-    # column, so neither the WBAREACOMI join nor the COMID-keyed endorheic
-    # classifier can run. The depstor DAG therefore fail-fasts on this profile
-    # — at the `endorheic` step first, which now precedes `wbody_connectivity`
-    # and raises on a waterbody layer with no COMID column. Use the `gfv2`
-    # profile for depstor validation.
+    # column, so neither the segment on-stream classifier, the WBAREACOMI join,
+    # nor the COMID-keyed endorheic classifier can run. The depstor DAG therefore
+    # fail-fasts on this profile — at the `endorheic` step first, and at
+    # `segment_wbody` next, both of which raise on a waterbody layer with no
+    # COMID column. Use the `gfv2` profile for depstor validation.
     hru_gpkg: "{data_root}/{fabric}/fabric/gfv2_vpu01_nhru.gpkg"
     hru_layer: nhru
     id_feature: nat_hru_id
@@ -221,13 +227,18 @@ fabrics:
     twi_raster: "{data_root}/shared/conus/vrt/twi_hydrodem.vrt"
     segments_gpkg: "{data_root}/oregon/fabric/model_layers 9.gpkg"
     segments_layer: nsegment
-    # CONUS NHDPlusV2 waterbodies (POLYGON, EPSG:5070); the waterbody builder
-    # reprojects to the template grid and clips to the Oregon land mask.
-    waterbody_gpkg: "{data_root}/input/nhd/conus_waterbodies.gpkg"
+    # CONUS NHDPlusV2 waterbodies (POLYGON, EPSG:5070) — the SAME layer gfv2 reads, so
+    # both fabrics classify against one shoreline vintage. The retired
+    # conus_waterbodies.gpkg produced 19.0% zero-length segment grazes here against
+    # 3.1% on this layer. The waterbody builder reprojects to the template grid and
+    # clips to the Oregon land mask.
+    waterbody_gpkg: "{data_root}/input/nhd/nhd_waterbodies.gpkg"
     waterbody_layer: waterbodies
-    # Connected-waterbody COMIDs distilled from NHD WBAREACOMI artificial paths
-    # (see gfv2_params.download.nhd_flowlines). Drives wbody_connectivity.
-    connected_comids_table: "{data_root}/input/nhd/connected_waterbody_comids.parquet"
+    # OPT-IN COMPARISON ONLY — see the gfv2 profile.
+    #   connected_comids_table: "{data_root}/input/nhd/connected_waterbody_comids.parquet"
+    # 770 on-stream COMIDs measured on this fabric (1,453 candidate pairs, 45 zero-length
+    # grazes dropped); in-domain that is 768 against 1,550 under the old NHD union.
+    min_onstream_comids: 500
     # EPA Level III Ecoregions (shared CONUS input, see
     # gfv2_params.download.epa_ecoregions). Drives dprst_depth (#173).
     ecoregions_gpkg: "{data_root}/input/ecoregions/us_eco_l3.gpkg"
@@ -264,13 +275,13 @@ fabrics:
     vpu: "12"
     segments_gpkg: "{data_root}/{fabric}/fabric/tjc.gpkg"
     segments_layer: nsegment
-    # Shared CONUS NHDPlusV2 waterbodies; the waterbody builder reprojects to
-    # the template grid and clips to the tjc land mask.
-    waterbody_gpkg: "{data_root}/input/nhd/conus_waterbodies.gpkg"
+    # Shared CONUS NHDPlusV2 waterbodies — the same layer gfv2/oregon read; the
+    # waterbody builder reprojects to the template grid and clips to the tjc land mask.
+    waterbody_gpkg: "{data_root}/input/nhd/nhd_waterbodies.gpkg"
     waterbody_layer: waterbodies
-    # Connected-waterbody COMIDs distilled from NHD WBAREACOMI artificial paths
-    # (see gfv2_params.download.nhd_flowlines). Drives wbody_connectivity.
-    connected_comids_table: "{data_root}/input/nhd/connected_waterbody_comids.parquet"
+    # OPT-IN COMPARISON ONLY — see the gfv2 profile. No `min_onstream_comids`: tjc is a
+    # small domain and omits `min_endorheic_comids` for the same reason.
+    #   connected_comids_table: "{data_root}/input/nhd/connected_waterbody_comids.parquet"
     # EPA Level III Ecoregions (shared CONUS input, see
     # gfv2_params.download.epa_ecoregions). Drives dprst_depth (#173).
     ecoregions_gpkg: "{data_root}/input/ecoregions/us_eco_l3.gpkg"
