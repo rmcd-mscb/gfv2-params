@@ -2227,11 +2227,17 @@ path."
 | Reservoir FTYPE anomaly | no task — spec-documented finding, no code |
 | Rollout | no task — operational, see below |
 
-**Not covered by any task, deliberately:** the rollout (oregon → gfv2_dev → gfv2 rebuilds
-and the Stage B re-derive) is operational work, not code. It runs after this plan merges,
-following the spec's Rollout section. Flag to the operator: the CONUS cascade starts at
-`--from waterbody`, three fabrics rebuild, and `gfv2` must not be touched until the
-`gfv2_dev` product is checked.
+**Not covered by any task, deliberately:** the rollout (oregon → gfv2 rebuilds and the
+Stage B re-derive) is operational work, not code. It runs after this plan merges,
+following the spec's Rollout section. Flags to the operator:
+
+- The CONUS cascade starts at `--from waterbody` (the layer swap moves the `waterbody`
+  builder itself), and `waterbody`/`dprst` are the ~384G full-grid steps.
+- The `gfv2_dev` shakedown is **waived** for this change by explicit operator decision
+  (2026-07-24) — the rebuild goes straight to the canonical `gfv2` product. Back up the
+  existing `gfv2/depstor_rasters/` outputs before launching, and confirm
+  `segment_wbody` emits ~48,529 COMIDs before letting the cascade continue.
+- `gfv2_dev`'s profile is still fixed in Task 4; it is just not used as a gate.
 
 **Placeholder scan:** no TBD/TODO; every code step carries runnable code; the fixture
 COMIDs, expected sets, floor values, and config line numbers are all concrete.
