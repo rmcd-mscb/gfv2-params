@@ -15,6 +15,93 @@ in [HPC_REFERENCE.md](HPC_REFERENCE.md).
 
 ---
 
+## Quick Start for Scientists (CONUS `gfv2`)
+
+If you are running the standard CONUS `gfv2` pipeline from scratch, these are
+the commands in order. Each block says what to wait for before moving on.
+For anything non-standard (different fabric, re-running one step, recovery),
+see the full steps below or [HPC_REFERENCE.md](HPC_REFERENCE.md).
+
+```bash
+# 0 · Initialize and download inputs (~112 GB total; runs overnight)
+pixi run init-data-root
+sbatch slurm_batch/download_rpu_rasters.batch
+sbatch slurm_batch/download_nalcms.batch
+sbatch slurm_batch/download_nhm_v11.batch
+sbatch slurm_batch/stage_twi.batch
+```
+> Wait for all four jobs `COMPLETED`. Then stage the manual inputs listed in
+> `README.md` (soils, LULC, NHM defaults), then verify:
+```bash
+pixi run init-data-root --check
+
+# 1 · Build shared CONUS rasters (runs once; reused by every fabric)
+sbatch slurm_batch/build_shared_rasters.batch
+```
+> Wait for `COMPLETED`.
+```bash
+
+# 2 · Prepare the fabric
+#     NOTE: run the first command on a COMPUTE NODE (JupyterHub or salloc), not the login node.
+pixi run -e notebooks marimo run notebooks/merge_vpu_targets.py
+sbatch slurm_batch/merge_vpu_segments.batch
+sbatch slurm_batch/prepare_fabric.batch
+```
+> Wait for both batch jobs `COMPLETED`.
+```bash
+
+# 3 · Build depression-storage rasters
+#     One-time downloads (skip if already staged in this data_root):
+srun -p cpu -A impd --time=02:00:00 --ntasks=1 --cpus-per-task=4 --mem=48G \
+  pixi run --as-is python -m gfv2_params.download.nhd_waterbodies
+pixi run --as-is python -m gfv2_params.download.nhd_burn_components
+pixi run --as-is python -m gfv2_params.download.wbd_huc12
+pixi run --as-is python -m gfv2_params.download.wesm
+pixi run --as-is python scripts/clip_shared_to_fabric.py --fabric gfv2
+#     Depstor raster stack — run in this order, waiting for each to COMPLETE:
+sbatch slurm_batch/build_depstor_rasters.batch --step landmask
+sbatch slurm_batch/build_depstor_rasters.batch --step segment_wbody
+sbatch slurm_batch/build_depstor_rasters.batch --step endorheic
+sbatch slurm_batch/build_depstor_rasters.batch --step imperv
+sbatch slurm_batch/build_depstor_rasters.batch --step waterbody
+sbatch slurm_batch/build_depstor_rasters.batch --step wbody_connectivity
+sbatch slurm_batch/build_depstor_rasters.batch --step dprst
+BATCHES=$(pixi run --as-is python -c \
+  "import yaml;print(yaml.safe_load(open('configs/base_config.yml'))['data_root'])")/gfv2/batches
+slurm_batch/submit_dprst_depth.sh "$BATCHES" gfv2 configs/base_config.yml 150
+```
+> Wait for `submit_dprst_depth.sh`'s final job (`mean_finalize`) `COMPLETED`, then:
+```bash
+sbatch slurm_batch/build_depstor_rasters.batch
+```
+> Wait for `COMPLETED`.
+```bash
+
+# 4 · Generate parameters (submits and chains all jobs automatically)
+slurm_batch/submit_zonal_params.sh   "$BATCHES" gfv2 configs/base_config.yml
+slurm_batch/submit_depstor_params.sh "$BATCHES" gfv2 configs/base_config.yml
+```
+> Wait for all submitted jobs `COMPLETED` — monitor with `squeue -u "$USER"`.
+```bash
+
+# 5 · Gap-fill missing values
+sbatch slurm_batch/merge_and_fill_params.batch
+```
+> Wait for `COMPLETED`.
+```bash
+
+# 6 · (optional) Merge NHM default parameter tables
+sbatch slurm_batch/merge_default_output_params.batch
+
+# 7 · Render results figures
+sbatch slurm_batch/render_figures.batch
+```
+
+Outputs land in `{data_root}/gfv2/params/merged/` (parameter CSVs) and
+`docs/figures/gfv2/` (figures). See [Where outputs land](#where-outputs-land) below.
+
+---
+
 ## Pipeline at a glance
 
 1. **Step 0** — Initialize data root, download public rasters, stage TWI.
