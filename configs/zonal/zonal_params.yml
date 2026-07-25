@@ -107,12 +107,16 @@ params:
     crosswalk_file: crosswalks/nhm_v11_nhm.csv # cov_type mapping only
     categorical: true
     merged_file: nhm_lulc_nhm_v11_params.csv
-    # Observed on-disk header (oregon + gfv2). NB: the current
-    # zonal_runners/lulc_prederived.py builder computes `rad_trncf` (Beer's-law
-    # transform), not `retention` -- the on-disk merged CSVs predate that
-    # rename and still carry `retention`. Declaring `retention` matches what a
-    # fill run actually finds in the file today; Task 1's guard raises loudly
-    # (not a silent skip) if a future regen renames the column to `rad_trncf`.
+    # Observed on-disk header: gfv2/oregon still carry `retention` (built before
+    # the zonal_runners/lulc_prederived.py rename); tjc (built after the rename)
+    # carries `rad_trncf` instead. This is a RENAME of the same computed
+    # quantity, not two different quantities -- lulc_prederived.py's own
+    # docstring says "There is no `retention` column: it was only ever a
+    # stand-in for rad_trncf, which this path computes directly." The alias
+    # group below (a list, not a plain string) resolves to whichever of the two
+    # is actually present in a given fabric's file; if NEITHER is present the
+    # guard still raises exactly as it would for a plain missing column, so a
+    # genuinely absent column cannot silently skip filling.
     fill_columns:
       [
         cov_type,
@@ -121,7 +125,7 @@ params:
         snow_intcp,
         covden_sum,
         covden_win,
-        retention,
+        [retention, rad_trncf],
       ]
 
   # NALCMS 2020: no keep raster -> crosswalk evergreen_retention column.

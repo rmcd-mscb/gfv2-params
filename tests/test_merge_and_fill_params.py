@@ -329,6 +329,129 @@ def test_declared_column_absent_from_frame_raises():
         )
 
 
+# ---------------------------------------------------------------------------
+# Finding 2: retention/rad_trncf alias groups in fill_columns.
+#
+# lulc_prederived.py renamed the same computed quantity from `retention` to
+# `rad_trncf`; gfv2/oregon were built before the rename (still carry
+# `retention`), tjc was built after (carries `rad_trncf`). A declared
+# fill_columns entry may be a list/tuple of alias alternatives instead of a
+# plain string -- the first one present in the frame wins.
+# ---------------------------------------------------------------------------
+
+def _lulc_frame(column_name):
+    return pd.DataFrame({
+        "model_hru_idx": [1, 2, 3],
+        "cov_type": [1, 2, 3],
+        column_name: [0.1, 0.2, np.nan],
+    })
+
+
+def test_alias_resolves_to_first_alternative_present():
+    """Legacy header (gfv2/oregon): `retention` present, `rad_trncf` absent."""
+    plan = maf.resolve_fill_plan(
+        _lulc_frame("retention"), declared=["cov_type", ["retention", "rad_trncf"]],
+        missing_ids=set(), id_feature="model_hru_idx", param_name="lulc_nhm_v11",
+    )
+    assert plan.fill_columns == ["cov_type", "retention"]
+    assert "rad_trncf" not in plan.fill_columns
+
+
+def test_alias_resolves_to_second_alternative_present():
+    """Current header (tjc, post-rename): `rad_trncf` present, `retention` absent."""
+    plan = maf.resolve_fill_plan(
+        _lulc_frame("rad_trncf"), declared=["cov_type", ["retention", "rad_trncf"]],
+        missing_ids=set(), id_feature="model_hru_idx", param_name="lulc_nhm_v11",
+    )
+    assert plan.fill_columns == ["cov_type", "rad_trncf"]
+    assert "retention" not in plan.fill_columns
+
+
+def test_alias_raises_when_neither_alternative_present():
+    """Neither alias present must still raise -- this is NOT an optional-column
+    mechanism; a genuinely missing column cannot silently skip filling."""
+    frame = pd.DataFrame({"model_hru_idx": [1, 2], "cov_type": [1, 2]})
+    with pytest.raises(ValueError, match="not present"):
+        maf.resolve_fill_plan(
+            frame, declared=["cov_type", ["retention", "rad_trncf"]], missing_ids=set(),
+            id_feature="model_hru_idx", param_name="lulc_nhm_v11",
+        )
+
+
+def test_alias_column_excluded_from_undeclared_with_nan():
+    """Whichever alias actually resolves must not ALSO be reported as an
+    undeclared NaN-carrying column."""
+    plan = maf.resolve_fill_plan(
+        _lulc_frame("rad_trncf"), declared=["cov_type", ["retention", "rad_trncf"]],
+        missing_ids=set(), id_feature="model_hru_idx", param_name="lulc_nhm_v11",
+    )
+    assert "rad_trncf" not in plan.undeclared_with_nan
+
+
+# ---------------------------------------------------------------------------
+# Finding 3: appending an absent-id row must not invent an hru_id column that
+# was never in the original frame.
+# ---------------------------------------------------------------------------
+
+def test_knn_does_not_add_spurious_hru_id_column():
+    """gfv2's id_feature is nat_hru_id with NO hru_id column at all. Filling an
+    absent row must not manufacture an all-empty hru_id column in the output."""
+    import logging
+    logger = logging.getLogger("test")
+
+    merged_gdf = gpd.GeoDataFrame(
+        {"nat_hru_id": [1, 2, 3]},
+        geometry=[Point(0, 0), Point(10, 0), Point(5, 0)],
+        crs="EPSG:5070",
+    )
+    param_df = pd.DataFrame({
+        "nat_hru_id": [1, 2],
+        "my_param": [100.0, 200.0],
+    })
+
+    result = fill_missing_values_knn(param_df, [3], merged_gdf, "my_param", 1, "nat_hru_id", logger)
+    assert "hru_id" not in result.columns
+
+
+def test_knn_still_populates_hru_id_when_frame_already_has_it():
+    """Regression guard for the opposite direction: when hru_id genuinely IS a
+    secondary column in the frame, appended rows must still populate it (not
+    leave it NaN) -- this is the pre-existing, still-desired behavior."""
+    import logging
+    logger = logging.getLogger("test")
+
+    merged_gdf = gpd.GeoDataFrame(
+        {"nat_hru_id": [1, 2, 3]},
+        geometry=[Point(0, 0), Point(10, 0), Point(5, 0)],
+        crs="EPSG:5070",
+    )
+    param_df = pd.DataFrame({
+        "nat_hru_id": [1, 2],
+        "hru_id": [1, 2],
+        "my_param": [100.0, 200.0],
+    })
+
+    result = fill_missing_values_knn(param_df, [3], merged_gdf, "my_param", 1, "nat_hru_id", logger)
+    assert result.loc[result["nat_hru_id"] == 3, "hru_id"].iloc[0] == 3
+
+
+def test_id_column_with_nan_excluded_from_undeclared_with_nan():
+    """An ID column (hru_id, in ID_COLUMNS but NOT the active id_feature) that
+    carries NaN must never be reported/filled -- this exclusion is exactly the
+    branch that hid the spurious-hru_id regression (Finding 3): if it had
+    warned, the bug would have been visible in every gfv2 fill-run log."""
+    frame = pd.DataFrame({
+        "nat_hru_id": [1, 2, 3],
+        "hru_id": [1, 2, np.nan],
+        "hru_deplcrv": [1.0, 2.0, 3.0],
+    })
+    plan = maf.resolve_fill_plan(
+        frame, declared=["hru_deplcrv"], missing_ids=set(),
+        id_feature="nat_hru_id", param_name="mystery_param",
+    )
+    assert "hru_id" not in plan.undeclared_with_nan
+
+
 def test_writes_in_place_and_preserves_raw(tmp_path):
     p = tmp_path / "nhm_x_params.csv"
     pd.DataFrame({"hru_id": [1, 2], "v": [1.0, np.nan]}).to_csv(p, index=False)
@@ -518,3 +641,125 @@ def test_iter_declared_params_snarea_optional():
     """The 2-arg call the brief documented must still work (snarea omitted)."""
     declared = maf.iter_declared_params({}, {})
     assert declared == []
+
+
+# ---------------------------------------------------------------------------
+# Finding 2 (isolation half): run_fill_sweep must not let one param's config
+# drift starve every other declared param of its fill.
+# ---------------------------------------------------------------------------
+
+class TestRunFillSweep:
+    def _merged_gdf(self):
+        return gpd.GeoDataFrame(
+            {"hru_id": [1, 2, 3]},
+            geometry=[Point(0, 0), Point(10, 0), Point(5, 0)],
+            crs="EPSG:5070",
+        )
+
+    def test_one_param_failure_does_not_block_the_others(self, tmp_path):
+        """A param whose declared fill_columns names a column absent from its
+        own file (the tjc-vs-gfv2 rad_trncf/retention scenario, pre-fix) must
+        fail in isolation -- every OTHER param in the sweep still gets filled."""
+        import logging
+        logger = logging.getLogger("test")
+
+        good = tmp_path / "nhm_good_params.csv"
+        pd.DataFrame({"hru_id": [1, 2], "v": [10.0, 20.0]}).to_csv(good, index=False)
+
+        bad = tmp_path / "nhm_bad_params.csv"
+        pd.DataFrame({"hru_id": [1, 2], "v": [1.0, 2.0]}).to_csv(bad, index=False)
+
+        targets = [
+            ("good_param", good, ["v"]),
+            ("bad_param", bad, ["typo_column"]),  # not present -> resolve_fill_plan raises
+        ]
+
+        failed = maf.run_fill_sweep(
+            targets, self._merged_gdf(), expected_max=3, id_feature="hru_id",
+            k_neighbors=1, logger=logger,
+        )
+
+        assert failed == ["bad_param"]
+        # good_param was still filled despite bad_param's failure.
+        result = pd.read_csv(good)
+        assert result["hru_id"].tolist() == [1, 2, 3]
+
+    def test_no_failures_returns_empty_list(self, tmp_path):
+        import logging
+        logger = logging.getLogger("test")
+
+        good = tmp_path / "nhm_good_params.csv"
+        pd.DataFrame({"hru_id": [1, 2], "v": [10.0, 20.0]}).to_csv(good, index=False)
+
+        failed = maf.run_fill_sweep(
+            [("good_param", good, ["v"])], self._merged_gdf(), expected_max=3,
+            id_feature="hru_id", k_neighbors=1, logger=logger,
+        )
+        assert failed == []
+
+
+# ---------------------------------------------------------------------------
+# Finding 5: --param_file must be under the ACTIVE fabric's own merged/ dir.
+# ---------------------------------------------------------------------------
+
+def test_check_param_file_in_fabric_accepts_matching_dir(tmp_path):
+    merged_dir = tmp_path / "gfv2" / "params" / "merged"
+    merged_dir.mkdir(parents=True)
+    param_file = merged_dir / "nhm_x_params.csv"
+    maf.check_param_file_in_fabric(param_file, merged_dir)  # must not raise
+
+
+def test_check_param_file_in_fabric_rejects_foreign_fabric(tmp_path):
+    """--fabric gfv2 --param_file <gfv2_vpu01 path> must be refused, not
+    silently write into the wrong fabric's canonical file."""
+    merged_dir = tmp_path / "gfv2" / "params" / "merged"
+    merged_dir.mkdir(parents=True)
+    foreign_file = tmp_path / "gfv2_vpu01" / "params" / "merged" / "nhm_x_params.csv"
+
+    with pytest.raises(ValueError, match="not under the active fabric"):
+        maf.check_param_file_in_fabric(foreign_file, merged_dir)
+
+
+# ---------------------------------------------------------------------------
+# Finding 4: warn about a merged/nhm_*_params.csv that no config entry
+# declares (the reverse direction from the per-target skip warning).
+# ---------------------------------------------------------------------------
+
+class TestWarnUndeclaredMergedFiles:
+    def test_warns_on_undeclared_on_disk_file(self, tmp_path, caplog):
+        import logging
+        (tmp_path / "nhm_declared_params.csv").write_text("hru_id,v\n1,1\n")
+        (tmp_path / "nhm_mystery_params.csv").write_text("hru_id,v\n1,1\n")
+        logger = logging.getLogger("test_warn_undeclared")
+
+        with caplog.at_level(logging.WARNING, logger="test_warn_undeclared"):
+            undeclared = maf.warn_undeclared_merged_files(
+                tmp_path, [("declared", "nhm_declared_params.csv", ["v"])], logger,
+            )
+
+        assert undeclared == ["nhm_mystery_params.csv"]
+        assert any("nhm_mystery_params.csv" in rec.message for rec in caplog.records)
+
+    def test_allowlists_library_and_validation_files(self, tmp_path):
+        import logging
+        (tmp_path / "nhm_declared_params.csv").write_text("hru_id,v\n1,1\n")
+        (tmp_path / "nhm_foo_library_params.csv").write_text("a,b\n1,2\n")
+        (tmp_path / "nhm_bar_validation_params.csv").write_text("a,b\n1,2\n")
+        logger = logging.getLogger("test_warn_undeclared_allow")
+
+        undeclared = maf.warn_undeclared_merged_files(
+            tmp_path, [("declared", "nhm_declared_params.csv", ["v"])], logger,
+        )
+
+        assert undeclared == []
+
+    def test_no_undeclared_files_returns_empty(self, tmp_path):
+        import logging
+        (tmp_path / "nhm_declared_params.csv").write_text("hru_id,v\n1,1\n")
+        logger = logging.getLogger("test_warn_undeclared_none")
+
+        undeclared = maf.warn_undeclared_merged_files(
+            tmp_path, [("declared", "nhm_declared_params.csv", ["v"])], logger,
+        )
+
+        assert undeclared == []

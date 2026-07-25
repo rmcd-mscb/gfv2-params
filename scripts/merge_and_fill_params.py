@@ -9,6 +9,7 @@ profile.
 """
 
 import argparse
+import fnmatch
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -63,6 +64,17 @@ def resolve_fill_plan(param_df, declared, missing_ids, id_feature, param_name) -
     existed the column list was "everything except the id columns", which would have
     done exactly that.
 
+    Each entry in `declared` is normally a plain column name, but MAY instead be a
+    list/tuple of alias alternatives -- e.g. `[retention, rad_trncf]` for
+    `lulc_nhm_v11`, whose `lulc_prederived` builder renamed the same computed quantity
+    from `retention` to `rad_trncf` ("There is no `retention` column: it was only ever
+    a stand-in for rad_trncf", zonal_runners/lulc_prederived.py). Fabrics built before
+    the rename (gfv2, oregon) still carry `retention` on disk; fabrics built after it
+    (tjc) carry `rad_trncf`. The first alternative present in `param_df` wins; this is
+    NOT a generic "optional column" mechanism -- if NONE of the alternatives are
+    present, that still raises exactly like a plain missing column would, so a
+    genuinely absent column cannot silently skip filling.
+
     Two asymmetric guards, because the two kinds of gap differ in what they can mean:
 
       * an undeclared column with NaN CELLS is ambiguous -- it may be a legitimate
@@ -73,10 +85,24 @@ def resolve_fill_plan(param_df, declared, missing_ids, id_feature, param_name) -
     """
     declared = list(declared or [])
 
-    absent = [c for c in declared if c not in param_df.columns]
-    if absent:
+    resolved: list[str] = []
+    unresolved: list[str] = []
+    for item in declared:
+        if isinstance(item, (list, tuple)):
+            alternatives = list(item)
+            match = next((alt for alt in alternatives if alt in param_df.columns), None)
+            if match is None:
+                unresolved.append(" or ".join(alternatives))
+            else:
+                resolved.append(match)
+        elif item not in param_df.columns:
+            unresolved.append(item)
+        else:
+            resolved.append(item)
+
+    if unresolved:
         raise ValueError(
-            f"`fill_columns` for '{param_name}' names {absent}, which are not present in "
+            f"`fill_columns` for '{param_name}' names {unresolved}, which are not present in "
             f"the parameter file (columns: {sorted(param_df.columns)}). Fix the config -- "
             f"a typo here would silently fill nothing."
         )
@@ -92,13 +118,13 @@ def resolve_fill_plan(param_df, declared, missing_ids, id_feature, param_name) -
 
     undeclared_with_nan = {}
     for col in param_df.columns:
-        if col in declared or col in ID_COLUMNS or col == id_feature:
+        if col in resolved or col in ID_COLUMNS or col == id_feature:
             continue
         n_nan = int(param_df[col].isna().sum())
         if n_nan:
             undeclared_with_nan[col] = n_nan
 
-    return FillPlan(fill_columns=declared, undeclared_with_nan=undeclared_with_nan)
+    return FillPlan(fill_columns=resolved, undeclared_with_nan=undeclared_with_nan)
 
 
 def fill_missing_values_knn(param_df, missing_ids, merged_gdf, param_columns, k, id_feature, logger):
@@ -141,9 +167,15 @@ def fill_missing_values_knn(param_df, missing_ids, merged_gdf, param_columns, k,
     # Step 1: append all-NaN rows for absent ids so every expected id is present.
     if missing_ids:
         absent_rows = pd.DataFrame({id_feature: missing_ids})
-        # gfv2 CSVs carry a secondary local hru_id; populate it for appended rows.
-        # When id_feature is already hru_id (e.g. oregon) this is a harmless self-assignment.
-        absent_rows["hru_id"] = absent_rows[id_feature]
+        # Some fabrics' CSVs carry a secondary local hru_id column; populate it for
+        # appended rows ONLY if the frame already has one. gfv2's id_feature is
+        # nat_hru_id with NO hru_id column at all -- unconditionally adding one here
+        # would introduce a spurious, all-empty trailing hru_id column into the
+        # canonical output for every param with an absent row (lulc_nhm_v11,
+        # lulc_nalcms, ssflux on gfv2). When id_feature is already hru_id (e.g.
+        # oregon) the column already exists, so this is a harmless self-assignment.
+        if "hru_id" in param_df.columns:
+            absent_rows["hru_id"] = absent_rows[id_feature]
         param_df = pd.concat([param_df, absent_rows], ignore_index=True)
 
     # Step 2: attach centroid x,y to every row (left join preserves all ids).
@@ -328,6 +360,112 @@ def _load_declared_params() -> list[tuple[str, str, list[str]]]:
     return iter_declared_params(zonal_cfg, depstor_cfg, snarea_cfg)
 
 
+def check_param_file_in_fabric(param_file: Path, merged_dir: Path) -> None:
+    """Refuse a `--param_file` that does not live under the active fabric's
+    own `merged/` directory.
+
+    `--fabric gfv2 --param_file <gfv2_vpu01 path>` would otherwise write in
+    place into a DIFFERENT fabric's canonical parameter file -- the CLI takes
+    `--fabric` and `--param_file` as two independent flags with nothing tying
+    them together, so nothing else catches a mismatched pair.
+    """
+    if param_file.parent.resolve() != merged_dir.resolve():
+        raise ValueError(
+            f"--param_file {param_file} is not under the active fabric's merged "
+            f"directory ({merged_dir}). Refusing to write in place into what looks "
+            f"like a different fabric's canonical parameter file -- pass a path "
+            f"under {merged_dir}, or check --fabric."
+        )
+
+
+# Allowlist for warn_undeclared_merged_files: on-disk artifacts under merged/
+# that legitimately have no fill_columns declaration because they are not a
+# per-HRU consumer param (e.g. a *_library.csv reference table).
+_UNDECLARED_ALLOW_PATTERNS = ("*_library*", "*_validation*")
+
+
+def warn_undeclared_merged_files(merged_dir: Path, declared_params, logger) -> list[str]:
+    """Warn about any `merged/nhm_*_params.csv` that no config entry declares.
+
+    All-params mode iterates the DECLARATION, so a merged file with no config
+    entry is otherwise never filled and never flagged -- there is nothing
+    enforcing the reverse direction (declaration -> disk is covered by the
+    per-target skip warning; disk -> declaration was not, until now).
+
+    Returns the sorted list of undeclared filenames warned about (for tests).
+    """
+    declared_filenames = {merged_file for _, merged_file, _ in declared_params}
+    undeclared = []
+    for on_disk in sorted(merged_dir.glob("nhm_*_params.csv")):
+        if on_disk.name in declared_filenames:
+            continue
+        if any(fnmatch.fnmatch(on_disk.name, pat) for pat in _UNDECLARED_ALLOW_PATTERNS):
+            continue
+        undeclared.append(on_disk.name)
+        logger.warning(
+            "%s exists under %s but is not declared in any fill_columns config "
+            "(configs/zonal/zonal_params.yml, configs/depstor/depstor_params.yml, or "
+            "configs/snarea/snarea_library.yml) -- it will never be gap-filled by this "
+            "step.", on_disk.name, merged_dir,
+        )
+    return undeclared
+
+
+def run_fill_sweep(targets, merged_gdf, expected_max, id_feature, k_neighbors, logger) -> list[str]:
+    """Fill every `(name, param_file, declared_columns)` in `targets`, isolating
+    per-param failures.
+
+    One param's config drift (e.g. a column rename that resolve_fill_plan can't
+    resolve) must not starve every OTHER declared param of its fill -- a
+    partially-applied canonical set from an aborted sweep is worse than a
+    param that stays unfilled with a named, logged cause. Catches per-param,
+    logs the full traceback, records the failure, and continues; the caller
+    decides the process exit code from the returned failure list.
+    """
+    failed_params: list[str] = []
+    for name, param_file, declared_columns in targets:
+        logger.info("=== %s (%s) ===", name, param_file.name)
+        try:
+            param_df, missing_ids = find_missing_ids(param_file, expected_max, id_feature, logger)
+            plan = resolve_fill_plan(param_df, declared_columns, missing_ids, id_feature, name)
+
+            for col, n in plan.undeclared_with_nan.items():
+                logger.warning(
+                    "  %s: column '%s' has %d NaN cell(s) but is NOT declared in "
+                    "`fill_columns` — left untouched. If it is a PRMS parameter rather than "
+                    "provenance, add it to the config; if it is provenance, this is correct.",
+                    param_file.name, col, n,
+                )
+
+            if not plan.fill_columns:
+                logger.info("  No fill_columns declared for %s; nothing to fill", name)
+                continue
+
+            # Capture dtypes on the pristine pre-fill frame; fill_missing_values_knn
+            # does not mutate param_df in place (it rebinds through pd.concat/merge),
+            # so it also doubles as the "original" frame write_filled_in_place needs.
+            dtypes = param_df.dtypes.to_dict()
+
+            complete_df = fill_missing_values_knn(
+                param_df, missing_ids, merged_gdf, plan.fill_columns, k_neighbors, id_feature, logger,
+            )
+            write_filled_in_place(complete_df, param_file, param_df, dtypes, logger=logger)
+
+            final_ids = set(complete_df[id_feature])
+            expected_ids = set(range(1, expected_max + 1))
+            still_missing = expected_ids - final_ids
+            if still_missing:
+                logger.warning("  %d IDs are still missing", len(still_missing))
+            else:
+                logger.info("  All missing values have been filled successfully!")
+        except Exception:
+            # See docstring: isolate this param's failure, keep going.
+            logger.exception("  %s: FAILED to fill -- continuing with remaining params", name)
+            failed_params.append(name)
+
+    return failed_params
+
+
 def main():
     parser = argparse.ArgumentParser(description="Fill missing parameter values using KNN interpolation.")
     parser.add_argument("--base_config", default=None, help="Path to base_config.yml")
@@ -396,6 +534,7 @@ def main():
         # through the same resolve_fill_plan / fill_missing_values_knn /
         # write_filled_in_place path as the default all-params mode below.
         param_file = Path(args.param_file)
+        check_param_file_in_fabric(param_file, merged_dir)
         if not param_file.exists():
             raise FileNotFoundError(
                 f"Parameter file not found: {param_file}\n"
@@ -414,55 +553,37 @@ def main():
     else:
         # All-params mode (default): every declared param whose merged file has
         # already been produced for this fabric. A param not yet produced
-        # (e.g. lulc_nlcd/lulc_foresce -- inputs unstaged) is skipped with an
-        # INFO line, not an error.
+        # (e.g. lulc_nlcd/lulc_foresce -- inputs unstaged) is skipped with a
+        # WARNING (not silently at INFO -- an operator scanning the log for
+        # problems should see it).
         targets = []
         for name, merged_file, fill_columns in declared_params:
             pf = merged_dir / merged_file
             if not pf.exists():
-                logger.info("Skipping %s: %s not found (not yet produced for this fabric)", name, pf)
+                logger.warning("Skipping %s: %s not found (not yet produced for this fabric)", name, pf)
                 continue
             targets.append((name, pf, fill_columns))
         if not targets:
             logger.warning("No declared params' merged files were found under %s", merged_dir)
-            return
+            return 0
 
-    for name, param_file, declared_columns in targets:
-        logger.info("=== %s (%s) ===", name, param_file.name)
+        # The reverse direction: warn about a merged/nhm_*_params.csv on disk that
+        # no config entry declares at all -- see warn_undeclared_merged_files.
+        warn_undeclared_merged_files(merged_dir, declared_params, logger)
 
-        param_df, missing_ids = find_missing_ids(param_file, expected_max, id_feature, logger)
-        plan = resolve_fill_plan(param_df, declared_columns, missing_ids, id_feature, name)
+    failed_params = run_fill_sweep(
+        targets, merged_gdf, expected_max, id_feature, args.k_neighbors, logger,
+    )
 
-        for col, n in plan.undeclared_with_nan.items():
-            logger.warning(
-                "  %s: column '%s' has %d NaN cell(s) but is NOT declared in "
-                "`fill_columns` — left untouched. If it is a PRMS parameter rather than "
-                "provenance, add it to the config; if it is provenance, this is correct.",
-                param_file.name, col, n,
-            )
-
-        if not plan.fill_columns:
-            logger.info("  No fill_columns declared for %s; nothing to fill", name)
-            continue
-
-        # Capture dtypes on the pristine pre-fill frame; fill_missing_values_knn
-        # does not mutate param_df in place (it rebinds through pd.concat/merge),
-        # so it also doubles as the "original" frame write_filled_in_place needs.
-        dtypes = param_df.dtypes.to_dict()
-
-        complete_df = fill_missing_values_knn(
-            param_df, missing_ids, merged_gdf, plan.fill_columns, args.k_neighbors, id_feature, logger,
+    if failed_params:
+        logger.error(
+            "%d of %d param(s) FAILED to fill: %s. The canonical set is only PARTIALLY "
+            "applied -- fix the cause(s) above and re-run.",
+            len(failed_params), len(targets), ", ".join(failed_params),
         )
-        write_filled_in_place(complete_df, param_file, param_df, dtypes, logger=logger)
-
-        final_ids = set(complete_df[id_feature])
-        expected_ids = set(range(1, expected_max + 1))
-        still_missing = expected_ids - final_ids
-        if still_missing:
-            logger.warning("  %d IDs are still missing", len(still_missing))
-        else:
-            logger.info("  All missing values have been filled successfully!")
+        return 1
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())
