@@ -313,6 +313,22 @@ holds the full stack (through `carea_map_t8/t156_binary.tif`).
 
 ### 4 · Generate parameters
 
+```bash
+BATCHES=$(pixi run data-root)/gfv2/batches
+slurm_batch/submit_zonal_params.sh   "$BATCHES" gfv2 configs/base_config.yml
+slurm_batch/submit_depstor_params.sh "$BATCHES" gfv2 configs/base_config.yml
+```
+
+**What it does:** `submit_zonal_params.sh` chains every zonal parameter (array
++ merge per param, `slope`→`ssflux` dependency and weights prereq handled
+automatically); `submit_depstor_params.sh` chains all 10 depstor fractions +
+the 6 PRMS ratios job.
+
+**Wait for:** all submitted jobs `COMPLETED` — monitor with `squeue -u "$USER"`.
+
+<details>
+<summary>Run one parameter at a time (debugging)</summary>
+
 Each parameter is **two batch jobs**: an array job over every HRU batch, then a
 merge that runs after it (`afterok`). Submit them **in order, waiting for each
 merge before the next** — `slope` must merge before `ssflux`. First set the
@@ -371,21 +387,7 @@ the 6 PRMS ratios:
 sbatch --export=ALL,BASE_CONFIG=$BASE_CONFIG,FABRIC=$FABRIC slurm_batch/derive_depstor_ratios.batch
 ```
 
-**What it does:** computes every per-HRU zonal parameter and the 6 depstor ratios.
-
-**Wait for:** all array + merge jobs `COMPLETED` (`squeue -u "$USER"`), then the
-ratios job `COMPLETED`.
-
-> **Convenience — run wholesale.** The two wrappers below submit exactly the
-> batch jobs above for you, chained with `afterok` (and they handle the
-> `slope`→`ssflux` dependency and the weights prereq automatically):
->
-> ```bash
-> slurm_batch/submit_zonal_params.sh   "$BATCHES" gfv2 configs/base_config.yml
-> slurm_batch/submit_depstor_params.sh "$BATCHES" gfv2 configs/base_config.yml
-> ```
-
----
+</details>
 
 ### 5 · Gap-fill missing values
 
