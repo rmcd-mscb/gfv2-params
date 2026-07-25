@@ -578,7 +578,7 @@ srun -p cpu -A impd --mem=8G --time=00:15:00 \
   pixi run -e dev pytest tests/test_segment_wbody.py -q
 ```
 
-Expected: all pass (23 tests, counting the 5 parametrised edge cases).
+Expected: all pass (21 tests = 16 functions + 5 parametrised edge cases).
 
 - [ ] **Step 5: Lint and commit**
 
