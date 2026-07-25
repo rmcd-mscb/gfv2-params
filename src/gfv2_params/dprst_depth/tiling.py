@@ -493,10 +493,19 @@ def _load_and_tag_for_plan(config: dict, logger) -> tuple[gpd.GeoDataFrame, gpd.
     local, pre-staged vector file -- no network I/O at all in `--plan` (tile
     *existence* is a Task 4 compute-time concern; `group_by_tile` never
     probes it).
+
+    Applies the SAME `min_onstream_comids`/`min_endorheic_comids` floors
+    `wbody_connectivity` enforces at its consuming end
+    (`check_onstream_floor`/`check_endorheic_floor`), because this hook has the
+    identical doctrine gap: it reads both parquets straight off disk with only
+    an existence check, and `submit_dprst_depth.sh` is a documented operator
+    route that bypasses the orchestrator entirely. A collapsed or stale table
+    would otherwise silently reconstruct the wrong dprst polygon set for the
+    whole SLURM array.
     """
     from ..download.epa_ecoregions import ECO_ID_FIELD, ecoregion_of
-    from ..endorheic import load_endorheic_comids
-    from ..segment_wbody import load_segment_comids
+    from ..endorheic import check_endorheic_floor, load_endorheic_comids, read_signal_counts
+    from ..segment_wbody import check_onstream_floor, load_segment_comids
     from .topo import load_fabric_dprst_polygons, resolution_class
 
     required = [
@@ -528,7 +537,25 @@ def _load_and_tag_for_plan(config: dict, logger) -> tuple[gpd.GeoDataFrame, gpd.
         if not p.exists():
             raise FileNotFoundError(f"--plan: {label} not found on disk: {p}")
 
-    onstream_comids = load_segment_comids(segment_table) - load_endorheic_comids(endorheic_table)
+    # Apply the same `min_onstream_comids`/`min_endorheic_comids` floors
+    # `wbody_connectivity` enforces at its consuming end. `--plan` reads both
+    # parquets straight off disk (no `BuildContext`/orchestrator), which is the
+    # exact same doctrine gap `wbody_connectivity`'s consuming-end check exists
+    # to close for `--from wbody_connectivity` — a collapsed or stale table
+    # would otherwise silently reconstruct the wrong dprst polygon set here too.
+    segment_comids = load_segment_comids(segment_table)
+    check_onstream_floor(
+        len(segment_comids), fabric=config.get("fabric", "<unknown>"),
+        floor=config.get("min_onstream_comids"), source=segment_table,
+    )
+    check_endorheic_floor(
+        read_signal_counts(endorheic_table),
+        fabric=config.get("fabric", "<unknown>"),
+        floor=config.get("min_endorheic_comids"),
+        signal_b_active=config.get("wbd_huc12_table") is not None,
+        source=endorheic_table,
+    )
+    onstream_comids = segment_comids - load_endorheic_comids(endorheic_table)
 
     dprst = load_fabric_dprst_polygons(
         waterbody_gpkg=waterbody_gpkg,
