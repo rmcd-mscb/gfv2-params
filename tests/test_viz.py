@@ -183,7 +183,7 @@ def test_param_inventory_kinds():
     # ssflux PRMS params read from the gap-filled Stage 7 CSV
     for n in ("soil2gw_max", "ssr2gw_rate", "fastcoef_lin", "slowcoef_lin",
               "gwflow_coef", "dprst_seep_rate_open", "dprst_flow_coef"):
-        assert by_name[n].csv_name == "filled_nhm_ssflux_params.csv"
+        assert by_name[n].csv_name == "nhm_ssflux_params.csv"
         assert by_name[n].kind == "continuous"
 
 
