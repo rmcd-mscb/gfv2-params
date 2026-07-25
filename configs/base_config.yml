@@ -239,6 +239,27 @@ fabrics:
     # 770 on-stream COMIDs measured on this fabric (1,453 candidate pairs, 45 zero-length
     # grazes dropped); in-domain that is 768 against 1,550 under the old NHD union.
     min_onstream_comids: 500
+    # --- endorheic classifier (Signal B) ------------------------------------
+    # Full WBD HUC12 layer; the `endorheic` builder re-applies the
+    # HU_12_TYPE == 'C' (closed-basin) filter itself, so pointing this at a full WBD
+    # layer cannot flag every waterbody endorheic. Wired up to match `gfv2`.
+    # Stage with: pixi run python -m gfv2_params.download.wbd_huc12
+    # NOTE: do NOT point this at input/nhd/closed_huc12.gpkg — that is an incomplete
+    # extract (23 type-C HUC12s in the Great Basin vs 141 in the full WBD).
+    # Without it only Signal A (FDR terminus-inside-itself) runs: measured 680 flagged
+    # COMIDs on this fabric, 0 from Signal B.
+    wbd_huc12_table: "{data_root}/input/wbd/wbd_huc12.parquet"
+    # Floor on the endorheic COMIDs. Set at 450 — comfortably below Signal A's own
+    # measured 680 on this fabric, so it cannot fire spuriously, while still activating
+    # `check_endorheic_floor`'s PER-SIGNAL zero checks (those only run when a floor is
+    # declared), which are the real protection: either signal dying alone is caught.
+    # CAVEAT on the total: Signal B is NOT fabric-scoped — the `endorheic` builder reads
+    # the full CONUS waterbody layer and full CONUS WBD, so its 21,504 flagged COMIDs
+    # here include 20,741 outside Oregon entirely. Inert for the product (the subtraction
+    # only touches this fabric's on-stream set, and endorheic_wbody.tif is land-masked),
+    # but it means the TOTAL is a CONUS number, not an Oregon one — don't tune this floor
+    # against it.
+    min_endorheic_comids: 450
     # EPA Level III Ecoregions (shared CONUS input, see
     # gfv2_params.download.epa_ecoregions). Drives dprst_depth (#173).
     ecoregions_gpkg: "{data_root}/input/ecoregions/us_eco_l3.gpkg"

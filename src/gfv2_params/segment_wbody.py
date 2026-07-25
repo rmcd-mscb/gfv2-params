@@ -55,6 +55,11 @@ CHUNK = 5000
 # Playa guardrail, 4 waterbodies / 2.05 km2 were on-stream on the strength of a
 # 0.2-nanometre "traversal".
 #
+# The populations are cleanly bimodal, which is what makes the constant safe rather than
+# arbitrary: on oregon the artifacts top out at 7.7e-9 m and the smallest GENUINE
+# traversal is 5.4 m — about nine orders of magnitude of empty space in between. This
+# does not cut through a continuum of borderline cases; there are no borderline cases.
+#
 # 1 micron is ~11 orders of magnitude below the 30 m grid and below any real NHD
 # vertex spacing, so it can only ever reject artifacts: it encodes no judgment about
 # WHICH grazes matter hydrologically. That judgment WAS considered as a cell-scale
