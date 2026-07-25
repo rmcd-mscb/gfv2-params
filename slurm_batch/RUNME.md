@@ -107,12 +107,24 @@ srun -p cpu -A impd --time=02:00:00 --ntasks=1 --cpus-per-task=4 --mem=48G \
 pixi run --as-is python -m gfv2_params.download.wesm
 pixi run --as-is python scripts/clip_shared_to_fabric.py --fabric gfv2   # tiny VRT (login OK)
 
-# 3a. landmask FIRST, standalone — dprst_depth (3b, below) needs land_mask.tif
-# on disk before it can fill+burn, but must itself run BEFORE the rest of the
-# stack (3c) reaches the dprst_depth step (issue #173 — its in-process
-# fallback is a ~250-500 CORE-HOUR CONUS compute, i.e. unbounded wall-clock
-# on one core; see HPC_REFERENCE.md "Stage 2d'"):
+# 3a. landmask, segment_wbody, and endorheic FIRST, standalone -- each needs
+# only profile-level inputs (segments_gpkg/waterbody_gpkg/template_raster for
+# segment_wbody; waterbody_gpkg/fdr_raster for endorheic), not any other
+# step's output, so all three can run ahead of the rest of the stack (3c):
+#   - landmask: dprst_depth (3b, below) needs land_mask.tif on disk before it
+#     can fill+burn, but must itself run BEFORE the rest of the stack (3c)
+#     reaches the dprst_depth step (issue #173 -- its in-process fallback is a
+#     ~250-500 CORE-HOUR CONUS compute, i.e. unbounded wall-clock on one core;
+#     see HPC_REFERENCE.md "Stage 2d'").
+#   - segment_wbody / endorheic: 3b's `tiling.py --plan` reconstructs the
+#     dprst polygon set against the REAL on-stream classifier (segment_wbody
+#     minus endorheic, not NHD), so it needs `segment_waterbody_comids.parquet`
+#     and `endorheic_waterbody_comids.parquet` already on disk -- both are
+#     STEP_ORDER outputs (positions 3 and 5) that 3c would otherwise only
+#     produce later, after 3b has already tried and failed to read them.
 sbatch slurm_batch/build_depstor_rasters.batch --step landmask
+sbatch slurm_batch/build_depstor_rasters.batch --step segment_wbody
+sbatch slurm_batch/build_depstor_rasters.batch --step endorheic
 
 # 3b. dprst_depth's own SLURM array (plan -> array -> build -> mean_zonal ->
 # mean_finalize) -- wait for this to COMPLETE before 3c:
@@ -120,9 +132,10 @@ BATCHES=$(pixi run --as-is python -c \
   "import yaml;print(yaml.safe_load(open('configs/base_config.yml'))['data_root'])")/gfv2/batches
 slurm_batch/submit_dprst_depth.sh "$BATCHES" gfv2 configs/base_config.yml 150
 
-# 3c. the rest of the depstor raster stack (landmask + dprst_depth both
-# already exist -> skipped fast; imperv/waterbody/endorheic/wbody_connectivity/
-# dprst/perv/hru_id/vpu_id/routing/routing_hru/drains_*/carea_map run normally):
+# 3c. the rest of the depstor raster stack (landmask + segment_wbody +
+# endorheic + dprst_depth all already exist -> skipped fast; imperv/waterbody/
+# wbody_connectivity/dprst/perv/hru_id/vpu_id/routing/routing_hru/drains_*/
+# carea_map run normally):
 sbatch slurm_batch/build_depstor_rasters.batch
 ```
 
@@ -171,9 +184,10 @@ sizing arithmetic, and recovery. `submit_dprst_depth.sh`'s stages produce
 *and* `nhm_dprst_depth_avg_params.csv` (`{fabric}/params/merged/`) — the
 latter does not go through Step 4's depstor-fractions loop below.
 
-**Wait for:** step 3a `COMPLETED`; step 3b's final job (`mean_finalize`)
-`COMPLETED`; then step 3c `COMPLETED`. `{fabric}/depstor_rasters/` holds the
-full stack (through `carea_map_t8/t156_binary.tif`).
+**Wait for:** all three step 3a jobs (`landmask`, `segment_wbody`, `endorheic`)
+`COMPLETED`; step 3b's final job (`mean_finalize`) `COMPLETED`; then step 3c
+`COMPLETED`. `{fabric}/depstor_rasters/` holds the full stack (through
+`carea_map_t8/t156_binary.tif`).
 
 ---
 

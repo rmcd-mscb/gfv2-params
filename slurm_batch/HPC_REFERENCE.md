@@ -575,13 +575,28 @@ one core.
 gfv2_params.download.wesm`) and `ecoregions_gpkg` (EPA L3 Ecoregions —
 `pixi run python -m gfv2_params.download.epa_ecoregions`, Stage 0). Both are
 already staged for `gfv2`/`gfv2_dev`/`oregon`/`tjc` in
-`configs/base_config.yml`; `gfv2_vpu01` has neither (same reason it lacks
-`connected_comids_table` — its `wbs` waterbody layer has no COMID).
+`configs/base_config.yml`; `gfv2_vpu01` has neither (its `wbs` waterbody layer
+has no COMID).
+
+**On-disk prerequisite.** The Plan stage reconstructs the dprst polygon set
+against the REAL on-stream classifier, not NHD: it needs
+`segment_waterbody_comids.parquet` and `endorheic_waterbody_comids.parquet`
+already present under `{fabric}/depstor_rasters/` — the `segment_wbody` and
+`endorheic` DAG steps' outputs (STEP_ORDER positions 3 and 5) — and raises
+`FileNotFoundError` naming whichever is missing otherwise. If the rest of the
+stack (Stage 2d) hasn't reached those steps yet, run them standalone first:
+`sbatch slurm_batch/build_depstor_rasters.batch --step segment_wbody` then
+`--step endorheic` (neither needs any other step's output — see `RUNME.md`'s
+step 3a, which runs `landmask`, `segment_wbody`, and `endorheic` standalone
+for exactly this reason, before the Plan stage below).
 
 **The 4-stage DAG (`slurm_batch/submit_dprst_depth.sh`):**
 
 1. **Plan** (`plan_dprst_depth_batches.batch`, 1 task) — reconstructs the
-   CONUS dprst polygon set, **clips it to the fabric's HRU extent** (same
+   CONUS dprst polygon set against the on-stream COMID set
+   (`segment_waterbody_comids.parquet` MINUS `endorheic_waterbody_comids.parquet`,
+   read from `{fabric}/depstor_rasters/` — see "On-disk prerequisite" above),
+   **clips it to the fabric's HRU extent** (same
    shared `topo.load_fabric_dprst_polygons` the builder uses — see the
    "Fabric clip" note below), tags it (`best_topo` via WESM, `ecoregion`
    via EPA L3), builds the tile → polygon work-list
