@@ -580,6 +580,8 @@ srun -p cpu -A impd --mem=8G --time=00:15:00 \
 
 Expected: all pass (21 tests = 16 functions + 5 parametrised edge cases).
 
+**As delivered this is 23.** Task-1 review round 1 added two tests this list omitted, covering the two branches that enforce *"an unmeasurable pair must raise, never be scored zero-length"*: `test_repair_invalid_raises_when_still_invalid_after_make_valid` (NaN-vertex polygon that survives `make_valid`) and `test_unmeasurable_pair_raises_rather_than_zero_length` (monkeypatches `shapely.intersection` so both the chunked call and the per-row fallback fail). Both are in commit `0662c80`; reproduce them if regenerating this file.
+
 - [ ] **Step 5: Lint and commit**
 
 ```bash
