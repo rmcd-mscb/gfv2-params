@@ -127,7 +127,13 @@ scalar defaults. Both are wrong:
   `dprst_seep_rate_open := ssr2gw_rate` and `dprst_flow_coef := fastcoef_lin`.
 - They are on disk, per-HRU, for CONUS:
   `gfv2/params/merged/filled_nhm_ssflux_params.csv` (verified — columns present,
-  non-degenerate).
+  non-degenerate). [As of this audit's date, `merge_and_fill_params.py` wrote
+  a separate `filled_`-prefixed file per param, hardcoded to `ssflux` only —
+  the `filled_` prefix is **retired** as of 2026-07-25: `merge_and_fill_params.py`
+  now fills every param that declares `fill_columns` in place, and the current
+  file is `gfv2/params/merged/nhm_ssflux_params.csv`, always gap-filled. This
+  paragraph is left as a dated historical record of what was true on
+  2026-07-08 and is not itself stale.]
 - `src/gfv2_params/viz.py:530-531` already maps them for plotting.
 
 So Bucket 3 has exactly **one** true member: `smidx_exp` — and per (3), it is

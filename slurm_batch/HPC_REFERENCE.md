@@ -81,7 +81,9 @@ gfv2_param/
     ├── fabric/             # Merged fabric gpkg
     ├── batches/            # Per-batch gpkgs + manifest
     ├── depstor_rasters/    # Depression-storage intermediate rasters (per fabric)
-    └── params/             # Parameter outputs + merged + filled
+    └── params/             # Parameter outputs; merged/ (canonical, gap-filled)
+                             #   + merged/_unfilled/ (pre-fill copies)
+                             #   + merged/_intermediates/
 ```
 
 > **Upgrading an existing `data_root` from the legacy `work/` layout?** Run
@@ -910,18 +912,25 @@ Env knobs (both wrappers):
   (e.g. omit `lulc_nlcd`/`lulc_foresce` when their CONUS rasters aren't present).
   Keep `slope` before `ssflux` in the list.
 
-**Depstor outputs** land in two subdirectories under `{fabric}/params/merged/`:
+**Depstor outputs** land in subdirectories under `{fabric}/params/merged/`:
 
-- `{fabric}/params/merged/` — **6 final PRMS-ready ratio CSVs**, dimensionless
+- `{fabric}/params/merged/` — the canonical parameter set, dimensionless
   and bounded in [0, 1]: `sro_to_dprst_perv`, `sro_to_dprst_imperv`,
-  `carea_max`, `smidx_coef`, `hru_percent_imperv`, `dprst_frac`.
+  `carea_max`, `smidx_coef`, `hru_percent_imperv`, `dprst_frac`. Not final
+  until Stage 7's gap-fill has run over each — Stage 7 fills every one of
+  these in place (each declares `fill_columns` in
+  `configs/depstor/depstor_params.yml`), so `merged/*.csv` is the single
+  file to read regardless of whether a given HRU needed KNN-filling.
 - `{fabric}/params/merged/_intermediates/` — **10 per-fraction count CSVs**
   (`nhm_<name>_frac_params.csv` and `nhm_hru_total_count_params.csv`). Each
   row's `count` column is the partial-pixel-weighted sum of `1`-valued cells
   per HRU — **not** a [0, 1] fraction. Inputs to ratio derivation; not direct
-  PRMS parameters. To get a true area fraction divide by the HRU pixel count
-  (e.g. `areasqkm * 1e6 / 900` for the 30 m template grid; the `hru_total`
-  fraction aggregates `land_mask.tif` to give that denominator).
+  PRMS parameters, never filled (`depstor_params.yml`'s `fractions:` entries
+  declare no `fill_columns`). To get a true area fraction divide by the HRU
+  pixel count (e.g. `areasqkm * 1e6 / 900` for the 30 m template grid; the
+  `hru_total` fraction aggregates `land_mask.tif` to give that denominator).
+- `{fabric}/params/merged/_unfilled/` — the pre-fill (raw) copy of each ratio
+  CSV above, preserved once by Stage 7 and never overwritten on a re-run.
 
 ---
 
@@ -953,14 +962,37 @@ Idempotent — skips if the matrix already exists; pass `FORCE=1` to overwrite.
 
 ### Stage 7 — KNN gap-fill
 
-Fits sklearn NearestNeighbors over every HRU and fills all param columns. Loads
-the full fabric into memory; submit via the batch:
+Fits sklearn NearestNeighbors over every HRU's centroid. Default (all-params)
+mode loops **every param that declares `fill_columns`** in
+`configs/zonal/zonal_params.yml`, `configs/depstor/depstor_params.yml`, or
+`configs/snarea/snarea_library.yml` and whose `merged/` CSV already exists for
+the active fabric — not one hardcoded file per invocation, which is the
+pre-fix behaviour that let 4 `oregon` params go unfilled unnoticed. Pass
+`--param_file <path>` to fill exactly one declared file instead. Loads the
+full fabric into memory; submit via the batch:
 
 ```bash
 sbatch slurm_batch/merge_and_fill_params.batch
 # Other fabrics:
 FABRIC=<name> sbatch slurm_batch/merge_and_fill_params.batch
+# Single-param mode:
+sbatch slurm_batch/merge_and_fill_params.batch --param_file <path-to-merged-csv>
 ```
+
+`merge_and_fill_params.py` writes the filled frame **in place** over
+`merged/<name>.csv` — the single canonical, always-gap-filled per-HRU file;
+the retired `filled_` prefix no longer exists, so **consumers read
+`merged/*.csv`**. The pre-fill (raw) copy is preserved once at
+`merged/_unfilled/<name>.csv` (never overwritten on a re-run — by then the
+on-disk file is already filled). The job log reports, per param, how many
+absent rows and NaN cells it filled, and applies two asymmetric guards: a
+column *not* declared in that param's `fill_columns` but carrying NaN cells
+only **warns** (a NaN cell may be a legitimate "not derivable" result); a
+param that is missing an HRU row entirely but declares no `fill_columns`
+**raises** (an absent row admits no such reading). Migrating an existing
+`filled_`-prefixed product onto this layout is a separate one-time step —
+`scripts/migrate_filled_params.py --merged_dir <path>` (dry-run by default,
+`--apply` to execute).
 
 ### Stage 8 — Merge NHM defaults
 
@@ -1096,7 +1128,11 @@ per `deplcrv_id`), `nhm_snarea_curve_params.csv` (one row per HRU:
 `nhm_snarea_curve_validation.csv` (calibration report: reconstruction error
 before/after, bias, `n_estimable`), and `nhm_snarea_curve.nc` (the pyWatershed
 parameter file — `snarea_curve` flat ascending, `hru_deplcrv`,
-`snarea_thresh`).
+`snarea_thresh`). Of these, only `nhm_snarea_curve_params.csv` declares
+`fill_columns` (`configs/snarea/snarea_library.yml`) and is gap-filled by
+Stage 7 — its curve/threshold columns, not the `cv_*`/provenance columns,
+which stay NaN by design; `nhm_snarea_curve_library.csv`/`_validation.csv`/
+`.nc` are never touched by Stage 7.
 
 **Cost profile:** Stage 1's gdptools weight-generation (`WeightGen`, one
 polygon/cell intersection pass per batch) is the expensive step; each batch's
