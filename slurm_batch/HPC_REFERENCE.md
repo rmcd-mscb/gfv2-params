@@ -518,14 +518,30 @@ re-run `wbody_connectivity` first.
 **segment_wbody/waterbody/endorheic rebuild cascade.** Changing `segments_gpkg`
 or the segment-based classifier logic alone (no waterbody layer change)
 re-runs `segment_wbody → waterbody → endorheic → wbody_connectivity → dprst →
-routing → drains_perv/drains_imperv` — rebuild with `--from segment_wbody
---force`; `segment_wbody` itself is cheap (42 s / 2.0 GB at CONUS) and doesn't
-change the job's `--mem` sizing. Changing the waterbody layer (e.g. a new
-BurnAddWaterbody union, or a `waterbody_gpkg` swap) starts one step later,
-`--from waterbody --force`, since `segment_wbody`'s own output is unaffected.
-Changing only the endorheic signals/inputs (waterbody and segment layers both
-unchanged): `--from endorheic --force`. Either way — `--mem=384G` for
-`waterbody`/`dprst`, `96G` for `routing`.
+dprst_depth → routing → drains_perv/drains_imperv` — rebuild with `--from
+segment_wbody --force`; `segment_wbody` itself is cheap (42 s / 2.0 GB at
+CONUS) and doesn't change the job's `--mem` sizing. Changing the waterbody
+layer (e.g. a new BurnAddWaterbody union, or a `waterbody_gpkg` swap) starts
+one step later, `--from waterbody --force`, since `segment_wbody`'s own output
+is unaffected. Changing only the endorheic signals/inputs (waterbody and
+segment layers both unchanged): `--from endorheic --force`. Either way —
+`--mem=384G` for `waterbody`/`dprst`, `96G` for `routing`.
+
+**`dprst_depth` is part of this cascade, not just `dprst_binary.tif`.**
+`STEP_ORDER` places `dprst_depth` after `dprst`, so any of the `--from
+segment_wbody|waterbody|endorheic --force` reruns above already include it —
+but a classifier change invalidates more than the raster: it changes the
+reconstructed dprst *polygon set* (`tiling.py::_load_and_tag_for_plan` /
+`dprst_depth.py::_load_dprst_polygons`, both keyed on the segment/endorheic
+on-stream COMIDs). `dprst_depth_batches/` — the per-tile-batch parquets
+`submit_dprst_depth.sh`'s SLURM array wrote against the OLD polygon set — must
+be wiped, and the full 4-stage `submit_dprst_depth.sh` DAG (plan → array →
+build → mean_zonal → mean_finalize; see "Stage 2d'" below) re-run from
+scratch, after `dprst` completes. Reusing stale batches left-joins the NEW
+polygon set onto the OLD one by COMID: a polygon newly classified dprst has no
+row, silently falls through to the regional-fill ladder instead of a measured
+3DEP depth, and only trips `dprst_depth_min_measured_frac` if enough of them
+do — fewer is a silent quality regression, not a raise.
 
 **dprst rebuild cascade.** Changing `dprst` membership (e.g. the per-cell
 impervious carve-out, or the on-stream COMID set) invalidates everything
@@ -608,12 +624,32 @@ against the REAL on-stream classifier, not NHD: it needs
 `segment_waterbody_comids.parquet` and `endorheic_waterbody_comids.parquet`
 already present under `{fabric}/depstor_rasters/` — the `segment_wbody` and
 `endorheic` DAG steps' outputs (STEP_ORDER positions 3 and 5) — and raises
-`FileNotFoundError` naming whichever is missing otherwise. If the rest of the
-stack (Stage 2d) hasn't reached those steps yet, run them standalone first:
+`FileNotFoundError` naming whichever is missing otherwise. It also applies the
+`min_onstream_comids`/`min_endorheic_comids` floors (same doctrine as
+`wbody_connectivity`'s consuming-end check — `--plan` reads both parquets off
+disk with no `BuildContext`/orchestrator, so a collapsed table would otherwise
+slip through unvalidated). If the rest of the stack (Stage 2d) hasn't reached
+those steps yet, run them standalone first:
 `sbatch slurm_batch/build_depstor_rasters.batch --step segment_wbody` then
 `--step endorheic` (neither needs any other step's output — see `RUNME.md`'s
 step 3a, which runs `landmask`, `segment_wbody`, and `endorheic` standalone
 for exactly this reason, before the Plan stage below).
+
+**Second prerequisite, for stage 3 (Build) — `dprst_binary.tif` must already
+be FRESH.** Stage 3 reuses `build_depstor_rasters.batch --step dprst_depth`,
+whose burn (`dprst_depth/burn.py`) masks the per-polygon depths to whatever
+`dprst_binary.tif` is on disk at that moment (`dprst_depth.py` —
+`ctx.require("dprst")`). That is a SEPARATE dependency from the Plan stage's
+segment/endorheic parquets: the polygon *set* comes from those two tables, but
+the per-cell *mask* stage 3 burns into comes from `dprst`, which is built by
+`waterbody → wbody_connectivity → dprst` (STEP_ORDER positions 1/3/5/6 —
+`imperv`, `waterbody`, `wbody_connectivity`, `dprst`). If those haven't run
+yet (e.g. on an EXISTING data_root after a classifier change, before the rest
+of Stage 2d reaches them), stage 3 silently burns against whatever
+`dprst_binary.tif` is already on disk — the PREVIOUS classifier's mask on an
+existing data_root, or a hard `ctx.require` failure on a from-scratch one.
+`RUNME.md`'s step 3b runs `imperv`, `waterbody`, `wbody_connectivity`, and
+`dprst` standalone for exactly this reason, before this DAG (step 3c) starts.
 
 **The 4-stage DAG (`slurm_batch/submit_dprst_depth.sh`):**
 
