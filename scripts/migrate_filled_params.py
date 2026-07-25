@@ -14,8 +14,21 @@ Step 1's skip is load-bearing: if `_unfilled/<name>.csv` already exists (e.g. a
 previous run of this script, or merge_and_fill_params.py has already run once
 since), the on-disk `<name>.csv` is ALREADY the filled product -- moving it
 over the preserved copy would destroy the true pre-fill version irreversibly,
-on a shared filesystem with no version control. See
-test_migration_refuses_when_raw_already_preserved.
+on a shared filesystem with no version control.
+
+Step 2 is NOT unconditional, even though step 1 may have been skipped. If
+`_unfilled/<name>.csv` (raw_target) already exists AND `<name>.csv`
+(canonical_target) ALSO already exists, the canonical file is already on the
+new convention (e.g. produced by a fresh `merge_and_fill_params.py` run) and
+`filled_<name>.csv` is a stale leftover from before that -- moving it over the
+canonical file would silently REVERT today's correct fill to whatever
+pre-branch product the `filled_` file still holds, with exit code 0 and no
+warning. That case refuses loudly instead of moving. Only when raw_target
+exists but canonical_target does NOT (a previous run of this script died
+between step 1 and step 2) does step 2 proceed, resuming the partial
+migration. See test_migration_resumes_when_raw_preserved_but_canonical_missing
+and test_migration_raises_when_canonical_already_filled_and_raw_preserved.
+`print_plan` mirrors this exact decision so a dry run matches --apply.
 
 Defaults to --dry-run (prints the plan, moves nothing); pass --apply to
 execute it. Always prints every move before making it.
@@ -58,6 +71,24 @@ def plan_migration(merged_dir: Path) -> list[tuple[Path, Path, Path]]:
     return plan
 
 
+class AlreadyMigratedError(RuntimeError):
+    """Raised when both the canonical file and its preserved raw copy already
+    exist -- moving the `filled_` file over the canonical would silently
+    revert an already-correct fill. See the module docstring."""
+
+
+def _refusal_message(filled_file: Path, canonical_target: Path, raw_target: Path) -> str:
+    return (
+        f"Refusing to migrate {filled_file.name}: both {canonical_target} (the canonical "
+        f"file, already on the new convention) and {raw_target} (its preserved pre-fill "
+        f"copy) already exist. This means {filled_file.name} is a stale leftover from "
+        f"before the canonical file was (re)filled -- moving it over {canonical_target.name} "
+        f"would silently REVERT today's correct fill to whatever pre-branch product "
+        f"{filled_file.name} still holds, with no warning. Inspect both files by hand; do "
+        f"not simply re-run --apply."
+    )
+
+
 def apply_migration(plan: list[tuple[Path, Path, Path]]) -> None:
     """Execute a migration plan from `plan_migration`.
 
@@ -65,10 +96,17 @@ def apply_migration(plan: list[tuple[Path, Path, Path]]) -> None:
     if that target already exists, see module docstring -- then move the
     `filled_` file onto the now-vacated canonical name. Prints every move (or
     skip) before performing it.
+
+    Raises `AlreadyMigratedError` (stopping the whole run) if a triple's
+    raw_target AND canonical_target both already exist -- see module
+    docstring. That case is NOT a resumable partial migration; the `filled_`
+    file must not be moved.
     """
     for filled_file, canonical_target, raw_target in plan:
         if raw_target.exists():
-            print(f"  SKIP  {canonical_target} -> {raw_target} (already preserved)")
+            if canonical_target.exists():
+                raise AlreadyMigratedError(_refusal_message(filled_file, canonical_target, raw_target))
+            print(f"  SKIP  {canonical_target} -> {raw_target} (already preserved; resuming partial migration)")
         elif canonical_target.exists():
             raw_target.parent.mkdir(parents=True, exist_ok=True)
             print(f"  MOVE  {canonical_target} -> {raw_target}")
@@ -81,10 +119,18 @@ def apply_migration(plan: list[tuple[Path, Path, Path]]) -> None:
 
 
 def print_plan(plan: list[tuple[Path, Path, Path]]) -> None:
-    """Print what `apply_migration` would do, without touching the filesystem."""
+    """Print what `apply_migration` would do, without touching the filesystem.
+
+    Mirrors apply_migration's decision exactly, including the refuse case --
+    a dry run that disagreed with --apply on a data-moving script would be
+    worse than no dry run at all.
+    """
     for filled_file, canonical_target, raw_target in plan:
-        note = " (already preserved -- would SKIP)" if raw_target.exists() else ""
         print(f"  {filled_file.name}")
+        if raw_target.exists() and canonical_target.exists():
+            print(f"    REFUSE -- {_refusal_message(filled_file, canonical_target, raw_target)}")
+            continue
+        note = " (already preserved -- would SKIP)" if raw_target.exists() else ""
         print(f"    {canonical_target.name} -> {raw_target.parent.name}/{raw_target.name}{note}")
         print(f"    {filled_file.name} -> {canonical_target.name}")
 
