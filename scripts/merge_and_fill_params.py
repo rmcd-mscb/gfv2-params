@@ -15,6 +15,7 @@ from pathlib import Path
 import geopandas as gpd
 import numpy as np
 import pandas as pd
+import yaml
 from sklearn.neighbors import NearestNeighbors
 from tqdm import tqdm
 
@@ -249,13 +250,103 @@ def write_filled_in_place(complete_df, param_file, original_df, dtypes, logger=N
     return param_file
 
 
+# Repo-relative config paths consumed by `iter_declared_params`. Only the
+# static `name`/`merged_file`/`output_file`/`fill_columns` fields are read
+# here (none are {data_root}/{fabric}-templated), so a bare yaml.safe_load is
+# enough -- no need for gfv2_params.config.load_config's fabric-profile
+# resolution, which keeps this read safe with no data root (the CI contract:
+# tests may parse these files but must not touch a real data root).
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+ZONAL_PARAMS_CONFIG = _REPO_ROOT / "configs" / "zonal" / "zonal_params.yml"
+DEPSTOR_PARAMS_CONFIG = _REPO_ROOT / "configs" / "depstor" / "depstor_params.yml"
+SNAREA_LIBRARY_CONFIG = _REPO_ROOT / "configs" / "snarea" / "snarea_library.yml"
+
+
+def _load_yaml_doc(path: Path) -> dict:
+    """Bare `yaml.safe_load` of a config file, no placeholder resolution."""
+    doc = yaml.safe_load(path.read_text())
+    return doc or {}
+
+
+def iter_declared_params(
+    zonal_cfg: dict, depstor_cfg: dict, snarea_cfg: dict | None = None
+) -> list[tuple[str, str, list[str]]]:
+    """Every param with a canonical `merged/` output and its declared `fill_columns`.
+
+    Returns `(param_name, merged_filename, fill_columns)` tuples.
+
+    `zonal_cfg["params"]` and `depstor_cfg["means"]` name their canonical file
+    `merged_file`; `depstor_cfg["ratios"]` names it `output_file` instead (see
+    `derive_depstor_params.py`'s `run_mean_finalize` / `run_ratios`).
+    `depstor_cfg["fractions"]` is DELIBERATELY EXCLUDED: every fraction entry
+    also happens to carry a `merged_file` key, but that key names the
+    per-fraction COUNT csv written to `merged/_intermediates/` (`run_merge`),
+    never a `merged/` output -- fractions are intermediates, not
+    consumer-facing params, and are never filled.
+
+    `snarea_cfg` is optional and does NOT share either config's
+    list-of-entries shape. `snarea_curve` is not a `zonal_params.yml` entry at
+    all -- it comes from the separate 3-stage SNODAS pipeline
+    (`configs/snarea/snarea_library.yml`, Stage 3), a flat single-param config
+    whose `params_file` names the real `nhm_snarea_curve_params.csv`. A
+    synthetic `snarea_curve` entry could not live in `zonal_params.yml`
+    instead: `slurm_batch/submit_zonal_params.sh` loops that exact `params:`
+    list to submit one SLURM array job per param, and a phantom entry with no
+    `source_raster`/`script:` would break that orchestration. Hence the
+    separate optional argument rather than a fourth zonal-shaped list.
+    """
+    declared: list[tuple[str, str, list[str]]] = []
+
+    for entry in zonal_cfg.get("params", []) or []:
+        merged_file = entry.get("merged_file")
+        if merged_file:
+            declared.append((entry["name"], merged_file, list(entry.get("fill_columns") or [])))
+
+    for entry in depstor_cfg.get("means", []) or []:
+        merged_file = entry.get("merged_file")
+        if merged_file:
+            declared.append((entry["name"], merged_file, list(entry.get("fill_columns") or [])))
+
+    for entry in depstor_cfg.get("ratios", []) or []:
+        merged_file = entry.get("output_file")
+        if merged_file:
+            declared.append((entry["name"], merged_file, list(entry.get("fill_columns") or [])))
+
+    if snarea_cfg:
+        merged_file = snarea_cfg.get("params_file")
+        if merged_file:
+            declared.append(("snarea_curve", merged_file, list(snarea_cfg.get("fill_columns") or [])))
+
+    return declared
+
+
+def _load_declared_params() -> list[tuple[str, str, list[str]]]:
+    """`iter_declared_params` over the real in-repo configs."""
+    zonal_cfg = _load_yaml_doc(ZONAL_PARAMS_CONFIG)
+    depstor_cfg = _load_yaml_doc(DEPSTOR_PARAMS_CONFIG)
+    snarea_cfg = _load_yaml_doc(SNAREA_LIBRARY_CONFIG)
+    return iter_declared_params(zonal_cfg, depstor_cfg, snarea_cfg)
+
+
 def main():
     parser = argparse.ArgumentParser(description="Fill missing parameter values using KNN interpolation.")
     parser.add_argument("--base_config", default=None, help="Path to base_config.yml")
     parser.add_argument("--fabric", default=None, help="Fabric name (overrides FABRIC env / default_fabric)")
     parser.add_argument("--merged_gpkg", default=None, help="Path to merged nhru geopackage")
-    parser.add_argument("--param_file", default=None, help="Path to merged parameter CSV to fill")
-    parser.add_argument("--output_dir", default=None, help="Output directory for filled file")
+    parser.add_argument(
+        "--param_file", default=None,
+        help="Path to ONE merged parameter CSV to fill (single-param mode). Its "
+             "filename must be declared (merged_file/output_file/params_file) in "
+             "configs/zonal/zonal_params.yml, configs/depstor/depstor_params.yml, or "
+             "configs/snarea/snarea_library.yml. Omit to fill every declared param "
+             "for the active fabric whose merged file already exists (default).",
+    )
+    parser.add_argument(
+        "--output_dir", default=None,
+        help="Unused. Filling now writes in place at merged/<name>.csv (see "
+             "write_filled_in_place) -- kept only so a caller still passing this "
+             "flag does not break.",
+    )
     parser.add_argument("--k_neighbors", type=int, default=1)
     args = parser.parse_args()
 
@@ -276,21 +367,9 @@ def main():
     hru_layer = base.get("hru_layer", "nhru")
     if args.merged_gpkg is None:
         args.merged_gpkg = require_config_key(base, "hru_gpkg", "merge_and_fill_params")
-    if args.param_file is None:
-        args.param_file = f"{data_root}/{fabric}/params/merged/nhm_ssflux_params.csv"
-    if args.output_dir is None:
-        args.output_dir = f"{data_root}/{fabric}/params/merged"
 
     merged_gpkg = Path(args.merged_gpkg)
-    param_file = Path(args.param_file)
-    output_dir = Path(args.output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
-
-    if not param_file.exists():
-        raise FileNotFoundError(
-            f"Parameter file not found: {param_file}\n"
-            "Run scripts/derive_zonal_params.py --mode merge --param <name> for this parameter type first."
-        )
+    merged_dir = Path(data_root) / fabric / "params" / "merged"
 
     if not merged_gpkg.exists():
         raise FileNotFoundError(
@@ -310,35 +389,79 @@ def main():
         ) from exc
     logger.info("Loaded %d features", len(merged_gdf))
 
-    filled_param_file = output_dir / f"filled_{param_file.name}"
+    declared_params = _load_declared_params()
 
-    param_df, missing_ids = find_missing_ids(param_file, expected_max, id_feature, logger)
+    if args.param_file is not None:
+        # Single-param mode: fill exactly the file named on the CLI, routed
+        # through the same resolve_fill_plan / fill_missing_values_knn /
+        # write_filled_in_place path as the default all-params mode below.
+        param_file = Path(args.param_file)
+        if not param_file.exists():
+            raise FileNotFoundError(
+                f"Parameter file not found: {param_file}\n"
+                "Run scripts/derive_zonal_params.py --mode merge --param <name> (or the "
+                "matching depstor/snarea step) for this parameter type first."
+            )
+        match = next((d for d in declared_params if d[1] == param_file.name), None)
+        if match is None:
+            raise ValueError(
+                f"'{param_file.name}' is not declared in configs/zonal/zonal_params.yml, "
+                "configs/depstor/depstor_params.yml, or configs/snarea/snarea_library.yml "
+                "-- add a `fill_columns` entry for it before filling."
+            )
+        name, _merged_file, fill_columns = match
+        targets = [(name, param_file, fill_columns)]
+    else:
+        # All-params mode (default): every declared param whose merged file has
+        # already been produced for this fabric. A param not yet produced
+        # (e.g. lulc_nlcd/lulc_foresce -- inputs unstaged) is skipped with an
+        # INFO line, not an error.
+        targets = []
+        for name, merged_file, fill_columns in declared_params:
+            pf = merged_dir / merged_file
+            if not pf.exists():
+                logger.info("Skipping %s: %s not found (not yet produced for this fabric)", name, pf)
+                continue
+            targets.append((name, pf, fill_columns))
+        if not targets:
+            logger.warning("No declared params' merged files were found under %s", merged_dir)
+            return
 
-    param_columns = [col for col in param_df.columns if col not in {id_feature, "hru_id", "nat_hru_id", "vpu"}]
-    if not param_columns:
-        raise ValueError("No parameter columns found in the data")
+    for name, param_file, declared_columns in targets:
+        logger.info("=== %s (%s) ===", name, param_file.name)
 
-    needs_fill = bool(missing_ids) or param_df[param_columns].isna().to_numpy().any()
+        param_df, missing_ids = find_missing_ids(param_file, expected_max, id_feature, logger)
+        plan = resolve_fill_plan(param_df, declared_columns, missing_ids, id_feature, name)
 
-    if needs_fill:
-        logger.info("Filling parameter columns: %s", param_columns)
+        for col, n in plan.undeclared_with_nan.items():
+            logger.warning(
+                "  %s: column '%s' has %d NaN cell(s) but is NOT declared in "
+                "`fill_columns` — left untouched. If it is a PRMS parameter rather than "
+                "provenance, add it to the config; if it is provenance, this is correct.",
+                param_file.name, col, n,
+            )
+
+        if not plan.fill_columns:
+            logger.info("  No fill_columns declared for %s; nothing to fill", name)
+            continue
+
+        # Capture dtypes on the pristine pre-fill frame; fill_missing_values_knn
+        # does not mutate param_df in place (it rebinds through pd.concat/merge),
+        # so it also doubles as the "original" frame write_filled_in_place needs.
+        dtypes = param_df.dtypes.to_dict()
 
         complete_df = fill_missing_values_knn(
-            param_df, missing_ids, merged_gdf, param_columns, args.k_neighbors, id_feature, logger
+            param_df, missing_ids, merged_gdf, plan.fill_columns, args.k_neighbors, id_feature, logger,
         )
-        complete_df.to_csv(filled_param_file, index=False)
-        logger.info("Filled parameter file saved to: %s", filled_param_file)
+        write_filled_in_place(complete_df, param_file, param_df, dtypes, logger=logger)
 
         final_ids = set(complete_df[id_feature])
         expected_ids = set(range(1, expected_max + 1))
         still_missing = expected_ids - final_ids
-
         if still_missing:
-            logger.warning("%d IDs are still missing", len(still_missing))
+            logger.warning("  %d IDs are still missing", len(still_missing))
         else:
-            logger.info("All missing values have been filled successfully!")
-    else:
-        logger.info("No missing values found in the parameter file")
+            logger.info("  All missing values have been filled successfully!")
 
 
 if __name__ == "__main__":

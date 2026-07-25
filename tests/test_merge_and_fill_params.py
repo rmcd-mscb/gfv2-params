@@ -7,6 +7,7 @@ import geopandas as gpd
 import numpy as np
 import pandas as pd
 import pytest
+import yaml
 from shapely.geometry import Point
 
 _spec = importlib.util.spec_from_file_location(
@@ -371,3 +372,149 @@ def test_categorical_dtype_is_restored(tmp_path):
     got = pd.read_csv(p)
     assert got["cov_type"].dtype.kind == "i"
     assert got["cov_type"].tolist() == [1, 3]
+
+
+# ---------------------------------------------------------------------------
+# All-params default mode: every configured param declares fill_columns.
+#
+# The two configs use DIFFERENT top-level list keys — zonal has `params:`,
+# depstor has `fractions:` / `means:` / `ratios:`. Iterating only "params"
+# would silently return [] for depstor and make this test pass vacuously.
+#
+# NB deviation from the design brief: the brief assumed `snarea_curve` was a
+# configs/zonal/zonal_params.yml `params:` entry. It is not — snarea_curve
+# comes from the separate 3-stage SNODAS pipeline
+# (configs/snarea/snarea_library.yml, Stage 3), a FLAT single-param config
+# (no `params:`/`fractions:` list, no per-entry `name:`) whose `params_file`
+# names the real `nhm_snarea_curve_params.csv`. Folding a synthetic
+# `snarea_curve` entry into zonal_params.yml's `params:` list would also feed
+# slurm_batch/submit_zonal_params.sh, which loops that exact list to submit
+# one SLURM array job per param — a phantom entry with no `source_raster`/
+# `script:` would break that orchestration. So `snarea_curve` is checked
+# separately below, against its real config file.
+# ---------------------------------------------------------------------------
+
+_PARAM_LIST_KEYS = ("params", "fractions", "means", "ratios")
+
+
+def _configured_entries(doc):
+    for key in _PARAM_LIST_KEYS:
+        for entry in doc.get(key, []) or []:
+            if isinstance(entry, dict):
+                yield key, entry
+
+
+def _canonical_merged_filename(list_key, entry):
+    """The filename an entry writes to merged/ (canonical, consumer-facing),
+    or None if it does not land there.
+
+    zonal `params` and depstor `means` name their canonical file `merged_file`;
+    depstor `ratios` names it `output_file` instead (see
+    derive_depstor_params.py's run_mean_finalize / run_ratios). depstor
+    `fractions` are EXCLUDED even though every entry there also carries a
+    `merged_file` key — that key names the per-fraction COUNT csv written to
+    merged/_intermediates/ (run_merge), never a merged/ output. Fractions are
+    intermediates, not consumer-facing params, and are never filled.
+    """
+    if list_key == "fractions":
+        return None
+    if list_key == "ratios":
+        return entry.get("output_file")
+    return entry.get("merged_file")
+
+
+def test_every_configured_param_declares_fill_columns():
+    """A param with no fill_columns cannot be gap-filled — catch it at config time."""
+    root = Path(__file__).resolve().parent.parent
+    checked = 0
+    for cfg in [root / "configs/zonal/zonal_params.yml",
+                root / "configs/depstor/depstor_params.yml"]:
+        doc = yaml.safe_load(cfg.read_text())
+        for key, entry in _configured_entries(doc):
+            canonical = _canonical_merged_filename(key, entry)
+            if not canonical:
+                continue
+            checked += 1
+            assert entry.get("fill_columns"), (
+                f"{entry['name']} (under '{key}' in {cfg.name}) has a merged/ output but "
+                f"no fill_columns, so the gap-fill step would skip it and any missing HRU "
+                f"row would raise."
+            )
+
+    # snarea_curve: separate flat config, see the module-level note above.
+    snarea_doc = yaml.safe_load(
+        (root / "configs/snarea/snarea_library.yml").read_text()
+    )
+    assert snarea_doc.get("params_file"), "snarea_library.yml must declare params_file"
+    checked += 1
+    assert snarea_doc.get("fill_columns"), (
+        "configs/snarea/snarea_library.yml declares params_file but no fill_columns, so "
+        "snarea_curve would never be filled by the default all-params run."
+    )
+
+    # Guard against the whole test passing because nothing was found.
+    assert checked >= 7, f"expected to check at least 7 merged params, checked {checked}"
+
+
+def test_snarea_curve_does_not_declare_provenance_columns():
+    """Regression guard for the whole point of this change.
+
+    Reads configs/snarea/snarea_library.yml, not configs/zonal/zonal_params.yml
+    — see the module-level deviation note above.
+    """
+    root = Path(__file__).resolve().parent.parent
+    doc = yaml.safe_load((root / "configs/snarea/snarea_library.yml").read_text())
+    forbidden = {"cv_assign", "cv_subgrid", "cv_empirical", "cv_source",
+                 "sdc_status", "sca_class", "similarity", "n_seasons",
+                 "n_peak_years", "peak_swe_mm"}
+    assert not (set(doc["fill_columns"]) & forbidden)
+    assert "hru_deplcrv" in doc["fill_columns"]
+
+
+# ---------------------------------------------------------------------------
+# iter_declared_params: unit coverage on synthetic dicts (no data root, no
+# real config files) for the exclusion/inclusion rules exercised above.
+# ---------------------------------------------------------------------------
+
+def test_iter_declared_params_excludes_fractions_includes_means_and_ratios():
+    zonal_cfg = {
+        "params": [
+            {"name": "elevation", "merged_file": "nhm_elevation_params.csv",
+             "fill_columns": ["mean"]},
+        ],
+    }
+    depstor_cfg = {
+        "fractions": [
+            {"name": "perv_frac", "merged_file": "nhm_perv_frac_params.csv"},
+        ],
+        "means": [
+            {"name": "dprst_depth_avg", "merged_file": "nhm_dprst_depth_avg_params.csv",
+             "fill_columns": ["dprst_depth_avg"]},
+        ],
+        "ratios": [
+            {"name": "dprst_frac", "output_file": "nhm_dprst_frac_params.csv",
+             "fill_columns": ["dprst_frac"]},
+        ],
+    }
+
+    declared = maf.iter_declared_params(zonal_cfg, depstor_cfg)
+    names = {d[0] for d in declared}
+
+    assert names == {"elevation", "dprst_depth_avg", "dprst_frac"}
+    assert "perv_frac" not in names  # fraction excluded despite its merged_file key
+
+    by_name = {d[0]: d for d in declared}
+    assert by_name["dprst_frac"] == ("dprst_frac", "nhm_dprst_frac_params.csv", ["dprst_frac"])
+    assert by_name["elevation"] == ("elevation", "nhm_elevation_params.csv", ["mean"])
+
+
+def test_iter_declared_params_includes_snarea_when_given():
+    snarea_cfg = {"params_file": "nhm_snarea_curve_params.csv", "fill_columns": ["hru_deplcrv"]}
+    declared = maf.iter_declared_params({}, {}, snarea_cfg)
+    assert declared == [("snarea_curve", "nhm_snarea_curve_params.csv", ["hru_deplcrv"])]
+
+
+def test_iter_declared_params_snarea_optional():
+    """The 2-arg call the brief documented must still work (snarea omitted)."""
+    declared = maf.iter_declared_params({}, {})
+    assert declared == []

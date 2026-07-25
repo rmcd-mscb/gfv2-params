@@ -32,6 +32,12 @@ defaults:
   categorical: false
   count_column: count
 
+# NB for scripts/merge_and_fill_params.py: every `fractions` entry below carries
+# a `merged_file` key, but that key names the per-fraction COUNT csv written to
+# merged/_intermediates/ (see derive_depstor_params.py run_merge) -- never a
+# merged/ output. Fractions are intermediates, not consumer-facing params, and
+# are NOT declared `fill_columns` / NOT filled. Only `means` (merged_file) and
+# `ratios` (output_file) below land in merged/ and carry fill_columns.
 fractions:
   - name: perv_frac
     source_raster: "{data_root}/{fabric}/depstor_rasters/perv_binary.tif"
@@ -109,6 +115,12 @@ means:
     floor_in: 49.0
     units_in_raster: metres
     units_out: inches
+    # Observed on-disk header: hru_id,dprst_depth_avg,dprst_depth_provenance.
+    # dprst_depth_provenance (3dep_raw / hollister_flat / calibrated /
+    # no_dprst_cells) records HOW the value was derived per HRU -- provenance,
+    # not a PRMS parameter -- and is deliberately excluded, same reasoning as
+    # snarea_curve's cv_* columns.
+    fill_columns: [dprst_depth_avg]
 
 # Ratio derivations -- final PRMS parameters in {output_dir}/{merged_subdir}/.
 # numerator/denominator reference fraction `name`s above; derive_depstor_params
@@ -124,24 +136,28 @@ ratios:
     denominator: perv_frac
     clamp_to_one: false
     output_file: nhm_sro_to_dprst_perv_params.csv
+    fill_columns: [sro_to_dprst_perv]
 
   - name: sro_to_dprst_imperv
     numerator: drains_imperv_frac
     denominator: imperv_frac
     clamp_to_one: false
     output_file: nhm_sro_to_dprst_imperv_params.csv
+    fill_columns: [sro_to_dprst_imperv]
 
   - name: carea_max
     numerator: carea_t8_frac
     denominator: perv_frac
     clamp_to_one: true
     output_file: nhm_carea_max_params.csv
+    fill_columns: [carea_max]
 
   - name: smidx_coef
     numerator: carea_t156_frac
     denominator: perv_frac
     clamp_to_one: true
     output_file: nhm_smidx_coef_params.csv
+    fill_columns: [smidx_coef]
 
   # imperv_count / hru_pixel_count -- per-HRU fraction of land area classified
   # as impervious. Bounded in [0, 1] by construction.
@@ -150,6 +166,7 @@ ratios:
     denominator: hru_total
     clamp_to_one: false
     output_file: nhm_hru_percent_imperv_params.csv
+    fill_columns: [hru_percent_imperv]
 
   # dprst_count / hru_pixel_count -- per-HRU fraction of land area classified
   # as depression storage. Bounded in [0, 1] by construction.
@@ -162,3 +179,4 @@ ratios:
     denominator: hru_total
     clamp_to_one: false
     output_file: nhm_dprst_frac_params.csv
+    fill_columns: [dprst_frac]
