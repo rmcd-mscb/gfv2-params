@@ -66,8 +66,7 @@ sbatch slurm_batch/build_depstor_rasters.batch --step imperv
 sbatch slurm_batch/build_depstor_rasters.batch --step waterbody
 sbatch slurm_batch/build_depstor_rasters.batch --step wbody_connectivity
 sbatch slurm_batch/build_depstor_rasters.batch --step dprst
-BATCHES=$(pixi run --as-is python -c \
-  "import yaml;print(yaml.safe_load(open('configs/base_config.yml'))['data_root'])")/gfv2/batches
+BATCHES=$(pixi run data-root)/gfv2/batches
 slurm_batch/submit_dprst_depth.sh "$BATCHES" gfv2 configs/base_config.yml 150
 ```
 > Wait for `submit_dprst_depth.sh`'s final job (`mean_finalize`) `COMPLETED`, then:
@@ -238,8 +237,7 @@ sbatch slurm_batch/build_depstor_rasters.batch --step dprst
 # 3c. dprst_depth's own SLURM array (plan -> array -> build -> mean_zonal ->
 # mean_finalize) -- now burns against the FRESH `dprst_binary.tif` from 3b.
 # Wait for this to COMPLETE before 3d:
-BATCHES=$(pixi run --as-is python -c \
-  "import yaml;print(yaml.safe_load(open('configs/base_config.yml'))['data_root'])")/gfv2/batches
+BATCHES=$(pixi run data-root)/gfv2/batches
 slurm_batch/submit_dprst_depth.sh "$BATCHES" gfv2 configs/base_config.yml 150
 
 # 3d. the rest of the depstor raster stack (landmask + imperv + segment_wbody
@@ -321,8 +319,7 @@ merge before the next** — `slope` must merge before `ssflux`. First set the
 shared variables:
 
 ```bash
-BATCHES=$(pixi run --as-is python -c \
-  "import yaml;print(yaml.safe_load(open('configs/base_config.yml'))['data_root'])")/gfv2/batches
+BATCHES=$(pixi run data-root)/gfv2/batches
 FABRIC=gfv2
 BASE_CONFIG=configs/base_config.yml
 N=$(grep '^n_batches:' "$BATCHES/manifest.yml" | awk '{print $2}')   # array size
