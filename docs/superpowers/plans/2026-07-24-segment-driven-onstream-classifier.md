@@ -2268,3 +2268,405 @@ is `comid`/`wb_index`/`seg_index`/`overlap_m` in Tasks 1/5. `check_onstream_floo
 the easiest place to silently weaken coverage. Do not make the segment table optional to
 avoid it — that would reintroduce exactly the silent-fallback failure mode the spec's
 guard 1 exists to prevent.
+
+---
+
+# SCOPE EXPANSION — Tasks 8 and 9
+
+**Added 2026-07-24, after Task 4's review.** Not in the original plan; approved by the
+operator when the gap was found.
+
+**What the plan missed.** It treated `wbody_connectivity` as the only consumer of
+`connected_comids_table` / `flowthrough_comids_table`. There are three more:
+
+| consumer | effect once Task 4 comments the keys out |
+| --- | --- |
+| `depstor_builders/dprst_depth.py:124` | hard `raise KeyError`; `dprst_depth` is step 10 of 16 in `STEP_ORDER` |
+| `dprst_depth/tiling.py:495` | same hard break on the SLURM-array `--plan` path |
+| `depstor_builders/waterbody.py:40` | returns `None` → falls back to the BROAD BurnAdd guard (raises on *any* overlap) |
+| `scripts/diagnose/dprst_depth_probe.py:116` | `require_config_key` → breaks (diagnostic only) |
+
+**The deeper defect the break exposed.** `dprst_depth/topo.py::load_fabric_dprst_polygons`
+*reconstructs the dprst polygon set* — "drop on-stream, force-Playa-dprst, exclude Ice
+Mass" — from the NHD union. That is the same classification `dprst` performs, so
+`dprst_depth` was already going to compute depths for a **different polygon set than
+`dprst_binary.tif`** (~769 waterbodies' divergence in oregon alone). Task 4 turned a
+silent wrong answer into a loud crash; the crash is the lucky outcome.
+
+**Decision:** align every consumer on one on-stream definition. This also closes a
+*pre-existing* half of the same divergence: `topo.py` never subtracted the endorheic set
+either, so the Great Salt Lake was excluded from `dprst_depth`'s polygon set while
+`dprst_binary.tif` includes it. Both halves are fixed here, because "one definition"
+is the whole point.
+
+**The on-stream set every consumer must now use:**
+
+```
+onstream = load_segment_comids(segment_waterbody_comids.parquet)
+         - load_endorheic_comids(endorheic_waterbody_comids.parquet)
+```
+
+Playa/Ice Mass are NOT subtracted here — `topo.py` already applies force-Playa-dprst and
+Ice-Mass-exclusion itself, and `waterbody`'s guard wants the pre-FTYPE superset.
+
+---
+
+## Task 8: Align `waterbody`'s BurnAdd guard + move `segment_wbody` earlier
+
+**Files:**
+- Modify: `src/gfv2_params/depstor_builders/waterbody.py` (`_load_onstream_comids`)
+- Modify: `src/gfv2_params/depstor_builders/__init__.py` (`STEP_ORDER`)
+- Test: `tests/test_waterbody.py`
+
+**Interfaces:**
+- Consumes: `segment_wbody.load_segment_comids`, `ctx.paths["segment_wbody_comids"]`.
+- Produces: `STEP_ORDER` with `segment_wbody` before `waterbody`.
+
+**Why the reorder is safe:** `segment_wbody` needs only `segments_gpkg`, `waterbody_gpkg`
+and `template_path` (for its extent guard) — no upstream builder output, no raster from
+`landmask`. It can legitimately run before `waterbody`.
+
+**Why the conservatism argument still holds.** `_load_onstream_comids`'s docstring says
+the pre-endorheic NHD union is "a conservative superset — it can only make the overlap
+guard fire MORE, never less, which is the safe direction." The segment set is *smaller*
+than the NHD union, so switching sources reduces conservatism **relative to the NHD
+union** — but that is the correct move, because the guard models the on-stream mask
+`regions_touching_mask` actually reads, and that mask is now segment-derived. Using
+NHD's larger set would fire on clumps that are not at risk. And the segment set stays a
+superset of the FINAL mask (`segment − endorheic − Playa/IceMass`), so "fires more than
+strictly needed, never less" is preserved against the mask that matters.
+
+- [ ] **Step 1: Write the failing test**
+
+In `tests/test_waterbody.py`, add:
+
+```python
+def test_burnadd_guard_reads_the_segment_onstream_table(tmp_path):
+    """The BurnAdd overlap guard must model the mask `dprst` actually reads.
+
+    That mask is now segment-derived, so the guard's on-stream set comes from
+    `segment_wbody_comids`, not the retired NHD tables. A guard fed NHD's larger
+    union would fire on clumps that are not at risk.
+    """
+    import pandas as pd
+
+    from gfv2_params.depstor_builders.waterbody import _load_onstream_comids
+    from gfv2_params.depstor_builders.context import BuildContext
+
+    seg_table = tmp_path / "segment_waterbody_comids.parquet"
+    pd.DataFrame({
+        "comid": pd.array([11, 22], dtype="int64"),
+        "n_segments": pd.array([1, 1], dtype="int64"),
+        "overlap_m": pd.array([100.0, 100.0], dtype="float64"),
+    }).to_parquet(seg_table, index=False)
+
+    ctx = BuildContext(
+        fabric="t", template_path=tmp_path / "t.tif", output_dir=tmp_path,
+        hru_gpkg=tmp_path / "h.gpkg", hru_layer="nhru",
+    )
+    ctx.paths["segment_wbody_comids"] = seg_table
+    assert _load_onstream_comids(ctx, logging.getLogger("test")) == {11, 22}
+
+
+def test_burnadd_guard_falls_back_when_segment_table_absent(tmp_path):
+    """No segment table -> None, so the caller uses the BROAD guard rather than skipping.
+
+    `waterbody` must stay runnable standalone (e.g. `--step waterbody` on a fresh
+    output dir), so a missing table degrades to the conservative guard instead of
+    raising. Silently SKIPPING the guard would be the unsafe outcome, and is what
+    returning None prevents.
+    """
+    from gfv2_params.depstor_builders.waterbody import _load_onstream_comids
+    from gfv2_params.depstor_builders.context import BuildContext
+
+    ctx = BuildContext(
+        fabric="t", template_path=tmp_path / "t.tif", output_dir=tmp_path,
+        hru_gpkg=tmp_path / "h.gpkg", hru_layer="nhru",
+    )
+    assert _load_onstream_comids(ctx, logging.getLogger("test")) is None
+
+
+def test_segment_wbody_precedes_waterbody_in_step_order():
+    """waterbody's guard reads segment_wbody's output, so it must run first."""
+    from gfv2_params.depstor_builders import STEP_ORDER
+
+    assert STEP_ORDER.index("segment_wbody") < STEP_ORDER.index("waterbody")
+    assert STEP_ORDER.index("segment_wbody") < STEP_ORDER.index("wbody_connectivity")
+```
+
+Add `import logging` to the top of the file if absent.
+
+- [ ] **Step 2: Run to verify it fails**
+
+```bash
+srun -p cpu -A impd --mem=8G --time=00:15:00 \
+  pixi run -e dev pytest tests/test_waterbody.py -q -k "segment or burnadd_guard"
+```
+
+Expected: the two `_load_onstream_comids` tests fail (it still reads NHD tables), and the
+`STEP_ORDER` test fails (`segment_wbody` currently follows `waterbody`).
+
+- [ ] **Step 3: Repoint `_load_onstream_comids`**
+
+Replace the body of `_load_onstream_comids` in
+`src/gfv2_params/depstor_builders/waterbody.py` so it reads the segment table from
+`ctx.paths`, and rewrite the docstring paragraph that describes the source. Keep the
+`None`-means-use-the-broad-guard contract exactly as it is — only the SOURCE changes:
+
+```python
+    table = ctx.paths.get("segment_wbody_comids")
+    if table is None or not table.exists():
+        return None
+    connected = load_segment_comids(table)
+    logger.info(
+        "  BurnAdd overlap guard: %d on-stream COMIDs loaded from the segment "
+        "classifier (pre-endorheic)", len(connected),
+    )
+    return connected
+```
+
+Update the import at the top of the module: drop `load_connected_comids` if nothing else
+in the file uses it (grep first), and add `from ..segment_wbody import load_segment_comids`.
+
+Update the caller's fallback warning (around line 348) so it names the right cause:
+
+```python
+            logger.warning(
+                "  BurnAdd overlap guard: the segment on-stream table is unavailable "
+                "(the `segment_wbody` step has not run for this fabric) — cannot "
+                "restrict the guard to on-stream neighbours, falling back to the broad "
+                "guard (raises on ANY overlap with an existing waterbody, not just an "
+                "on-stream one)."
+            )
+```
+
+- [ ] **Step 4: Move `segment_wbody` earlier in `STEP_ORDER`**
+
+In `src/gfv2_params/depstor_builders/__init__.py`, `STEP_ORDER` becomes:
+
+```python
+STEP_ORDER = [
+    "landmask",
+    "imperv",
+    "segment_wbody",
+    "waterbody",
+    "endorheic",
+    "wbody_connectivity",
+    "dprst",
+    ...
+```
+
+(only `segment_wbody` moves; everything else keeps its relative order). Update the
+`segment_wbody` line in the output-key doc comment to note it now runs before
+`waterbody` because the BurnAdd guard consumes it.
+
+- [ ] **Step 5: Run the tests**
+
+```bash
+srun -p cpu -A impd --mem=16G --time=00:30:00 \
+  pixi run -e dev pytest tests/test_waterbody.py tests/test_segment_wbody.py \
+    tests/test_wbody_connectivity.py tests/test_expected_outputs.py \
+    tests/test_routing_tiling.py -q
+```
+
+All must pass. `tests/test_routing_tiling.py` asserts a `STEP_ORDER` ordering invariant
+(`vpu_id` before `routing`) — it is included because you touched that list.
+
+- [ ] **Step 6: Lint and commit**
+
+```bash
+pixi run -e dev pre-commit run --files \
+  src/gfv2_params/depstor_builders/waterbody.py \
+  src/gfv2_params/depstor_builders/__init__.py tests/test_waterbody.py
+git add src/gfv2_params/depstor_builders/waterbody.py \
+        src/gfv2_params/depstor_builders/__init__.py tests/test_waterbody.py
+git commit -m "fix(depstor): BurnAdd guard reads the segment on-stream table
+
+The guard models the on-stream mask regions_touching_mask actually reads, and
+that mask is now segment-derived, so feeding it NHD's larger union would fire
+on clumps that are not at risk. Moves segment_wbody ahead of waterbody in
+STEP_ORDER so the guard can see it -- safe because segment_wbody has no
+upstream builder dependency.
+
+The None-means-use-the-broad-guard contract is unchanged; only the source
+moves. The segment set remains a superset of the final mask
+(segment - endorheic - Playa/IceMass), so the guard still fires more than
+strictly needed rather than less."
+```
+
+---
+
+## Task 9: Align the `dprst_depth` chain
+
+**Files:**
+- Modify: `src/gfv2_params/dprst_depth/topo.py` (`load_fabric_dprst_polygons` signature)
+- Modify: `src/gfv2_params/depstor_builders/dprst_depth.py` (`_load_dprst_polygons` + key checks)
+- Modify: `src/gfv2_params/dprst_depth/tiling.py` (the `--plan` path)
+- Modify: `scripts/diagnose/dprst_depth_probe.py`
+- Test: `tests/test_dprst_depth_topo.py`, `tests/test_dprst_depth_tiling.py`, `tests/test_dprst_depth.py`, `tests/test_dprst_depth_probe.py`
+
+**Interfaces:**
+- Consumes: `segment_wbody.load_segment_comids`, `endorheic.load_endorheic_comids`.
+- Produces: `load_fabric_dprst_polygons(waterbody_gpkg, waterbody_layer, *, onstream_comids: set[int], hru_gpkg, hru_layer, logger)` — the two table-path parameters are REPLACED by one resolved set.
+
+**Why a resolved set, not paths:** the builder reads the tables from `ctx.paths`
+(orchestrator-tracked), while the `--plan` path derives them from `config["output_dir"]`.
+Passing a set keeps `topo.py` agnostic about provenance and preserves the "BOTH paths use
+the SAME shared helper so they can never diverge" property its docstring promises.
+
+- [ ] **Step 1: Write the failing tests**
+
+In `tests/test_dprst_depth_topo.py`, add:
+
+```python
+def test_load_fabric_dprst_polygons_takes_a_resolved_onstream_set():
+    """The helper must accept a COMID set, not table paths.
+
+    Provenance differs between the builder (ctx.paths) and the --plan path
+    (config["output_dir"]); a resolved set keeps this helper agnostic so the two
+    paths cannot diverge on the classification.
+    """
+    import inspect
+
+    from gfv2_params.dprst_depth.topo import load_fabric_dprst_polygons
+
+    params = inspect.signature(load_fabric_dprst_polygons).parameters
+    assert "onstream_comids" in params
+    assert "connected_comids_table" not in params
+    assert "flowthrough_comids_table" not in params
+```
+
+Extend the existing polygon-reconstruction test(s) in that file to pass
+`onstream_comids={...}` instead of the two table paths. Read the file first — match its
+existing fixture style rather than inventing a new one.
+
+In `tests/test_dprst_depth.py`, add a test that the builder raises when
+`segment_wbody_comids` is missing from `ctx.paths`, with `segment_wbody` named in the
+message.
+
+In `tests/test_dprst_depth_tiling.py`, update the `--plan` required-keys test: neither
+NHD key may appear in the required list, and the segment/endorheic parquets must be
+resolved from `output_dir`.
+
+- [ ] **Step 2: Run to verify they fail**
+
+```bash
+srun -p cpu -A impd --mem=8G --time=00:20:00 \
+  pixi run -e dev pytest tests/test_dprst_depth_topo.py tests/test_dprst_depth.py \
+    tests/test_dprst_depth_tiling.py -q
+```
+
+- [ ] **Step 3: Change `topo.load_fabric_dprst_polygons`**
+
+Replace the `connected_comids_table` / `flowthrough_comids_table` parameters with a
+keyword-only `onstream_comids: set[int]`, delete the in-function union block (the
+`load_connected_comids` calls and the "connected COMIDs: %d WBAREACOMI + ..." log line),
+and use `onstream_comids` directly where `connected` was used. Log the received count
+instead:
+
+```python
+    logger.info("  %d on-stream COMIDs supplied by the caller", len(onstream_comids))
+```
+
+Rewrite the docstring's step 1 from "Union the connected(WBAREACOMI) COMID set with the
+optional flow-through COMID set" to state that the caller supplies the resolved
+on-stream set (segment classifier minus endorheic), and that this helper applies only
+the FTYPE rules (force-Playa-dprst, exclude Ice Mass) and the fabric clip.
+
+- [ ] **Step 4: Repoint the builder**
+
+In `src/gfv2_params/depstor_builders/dprst_depth.py`:
+
+Delete the four `connected_comids_table` / `flowthrough_comids_table` presence and
+existence checks. Replace with a required-key check plus set assembly:
+
+```python
+    if "segment_wbody_comids" not in ctx.paths:
+        raise KeyError(
+            "dprst_depth step needs `segment_wbody_comids` in the build context, but the "
+            "`segment_wbody` step has not run for this fabric. That table is the on-stream "
+            "source the dprst polygon set is reconstructed against — without it "
+            "dprst_depth would compute depths for a different polygon set than "
+            "dprst_binary.tif. Run the full DAG, or `--from segment_wbody`."
+        )
+    if "endorheic_comids" not in ctx.paths:
+        raise KeyError(
+            "dprst_depth step needs `endorheic_comids` in the build context, but the "
+            "`endorheic` step has not run for this fabric. Without the endorheic "
+            "subtraction the reconstructed dprst polygon set would exclude terminal "
+            "lakes that `dprst_binary.tif` includes — the Great Salt Lake among them."
+        )
+    onstream = load_segment_comids(ctx.require("segment_wbody_comids")) - \
+        load_endorheic_comids(ctx.require("endorheic_comids"))
+```
+
+and pass `onstream_comids=onstream` to `load_fabric_dprst_polygons`. Add the two imports.
+Update the module docstring's input list (line ~16) from
+"`waterbody_gpkg` + `connected_comids_table` (+ optional `flowthrough_comids_table`)"
+to name the segment and endorheic tables instead.
+
+- [ ] **Step 5: Repoint the `--plan` path**
+
+In `src/gfv2_params/dprst_depth/tiling.py`: drop `"connected_comids_table"` from
+`required`, drop both `Path(config[...])` lines and their `checks` entries, and resolve
+the two parquets from the depstor output dir:
+
+```python
+    output_dir = Path(config["output_dir"])
+    segment_table = output_dir / "segment_waterbody_comids.parquet"
+    endorheic_table = output_dir / "endorheic_waterbody_comids.parquet"
+    checks.extend([
+        ("segment_waterbody_comids.parquet", segment_table),
+        ("endorheic_waterbody_comids.parquet", endorheic_table),
+    ])
+```
+
+Add `"output_dir"` to `required`. Then pass
+`onstream_comids=load_segment_comids(segment_table) - load_endorheic_comids(endorheic_table)`.
+The existing `FileNotFoundError` loop over `checks` already gives a clear message per
+missing path — reuse it rather than adding new raises.
+
+- [ ] **Step 6: Repoint the diagnostic**
+
+In `scripts/diagnose/dprst_depth_probe.py`, replace the
+`require_config_key(base, "connected_comids_table", ...)` / `flowthrough` reads with the
+same output-dir-derived segment/endorheic resolution, and pass `onstream_comids`.
+
+- [ ] **Step 7: Run the tests**
+
+```bash
+srun -p cpu -A impd --mem=16G --time=00:40:00 \
+  pixi run -e dev pytest tests/test_dprst_depth_topo.py tests/test_dprst_depth.py \
+    tests/test_dprst_depth_tiling.py tests/test_dprst_depth_probe.py \
+    tests/test_dprst_depth_burn.py tests/test_dprst_depth_compute.py \
+    tests/test_dprst_depth_fill.py -q
+```
+
+All must pass. If a test outside the four you edited breaks, investigate — do not adjust
+the test to fit.
+
+- [ ] **Step 8: Lint and commit**
+
+```bash
+pixi run -e dev pre-commit run --files \
+  src/gfv2_params/dprst_depth/topo.py src/gfv2_params/dprst_depth/tiling.py \
+  src/gfv2_params/depstor_builders/dprst_depth.py \
+  scripts/diagnose/dprst_depth_probe.py tests/test_dprst_depth_topo.py \
+  tests/test_dprst_depth.py tests/test_dprst_depth_tiling.py tests/test_dprst_depth_probe.py
+git add -A src/gfv2_params/dprst_depth/ src/gfv2_params/depstor_builders/dprst_depth.py \
+        scripts/diagnose/dprst_depth_probe.py tests/
+git commit -m "fix(depstor)!: dprst_depth reconstructs dprst against the real classifier
+
+topo.load_fabric_dprst_polygons rebuilt the dprst polygon set from the NHD
+COMID union, so dprst_depth computed depths for a DIFFERENT polygon set than
+dprst_binary.tif -- ~769 waterbodies' divergence in oregon alone. It also
+never subtracted the endorheic set, so the Great Salt Lake was excluded from
+dprst_depth while dprst includes it. Both halves are pre-existing; commenting
+the NHD keys out of the profiles turned a silent wrong answer into a loud
+crash.
+
+The helper now takes a resolved onstream_comids set instead of two table
+paths, so the builder (ctx.paths) and the SLURM --plan path
+(config[output_dir]) cannot diverge on the classification -- the property its
+docstring already promised."
+```
