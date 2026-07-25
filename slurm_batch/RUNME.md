@@ -185,16 +185,22 @@ pixi run --as-is python -m gfv2_params.download.wbd_huc12             # full WBD
 # Stage WESM 1m footprints (one-time, CONUS; dprst_depth's best-available-topo tagging):
 pixi run --as-is python -m gfv2_params.download.wesm
 pixi run --as-is python scripts/clip_shared_to_fabric.py --fabric gfv2   # tiny VRT (login OK)
+```
 
-# OPT-IN COMPARISON ONLY -- NOT needed for a normal depstor run. On-stream now
-# comes from segment_wbody (the model's own nsegment network); these three NHD
-# staging steps only matter if you set connected_comids_table/flowthrough_comids_table
-# in a fabric profile to A/B the segment classifier against NHD flowline topology
-# (see CLAUDE.md's "MODEL's own segment network" bullet):
-#   pixi run --as-is python -m gfv2_params.download.nhd_topology       # must run first -- gates both COMID steps below
-#   sbatch slurm_batch/download_nhd_flowlines.batch                    # WBAREACOMI-connected COMIDs
-#   sbatch slurm_batch/stage_nhd_flowthrough.batch                     # flow-through COMIDs
+> **Optional — NHD segment classifier A/B comparison only.** Not needed for a
+> normal depstor run. On-stream classification comes from `segment_wbody` (the
+> model's own `nsegment` network). These three staging steps are only needed if
+> you set `connected_comids_table`/`flowthrough_comids_table` in a fabric profile
+> to A/B against NHD flowline topology (see `CLAUDE.md` "MODEL's own segment
+> network"):
+>
+> ```bash
+> pixi run --as-is python -m gfv2_params.download.nhd_topology       # must run first
+> sbatch slurm_batch/download_nhd_flowlines.batch                    # WBAREACOMI-connected COMIDs
+> sbatch slurm_batch/stage_nhd_flowthrough.batch                     # flow-through COMIDs
+> ```
 
+```bash
 # 3a. landmask, segment_wbody, and endorheic FIRST, standalone -- each needs
 # only profile-level inputs (segments_gpkg/waterbody_gpkg/template_raster for
 # segment_wbody; waterbody_gpkg/fdr_raster for endorheic), not any other
@@ -442,7 +448,10 @@ separate step — see `scripts/migrate_filled_params.py` (dry-run by default,
 
 ---
 
-### 6 · (optional) Merge NHM defaults
+### 6 · Merge NHM defaults
+
+> **Optional:** only needed if you want to merge NHM default parameter tables
+> into the per-HRU outputs.
 
 ```bash
 sbatch slurm_batch/merge_default_output_params.batch
@@ -468,7 +477,10 @@ sbatch slurm_batch/render_figures.batch     # PNGs -> docs/figures/gfv2/
 
 ---
 
-### 8 · (optional) Snow depletion curves (SNODAS → snarea_curve)
+### 8 · Snow depletion curves (SNODAS → snarea_curve)
+
+> **Optional:** fabric-independent; run after Step 5 if `snarea_curve`,
+> `hru_deplcrv`, and `snarea_thresh` are needed.
 
 ```bash
 # One-command recipe: submits all 4 jobs (Stage 1 array -> merge -> Stage 2
