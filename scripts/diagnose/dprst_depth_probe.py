@@ -14,7 +14,6 @@ import pandas as pd
 from rasterio.warp import transform_bounds
 from scipy import stats as scipy_stats
 
-from gfv2_params.depstor import load_connected_comids
 from gfv2_params.dprst_depth.topo import (
     _interior_mask,
     depth_to_spill,
@@ -108,25 +107,43 @@ def load_conus_dprst(base: dict, logger) -> gpd.GeoDataFrame:
     through `topo.load_fabric_dprst_polygons` instead. Don't assume all
     dprst-polygon reconstruction sites in this repo are unified on the
     fabric-clipped path.
+
+    The on-stream COMID set fed to `dprst_polygons` is the segment
+    classifier's on-stream set (`segment_waterbody_comids.parquet`) MINUS the
+    endorheic set (`endorheic_waterbody_comids.parquet`) — the SAME
+    classification `dprst`/`wbody_connectivity` use to build
+    `dprst_binary.tif`. Both tables live under the depstor output dir
+    (`{data_root}/{fabric}/depstor_rasters`); `base` (from
+    `load_base_config`) only carries the fabric profile, not that step's
+    `output_dir`, so this reconstructs the same path convention
+    `build_depstor_rasters.py`/`viz.py` use for a base-config-only caller.
     """
     from gfv2_params.config import require_config_key
+    from gfv2_params.endorheic import load_endorheic_comids
+    from gfv2_params.segment_wbody import load_segment_comids
 
     waterbody_gpkg = require_config_key(base, "waterbody_gpkg", "dprst_depth_probe")
     waterbody_layer = require_config_key(base, "waterbody_layer", "dprst_depth_probe")
-    connected_table = Path(require_config_key(base, "connected_comids_table", "dprst_depth_probe"))
-    flowthrough_table = base.get("flowthrough_comids_table")
 
-    connected = load_connected_comids(connected_table)
-    n_wbareacomi = len(connected)
-    n_flowthrough = 0
-    if flowthrough_table is not None:
-        flowthrough_table = Path(flowthrough_table)
-        flowthrough = load_connected_comids(flowthrough_table)
-        n_flowthrough = len(flowthrough - connected)
-        connected = connected | flowthrough
+    output_dir = Path(base["data_root"]) / base["fabric"] / "depstor_rasters"
+    segment_table = output_dir / "segment_waterbody_comids.parquet"
+    endorheic_table = output_dir / "endorheic_waterbody_comids.parquet"
+    for label, p in (
+        ("segment_waterbody_comids.parquet", segment_table),
+        ("endorheic_waterbody_comids.parquet", endorheic_table),
+    ):
+        if not p.exists():
+            raise FileNotFoundError(
+                f"dprst_depth_probe: {label} not found on disk: {p}. Run the "
+                f"segment_wbody/endorheic depstor steps first."
+            )
+
+    segment_comids = load_segment_comids(segment_table)
+    endorheic_comids = load_endorheic_comids(endorheic_table)
+    onstream = segment_comids - endorheic_comids
     logger.info(
-        "connected COMIDs: %d WBAREACOMI + %d new flow-through = %d total",
-        n_wbareacomi, n_flowthrough, len(connected),
+        "on-stream COMIDs: %d segment - %d endorheic (subtracted %d) = %d total",
+        len(segment_comids), len(endorheic_comids), len(segment_comids - onstream), len(onstream),
     )
 
     logger.info("Reading waterbodies: %s (layer=%s)", waterbody_gpkg, waterbody_layer)
@@ -137,7 +154,7 @@ def load_conus_dprst(base: dict, logger) -> gpd.GeoDataFrame:
     )
     logger.info("  %d waterbody polygons", len(wb_gdf))
 
-    dprst = dprst_polygons(wb_gdf, connected)
+    dprst = dprst_polygons(wb_gdf, onstream)
     del wb_gdf  # 448k full-CONUS waterbody polygons no longer needed
     gc.collect()
     dprst["area_km2"] = dprst.geometry.area / 1e6

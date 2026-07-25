@@ -42,6 +42,7 @@ from gfv2_params.dprst_depth.aggregate import (
     finalize_depth_params,
 )
 from gfv2_params.dprst_depth.fill import M_TO_IN
+from gfv2_params.dprst_depth.tiling import _load_and_tag_for_plan
 
 _CRS = "EPSG:5070"
 _REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -150,9 +151,33 @@ def _write_waterbody_gpkg(path):
     gdf.to_file(path, layer="waterbodies", driver="GPKG")
 
 
-def _write_connected_parquet(path):
-    # Empty connected set: neither polygon is on-stream -> both stay dprst.
-    pd.DataFrame({"comid": pd.Series([], dtype="int64")}).to_parquet(path)
+def _write_segment_comids(tmp_path, comids, name="segment_waterbody_comids.parquet"):
+    """A `segment_wbody` output table, in the shape `load_segment_comids` reads
+    (mirrors `test_wbody_connectivity.py`'s `_write_segment_table`)."""
+    comids = list(comids)
+    path = tmp_path / name
+    pd.DataFrame({
+        "comid": pd.array(comids, dtype="int64"),
+        "n_segments": pd.array([1] * len(comids), dtype="int64"),
+        "overlap_m": pd.array([100.0] * len(comids), dtype="float64"),
+    }).to_parquet(path, index=False)
+    return path
+
+
+def _write_endorheic_comids(tmp_path, comids=(), name="endorheic_waterbody_comids.parquet"):
+    """An `endorheic` output table, in the shape `load_endorheic_comids` reads.
+    Empty by default -- the no-closed-basin no-op case (mirrors
+    `test_wbody_connectivity.py`'s `_write_empty_endorheic`)."""
+    comids = list(comids)
+    n = len(comids)
+    path = tmp_path / name
+    pd.DataFrame({
+        "comid": pd.array(comids, dtype="int64"),
+        "frac_own": pd.array([1.0] * n, dtype="float64"),
+        "by_terminus": pd.array([True] * n, dtype="bool"),
+        "by_closed_huc12": pd.array([False] * n, dtype="bool"),
+    }).to_parquet(path, index=False)
+    return path
 
 
 def _write_ecoregions_gpkg(path):
@@ -184,6 +209,95 @@ def _write_hru_gpkg(path):
     gdf.to_file(path, layer="nhru", driver="GPKG")
 
 
+def test_load_dprst_polygons_raises_when_segment_wbody_comids_missing(tmp_path):
+    """`_load_dprst_polygons` must raise a KeyError naming `segment_wbody` when
+    `segment_wbody_comids` is absent from `ctx.paths` -- the `segment_wbody`
+    step hasn't run for this fabric, and without its table the reconstructed
+    dprst polygon set would diverge from `dprst_binary.tif`."""
+    waterbody_gpkg = tmp_path / "waterbodies.gpkg"
+    _write_waterbody_gpkg(waterbody_gpkg)
+
+    ctx = BuildContext(
+        fabric="t", template_path=Path("unused"), output_dir=tmp_path,
+        hru_gpkg=tmp_path / "hru.gpkg", hru_layer="nhru",
+        waterbody_gpkg=waterbody_gpkg, waterbody_layer="waterbodies",
+    )
+    # endorheic_comids present -- isolates the missing segment_wbody_comids check.
+    ctx.paths["endorheic_comids"] = _write_endorheic_comids(tmp_path)
+
+    with pytest.raises(KeyError, match="segment_wbody"):
+        dprst_depth._load_dprst_polygons(ctx, _L())
+
+
+def test_load_dprst_polygons_raises_when_endorheic_comids_missing(tmp_path):
+    """Same guard, the other table: without the endorheic subtraction the
+    reconstructed dprst polygon set would exclude terminal lakes (Great Salt
+    Lake among them) that `dprst_binary.tif` includes."""
+    waterbody_gpkg = tmp_path / "waterbodies.gpkg"
+    _write_waterbody_gpkg(waterbody_gpkg)
+
+    ctx = BuildContext(
+        fabric="t", template_path=Path("unused"), output_dir=tmp_path,
+        hru_gpkg=tmp_path / "hru.gpkg", hru_layer="nhru",
+        waterbody_gpkg=waterbody_gpkg, waterbody_layer="waterbodies",
+    )
+    # segment_wbody_comids present -- isolates the missing endorheic_comids check.
+    ctx.paths["segment_wbody_comids"] = _write_segment_comids(tmp_path, [101])
+
+    with pytest.raises(KeyError, match="endorheic"):
+        dprst_depth._load_dprst_polygons(ctx, _L())
+
+
+def test_builder_and_plan_paths_resolve_the_same_onstream_set(tmp_path):
+    """The builder (`_load_dprst_polygons`, reads `ctx.paths`) and the SLURM
+    `--plan` hook (`tiling._load_and_tag_for_plan`, reads `config["output_dir"]`)
+    must reconstruct the IDENTICAL dprst polygon set from the same segment +
+    endorheic tables -- the whole point of `load_fabric_dprst_polygons` taking
+    a resolved `onstream_comids` set instead of two provenance-specific table
+    paths (see `topo.load_fabric_dprst_polygons`'s docstring).
+
+    COMID 101 is on-stream per the segment classifier but ALSO endorheic, so
+    it must survive the subtraction and end up classified dprst (the Great
+    Salt Lake shape); COMID 102 is genuinely on-stream and must stay excluded
+    on BOTH paths.
+    """
+    waterbody_gpkg = tmp_path / "waterbodies.gpkg"
+    _write_waterbody_gpkg(waterbody_gpkg)
+    ecoregions_gpkg = tmp_path / "ecoregions.gpkg"
+    _write_ecoregions_gpkg(ecoregions_gpkg)
+    wesm_index = tmp_path / "wesm.gpkg"
+    _write_wesm_gpkg(wesm_index)
+    hru_gpkg = tmp_path / "hru.gpkg"
+    _write_hru_gpkg(hru_gpkg)
+
+    segment_table = _write_segment_comids(tmp_path, [101, 102])
+    endorheic_table = _write_endorheic_comids(tmp_path, [101])
+    assert segment_table.parent == tmp_path  # both land directly under output_dir
+
+    # --- builder path: ctx.paths (orchestrator-tracked) ---
+    ctx = BuildContext(
+        fabric="t", template_path=Path("unused"), output_dir=tmp_path,
+        hru_gpkg=hru_gpkg, hru_layer="nhru",
+        waterbody_gpkg=waterbody_gpkg, waterbody_layer="waterbodies",
+    )
+    ctx.paths["segment_wbody_comids"] = segment_table
+    ctx.paths["endorheic_comids"] = endorheic_table
+    builder_dprst = dprst_depth._load_dprst_polygons(ctx, _L())
+
+    # --- --plan path: config["output_dir"] (same tmp_path, same filenames) ---
+    config = {
+        "waterbody_gpkg": str(waterbody_gpkg), "waterbody_layer": "waterbodies",
+        "output_dir": str(tmp_path),
+        "wesm_index": str(wesm_index), "ecoregions_gpkg": str(ecoregions_gpkg),
+        "hru_gpkg": str(hru_gpkg), "hru_layer": "nhru",
+    }
+    plan_dprst, _wesm_gdf = _load_and_tag_for_plan(config, _L())
+
+    assert set(builder_dprst["COMID"]) == set(plan_dprst["COMID"])
+    assert set(builder_dprst["COMID"]) == {101}
+    assert 102 not in set(builder_dprst["COMID"])
+
+
 def test_dprst_depth_build_end_to_end(tmp_path, monkeypatch):
     dem_path = tmp_path / "local_dem.tif"
     _write_dem(dem_path)
@@ -201,8 +315,6 @@ def test_dprst_depth_build_end_to_end(tmp_path, monkeypatch):
 
     waterbody_gpkg = tmp_path / "waterbodies.gpkg"
     _write_waterbody_gpkg(waterbody_gpkg)
-    connected_table = tmp_path / "connected.parquet"
-    _write_connected_parquet(connected_table)
     ecoregions_gpkg = tmp_path / "ecoregions.gpkg"
     _write_ecoregions_gpkg(ecoregions_gpkg)
     wesm_index = tmp_path / "wesm.gpkg"
@@ -214,11 +326,15 @@ def test_dprst_depth_build_end_to_end(tmp_path, monkeypatch):
         fabric="t", template_path=tmpl, output_dir=tmp_path,
         hru_gpkg=hru_gpkg, hru_layer="nhru", id_feature="hru_id",
         waterbody_gpkg=waterbody_gpkg, waterbody_layer="waterbodies",
-        connected_comids_table=connected_table,
         wesm_index=wesm_index, ecoregions_gpkg=ecoregions_gpkg,
     )
     ctx.paths["landmask"] = lm
     ctx.paths["dprst"] = dm
+    # Empty on-stream set (segment - endorheic, both empty): neither polygon
+    # is on-stream -> both stay dprst, matching the retired _write_connected_parquet
+    # fixture's "empty connected set" comment.
+    ctx.paths["segment_wbody_comids"] = _write_segment_comids(tmp_path, [])
+    ctx.paths["endorheic_comids"] = _write_endorheic_comids(tmp_path)
 
     step_cfg = {"outputs": {"dprst_depth": "dprst_depth.tif", "op_flow_thres": "op_flow_thres_params.csv"}}
     produced = dprst_depth.build(step_cfg, ctx, _L())

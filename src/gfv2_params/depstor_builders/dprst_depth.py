@@ -6,15 +6,20 @@ Orchestrates Tasks 2-6 exactly as validated by
 reconstruction of the shipped dprst polygon set) and the Phase 0/1 spike
 design doc:
 
-  1. Reconstruct the dprst polygon set directly from `waterbody_gpkg` +
-     the connected(WBAREACOMI) union flow-through COMID tables, CLIPPED to
-     the fabric's HRU extent (`dprst_depth.topo.load_fabric_dprst_polygons`
-     — the same reconstruction as `dprst_depth.topo.dprst_polygons` plus the
-     fabric-bounds clip, `topo._clip_dprst_to_fabric`, so a regional fabric
-     doesn't reprocess the whole CONUS dprst set). This reconstruction step
-     alone does NOT read `dprst_binary.tif` — its data dependency is
-     `waterbody_gpkg` + `connected_comids_table` (+ optional
-     `flowthrough_comids_table`) + `hru_gpkg`, not the raster. STEP_ORDER
+  1. Reconstruct the dprst polygon set directly from `waterbody_gpkg` + the
+     resolved on-stream COMID set, CLIPPED to the fabric's HRU extent
+     (`dprst_depth.topo.load_fabric_dprst_polygons` — the same reconstruction
+     as `dprst_depth.topo.dprst_polygons` plus the fabric-bounds clip,
+     `topo._clip_dprst_to_fabric`, so a regional fabric doesn't reprocess the
+     whole CONUS dprst set). The on-stream set is the segment classifier's
+     on-stream COMIDs (`segment_wbody_comids`, from the `segment_wbody`
+     step) MINUS the endorheic set (`endorheic_comids`, from the
+     `endorheic` step) — the SAME set `wbody_connectivity` uses to build
+     `dprst_binary.tif`, so this reconstruction can't diverge from the
+     shipped raster's classification. This reconstruction step alone does
+     NOT read `dprst_binary.tif` — its data dependency is `waterbody_gpkg` +
+     `segment_wbody_comids` + `endorheic_comids` + `hru_gpkg`, not the
+     raster. STEP_ORDER
      places the overall `dprst_depth` step after `dprst` (for
      classification-consistency and convention) and after `landmask`/
      `hru_id`; since the e596de0 correctness fix, that ordering is also a
@@ -85,6 +90,8 @@ from ..dprst_depth.compute import run_batch
 from ..dprst_depth.fill import fill_flat, fit_ecoregion_models
 from ..dprst_depth.tiling import group_by_tile, guard_oversized_windows
 from ..dprst_depth.topo import load_fabric_dprst_polygons, resolution_class
+from ..endorheic import load_endorheic_comids
+from ..segment_wbody import load_segment_comids
 from .context import BuildContext
 
 # Columns computed by compute.run_batch/compute_polygon that survive the
@@ -112,40 +119,44 @@ def _load_dprst_polygons(ctx: BuildContext, logger) -> gpd.GeoDataFrame:
     fabric clip to `topo.load_fabric_dprst_polygons` — the SAME shared helper
     the SLURM plan hook (`tiling.py::_load_and_tag_for_plan`) calls, so the
     in-process builder path and the array/plan path can't diverge (both
-    reconstruct from the profile's `waterbody_gpkg` layer + the COMID union and clip to
-    the fabric's HRU extent — without that clip a regional fabric would
-    process the whole CONUS dprst set).
+    reconstruct from the profile's `waterbody_gpkg` layer + the resolved
+    on-stream COMID set and clip to the fabric's HRU extent — without that
+    clip a regional fabric would process the whole CONUS dprst set). The
+    on-stream set is the segment classifier's on-stream COMIDs
+    (`segment_wbody_comids`) MINUS the endorheic set (`endorheic_comids`) —
+    the SAME set `wbody_connectivity` unions/subtracts to build
+    `dprst_binary.tif`, so this reconstruction can't diverge from the shipped
+    raster's classification.
     """
     if ctx.waterbody_gpkg is None or ctx.waterbody_layer is None:
         raise KeyError(
             "dprst_depth step needs `waterbody_gpkg`/`waterbody_layer` in the "
             "fabric profile."
         )
-    if ctx.connected_comids_table is None:
-        raise KeyError(
-            "dprst_depth step needs `connected_comids_table` in the fabric "
-            "profile. Stage it first: "
-            "`python -m gfv2_params.download.nhd_flowlines`."
-        )
-    if not ctx.connected_comids_table.exists():
-        raise FileNotFoundError(
-            f"Connected-COMID table not found: {ctx.connected_comids_table}. "
-            f"Run `python -m gfv2_params.download.nhd_flowlines` first."
-        )
     if not ctx.waterbody_gpkg.exists():
         raise FileNotFoundError(f"Waterbody gpkg not found: {ctx.waterbody_gpkg}")
-    if ctx.flowthrough_comids_table is not None and not ctx.flowthrough_comids_table.exists():
-        raise FileNotFoundError(
-            f"Flow-through COMID table not found: {ctx.flowthrough_comids_table}. "
-            f"Run `python -m gfv2_params.download.nhd_flowthrough` first, or "
-            f"remove `flowthrough_comids_table` from the profile."
+    if "segment_wbody_comids" not in ctx.paths:
+        raise KeyError(
+            "dprst_depth step needs `segment_wbody_comids` in the build context, but the "
+            "`segment_wbody` step has not run for this fabric. That table is the on-stream "
+            "source the dprst polygon set is reconstructed against — without it "
+            "dprst_depth would compute depths for a different polygon set than "
+            "dprst_binary.tif. Run the full DAG, or `--from segment_wbody`."
         )
+    if "endorheic_comids" not in ctx.paths:
+        raise KeyError(
+            "dprst_depth step needs `endorheic_comids` in the build context, but the "
+            "`endorheic` step has not run for this fabric. Without the endorheic "
+            "subtraction the reconstructed dprst polygon set would exclude terminal "
+            "lakes that `dprst_binary.tif` includes — the Great Salt Lake among them."
+        )
+    onstream = load_segment_comids(ctx.require("segment_wbody_comids")) - \
+        load_endorheic_comids(ctx.require("endorheic_comids"))
 
     return load_fabric_dprst_polygons(
         waterbody_gpkg=ctx.waterbody_gpkg,
         waterbody_layer=ctx.waterbody_layer,
-        connected_comids_table=ctx.connected_comids_table,
-        flowthrough_comids_table=ctx.flowthrough_comids_table,
+        onstream_comids=onstream,
         hru_gpkg=ctx.hru_gpkg,
         hru_layer=ctx.hru_layer,
         logger=logger,

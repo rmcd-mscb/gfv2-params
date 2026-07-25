@@ -480,19 +480,27 @@ def _load_and_tag_for_plan(config: dict, logger) -> tuple[gpd.GeoDataFrame, gpd.
     builder's `_load_dprst_polygons` calls — so the SLURM plan/array path and
     the in-process builder path can't diverge on the reconstruction OR the
     fabric clip (without the clip a regional fabric like `oregon` would plan
-    the entire CONUS dprst set, not its own). Then applies the same WESM
-    `best_topo` and EPA L3 `ecoregion` tags the builder's `_tag_polygons`
-    does, reading directly off the resolved config dict instead of a
-    `BuildContext` since this runs standalone ahead of any other
-    depstor_rasters step. Every input is a local, pre-staged vector file --
-    no network I/O at all in `--plan` (tile *existence* is a Task 4
-    compute-time concern; `group_by_tile` never probes it).
+    the entire CONUS dprst set, not its own). The on-stream COMID set fed to
+    that helper is the segment classifier's on-stream set
+    (`segment_waterbody_comids.parquet`) MINUS the endorheic set
+    (`endorheic_waterbody_comids.parquet`), resolved from `output_dir` --
+    the SAME two tables `ctx.paths` tracks for the in-process builder, just
+    reached by a different route (this hook runs standalone ahead of any
+    other depstor_rasters step, so it has no `BuildContext`/orchestrator to
+    read `ctx.paths` from). Then applies the same WESM `best_topo` and EPA L3
+    `ecoregion` tags the builder's `_tag_polygons` does, reading directly off
+    the resolved config dict instead of a `BuildContext`. Every input is a
+    local, pre-staged vector file -- no network I/O at all in `--plan` (tile
+    *existence* is a Task 4 compute-time concern; `group_by_tile` never
+    probes it).
     """
     from ..download.epa_ecoregions import ECO_ID_FIELD, ecoregion_of
+    from ..endorheic import load_endorheic_comids
+    from ..segment_wbody import load_segment_comids
     from .topo import load_fabric_dprst_polygons, resolution_class
 
     required = [
-        "waterbody_gpkg", "waterbody_layer", "connected_comids_table",
+        "waterbody_gpkg", "waterbody_layer", "output_dir",
         "wesm_index", "ecoregions_gpkg", "hru_gpkg", "hru_layer",
     ]
     missing = [k for k in required if not config.get(k)]
@@ -502,31 +510,30 @@ def _load_and_tag_for_plan(config: dict, logger) -> tuple[gpd.GeoDataFrame, gpd.
         )
 
     waterbody_gpkg = Path(config["waterbody_gpkg"])
-    connected_comids_table = Path(config["connected_comids_table"])
     wesm_index = Path(config["wesm_index"])
     ecoregions_gpkg = Path(config["ecoregions_gpkg"])
     hru_gpkg = Path(config["hru_gpkg"])
-    flowthrough_comids_table = (
-        Path(config["flowthrough_comids_table"]) if config.get("flowthrough_comids_table") else None
-    )
+    output_dir = Path(config["output_dir"])
+    segment_table = output_dir / "segment_waterbody_comids.parquet"
+    endorheic_table = output_dir / "endorheic_waterbody_comids.parquet"
     checks = [
         ("waterbody_gpkg", waterbody_gpkg),
-        ("connected_comids_table", connected_comids_table),
         ("wesm_index", wesm_index),
         ("ecoregions_gpkg", ecoregions_gpkg),
         ("hru_gpkg", hru_gpkg),
+        ("segment_waterbody_comids.parquet", segment_table),
+        ("endorheic_waterbody_comids.parquet", endorheic_table),
     ]
-    if flowthrough_comids_table is not None:
-        checks.append(("flowthrough_comids_table", flowthrough_comids_table))
     for label, p in checks:
         if not p.exists():
             raise FileNotFoundError(f"--plan: {label} not found on disk: {p}")
 
+    onstream_comids = load_segment_comids(segment_table) - load_endorheic_comids(endorheic_table)
+
     dprst = load_fabric_dprst_polygons(
         waterbody_gpkg=waterbody_gpkg,
         waterbody_layer=config["waterbody_layer"],
-        connected_comids_table=connected_comids_table,
-        flowthrough_comids_table=flowthrough_comids_table,
+        onstream_comids=onstream_comids,
         hru_gpkg=hru_gpkg,
         hru_layer=config["hru_layer"],
         logger=logger,
