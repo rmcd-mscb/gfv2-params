@@ -410,15 +410,14 @@ earlier than a classifier-only change would.
 1. `oregon` first — small, fast, and where the evidence in this spec was measured.
    Expect in-domain on-stream COMIDs 1,550 → 768 and a corresponding rise in
    `dprst_frac`.
-2. **Straight to `gfv2`** — the operator has explicitly waived the usual `gfv2_dev`
-   shakedown for this change (2026-07-24), on the grounds that the full CONUS `gfv2`
-   product has already been built and re-run. This is a deliberate one-off exception to
-   the standing "validate unproven rebuilds on `gfv2_dev`" rule, not a change to it.
-   Expect `segment_wbody` to emit **48,529** COMIDs; a materially different count means
-   an input changed, and is the signal to stop before the cascade.
-   The `gfv2_dev` profile is still corrected in code (it read a different waterbody
-   layer from `gfv2`, which was a latent trap for the next person to use it) — it is
-   simply not exercised as a validation gate here.
+2. `gfv2_dev` for the CONUS shakedown, **not** `gfv2` (standing rule: validate unproven
+   rebuilds on `gfv2_dev`). Waiving it was considered and rejected on 2026-07-24: the
+   change is large enough that the shakedown is cheap insurance against far costlier
+   debugging on the canonical product. `gfv2_dev`'s `waterbody_gpkg` fix is a
+   prerequisite for this step to mean anything — it currently reads a different
+   waterbody layer from `gfv2`, so without that fix the shakedown would not represent
+   `gfv2`. Expect `segment_wbody` to emit **48,529** COMIDs; a materially different
+   count means an input changed, and is the signal to stop before the cascade.
 3. Cascade: `--from waterbody` → `endorheic` → `segment_wbody` → `wbody_connectivity`
    → `dprst` → `routing` → `routing_hru` → `drains_perv` / `drains_imperv`. Then the
    Stage B re-derive of the dprst-derived fractions, the 6 PRMS ratios, and
