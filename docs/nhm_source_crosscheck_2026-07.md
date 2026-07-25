@@ -207,12 +207,19 @@ Everything here matches TM 6-B9 exactly. Recording it so a future reader doesn't
 
 TM 6-B9 and Driscoll 2020 both define on-stream as *NHDPlus waterbodies within or
 intersecting a **60-m buffer** of the GF stream segments.* That is the legacy
-`streambuffer` test this repo retired in PR #139, and replaced with an NHD-topology
-classifier (WBAREACOMI artificial-path topology ∪ geometric flow-through topology,
-both gated on Network-Flowline membership; Playa force-dprst; Ice Mass excluded).
+`streambuffer` test this repo retired in PR #139, first replaced with an
+NHD-topology classifier (WBAREACOMI artificial-path topology ∪ geometric
+flow-through topology, both gated on Network-Flowline membership; Playa
+force-dprst; Ice Mass excluded) — and that NHD-topology classifier has since
+itself been superseded by `segment_wbody`: a waterbody is on-stream iff a
+model `nsegment` intersects it with **positive length**, with the same
+Playa force-dprst / Ice Mass exclusion retained downstream. The NHD-topology
+union is now an opt-in comparison mode only (commented out of every fabric
+profile) — see `CLAUDE.md`'s "MODEL's own segment network" bullet.
 
-**This is a deliberate improvement and should not be retrograded.** The papers
-predate it. Two consequences to keep in mind:
+**This progression is a deliberate improvement and should not be
+retrograded — do not reintroduce the 60-m buffer test.** The papers predate
+all of it. Two consequences to keep in mind:
 
 - Because `carea_max`/`smidx_coef` take `∨ onstream` in their numerators, our
   improved on-stream mask propagates into `carea_max` too. Our `carea_max`
