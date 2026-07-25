@@ -1,4 +1,9 @@
-"""Tests for WBAREACOMI-driven waterbody connectivity (helper + builder)."""
+"""Tests for segment-driven waterbody connectivity (helper + builder).
+
+On-stream status comes from the model's own `nsegment` network
+(`segment_wbody`); NHD flowline topology (WBAREACOMI / flow-through) is
+retained only as an opt-in comparison union, not the production source.
+"""
 
 from __future__ import annotations
 
