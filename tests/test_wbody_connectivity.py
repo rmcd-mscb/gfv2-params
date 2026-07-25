@@ -8,6 +8,7 @@ from pathlib import Path
 import geopandas as gpd
 import numpy as np
 import pandas as pd
+import pytest
 import rasterio
 from rasterio.transform import from_origin
 from shapely.geometry import Polygon
@@ -164,6 +165,7 @@ def test_wbody_connectivity_rasterizes_only_connected(tmp_path):
     )
     ctx.paths["landmask"] = landmask
     ctx.paths["endorheic_comids"] = _write_empty_endorheic(tmp_path)
+    ctx.paths["segment_wbody_comids"] = _write_segment_table(tmp_path, [10])
 
     produced = wbody_connectivity.build(
         _STEP_CFG, ctx, logging.getLogger("test")
@@ -178,22 +180,19 @@ def test_wbody_connectivity_rasterizes_only_connected(tmp_path):
     assert int((arr == 1).sum()) > 0
 
 
-def test_wbody_connectivity_requires_table(tmp_path):
-    import pytest
+def test_wbody_connectivity_no_nhd_table_is_the_default(tmp_path):
+    """`connected_comids_table = None` is now the DEFAULT, not an error.
 
+    Replaces the former test_wbody_connectivity_requires_table: the WBAREACOMI table
+    is an opt-in comparison input, and the required primary source is the segment
+    table (see test_missing_segment_table_raises).
+    """
     from gfv2_params.depstor_builders import wbody_connectivity
-    from gfv2_params.depstor_builders.context import BuildContext
 
-    template = tmp_path / "template.tif"
-    _write_template(template)
-    ctx = BuildContext(
-        fabric="t", template_path=template, output_dir=tmp_path,
-        hru_gpkg=tmp_path / "x.gpkg", hru_layer="waterbodies",
-        waterbody_gpkg=tmp_path / "x.gpkg", waterbody_layer="waterbodies",
-        connected_comids_table=None,
-    )
-    with pytest.raises(KeyError):
-        wbody_connectivity.build(_STEP_CFG, ctx, logging.getLogger("test"))
+    ctx = _segment_ctx(tmp_path, segment_comids=[10])
+    assert ctx.connected_comids_table is None
+    produced = wbody_connectivity.build(_STEP_CFG, ctx, logging.getLogger("test"))
+    assert "connected_wbody" in produced
 
 
 def test_wbody_connectivity_zero_match_raises(tmp_path):
@@ -228,6 +227,7 @@ def test_wbody_connectivity_zero_match_raises(tmp_path):
     )
     ctx.paths["landmask"] = landmask
     ctx.paths["endorheic_comids"] = _write_empty_endorheic(tmp_path)
+    ctx.paths["segment_wbody_comids"] = _write_segment_table(tmp_path, [999])
 
     with pytest.raises(ValueError, match="matched 0 of"):
         wbody_connectivity.build(_STEP_CFG, ctx, logging.getLogger("test"))
@@ -273,6 +273,7 @@ def test_wbody_connectivity_drops_non_land_cells(tmp_path):
     )
     ctx.paths["landmask"] = landmask
     ctx.paths["endorheic_comids"] = _write_empty_endorheic(tmp_path)
+    ctx.paths["segment_wbody_comids"] = _write_segment_table(tmp_path, [10])
 
     produced = wbody_connectivity.build(
         _STEP_CFG, ctx, logging.getLogger("test")
@@ -337,6 +338,7 @@ def test_wbody_connectivity_flowthrough_only_waterbody_burned(tmp_path):
     )
     ctx.paths["landmask"] = landmask
     ctx.paths["endorheic_comids"] = _write_empty_endorheic(tmp_path)
+    ctx.paths["segment_wbody_comids"] = _write_segment_table(tmp_path, [10])
 
     produced = wbody_connectivity.build(
         _STEP_CFG, ctx, logging.getLogger("test")
@@ -367,6 +369,7 @@ def test_wbody_connectivity_flowthrough_missing_raises(tmp_path):
         connected_comids_table=tmp_path / "connected.parquet",
         flowthrough_comids_table=tmp_path / "does_not_exist.parquet",
     )
+    ctx.paths["segment_wbody_comids"] = _write_segment_table(tmp_path, [10])
     with pytest.raises(FileNotFoundError):
         wbody_connectivity.build(_STEP_CFG, ctx, logging.getLogger("test"))
 
@@ -408,6 +411,7 @@ def test_wbody_connectivity_flowthrough_empty_raises(tmp_path):
         flowthrough_comids_table=flowthrough_table,
     )
     ctx.paths["landmask"] = landmask
+    ctx.paths["segment_wbody_comids"] = _write_segment_table(tmp_path, [10])
 
     with pytest.raises(ValueError, match="empty"):
         wbody_connectivity.build(_STEP_CFG, ctx, logging.getLogger("test"))
@@ -466,6 +470,7 @@ def test_wbody_connectivity_force_dprst_ftypes_excluded(tmp_path):
     )
     ctx.paths["landmask"] = landmask
     ctx.paths["endorheic_comids"] = _write_empty_endorheic(tmp_path)
+    ctx.paths["segment_wbody_comids"] = _write_segment_table(tmp_path, [10, 20, 30])
 
     produced = wbody_connectivity.build(
         _STEP_CFG, ctx, logging.getLogger("test")
@@ -522,6 +527,7 @@ def test_wbody_connectivity_missing_ftype_column_raises(tmp_path):
     )
     ctx.paths["landmask"] = landmask
     ctx.paths["endorheic_comids"] = _write_empty_endorheic(tmp_path)
+    ctx.paths["segment_wbody_comids"] = _write_segment_table(tmp_path, [10, 20, 30])
 
     with pytest.raises(KeyError, match="FTYPE"):
         wbody_connectivity.build(
@@ -561,6 +567,7 @@ def test_wbody_connectivity_flowthrough_none_is_silent_noop(tmp_path):
     )
     ctx.paths["landmask"] = landmask
     ctx.paths["endorheic_comids"] = _write_empty_endorheic(tmp_path)
+    ctx.paths["segment_wbody_comids"] = _write_segment_table(tmp_path, [10])
 
     produced = wbody_connectivity.build(
         _STEP_CFG, ctx, logging.getLogger("test")
@@ -624,6 +631,7 @@ def test_endorheic_comid_is_demoted_from_the_connected_raster(tmp_path):
     )
     ctx.paths["landmask"] = landmask
     ctx.paths["endorheic_comids"] = endo
+    ctx.paths["segment_wbody_comids"] = _write_segment_table(tmp_path, [1, 2])
 
     wbody_connectivity.build(
         _STEP_CFG, ctx, logging.getLogger("t")
@@ -674,6 +682,7 @@ def test_endorheic_comids_missing_from_context_raises(tmp_path):
     )
     ctx.paths["landmask"] = landmask
     # NOTE: `endorheic_comids` deliberately NOT set in ctx.paths.
+    ctx.paths["segment_wbody_comids"] = _write_segment_table(tmp_path, [10])
 
     with pytest.raises(KeyError, match="endorheic"):
         wbody_connectivity.build(
@@ -721,6 +730,7 @@ def test_endorheic_comids_empty_table_is_a_legitimate_noop(tmp_path):
     )
     ctx.paths["landmask"] = landmask
     ctx.paths["endorheic_comids"] = endo
+    ctx.paths["segment_wbody_comids"] = _write_segment_table(tmp_path, [10])
 
     produced = wbody_connectivity.build(
         _STEP_CFG, ctx, logging.getLogger("test")
@@ -784,6 +794,7 @@ def test_endorheic_subtraction_never_widens_the_onstream_set(tmp_path):
     )
     ctx.paths["landmask"] = landmask
     ctx.paths["endorheic_comids"] = endo
+    ctx.paths["segment_wbody_comids"] = _write_segment_table(tmp_path, [1])
 
     wbody_connectivity.build(
         _STEP_CFG, ctx, logging.getLogger("t")
@@ -847,6 +858,7 @@ def test_wbody_connectivity_writes_endorheic_wbody_raster(tmp_path):
     )
     ctx.paths["landmask"] = landmask
     ctx.paths["endorheic_comids"] = endo
+    ctx.paths["segment_wbody_comids"] = _write_segment_table(tmp_path, [1, 2])
 
     produced = wbody_connectivity.build(_STEP_CFG, ctx, logging.getLogger("t"))
     assert "endorheic_wbody" in produced
@@ -929,6 +941,7 @@ def _endorheic_ctx(tmp_path, *, endorheic_rows, member=None, **kw):
     )
     ctx.paths["landmask"] = landmask
     ctx.paths["endorheic_comids"] = endo
+    ctx.paths["segment_wbody_comids"] = _write_segment_table(tmp_path, [10, 20])
     return ctx
 
 
@@ -1060,6 +1073,7 @@ def test_endorheic_wbody_raster_is_land_masked(tmp_path):
     )
     ctx.paths["landmask"] = landmask
     ctx.paths["endorheic_comids"] = endo
+    ctx.paths["segment_wbody_comids"] = _write_segment_table(tmp_path, [10])
 
     produced = wbody_connectivity.build(_STEP_CFG, ctx, logging.getLogger("test"))
     with rasterio.open(produced["endorheic_wbody"]) as src:
@@ -1067,3 +1081,163 @@ def test_endorheic_wbody_raster_is_land_masked(tmp_path):
 
     assert (arr[3:5, 0:2] == 1).any(), "endorheic cells on LAND must be burned"
     assert not (arr[5:, :] == 1).any(), "endorheic cells over OCEAN must be masked off"
+
+
+# ---------------------------------------------------------------------------
+# Segment-driven on-stream source (the PRIMARY source; NHD tables are opt-in)
+# ---------------------------------------------------------------------------
+
+
+def _write_segment_table(tmp_path: Path, comids, name="segment_waterbody_comids.parquet") -> Path:
+    """A segment_wbody output table wired into ctx.paths as the primary on-stream source."""
+    path = tmp_path / name
+    pd.DataFrame({
+        "comid": pd.array(list(comids), dtype="int64"),
+        "n_segments": pd.array([1] * len(list(comids)), dtype="int64"),
+        "overlap_m": pd.array([100.0] * len(list(comids)), dtype="float64"),
+    }).to_parquet(path, index=False)
+    return path
+
+
+def _segment_ctx(tmp_path, *, segment_comids, comids=(10, 20), **kw):
+    """Two waterbodies, on-stream purely via the segment table (no NHD tables)."""
+    from shapely.geometry import box
+
+    from gfv2_params.depstor_builders.context import BuildContext
+
+    template = tmp_path / "template.tif"
+    landmask = tmp_path / "land_mask.tif"
+    wb_gpkg = tmp_path / "wb.gpkg"
+    _write_template(template)
+    _write_landmask(landmask)
+    gpd.GeoDataFrame(
+        {"COMID": list(comids), "member_comid": [str(c) for c in comids],
+         "FTYPE": ["LakePond"] * len(comids)},
+        geometry=[box(0, 270, 60, 300), box(240, 0, 300, 30)],
+        crs="EPSG:5070",
+    ).to_file(wb_gpkg, layer="waterbodies", driver="GPKG")
+
+    ctx = BuildContext(
+        fabric="t", template_path=template, output_dir=tmp_path,
+        hru_gpkg=wb_gpkg, hru_layer="waterbodies",
+        waterbody_gpkg=wb_gpkg, waterbody_layer="waterbodies",
+        connected_comids_table=None, flowthrough_comids_table=None, **kw,
+    )
+    ctx.paths["landmask"] = landmask
+    ctx.paths["endorheic_comids"] = _write_empty_endorheic(tmp_path)
+    ctx.paths["segment_wbody_comids"] = _write_segment_table(tmp_path, segment_comids)
+    return ctx
+
+
+def test_segment_table_alone_drives_the_onstream_mask(tmp_path):
+    """Segments-only is the DEFAULT path: no NHD table configured at all."""
+    from gfv2_params.depstor_builders import wbody_connectivity
+
+    ctx = _segment_ctx(tmp_path, segment_comids=[10])
+    produced = wbody_connectivity.build(_STEP_CFG, ctx, logging.getLogger("test"))
+    with rasterio.open(produced["connected_wbody"]) as src:
+        arr = src.read(1)
+    assert arr[0, 0] == 1     # COMID 10: a segment runs through it
+    assert arr[9, 9] != 1     # COMID 20: no segment -> depression storage
+
+
+def test_missing_segment_table_raises(tmp_path):
+    """The segment table is REQUIRED — without it every waterbody becomes dprst."""
+    from gfv2_params.depstor_builders import wbody_connectivity
+
+    ctx = _segment_ctx(tmp_path, segment_comids=[10])
+    del ctx.paths["segment_wbody_comids"]
+    with pytest.raises(KeyError, match="segment_wbody"):
+        wbody_connectivity.build(_STEP_CFG, ctx, logging.getLogger("test"))
+
+
+def test_onstream_floor_is_enforced_at_the_consuming_end(tmp_path):
+    """`--from wbody_connectivity` skips the producer, so the floor must fire here too."""
+    from gfv2_params.depstor_builders import wbody_connectivity
+
+    ctx = _segment_ctx(tmp_path, segment_comids=[10], min_onstream_comids=500)
+    with pytest.raises(ValueError, match="min_onstream_comids"):
+        wbody_connectivity.build(_STEP_CFG, ctx, logging.getLogger("test"))
+
+
+def test_nhd_tables_union_in_and_warn_when_configured(tmp_path, caplog):
+    """The NHD tables are opt-in COMPARISON inputs, and saying so must be loud."""
+    from gfv2_params.depstor_builders import wbody_connectivity
+
+    ctx = _segment_ctx(tmp_path, segment_comids=[10])
+    conn = tmp_path / "connected.parquet"
+    pd.DataFrame({"comid": pd.array([20], dtype="int64")}).to_parquet(conn, index=False)
+    ctx.connected_comids_table = conn
+
+    with caplog.at_level(logging.WARNING):
+        produced = wbody_connectivity.build(_STEP_CFG, ctx, logging.getLogger("test"))
+    with rasterio.open(produced["connected_wbody"]) as src:
+        arr = src.read(1)
+    assert arr[0, 0] == 1   # COMID 10 from the segment table
+    assert arr[9, 9] == 1   # COMID 20 unioned in from WBAREACOMI
+    assert "COMPARISON MODE" in caplog.text
+
+
+def test_endorheic_still_subtracts_from_the_segment_set(tmp_path):
+    """The endorheic guard is unchanged and still demotes a segment-promoted lake.
+
+    This is the Great Salt Lake path under the new source: a model segment runs
+    through it, so the segment classifier promotes it, and the endorheic
+    subtraction is the only thing that takes it back out. It matters MORE here
+    than under NHD, because a segment TERMINATING inside a waterbody now
+    promotes it -- the inflow-AND-outflow discrimination is gone.
+    """
+    from gfv2_params.depstor_builders import wbody_connectivity
+
+    ctx = _segment_ctx(tmp_path, segment_comids=[10, 20])
+    endo = tmp_path / "endorheic_gsl.parquet"
+    pd.DataFrame(
+        {"comid": pd.array([20], dtype="int64"), "frac_own": [1.0],
+         "by_terminus": [True], "by_closed_huc12": [False]}
+    ).to_parquet(endo, index=False)
+    ctx.paths["endorheic_comids"] = endo
+
+    produced = wbody_connectivity.build(_STEP_CFG, ctx, logging.getLogger("test"))
+    with rasterio.open(produced["connected_wbody"]) as src:
+        connected = src.read(1)
+    with rasterio.open(produced["endorheic_wbody"]) as src:
+        endorheic = src.read(1)
+    assert connected[0, 0] == 1              # COMID 10 stays on-stream
+    assert connected[9, 9] != 1              # COMID 20 demoted by endorheic
+    assert (endorheic[9, 8:10] == 1).any()   # ...but still in endorheic_wbody.tif
+
+
+def test_playa_promoted_by_a_segment_is_still_dropped(tmp_path):
+    """The FTYPE guardrail is unchanged and still applies to the segment source."""
+    from shapely.geometry import box
+
+    from gfv2_params.depstor_builders import wbody_connectivity
+    from gfv2_params.depstor_builders.context import BuildContext
+
+    template = tmp_path / "template.tif"
+    landmask = tmp_path / "land_mask.tif"
+    wb_gpkg = tmp_path / "wb.gpkg"
+    _write_template(template)
+    _write_landmask(landmask)
+    gpd.GeoDataFrame(
+        {"COMID": [10, 20], "member_comid": ["10", "20"],
+         "FTYPE": ["LakePond", "Playa"]},
+        geometry=[box(0, 270, 60, 300), box(240, 0, 300, 30)],
+        crs="EPSG:5070",
+    ).to_file(wb_gpkg, layer="waterbodies", driver="GPKG")
+
+    ctx = BuildContext(
+        fabric="t", template_path=template, output_dir=tmp_path,
+        hru_gpkg=wb_gpkg, hru_layer="waterbodies",
+        waterbody_gpkg=wb_gpkg, waterbody_layer="waterbodies",
+        connected_comids_table=None,
+    )
+    ctx.paths["landmask"] = landmask
+    ctx.paths["endorheic_comids"] = _write_empty_endorheic(tmp_path)
+    ctx.paths["segment_wbody_comids"] = _write_segment_table(tmp_path, [10, 20])
+
+    produced = wbody_connectivity.build(_STEP_CFG, ctx, logging.getLogger("test"))
+    with rasterio.open(produced["connected_wbody"]) as src:
+        arr = src.read(1)
+    assert arr[0, 0] == 1   # LakePond on-stream
+    assert arr[9, 9] != 1   # Playa force-dprst despite a segment through it

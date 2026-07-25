@@ -1,9 +1,11 @@
-"""Rasterise the NHD-connected waterbody polygons to a uint8 binary mask.
+"""Rasterise the on-stream waterbody polygons to a uint8 binary mask.
 
-Connectivity comes from NHD's WBAREACOMI artificial-path topology (staged by
-gfv2_params.download.nhd_flowlines into a connected-COMID parquet), joined to the
-waterbody polygons by COMID / member_comid. Replaces the old streambuffer mask as
-the on-stream signal consumed by the dprst step.
+On-stream status comes from the MODEL's own routing network: the COMIDs a fabric
+`nsegment` intersects with positive length, staged by the `segment_wbody` step. NHD
+flowline topology (WBAREACOMI via `nhd_flowlines`, geometric flow-through via
+`nhd_flowthrough`) is retained as an OPT-IN comparison union — absent from every fabric
+profile by default, and logged as a WARNING when present, because it is not the
+production definition of on-stream.
 
 Also rasterises a SECOND mask, `endorheic_wbody.tif`: every waterbody the
 `endorheic` classifier flagged (Signal A and/or B), regardless of whether it is
@@ -33,6 +35,7 @@ from ..endorheic import (
     read_signal_counts,
 )
 from ..nhd_ftypes import NEVER_ONSTREAM_FTYPES
+from ..segment_wbody import check_onstream_floor, load_segment_comids
 from .context import BuildContext
 
 
@@ -99,11 +102,14 @@ def build(step_cfg: dict, ctx: BuildContext, logger) -> dict:
         raise KeyError(
             "wbody_connectivity step needs `waterbody_gpkg` and `waterbody_layer`."
         )
-    if ctx.connected_comids_table is None:
+    if "segment_wbody_comids" not in ctx.paths:
         raise KeyError(
-            "wbody_connectivity step needs `connected_comids_table` in the fabric "
-            "profile. Stage it first: "
-            "`python -m gfv2_params.download.nhd_flowlines`."
+            "wbody_connectivity step needs `segment_wbody_comids` in the build context, "
+            "but the `segment_wbody` step has not run and produced no output on disk for "
+            "this fabric. That table is the PRIMARY on-stream source; without it every "
+            "waterbody in the domain would be classified as depression storage. Run the "
+            "`segment_wbody` step first (e.g. `--from segment_wbody`), or run the full "
+            "DAG so it runs in order."
         )
     outputs = step_cfg["outputs"]
     connected_path = ctx.resolve_output(outputs["connected_wbody"])
@@ -112,9 +118,11 @@ def build(step_cfg: dict, ctx: BuildContext, logger) -> dict:
 
     logger.info("--- wbody_connectivity ---")
     logger.info("  Waterbody gpkg : %s (layer=%s)", ctx.waterbody_gpkg, ctx.waterbody_layer)
-    logger.info("  Connected table: %s", ctx.connected_comids_table)
+    logger.info("  Primary source : segment_wbody_comids (model nsegment intersection)")
+    if ctx.connected_comids_table is not None:
+        logger.info("  [comparison] WBAREACOMI table: %s", ctx.connected_comids_table)
     if ctx.flowthrough_comids_table is not None:
-        logger.info("  Flow-through table: %s", ctx.flowthrough_comids_table)
+        logger.info("  [comparison] flow-through table: %s", ctx.flowthrough_comids_table)
     logger.info("  Output (connected): %s", connected_path)
     logger.info("  Output (endorheic): %s", endorheic_path)
 
@@ -122,16 +130,46 @@ def build(step_cfg: dict, ctx: BuildContext, logger) -> dict:
         logger.info("  Both outputs exist — skipping (pass --force to rebuild)")
         return {"connected_wbody": connected_path, "endorheic_wbody": endorheic_path}
 
-    if not ctx.connected_comids_table.exists():
-        raise FileNotFoundError(
-            f"Connected-COMID table not found: {ctx.connected_comids_table}. "
-            f"Run `python -m gfv2_params.download.nhd_flowlines` first."
-        )
-
     info = RasterInfo.from_path(ctx.template_path)
-    connected = load_connected_comids(ctx.connected_comids_table)
-    n_wbareacomi = len(connected)
+
+    # PRIMARY source: COMIDs a model nsegment intersects with positive length. The
+    # floor is applied HERE as well as in the producing builder — `--from
+    # wbody_connectivity` (the documented cascade-rebuild recipe) leaves `segment_wbody`
+    # out of the run list and `_hydrate_existing_outputs` pulls its table off disk with
+    # no validation at all.
+    segment_table = ctx.require("segment_wbody_comids")
+    connected = load_segment_comids(segment_table)
+    n_segment = len(connected)
+    check_onstream_floor(
+        n_segment, fabric=ctx.fabric, floor=ctx.min_onstream_comids,
+        source=segment_table,
+    )
+
+    # OPT-IN COMPARISON SOURCES. Both NHD tables are absent from every fabric profile by
+    # default (commented out in base_config.yml). Present means an operator deliberately
+    # asked to union NHD's answer back in for an A/B, which is NOT the production
+    # definition of on-stream — so say so loudly rather than let a stale table quietly
+    # become a second definition.
+    n_wbareacomi = 0
     n_flowthrough = 0
+    if ctx.connected_comids_table is not None or ctx.flowthrough_comids_table is not None:
+        logger.warning(
+            "  COMPARISON MODE: an NHD COMID table is configured (connected=%s, "
+            "flowthrough=%s), so NHD flowline topology is being UNIONED into the "
+            "segment-derived on-stream set. This is NOT the production classifier — "
+            "comment those keys out of the fabric profile for a production run.",
+            ctx.connected_comids_table, ctx.flowthrough_comids_table,
+        )
+    if ctx.connected_comids_table is not None:
+        if not ctx.connected_comids_table.exists():
+            raise FileNotFoundError(
+                f"Connected-COMID table not found: {ctx.connected_comids_table}. Run "
+                f"`python -m gfv2_params.download.nhd_flowlines` first, or remove "
+                f"`connected_comids_table` from the profile."
+            )
+        wbareacomi = load_connected_comids(ctx.connected_comids_table)
+        n_wbareacomi = len(wbareacomi - connected)
+        connected = connected | wbareacomi
     if ctx.flowthrough_comids_table is not None:
         if not ctx.flowthrough_comids_table.exists():
             raise FileNotFoundError(
@@ -144,7 +182,7 @@ def build(step_cfg: dict, ctx: BuildContext, logger) -> dict:
         if not flowthrough:
             raise ValueError(
                 "configured flow-through table is empty → it would promote no "
-                "waterbodies and silently degrade to WBAREACOMI-only; re-run "
+                "waterbodies and silently degrade to a no-op; re-run "
                 "nhd_flowthrough or remove the key"
             )
         n_flowthrough = len(flowthrough - connected)
@@ -213,9 +251,9 @@ def build(step_cfg: dict, ctx: BuildContext, logger) -> dict:
         )
 
     logger.info(
-        "  on-stream COMIDs: %d WBAREACOMI + %d new flow-through - %d endorheic "
-        "= %d total",
-        n_wbareacomi, n_flowthrough, n_endorheic, len(connected),
+        "  on-stream COMIDs: %d segment + %d new WBAREACOMI + %d new flow-through "
+        "- %d endorheic = %d total",
+        n_segment, n_wbareacomi, n_flowthrough, n_endorheic, len(connected),
     )
     # NOTE: this re-reads the raw waterbody_gpkg from disk, NOT the merged frame
     # `waterbody.build()` produces (which unions in BurnAddWaterbody rows). So
@@ -265,10 +303,10 @@ def build(step_cfg: dict, ctx: BuildContext, logger) -> dict:
         # loud instead of writing an all-nodata raster the orchestrator accepts.
         raise ValueError(
             f"wbody_connectivity matched 0 of {len(wb_gdf)} waterbodies against "
-            f"{len(connected)} connected COMIDs — this would misclassify every "
-            f"waterbody as depression storage. Check that "
-            f"{ctx.connected_comids_table} is complete and that the "
-            f"COMID/member_comid join keys align with the waterbody layer."
+            f"{len(connected)} on-stream COMIDs — this would misclassify every "
+            f"waterbody as depression storage. Check that {segment_table} is complete "
+            f"(the `segment_wbody` step) and that its COMID/member_comid join keys "
+            f"align with the waterbody layer."
         )
 
     # Read the land mask once and reuse for both rasters below -- each call allocates a
