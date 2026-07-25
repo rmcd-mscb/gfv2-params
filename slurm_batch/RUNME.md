@@ -344,6 +344,14 @@ Migrating an existing product off the old `filled_` layout is a one-time,
 separate step — see `scripts/migrate_filled_params.py` (dry-run by default,
 `--apply` to execute).
 
+> **Run the migration BEFORE the first Step 5 run on an existing product.**
+> If a fabric's `merged/` directory still has any `filled_*.csv` files from
+> before this convention existed, migrate it first. Running Step 5 (which
+> writes the new, correct fill in place) and only migrating afterward would
+> have the migration move the stale `filled_` file over top of today's
+> correct fill — refused loudly, not silently, as of the Finding-1 fix, but
+> the ordering above avoids hitting the refusal at all.
+
 **Wait for:** the job `COMPLETED`.
 
 ---

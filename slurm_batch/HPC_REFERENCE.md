@@ -994,6 +994,13 @@ param that is missing an HRU row entirely but declares no `fill_columns`
 `scripts/migrate_filled_params.py --merged_dir <path>` (dry-run by default,
 `--apply` to execute).
 
+**Run the migration BEFORE the first Stage 7 run on an existing product.** A
+fabric whose `merged/` directory still has `filled_*.csv` leftovers must be
+migrated first. Filling then migrating (the wrong order) would have the
+migration move a stale `filled_` file over today's already-correct canonical
+fill; that is refused loudly rather than silently reverted, but migrating
+first avoids hitting the refusal at all.
+
 ### Stage 8 — Merge NHM defaults
 
 ```bash
