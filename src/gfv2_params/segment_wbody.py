@@ -44,6 +44,25 @@ import shapely
 # dominates, small enough to bound the per-row fallback.
 CHUNK = 5000
 
+# Floor on a "positive length" intersection, in metres. NUMERICAL HYGIENE, not a
+# hydrologic threshold -- do NOT tune it.
+#
+# GEOS resolves a segment grazing a waterbody's boundary to a length that is
+# mathematically zero but numerically a hair above it. Measured on the real oregon
+# fabric: 8 of 770 kept COMIDs came in between 2.3e-10 m and 7.7e-9 m -- boundary
+# touches, which is the EXACT case the positive-length rule exists to exclude (see
+# the module docstring). A bare `> 0` test admits them on float noise alone; after the
+# Playa guardrail, 4 waterbodies / 2.05 km2 were on-stream on the strength of a
+# 0.2-nanometre "traversal".
+#
+# 1 micron is ~11 orders of magnitude below the 30 m grid and below any real NHD
+# vertex spacing, so it can only ever reject artifacts: it encodes no judgment about
+# WHICH grazes matter hydrologically. That judgment WAS considered as a cell-scale
+# threshold (cell_size * sqrt(2) = 42.4 m) and deliberately rejected as a tuning knob
+# this classifier must not have -- this is a different thing, and the distinction is
+# why it is safe.
+MIN_OVERLAP_M = 1e-6
+
 _PAIR_DTYPES = {
     "comid": "int64",
     "wb_index": "int64",
@@ -207,7 +226,7 @@ def segment_waterbody_pairs(seg_gdf, wb_gdf, *, logger=None) -> pd.DataFrame:
             logger.warning(
                 "  dropped %d pair(s) whose waterbody COMID is non-numeric/NaN", n_bad
             )
-    n_zero = int((pairs["overlap_m"] == 0).sum())
+    n_zero = int((pairs["overlap_m"] <= MIN_OVERLAP_M).sum())
     if logger:
         logger.info(
             "  %d of %d pairs are zero-length grazes (%.1f%%) and are dropped",
@@ -217,10 +236,17 @@ def segment_waterbody_pairs(seg_gdf, wb_gdf, *, logger=None) -> pd.DataFrame:
 
 
 def segment_waterbody_comids(pairs: pd.DataFrame) -> set[int]:
-    """COMIDs with at least one POSITIVE-LENGTH pair — the on-stream set."""
+    """COMIDs with at least one POSITIVE-LENGTH pair — the on-stream set.
+
+    "Positive" means above `MIN_OVERLAP_M`, not above 0.0: see that constant for why a
+    bare `> 0` test admits GEOS boundary-touch artifacts.
+    """
     if pairs.empty:
         return set()
-    return {int(c) for c in pairs.loc[pairs["overlap_m"] > 0, "comid"].unique()}
+    return {
+        int(c)
+        for c in pairs.loc[pairs["overlap_m"] > MIN_OVERLAP_M, "comid"].unique()
+    }
 
 
 def segment_comid_frame(pairs: pd.DataFrame) -> pd.DataFrame:
@@ -229,7 +255,7 @@ def segment_comid_frame(pairs: pd.DataFrame) -> pd.DataFrame:
     `n_segments` counts DISTINCT segments, so a multi-part waterbody (several rows
     sharing a COMID) crossed by one segment reports 1, not one per row.
     """
-    positive = pairs[pairs["overlap_m"] > 0] if not pairs.empty else pairs
+    positive = pairs[pairs["overlap_m"] > MIN_OVERLAP_M] if not pairs.empty else pairs
     if positive.empty:
         return pd.DataFrame({k: pd.array([], dtype=v) for k, v in _FRAME_DTYPES.items()})
     return (

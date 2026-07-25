@@ -21,6 +21,7 @@ from rasterio.transform import from_origin
 from shapely.geometry import LineString, Polygon, box
 
 from gfv2_params.segment_wbody import (
+    MIN_OVERLAP_M,
     check_onstream_floor,
     load_segment_comids,
     repair_invalid,
@@ -61,6 +62,36 @@ def test_edge_case_overlap_and_promotion(name, line, expected_len, expected_kept
     assert len(pairs) == 1, f"{name}: sjoin should match the lake"
     assert pairs["overlap_m"].iloc[0] == pytest.approx(expected_len), name
     assert (segment_waterbody_comids(pairs) == {7}) is expected_kept, name
+
+
+def test_sub_epsilon_overlap_is_treated_as_a_graze():
+    """A GEOS boundary-touch artifact must NOT promote the waterbody.
+
+    Found on the real oregon fabric: 8 of 770 kept COMIDs measured between 2.3e-10 m
+    and 7.7e-9 m — grazes GEOS resolved a hair above zero rather than exactly 0.0. A
+    bare `> 0` test admits them, which is the exact case the positive-length rule
+    exists to exclude. This pins `MIN_OVERLAP_M` as the guard against that.
+    """
+    pairs = pd.DataFrame({
+        "comid": pd.array([7, 8], dtype="int64"),
+        "wb_index": pd.array([0, 1], dtype="int64"),
+        "seg_index": pd.array([0, 1], dtype="int64"),
+        # 7: a real sub-nanometre artifact seen in production. 8: a genuine traversal.
+        "overlap_m": pd.array([2.328306e-10, 5.0], dtype="float64"),
+    })
+    assert segment_waterbody_comids(pairs) == {8}
+    frame = segment_comid_frame(pairs)
+    assert frame["comid"].tolist() == [8]
+
+
+def test_epsilon_is_far_below_any_real_geometry():
+    """MIN_OVERLAP_M must only ever reject artifacts, never a real traversal.
+
+    It is numerical hygiene, not a hydrologic threshold — the cell-scale threshold
+    (30 m * sqrt(2) = 42.4 m) was considered for that role and deliberately rejected
+    as a tuning knob. Guards against anyone "tuning" this constant upward into one.
+    """
+    assert MIN_OVERLAP_M < 1e-3, "epsilon must stay orders of magnitude below a grid cell"
 
 
 def test_disjoint_segment_produces_no_pair_and_no_comid():
