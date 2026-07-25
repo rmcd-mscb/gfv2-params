@@ -430,20 +430,40 @@ In `configs/depstor/depstor_params.yml`, add `fill_columns` to each of the 6 rat
 - [ ] **Step 2: Write the failing tests**
 
 ```python
+# The two configs use DIFFERENT top-level list keys — zonal has `params:`, depstor has
+# `fractions:` / `means:` / `ratios:`. Iterating only "params" would silently return []
+# for depstor and make this test pass vacuously.
+_PARAM_LIST_KEYS = ("params", "fractions", "means", "ratios")
+
+
+def _configured_entries(doc):
+    for key in _PARAM_LIST_KEYS:
+        for entry in doc.get(key, []) or []:
+            if isinstance(entry, dict):
+                yield key, entry
+
+
 def test_every_configured_param_declares_fill_columns():
     """A param with no fill_columns cannot be gap-filled — catch it at config time."""
     import yaml
     root = Path(__file__).resolve().parent.parent
+    checked = 0
     for cfg in [root / "configs/zonal/zonal_params.yml",
                 root / "configs/depstor/depstor_params.yml"]:
         doc = yaml.safe_load(cfg.read_text())
-        for entry in doc.get("params", []):
+        for key, entry in _configured_entries(doc):
+            # Only files landing in merged/ are canonical consumer-facing params;
+            # depstor `fractions` go to merged/_intermediates/ and are not filled.
             if not entry.get("merged_file"):
                 continue
+            checked += 1
             assert entry.get("fill_columns"), (
-                f"{entry['name']} in {cfg.name} has a merged_file but no fill_columns, so "
-                f"the gap-fill step would skip it and any missing HRU row would raise."
+                f"{entry['name']} (under '{key}' in {cfg.name}) has a merged_file but no "
+                f"fill_columns, so the gap-fill step would skip it and any missing HRU "
+                f"row would raise."
             )
+    # Guard against the whole test passing because nothing was found.
+    assert checked >= 7, f"expected to check at least 7 merged params, checked {checked}"
 
 
 def test_snarea_curve_does_not_declare_provenance_columns():
@@ -584,10 +604,14 @@ Create `scripts/migrate_filled_params.py`. It must default to `--dry-run` and re
 
 - [ ] **Step 4: Point `viz.py` at the canonical files**
 
-Replace all 7 occurrences of `filled_nhm_ssflux_params.csv` with `nhm_ssflux_params.csv` in `src/gfv2_params/viz.py`. Verify with:
+Replace all 7 occurrences of `filled_nhm_ssflux_params.csv` with `nhm_ssflux_params.csv` in `src/gfv2_params/viz.py`.
+
+**`tests/test_viz.py:186` asserts the old filename** (`assert by_name[n].csv_name == "filled_nhm_ssflux_params.csv"`) and must be updated to `nhm_ssflux_params.csv` in the same commit — otherwise the suite fails and it looks like the repoint broke something.
+
+Verify with:
 
 ```bash
-grep -c "filled_" src/gfv2_params/viz.py   # expect 0
+grep -c "filled_" src/gfv2_params/viz.py tests/test_viz.py   # expect 0 for both
 ```
 
 - [ ] **Step 5: Run the tests**
