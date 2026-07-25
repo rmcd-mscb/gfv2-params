@@ -1,8 +1,10 @@
 """Emit the segment-derived on-stream COMID table consumed by `wbody_connectivity`.
 
-Runs after `endorheic` and before `wbody_connectivity`. Reads the fabric's own
-`segments_gpkg` (the model routing network) and `waterbody_gpkg`, and writes the COMIDs
-a segment intersects with positive length — the PRIMARY on-stream source.
+Runs before `waterbody` (whose BurnAdd overlap guard reads this table) and before
+`wbody_connectivity` (whose primary on-stream source it is). It has no dependency on
+`endorheic` — it reads only the fabric's own `segments_gpkg` (the model routing
+network) and `waterbody_gpkg`, and writes the COMIDs a segment intersects with
+positive length — the PRIMARY on-stream source.
 
 No raster inputs, so this is cheap: measured 42 s wall / 2.0 GB peak RSS at CONUS scale
 (186,709 segments x 448,124 polygons), unlike the ~384 G full-grid `waterbody`/`dprst`

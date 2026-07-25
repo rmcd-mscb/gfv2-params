@@ -355,7 +355,12 @@ def test_builder_registers_in_the_dag():
     from gfv2_params.depstor_builders import BUILDERS, STEP_ORDER
 
     assert "segment_wbody" in BUILDERS
-    assert STEP_ORDER.index("endorheic") < STEP_ORDER.index("segment_wbody")
+    # segment_wbody precedes BOTH its consumers: `waterbody` (whose BurnAdd overlap
+    # guard reads the table) and `wbody_connectivity` (whose primary on-stream source
+    # it is). It deliberately does NOT depend on `endorheic` — an earlier version of
+    # this test asserted endorheic < segment_wbody, which was incidental to the
+    # original step order rather than a real dependency.
+    assert STEP_ORDER.index("segment_wbody") < STEP_ORDER.index("waterbody")
     assert STEP_ORDER.index("segment_wbody") < STEP_ORDER.index("wbody_connectivity")
 
 

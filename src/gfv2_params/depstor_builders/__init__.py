@@ -68,7 +68,10 @@ BUILDERS = {
 #                                                    by_closed_huc12)
 #   segment_wbody      -> "segment_wbody_comids"    segment_waterbody_comids.parquet
 #                                                    (comid, n_segments, overlap_m) —
-#                                                    the PRIMARY on-stream source
+#                                                    the PRIMARY on-stream source. Runs
+#                                                    before `waterbody` (moved ahead of it
+#                                                    in STEP_ORDER) because waterbody's
+#                                                    BurnAdd overlap guard consumes it.
 #   wbody_connectivity -> "connected_wbody",       connected_wbody.tif (uint8, 1=connected),
 #                         "endorheic_wbody"        endorheic_wbody.tif (uint8, 1=endorheic;
 #                                                   full endorheic-classified set, regardless
@@ -90,9 +93,9 @@ BUILDERS = {
 STEP_ORDER = [
     "landmask",
     "imperv",
+    "segment_wbody",
     "waterbody",
     "endorheic",
-    "segment_wbody",
     "wbody_connectivity",
     "dprst",
     "perv",
