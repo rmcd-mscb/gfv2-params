@@ -488,6 +488,14 @@ deliberately left as separate changes:
   hand-made `conus_waterbodies.gpkg`; `#179` repointed the `gfv2` profile to the
   source-derived `nhd_waterbodies.gpkg` (shorelines differ **~2.2% in area**).
   The figures in this deck were rendered on the pre-repoint rasters.
+- **On-stream itself is no longer NHD-derived — superseded by the segment-driven
+  classifier.** This deck's Rules 1-6 describe the WBAREACOMI ∪ flow-through
+  evidence as the production on-stream test; it is now `segment_wbody` (a
+  waterbody is on-stream iff a model `nsegment` intersects it with positive
+  length). NHD flowline topology is retained only as an opt-in comparison union
+  (commented out of every fabric profile). Endorheic (Signal A/B) is unchanged
+  and is still what demotes terminal lakes — see CLAUDE.md's "MODEL's own
+  segment network" bullet and `docs/depstor_classification_reference.md`.
 - **`dprst_depth` (#173) must be regenerated against the grown product** — it is
   masked to `dprst_binary`, which now includes Great Salt Lake and 1,658 new
   polygons.
@@ -507,7 +515,10 @@ deliberately left as separate changes:
 - **The pipeline** is open-source, reproducible, and CONUS-scale: rasterio,
   richdem/WhiteboxTools, an in-process D8 kernel, gdptools, pixi, SLURM.
 - **The classifier is the product.** A waterbody is depression storage *unless
-  proven on-stream* — proof being Network-gated NHD evidence, never distance.
+  proven on-stream* — proof being Network-gated NHD evidence, never distance
+  *(superseded: production proof is now a positive-length model-segment
+  intersection, `segment_wbody`; NHD evidence is opt-in comparison only — see
+  "Status, and open issues" above)*.
 - **The Network gate was necessary but not sufficient.** With it in place, Great
   Salt Lake still came out **0% depression storage**. The fix is **Signal A —
   terminus-inside-itself** — plus exempting endorheic cells from the clump veto:

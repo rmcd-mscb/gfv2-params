@@ -89,23 +89,25 @@ batches it into per-batch geopackages.
 ### 3 · Build depstor rasters
 
 ```bash
-# Stage NHDPlus flowline topology FIRST (one-time, CONUS; required by both NHD
-# COMID steps below for the Network-Flowline gate):
-pixi run --as-is python -m gfv2_params.download.nhd_topology
-# Stage NHD-connected waterbody COMIDs (one-time, CONUS):
-sbatch slurm_batch/download_nhd_flowlines.batch
-# Stage flow-through waterbody COMIDs (one-time, CONUS):
-sbatch slurm_batch/stage_nhd_flowthrough.batch
+# The waterbody source (required): every CONUS fabric's waterbody_gpkg points at
+# this source-derived layer, not the retired hand-made conus_waterbodies.gpkg.
+srun -p cpu -A impd --time=02:00:00 --ntasks=1 --cpus-per-task=4 --mem=48G \
+  pixi run --as-is python -m gfv2_params.download.nhd_waterbodies
 # Endorheic classifier inputs (run once; CONUS-shared, fabric-independent):
 pixi run --as-is python -m gfv2_params.download.nhd_burn_components   # Sink.shp + BurnAddWaterbody
 pixi run --as-is python -m gfv2_params.download.wbd_huc12             # full WBD (type-C closed basins)
-# Source-derived replacement for the hand-made conus_waterbodies.gpkg (staged +
-# verified against it; NOT yet wired into waterbody_gpkg — see ARCHITECTURE.md):
-srun -p cpu -A impd --time=02:00:00 --ntasks=1 --cpus-per-task=4 --mem=48G \
-  pixi run --as-is python -m gfv2_params.download.nhd_waterbodies
 # Stage WESM 1m footprints (one-time, CONUS; dprst_depth's best-available-topo tagging):
 pixi run --as-is python -m gfv2_params.download.wesm
 pixi run --as-is python scripts/clip_shared_to_fabric.py --fabric gfv2   # tiny VRT (login OK)
+
+# OPT-IN COMPARISON ONLY -- NOT needed for a normal depstor run. On-stream now
+# comes from segment_wbody (the model's own nsegment network); these three NHD
+# staging steps only matter if you set connected_comids_table/flowthrough_comids_table
+# in a fabric profile to A/B the segment classifier against NHD flowline topology
+# (see CLAUDE.md's "MODEL's own segment network" bullet):
+#   pixi run --as-is python -m gfv2_params.download.nhd_topology       # must run first -- gates both COMID steps below
+#   sbatch slurm_batch/download_nhd_flowlines.batch                    # WBAREACOMI-connected COMIDs
+#   sbatch slurm_batch/stage_nhd_flowthrough.batch                     # flow-through COMIDs
 
 # 3a. landmask, segment_wbody, and endorheic FIRST, standalone -- each needs
 # only profile-level inputs (segments_gpkg/waterbody_gpkg/template_raster for
@@ -140,18 +142,17 @@ sbatch slurm_batch/build_depstor_rasters.batch
 ```
 
 **What it does:** clips the fabric-bounds FDR template, then builds the full
-depression-storage raster stack. The NHD/WBD staging steps + the WESM stage
-are one-time CONUS runs. `nhd_topology` stages the NHDPlus PlusFlowlineVAA
-network (`flowline_topology.parquet`) and **must run first**: both COMID
-steps gate on-stream promotion on Network-Flowline membership, so a waterbody
-NHD tagged only via Non-Network flowlines (closed-basin lakes) stays
-depression storage (issue #161). `nhd_flowlines` then stages
-WBAREACOMI-connected COMIDs and `nhd_flowthrough` adds flow-through COMIDs
-(both fail loud if the topology parquet is missing) — the two COMID sets are
-unioned by the `wbody_connectivity` builder. If you update either NHD staging
-COMID output after an initial build, rerun the depstor stack from
-`wbody_connectivity`
-(`sbatch slurm_batch/build_depstor_rasters.batch --from wbody_connectivity --force`).
+depression-storage raster stack (`landmask → imperv → segment_wbody →
+waterbody → endorheic → wbody_connectivity → dprst → perv → hru_id →
+dprst_depth → vpu_id → routing → routing_hru → drains_perv → drains_imperv →
+carea_map`). `segment_wbody` is the on-stream classifier's PRIMARY source: a
+waterbody is on-stream iff a model `nsegment` (the fabric's `segments_gpkg`)
+intersects it with positive length — see CLAUDE.md's "MODEL's own segment
+network" bullet. It's cheap (42 s / 2.0 GB at CONUS), so it doesn't affect this
+job's `--mem` sizing. `nhd_waterbodies` and the WESM stage above are the only
+one-time CONUS staging runs a normal build needs; the NHD topology/flowlines/
+flowthrough steps are opt-in comparison only (see the block above) and are
+NOT needed here.
 
 `nhd_burn_components` and `wbd_huc12` stage the (optional) inputs to the
 `endorheic` depstor step — Signal A (FDR terminus-inside-itself) needs no
@@ -161,9 +162,13 @@ pre-made `input/nhd/NHD_sink_points.gpkg` or `input/nhd/closed_huc12.gpkg` —
 both are incomplete extracts (see `HPC_REFERENCE.md`'s "Endorheic classifier
 inputs"). `wbody_connectivity` subtracts the `endorheic` output from the
 on-stream set — a strict subtraction, never additive — so changing the
-waterbody layer or the on-stream COMID set re-runs `waterbody → endorheic →
-wbody_connectivity → dprst → routing → drains_perv/drains_imperv`
-(`--mem=384G` for `waterbody`/`dprst`, `96G` for `routing`).
+`segments_gpkg`/classifier logic alone re-runs `segment_wbody → waterbody →
+endorheic → wbody_connectivity → dprst → routing → drains_perv/drains_imperv`
+(`--from segment_wbody --force`); changing the waterbody layer as well (e.g. a
+new BurnAddWaterbody union, or the layer swap this branch made) starts one
+step later at `waterbody` (`--from waterbody --force`) since `segment_wbody`
+itself is unaffected. Either way `waterbody`/`dprst` are the ~384G full-grid
+steps (`--mem=384G`), `routing` is `96G`.
 
 `wbody_connectivity` also writes a second raster, `endorheic_wbody.tif` (the
 full endorheic-classified set, regardless of on-stream status). `dprst`

@@ -15,10 +15,13 @@ is ``tile()``, which composites four layers for any COMID:
 Three data gotchas this module exists to respect
 ------------------------------------------------
 **Waterbody geometry comes from the profile's ``waterbody_gpkg``**
-(``conus_waterbodies.gpkg``), not ``nhd_waterbodies.parquet``. The rasters were
-built from the former; the latter is staged-from-source but not yet wired into
-the profile. Their shorelines differ (Great Salt Lake: 4,368.9 vs. 4,309.7 km2),
-so drawing from the parquet would misalign outlines with pixels.
+(``nhd_waterbodies.gpkg`` -- every CONUS fabric's profile now points there, not
+the retired hand-made ``conus_waterbodies.gpkg``), read via the OGR gpkg layer,
+not the ``nhd_waterbodies.parquet`` the download step also writes (the parquet
+needs libduckdb, absent from the env). Draw from whichever file the rasters
+were actually built against -- their shorelines differ (Great Salt Lake:
+4,368.9 vs. 4,309.7 km2 between the two waterbody layers), so a mismatch would
+misalign outlines with pixels.
 
 **NHDFlowline field casing varies by VPU** -- VPU 16 ships ``ComID`` /
 ``WBAreaComI``; VPUs 01 and 08 ship ``COMID`` / ``WBAREACOMI``. Everything is
@@ -179,12 +182,14 @@ def paths(fabric: str = "gfv2") -> dict:
 def _fallback_paths() -> dict:
     """The hardcoded path set used only for a genuinely config-less checkout.
 
-    Values are unchanged from the pre-fix fallback -- only when it fires
-    changed (see `paths()`).
+    Values are unchanged from the pre-fix fallback except `waterbody_gpkg`,
+    updated to match the profile's current source (`nhd_waterbodies.gpkg`,
+    not the retired `conus_waterbodies.gpkg`) -- only when this fires changed
+    (see `paths()`).
     """
     data_root = Path(_FALLBACK_DATA_ROOT)
     after = data_root / "gfv2" / "depstor_rasters"
-    waterbody_gpkg = data_root / "input" / "nhd" / "conus_waterbodies.gpkg"
+    waterbody_gpkg = data_root / "input" / "nhd" / "nhd_waterbodies.gpkg"
     waterbody_layer = "waterbodies"
     fdr = data_root / "gfv2" / "shared" / "gfv2_fdr.vrt"
     return _build_paths(data_root, after, waterbody_gpkg, waterbody_layer, fdr)
@@ -1321,32 +1326,39 @@ def fig_pipeline_dag() -> Path:
     """The depstor builder DAG: inputs through PRMS params.
 
     Recovered from the pre-rewrite renderer (``git show
-    f73e74a:scripts/render_depstor_figures.py``, ``fig_pipeline_dag``) and
-    extended with the steps PR #178 introduced: ``nhd_topology`` (highlighted
-    orange -- it MUST precede both ``nhd_flowlines`` and ``nhd_flowthrough``,
-    which fail loud without it), ``endorheic``, and its clump-veto exemption
-    edge straight into ``dprst`` (dashed red, distinct from the solid
-    ``endorheic -> wbody_connectivity`` subtraction edge feeding the union).
+    f73e74a:scripts/render_depstor_figures.py``, ``fig_pipeline_dag``), extended
+    with the steps PR #178 introduced (``endorheic`` and its clump-veto
+    exemption edge straight into ``dprst``, dashed red), and then updated for
+    the segment-driven on-stream classifier: ``segment_wbody`` (highlighted
+    blue -- STEP_ORDER position 3, ahead of ``waterbody``) is now the PRIMARY
+    path into ``wbody_connectivity``. ``nhd_topology``/``nhd_flowlines``/
+    ``nhd_flowthrough`` (muted grey, dashed edges) are de-emphasised as the
+    opt-in comparison branch -- commented out of every fabric profile by
+    default, unioned in only if an operator configures them for an A/B.
     """
     import matplotlib.patches as mpatches
 
     # (label, x, y, half_width)
     nodes = {
         # inputs
-        "nhd": ("NHD\n(waterbodies, flowlines)", 0.06, 0.92, 0.075),
+        "nhd": ("NHD\n(waterbodies)", 0.06, 0.92, 0.075),
+        "segments": ("Segments\n(model nsegment)", 0.06, 1.08, 0.08),
         "wbd": ("WBD\n(closed HUC12s)", 0.06, 0.74, 0.075),
         "fdr": ("FDR\n(fdr.vrt, code 0=sink)", 0.06, 0.56, 0.085),
         "twi": ("TWI", 0.06, 0.38, 0.05),
         "lulc": ("LULC\n(NLCD)", 0.06, 0.20, 0.065),
-        # staging -- nhd_topology MUST precede both COMID steps
-        "topology": ("nhd_topology", 0.25, 0.92, 0.07),
-        "flowlines": ("nhd_flowlines\n(WBAREACOMI)", 0.29, 0.68, 0.085),
-        "flowthrough": ("nhd_flowthrough\n(geometric)", 0.21, 0.44, 0.085),
+        # PRIMARY on-stream classifier -- runs before waterbody (STEP_ORDER
+        # position 3); its BurnAdd overlap guard consumes segment_wbody's output.
+        "segment_wbody": ("segment_wbody\n(PRIMARY on-stream,\npositive-length)", 0.30, 1.08, 0.09),
+        # opt-in comparison staging -- de-emphasised, off the production path
+        "topology": ("nhd_topology\n(opt-in)", 0.24, 0.68, 0.075),
+        "flowlines": ("nhd_flowlines\n(WBAREACOMI, opt-in)", 0.29, 0.50, 0.09),
+        "flowthrough": ("nhd_flowthrough\n(geometric, opt-in)", 0.21, 0.32, 0.09),
         # classification
         "waterbody": ("waterbody", 0.44, 0.92, 0.065),
         "endorheic": ("endorheic\n(Signal A + B)", 0.46, 0.30, 0.08),
-        "wbody_conn": ("wbody_connectivity\n(union − endorheic)", 0.64, 0.56, 0.095),
-        "dprst": ("dprst\n(+ clump-veto exemption)", 0.68, 0.30, 0.095),
+        "wbody_conn": ("wbody_connectivity\n(segment − endorheic\n[+ opt-in NHD])", 0.64, 0.56, 0.1),
+        "dprst": ("dprst\n(+ clump-veto exemption)", 0.68, 0.10, 0.095),
         # routing -> params
         "routing": ("routing\n(D8 + on-stream barrier)", 0.86, 0.56, 0.095),
         "same_hru": ("same_hru_drains", 0.82, 0.38, 0.08),
@@ -1354,11 +1366,15 @@ def fig_pipeline_dag() -> Path:
         "params": ("PRMS params\n(6 spatial)", 1.04, 0.38, 0.07),
     }
 
-    inputs = {"nhd", "wbd", "fdr", "twi", "lulc"}
+    inputs = {"nhd", "segments", "wbd", "fdr", "twi", "lulc"}
+    comparison_only = {"topology", "flowlines", "flowthrough"}
     edges = [
-        ("nhd", "topology"),
+        ("segments", "segment_wbody"),
+        ("nhd", "segment_wbody"),
+        ("segment_wbody", "waterbody"),
         ("nhd", "waterbody"),
         ("fdr", "waterbody"),
+        ("nhd", "topology"),
         ("topology", "flowlines"),
         ("topology", "flowthrough"),
         ("nhd", "flowlines"),
@@ -1367,6 +1383,7 @@ def fig_pipeline_dag() -> Path:
         ("fdr", "endorheic"),
         ("wbd", "endorheic"),
         ("waterbody", "endorheic"),
+        ("segment_wbody", "wbody_conn"),
         ("flowlines", "wbody_conn"),
         ("flowthrough", "wbody_conn"),
         ("endorheic", "wbody_conn"),
@@ -1382,23 +1399,36 @@ def fig_pipeline_dag() -> Path:
         ("dprst", "depth"),
         ("depth", "params"),
     ]
-    # Edges needing a style distinct from the default -- the hard ordering
-    # constraint (topology before either COMID step) and the clump-veto
-    # exemption path (endorheic straight into dprst, NOT via wbody_conn).
+    # Edges needing a style distinct from the default -- the PRIMARY
+    # segment-derived path (bold blue), the de-emphasised opt-in comparison
+    # path (muted grey, dashed), and the clump-veto exemption path (endorheic
+    # straight into dprst, NOT via wbody_conn).
     edge_style = {
-        ("topology", "flowlines"): dict(color="#e6550d", lw=2.2),
-        ("topology", "flowthrough"): dict(color="#e6550d", lw=2.2),
+        ("segments", "segment_wbody"): dict(color="#3182bd", lw=2.4),
+        ("nhd", "segment_wbody"): dict(color="#3182bd", lw=2.4),
+        ("segment_wbody", "waterbody"): dict(color="#3182bd", lw=1.8),
+        ("segment_wbody", "wbody_conn"): dict(color="#3182bd", lw=2.4),
+        ("nhd", "topology"): dict(color="#999999", lw=1.0, linestyle=":"),
+        ("topology", "flowlines"): dict(color="#999999", lw=1.0, linestyle=":"),
+        ("topology", "flowthrough"): dict(color="#999999", lw=1.0, linestyle=":"),
+        ("nhd", "flowlines"): dict(color="#999999", lw=1.0, linestyle=":"),
+        ("nhd", "flowthrough"): dict(color="#999999", lw=1.0, linestyle=":"),
+        ("waterbody", "flowthrough"): dict(color="#999999", lw=1.0, linestyle=":"),
+        ("flowlines", "wbody_conn"): dict(color="#999999", lw=1.0, linestyle=":"),
+        ("flowthrough", "wbody_conn"): dict(color="#999999", lw=1.0, linestyle=":"),
         ("endorheic", "dprst"): dict(
             color="#cc2222", lw=2.0, linestyle="--", connectionstyle="arc3,rad=0.35"
         ),
     }
 
-    fig, ax = plt.subplots(figsize=(15, 7))
+    fig, ax = plt.subplots(figsize=(15, 8))
     for key, (label, x, y, hw) in nodes.items():
-        if key in inputs:
+        if key in comparison_only:
+            color = "#eeeeee"  # muted -- opt-in comparison, off the production path
+        elif key in inputs:
             color = "#deebf7"
-        elif key == "topology":
-            color = "#fdae6b"  # highlighted -- the hard ordering constraint
+        elif key == "segment_wbody":
+            color = "#6baed6"  # highlighted -- the PRIMARY on-stream source
         elif key == "params":
             color = "#31a354"
         else:
@@ -1408,7 +1438,8 @@ def fig_pipeline_dag() -> Path:
             boxstyle="round,pad=0.01", facecolor=color, edgecolor="black",
         )
         ax.add_patch(box)
-        ax.text(x, y, label, ha="center", va="center", fontsize=7.5)
+        text_color = "#888888" if key in comparison_only else "black"
+        ax.text(x, y, label, ha="center", va="center", fontsize=7.5, color=text_color)
 
     for src, dst in edges:
         x0, y0, hw0 = nodes[src][1], nodes[src][2], nodes[src][3]
@@ -1427,18 +1458,23 @@ def fig_pipeline_dag() -> Path:
             arrowprops=dict(arrowstyle="->", connectionstyle=connectionstyle, **style),
         )
 
+    ax.text(
+        0.30, 1.19, "PRIMARY on-stream source\n(positive-length intersection)",
+        ha="center", fontsize=7.5, color="#3182bd", fontweight="bold",
+    )
     ax.annotate(
-        "must precede\nboth COMID steps", xy=(0.25, 0.92), xytext=(0.25, 1.04),
-        ha="center", fontsize=7.5, color="#e6550d", fontweight="bold",
-        arrowprops=dict(arrowstyle="-", color="#e6550d", lw=0.8),
+        "opt-in comparison only\n(commented out of every profile;\nnhd_topology still gates\nboth COMID steps IF enabled)",
+        xy=(0.24, 0.60), xytext=(0.06, 0.02),
+        ha="left", fontsize=7, color="#999999",
+        arrowprops=dict(arrowstyle="-", color="#999999", lw=0.8, linestyle=":"),
     )
     ax.text(
-        0.535, 0.14, "clump-veto exemption\n(endorheic_wbody.tif)",
+        0.44, -0.04, "clump-veto exemption\n(endorheic_wbody.tif)",
         ha="center", fontsize=7.5, color="#cc2222", style="italic",
     )
 
     ax.set_xlim(-0.05, 1.20)
-    ax.set_ylim(0.05, 1.10)
+    ax.set_ylim(-0.12, 1.24)
     ax.axis("off")
 
     out_path = OUT / "pipeline_dag.png"
@@ -1446,13 +1482,15 @@ def fig_pipeline_dag() -> Path:
         fig,
         out_path,
         suptitle=(
-            "Depression-storage builder DAG — nhd_topology (orange) must precede BOTH "
-            "nhd_flowlines and nhd_flowthrough (they fail loud without it); the dashed red "
-            "edge is the endorheic_wbody.tif clump-veto exemption straight into dprst, "
-            "distinct from the endorheic − wbody_connectivity subtraction feeding the "
-            "on-stream union."
+            "Depression-storage builder DAG — segment_wbody (blue) is the PRIMARY "
+            "on-stream source (a model nsegment intersecting a waterbody with positive "
+            "length), consumed by wbody_connectivity, waterbody's BurnAdd guard, and "
+            "dprst_depth. nhd_topology/nhd_flowlines/nhd_flowthrough (grey, dotted) are "
+            "an opt-in comparison union only, off by default. The dashed red edge is the "
+            "endorheic_wbody.tif clump-veto exemption straight into dprst, distinct from "
+            "the endorheic − wbody_connectivity subtraction feeding the on-stream set."
         ),
-        suptitle_fontsize=11,
+        suptitle_fontsize=10.5,
     )
 
 

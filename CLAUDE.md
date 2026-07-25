@@ -61,29 +61,39 @@ per-key required-field table), and how to add a new pipeline step.
 
 These are hard-won; violating them silently corrupts outputs.
 
-- **The dprst/on-stream split is driven by the UNION of two COMID sources.**
-  `wbody_connectivity` unions `connected_waterbody_comids.parquet` (WBAREACOMI
-  artificial-path topology, from `nhd_flowlines`) with
-  `flowthrough_waterbody_comids.parquet` (geometric flow-through topology, from
-  `nhd_flowthrough`). **Both sources gate on-stream promotion on Network-Flowline
-  membership** (a COMID present in `flowline_topology.parquet` / NHDPlus
-  PlusFlowlineVAA): NHD draws Non-Network artificial paths through essentially
-  every closed-basin lake, so the ungated WBAREACOMI set and the ungated
-  geometric T1 test both wrongly promoted genuinely endorheic waterbodies
-  on-stream (issue #161). Because of this gate, **`nhd_topology` must run before
-  both `nhd_flowlines` and `nhd_flowthrough`** (both fail loud if the topology
-  parquet is missing). A waterbody promoted by the flow-through test must have
-  both inflow and outflow — terminal sinks (inflow only), locally-spilling
-  potholes (outflow only), and isolated depressions stay dprst. Playa and Ice
-  Mass FTYPEs are a hard guardrail and are never promoted on-stream regardless
-  — but they are not equivalent: Playa IS depression storage (force-dprst);
-  Ice Mass is NOT depression storage and is excluded from the waterbody
-  classification entirely (its cells fall back to land, perv/imperv via LULC)
-  at the `waterbody` builder, upstream of this union. If
-  `drains_to_dprst` over-extends into humid open-drainage basins, fix the
-  **classifier** (which waterbodies are on-stream) — never add a cap or tuning
-  knob to routing. A cap cannot distinguish a legitimately large endorheic basin
-  from a spurious one and damages the correct cases.
+- **The dprst/on-stream split is driven by the MODEL's own segment network.**
+  `segment_wbody` promotes a waterbody to on-stream iff an `nsegment` from the
+  fabric's `segments_gpkg` intersects it with **positive length** (a zero-length
+  shoreline graze does not count — 3.1% of candidate pairs CONUS-wide). This asks
+  "is it on the network the model routes?", not "is it on the NHD network": NHD's
+  network is far finer, and a waterbody NHD routes but the model does not had no
+  representation at all. `segment_wbody` runs at **STEP_ORDER position 3**, ahead
+  of `waterbody` (whose BurnAdd overlap guard consumes its output) and
+  `wbody_connectivity`, and writes `segment_waterbody_comids.parquet` (registered
+  key `segment_wbody_comids`). Consequences that are deliberate: a segment
+  collinear with a shoreline promotes, and a segment **terminating inside** a
+  waterbody promotes, so NHD's inflow-AND-outflow discrimination is gone and the
+  **endorheic subtraction is what still demotes terminal lakes**.
+  There are **three consumers** of `segment_wbody_comids − endorheic_comids`:
+  `wbody_connectivity` (required primary on-stream source, applying the two
+  unchanged subtractions — `endorheic` and the Playa/Ice Mass guardrail),
+  `waterbody` (the BurnAdd overlap guard — reads the raw pre-endorheic
+  `segment_wbody_comids`, a deliberately conservative superset, since it runs
+  before `endorheic` and can't see the demotion), and `dprst_depth` (reconstructs
+  the dprst polygon set via `topo.load_fabric_dprst_polygons(onstream_comids=...)`
+  on both the in-process and SLURM `--plan` paths, so it computes depths for the
+  SAME polygon set `dprst_binary.tif` uses, not a divergent NHD-derived one).
+  NHD flowline topology (`nhd_flowlines` WBAREACOMI, `nhd_flowthrough`,
+  `nhd_topology`) is retained as an **opt-in comparison union**: the profile keys
+  are commented out on every fabric, and `wbody_connectivity` logs a
+  `COMPARISON MODE` warning if it ever sees one present. Because they are opt-in,
+  the "`nhd_topology` must run before both `nhd_flowlines` and `nhd_flowthrough`"
+  ordering constraint now applies only to that comparison path — a normal depstor
+  run stages none of the three. If `drains_to_dprst` over-extends into humid
+  open-drainage basins, fix the **classifier** (which waterbodies are on-stream)
+  — never add a cap or tuning knob to routing. A cap cannot distinguish a
+  legitimately large endorheic basin from a spurious one and damages the correct
+  cases.
 - **Depstor template/fdr come from a fabric-bounds clip** of `fdr.vrt`
   (`scripts/clip_shared_to_fabric.py`), not CONUS VRTs or per-VPU tiles. The
   clip must come from the hydrology lattice (`fdr.vrt`/`twi.vrt`); `elevation.vrt`
@@ -203,7 +213,9 @@ These are hard-won; violating them silently corrupts outputs.
   applies **per signal**, not just to the union: Signal B dominates by COUNT (543
   of 818 CONUS demotions) while Signal A carries almost all the demoted AREA, so a
   total Signal-A collapse still clears a count-based floor while ~75% of the
-  demoted area silently vanishes.
+  demoted area silently vanishes. The same both-ends contract applies to
+  `min_onstream_comids`, the floor on the `segment_wbody` COMID count (gfv2
+  30000 against 48,529 measured; oregon 500 against 770).
 - **On-stream waterbodies are traversal barriers in `routing`.** Land upslope
   of an on-stream (non-dprst) waterbody is captured by that waterbody's
   stream/lake routing and must not be attributed to a downstream depression —
