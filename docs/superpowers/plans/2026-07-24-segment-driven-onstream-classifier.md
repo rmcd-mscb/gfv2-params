@@ -261,10 +261,14 @@ def test_check_onstream_floor_raises_below_floor(tmp_path):
 
 
 def test_check_onstream_floor_is_opt_in(tmp_path):
+    # `floor=None` is the tjc contract: no floor declared, so ANY count passes.
+    # The assertion is that this does NOT raise — returning normally IS the result.
     check_onstream_floor(0, fabric="tjc", floor=None, source=tmp_path / "t.parquet")
 
 
 def test_check_onstream_floor_passes_at_floor(tmp_path):
+    # Boundary: the floor is inclusive, so n == floor must NOT raise. Guards against
+    # a `<=` typo that would reject a legitimately-at-floor result.
     check_onstream_floor(30000, fabric="gfv2", floor=30000, source=tmp_path / "t.parquet")
 ```
 
@@ -609,18 +613,28 @@ zero-length, which would demote a waterbody to dprst on a geometry error."
 
 - [ ] **Step 1: Write the failing builder tests**
 
-Append to `tests/test_segment_wbody.py`:
+Append to `tests/test_segment_wbody.py`.
+
+**Imports go at the TOP of the file with the existing ones, not in the appended block** —
+ruff's default `E4` set includes E402 (module-level import not at top of file), so
+mid-file imports fail the pre-commit gate the Global Constraints require. Add to the
+existing import block:
+
+```python
+import logging
+from pathlib import Path
+
+import rasterio
+from rasterio.transform import from_origin
+from shapely.geometry import box
+```
+
+Then append the test block itself:
 
 ```python
 # ---------------------------------------------------------------------------
 # Builder tests
 # ---------------------------------------------------------------------------
-
-import logging
-
-import rasterio
-from rasterio.transform import from_origin
-from shapely.geometry import box
 
 _STEP_CFG = {"output": "segment_waterbody_comids.parquet"}
 
