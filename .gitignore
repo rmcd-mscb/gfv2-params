@@ -202,3 +202,4 @@ node_modules/
 docs/presentations/*.html
 docs/presentations/*.pdf
 docs/presentations/*.pptx
+.launch/
