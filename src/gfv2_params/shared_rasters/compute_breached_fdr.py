@@ -38,9 +38,20 @@ from .context import SharedRastersContext
 # over-connection); too large -> over-carves real depressions. Start at 100 and
 # tune on VPU 09 (see #147), then pin the chosen value here with rationale.
 BREACH_DIST = 100
-# --fill: fill any pit not breachable within --dist, so the FDR has no interior
-# 0-sinks the routing kernel cannot leave. Keep True (a breach-or-fill hybrid is
-# still far less over-connecting than a global fill).
+# --fill: fill any pit not breachable within --dist. NOTE the consequence: the
+# resulting FDR has NO interior code-0 cells at all. The original rationale here
+# was that the routing kernel "cannot leave" an interior sink, which is wrong for
+# this pipeline -- `d8_routing` treats code 0 as a TERMINUS by design, and that is
+# the entire basis of the endorheic classifier's Signal A (terminus-inside-itself)
+# and of the classifier/router agreement CLAUDE.md relies on. Interior sinks are
+# the signal here, not a hazard.
+#
+# Keep True anyway, for the narrow purpose this raster serves: it exists only for
+# the #147 A/B on contributing area, where a breach-or-fill hybrid is the right
+# comparator against a global fill. But do NOT reach for `Fdr_breached` as an
+# endorheic-classifier input -- Signal A would find nothing to read and would go
+# silently dark. A depression-PRESERVING variant (fill=False plus a depth/area
+# threshold) would be a different raster with a different purpose.
 BREACH_FILL = True
 
 
