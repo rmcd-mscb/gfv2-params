@@ -1,0 +1,72 @@
+#!/bin/bash
+#SBATCH -p cpu
+#SBATCH -A impd
+#SBATCH --job-name=ab_drains_to_dprst
+#SBATCH --output=logs/job_%j.out
+#SBATCH --error=logs/job_%j.err
+#SBATCH --time=12:00:00
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=8
+#SBATCH --mem=128G
+
+# The #147 A/B: drains_to_dprst on ONE VPU across all three FDR conditionings.
+#
+#   production : the fabric fdr.vrt (NHDPlus FdrFac -- stream-burned + filled
+#                except at NHD's own curated sinks)
+#   fill       : Fdr_hydrodem_<vpu>.tif (richdem fill-all on the same Hydrodem)
+#   breach     : Fdr_breached_<vpu>.tif (WBT BreachDepressionsLeastCost)
+#
+# production-vs-fill isolates the DEM/stream-burn difference; fill-vs-breach
+# isolates the conditioning. This is the investigation #147 asked for and
+# PR #148 built the harness for but never ran.
+#
+# VPU 16 (Great Basin) is the default test domain: it carries the terminal
+# lakes the endorheic classifier exists for AND the closed basins whose
+# contributing areas #147 suspects are inflated, so one VPU exercises both
+# questions. Fdr_breached_16.tif is already staged.
+#
+# Memory: the harness reads the FULL CONUS vpu_id raster (~17 GB as uint8) and
+# warps the FDR onto the whole dprst grid before windowing to the VPU, so this
+# is NOT sized by the VPU -- 128G. Raise if it OOMs.
+#
+# Usage:
+#   sbatch slurm_batch/ab_drains_to_dprst.batch [VPU] [FABRIC]
+# Defaults: VPU=16, FABRIC=gfv2_dev (the Jul-25 segment-driven run).
+
+set -euo pipefail
+
+VPU="${1:-16}"
+FABRIC="${2:-gfv2_dev}"
+
+DATA_ROOT="$(pixi run --as-is data-root | tail -1)"
+DEPSTOR="${DATA_ROOT}/${FABRIC}/depstor_rasters"
+OUT_DIR="${DATA_ROOT}/${FABRIC}/diagnose/ab_drains_to_dprst_vpu${VPU}"
+
+# The fabric-bounds FDR clip doubles as the grid template (see CLAUDE.md:
+# template/fdr both come from the fdr.vrt clip, on the hydrology lattice).
+FDR_VRT="${DATA_ROOT}/gfv2/shared/gfv2_fdr.vrt"
+
+mkdir -p "${OUT_DIR}"
+
+echo "=== A/B drains_to_dprst | VPU ${VPU} | fabric ${FABRIC} ==="
+echo "data_root=${DATA_ROOT}"
+echo "out_dir=${OUT_DIR}"
+
+for VARIANT in production fill breach; do
+  echo ""
+  echo "--- FDR variant: ${VARIANT} ---"
+  pixi run --as-is python scripts/diagnose/ab_drains_to_dprst.py \
+    --vpu "${VPU}" \
+    --fdr "${VARIANT}" \
+    --fdr-vrt "${FDR_VRT}" \
+    --per-vpu-dir "${DATA_ROOT}/shared/per_vpu" \
+    --dprst "${DEPSTOR}/dprst_binary.tif" \
+    --vpu-id "${DEPSTOR}/vpu_id.tif" \
+    --template "${FDR_VRT}" \
+    --labels "${DEPSTOR}/wbody_regions.tif" \
+    --out-dir "${OUT_DIR}"
+done
+
+echo ""
+echo "=== done; outputs in ${OUT_DIR} ==="
+ls -la "${OUT_DIR}"
