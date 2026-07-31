@@ -224,6 +224,26 @@ params:
       - gwflow_coef
       - dprst_seep_rate_open
       - dprst_flow_coef
+    # hru_area is geometry.area from the fabric -- an exact fact already on disk,
+    # not something to interpolate. 77 gfv2 HRUs are absent from this file; without
+    # this declaration their hru_area lands NaN (it is an INPUT column above, so
+    # nobody declares it fillable), and under the retired "fill everything but the
+    # ids" regime it was KNN-copied from a neighbour at up to 11,109x the truth.
+    #
+    # `scale: 1.0` because geometry.area is in the fabric CRS's units, and every
+    # current fabric is a metre-based Albers (gfv2/oregon EPSG:5070, tjc
+    # ESRI:102039) -- so m², matching what zonal_runners/ssflux.py computes for
+    # every other row. A geographic-CRS fabric would yield degrees² with no error.
+    #
+    # NOT the PRMS `hru_area` parameter, which is acres (NHM_description TM6B9).
+    # This column is the raw divisor in the flux normalisation below -- do not
+    # reach for `scale` to "convert" it, or slowcoef_lin/fastcoef_lin/gwflow_coef
+    # all shift. `geometry` is preferred over the fabric's own `areasqkm` column
+    # so the synthesized value comes from the same computation as every other row.
+    fabric_columns:
+      hru_area:
+        source: geometry
+        scale: 1.0
     # Lithology permeability + PRMS flux normalisation (lifted verbatim
     # from configs/zonal/ssflux_param.yml).
     k_perm_min: -16.48

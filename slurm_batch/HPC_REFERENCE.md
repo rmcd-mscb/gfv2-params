@@ -989,7 +989,11 @@ absent rows and NaN cells it filled, and applies two asymmetric guards: a
 column *not* declared in that param's `fill_columns` but carrying NaN cells
 only **warns** (a NaN cell may be a legitimate "not derivable" result); a
 param that is missing an HRU row entirely but declares no `fill_columns`
-**raises** (an absent row admits no such reading). Migrating an existing
+**raises** (an absent row admits no such reading). A param may additionally
+declare `fabric_columns` — values copied verbatim from the fabric gpkg into
+synthesized rows instead of being interpolated (`ssflux`'s `hru_area` is
+`geometry.area`); every failure in that path raises rather than warns, and
+the copy is checked for residual NaN *before* the file is written. Migrating an existing
 `filled_`-prefixed product onto this layout is a separate one-time step —
 `scripts/migrate_filled_params.py --merged_dir <path>` (dry-run by default,
 `--apply` to execute).
