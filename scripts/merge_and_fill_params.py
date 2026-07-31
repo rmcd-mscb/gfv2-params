@@ -12,6 +12,7 @@ import argparse
 import fnmatch
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import NamedTuple
 
 import geopandas as gpd
 import numpy as np
@@ -318,12 +319,38 @@ def _load_yaml_doc(path: Path) -> dict:
     return doc or {}
 
 
+class DeclaredParam(NamedTuple):
+    """One config entry's fill contract: what file, and what may be written into it.
+
+    A NamedTuple rather than a bare tuple because this record has now been widened
+    twice (`fill_columns`, then `fabric_columns`) and each widening has to reach FOUR
+    consumption sites. The `fabric_columns` widening missed one of them --
+    `warn_undeclared_merged_files`, whose `for _, merged_file, _ in ...` then raised
+    `ValueError: too many values to unpack` in all-params mode, the DEFAULT and the
+    only mode `slurm_batch/merge_and_fill_params.batch` runs. It aborted `main()`
+    outside `run_fill_sweep`'s per-param guard, so nothing was filled at all, while
+    the test suite stayed green because its fixtures hand-built the OLD 3-tuple shape
+    -- test and implementation wrong in the same direction, agreeing with each other.
+
+    Attribute access cannot drift that way: a fifth field is invisible to every
+    consumer that does not ask for it.
+    """
+
+    name: str
+    merged_file: str
+    fill_columns: list[str]
+    fabric_columns: dict
+
+
 def iter_declared_params(
     zonal_cfg: dict, depstor_cfg: dict, snarea_cfg: dict | None = None
-) -> list[tuple[str, str, list[str], dict]]:
-    """Every param with a canonical `merged/` output and its declared `fill_columns`.
+) -> list[DeclaredParam]:
+    """Every param with a canonical `merged/` output, and what it declares fillable.
 
-    Returns `(param_name, merged_filename, fill_columns, fabric_columns)` tuples.
+    Returns `DeclaredParam(name, merged_file, fill_columns, fabric_columns)` records.
+    `fill_columns` is KNN-interpolated; `fabric_columns` is copied verbatim from the
+    fabric GDF (see `apply_fabric_columns`). Both default to empty for the params that
+    declare neither -- today every param but `ssflux` has an empty `fabric_columns`.
 
     `zonal_cfg["params"]` and `depstor_cfg["means"]` name their canonical file
     `merged_file`; `depstor_cfg["ratios"]` names it `output_file` instead (see
@@ -345,32 +372,40 @@ def iter_declared_params(
     `source_raster`/`script:` would break that orchestration. Hence the
     separate optional argument rather than a fourth zonal-shaped list.
     """
-    declared: list[tuple[str, str, list[str], dict]] = []
+    def _record(name: str, merged_file: str, entry: dict) -> DeclaredParam:
+        return DeclaredParam(
+            name=name,
+            merged_file=merged_file,
+            fill_columns=list(entry.get("fill_columns") or []),
+            fabric_columns=dict(entry.get("fabric_columns") or {}),
+        )
+
+    declared: list[DeclaredParam] = []
 
     for entry in zonal_cfg.get("params", []) or []:
         merged_file = entry.get("merged_file")
         if merged_file:
-            declared.append((entry["name"], merged_file, list(entry.get("fill_columns") or []), dict(entry.get("fabric_columns") or {})))
+            declared.append(_record(entry["name"], merged_file, entry))
 
     for entry in depstor_cfg.get("means", []) or []:
         merged_file = entry.get("merged_file")
         if merged_file:
-            declared.append((entry["name"], merged_file, list(entry.get("fill_columns") or []), dict(entry.get("fabric_columns") or {})))
+            declared.append(_record(entry["name"], merged_file, entry))
 
     for entry in depstor_cfg.get("ratios", []) or []:
         merged_file = entry.get("output_file")
         if merged_file:
-            declared.append((entry["name"], merged_file, list(entry.get("fill_columns") or []), dict(entry.get("fabric_columns") or {})))
+            declared.append(_record(entry["name"], merged_file, entry))
 
     if snarea_cfg:
         merged_file = snarea_cfg.get("params_file")
         if merged_file:
-            declared.append(("snarea_curve", merged_file, list(snarea_cfg.get("fill_columns") or []), dict(snarea_cfg.get("fabric_columns") or {})))
+            declared.append(_record("snarea_curve", merged_file, snarea_cfg))
 
     return declared
 
 
-def _load_declared_params() -> list[tuple[str, str, list[str]]]:
+def _load_declared_params() -> list[DeclaredParam]:
     """`iter_declared_params` over the real in-repo configs."""
     zonal_cfg = _load_yaml_doc(ZONAL_PARAMS_CONFIG)
     depstor_cfg = _load_yaml_doc(DEPSTOR_PARAMS_CONFIG)
@@ -412,7 +447,10 @@ def warn_undeclared_merged_files(merged_dir: Path, declared_params, logger) -> l
 
     Returns the sorted list of undeclared filenames warned about (for tests).
     """
-    declared_filenames = {merged_file for _, merged_file, _ in declared_params}
+    # Read by NAME, not by position: this set is the only thing this function needs
+    # from the record, and a positional unpack here is exactly what broke when
+    # `fabric_columns` widened it (see DeclaredParam).
+    declared_filenames = {d.merged_file for d in declared_params}
     undeclared = []
     for on_disk in sorted(merged_dir.glob("nhm_*_params.csv")):
         if on_disk.name in declared_filenames:
@@ -460,8 +498,8 @@ def apply_fabric_columns(complete_df, missing_ids, merged_gdf, fabric_columns, i
 
 
 def run_fill_sweep(targets, merged_gdf, expected_max, id_feature, k_neighbors, logger) -> list[str]:
-    """Fill every `(name, param_file, declared_columns)` in `targets`, isolating
-    per-param failures.
+    """Fill every `(name, param_file, fill_columns, fabric_col_spec)` in `targets`,
+    isolating per-param failures.
 
     One param's config drift (e.g. a column rename that resolve_fill_plan can't
     resolve) must not starve every OTHER declared param of its fill -- a
@@ -595,15 +633,14 @@ def main():
                 "Run scripts/derive_zonal_params.py --mode merge --param <name> (or the "
                 "matching depstor/snarea step) for this parameter type first."
             )
-        match = next((d for d in declared_params if d[1] == param_file.name), None)
+        match = next((d for d in declared_params if d.merged_file == param_file.name), None)
         if match is None:
             raise ValueError(
                 f"'{param_file.name}' is not declared in configs/zonal/zonal_params.yml, "
                 "configs/depstor/depstor_params.yml, or configs/snarea/snarea_library.yml "
                 "-- add a `fill_columns` entry for it before filling."
             )
-        name, _merged_file, fill_columns, fabric_col_spec = match
-        targets = [(name, param_file, fill_columns, fabric_col_spec)]
+        targets = [(match.name, param_file, match.fill_columns, match.fabric_columns)]
     else:
         # All-params mode (default): every declared param whose merged file has
         # already been produced for this fabric. A param not yet produced
@@ -611,12 +648,12 @@ def main():
         # WARNING (not silently at INFO -- an operator scanning the log for
         # problems should see it).
         targets = []
-        for name, merged_file, fill_columns, fabric_col_spec in declared_params:
-            pf = merged_dir / merged_file
+        for d in declared_params:
+            pf = merged_dir / d.merged_file
             if not pf.exists():
-                logger.warning("Skipping %s: %s not found (not yet produced for this fabric)", name, pf)
+                logger.warning("Skipping %s: %s not found (not yet produced for this fabric)", d.name, pf)
                 continue
-            targets.append((name, pf, fill_columns, fabric_col_spec))
+            targets.append((d.name, pf, d.fill_columns, d.fabric_columns))
         if not targets:
             logger.warning("No declared params' merged files were found under %s", merged_dir)
             return 0

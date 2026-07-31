@@ -734,7 +734,7 @@ class TestWarnUndeclaredMergedFiles:
 
         with caplog.at_level(logging.WARNING, logger="test_warn_undeclared"):
             undeclared = maf.warn_undeclared_merged_files(
-                tmp_path, [("declared", "nhm_declared_params.csv", ["v"])], logger,
+                tmp_path, [maf.DeclaredParam("declared", "nhm_declared_params.csv", ["v"], {})], logger,
             )
 
         assert undeclared == ["nhm_mystery_params.csv"]
@@ -748,7 +748,7 @@ class TestWarnUndeclaredMergedFiles:
         logger = logging.getLogger("test_warn_undeclared_allow")
 
         undeclared = maf.warn_undeclared_merged_files(
-            tmp_path, [("declared", "nhm_declared_params.csv", ["v"])], logger,
+            tmp_path, [maf.DeclaredParam("declared", "nhm_declared_params.csv", ["v"], {})], logger,
         )
 
         assert undeclared == []
@@ -759,10 +759,31 @@ class TestWarnUndeclaredMergedFiles:
         logger = logging.getLogger("test_warn_undeclared_none")
 
         undeclared = maf.warn_undeclared_merged_files(
-            tmp_path, [("declared", "nhm_declared_params.csv", ["v"])], logger,
+            tmp_path, [maf.DeclaredParam("declared", "nhm_declared_params.csv", ["v"], {})], logger,
         )
 
         assert undeclared == []
+
+    def test_consumes_the_real_producers_output(self, tmp_path):
+        """Feed `_load_declared_params()`'s ACTUAL records in, not a hand-built literal.
+
+        Regression guard for the `fabric_columns` widening: this function read the
+        record positionally (`for _, merged_file, _ in ...`) and raised
+        `ValueError: too many values to unpack` on every all-params run -- the default
+        mode, and the only one slurm_batch/merge_and_fill_params.batch uses. The three
+        tests above did not catch it because they hand-built the record, so they
+        asserted the shape the implementation still expected rather than the shape
+        production actually supplies. A fixture can never catch a producer/consumer
+        contract change; consuming the producer can.
+        """
+        import logging
+        (tmp_path / "nhm_mystery_params.csv").write_text("hru_id,v\n1,1\n")
+
+        undeclared = maf.warn_undeclared_merged_files(
+            tmp_path, maf._load_declared_params(), logging.getLogger("test_warn_undeclared_real"),
+        )
+
+        assert undeclared == ["nhm_mystery_params.csv"]
 
 
 # ---------------------------------------------------------------------------
@@ -772,6 +793,7 @@ class TestWarnUndeclaredMergedFiles:
 class TestApplyFabricColumns:
     def _gdf(self):
         from shapely.geometry import box
+
         # id=1: 100m x 100m = 10000 m²; id=2: 200m x 200m = 40000 m²; id=3: 50m x 50m = 2500 m²
         return gpd.GeoDataFrame(
             {"nat_hru_id": [1, 2, 3]},
