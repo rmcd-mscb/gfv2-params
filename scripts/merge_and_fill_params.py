@@ -10,6 +10,7 @@ profile.
 
 import argparse
 import fnmatch
+import math
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import NamedTuple
@@ -41,11 +42,16 @@ class FillPlan:
 
     `fill_columns` is exactly the caller's declared list, intersected with nothing —
     a declared column missing from the frame is an error, not a silent skip.
-    `fabric_columns` maps CSV column name -> (gdf_column, scale) for columns whose
-    value is a known geometric fact (e.g. hru_area = geometry.area) and must be
-    copied from the fabric GDF rather than KNN-interpolated.
+    `fabric_columns` maps CSV column name -> (source, scale), where `source` is either
+    a fabric-GDF column name or the SENTINEL "geometry", meaning `geometry.area` -- a
+    derived scalar, not a column read. These are columns whose value is an exact known
+    fact (`hru_area`), copied from the fabric rather than KNN-interpolated; see
+    `apply_fabric_columns`. Note the two lists are NOT peers in one respect: a param
+    may declare either, both, or neither, but `fabric_columns` alone only ever writes
+    the rows in `missing_ids`.
     `undeclared_with_nan` is the caller's warning material: columns carrying NaN that
-    nobody declared fillable.
+    nobody declared fillable. A `fabric_columns` column is NOT exempt from it -- see
+    the census comment in `resolve_fill_plan`.
     """
 
     fill_columns: list[str] = field(default_factory=list)
@@ -112,15 +118,60 @@ def resolve_fill_plan(param_df, declared, missing_ids, id_feature, param_name, f
             f"a typo here would silently fill nothing."
         )
 
-    if missing_ids and not declared:
+    # fabric_columns: {csv_col: {source: gdf_col_or_"geometry", scale: float}}
+    # Validated eagerly and completely, like fill_columns above, because the whole
+    # point of the mechanism is that a typo must RAISE rather than silently copy
+    # nothing. Narrower than fill_columns in one respect: there is no alias-list
+    # support here (fill_columns has it for the retention/rad_trncf rename), so a
+    # key is always a plain column name.
+    fabric_columns: dict[str, tuple[str, float]] = {}
+    bad_specs: list[str] = []
+    for csv_col, spec in (fabric_col_spec or {}).items():
+        if csv_col not in param_df.columns:
+            bad_specs.append(f"{csv_col!r} (not a column in the parameter file)")
+            continue
+        if not isinstance(spec, dict):
+            bad_specs.append(
+                f"{csv_col!r} (value must be a mapping with a `source` key, got {spec!r})"
+            )
+            continue
+        if "source" not in spec:
+            bad_specs.append(f"{csv_col!r} (mapping has no `source` key)")
+            continue
+        try:
+            scale = float(spec.get("scale", 1.0))
+        except (TypeError, ValueError):
+            bad_specs.append(f"{csv_col!r} (`scale` is not a number: {spec.get('scale')!r})")
+            continue
+        if not math.isfinite(scale) or scale == 0:
+            bad_specs.append(f"{csv_col!r} (`scale` must be finite and non-zero, got {scale!r})")
+            continue
+        fabric_columns[csv_col] = (spec["source"], scale)
+
+    if bad_specs:
         raise ValueError(
-            f"'{param_name}' is missing {len(missing_ids)} HRU row(s) but declares no "
-            f"`fill_columns`, so nothing would be filled and the gap would persist "
-            f"unnoticed. An absent HRU row is unambiguous -- unlike a NaN cell, it cannot "
-            f"be a legitimate 'not derivable' result. Add `fill_columns` for this param in "
-            f"its config entry."
+            f"`fabric_columns` for '{param_name}' is malformed: {bad_specs}. Expected "
+            f"`{{<csv column>: {{source: <gdf column> | geometry, scale: <number>}}}}`, "
+            f"where the csv column is one of {sorted(param_df.columns)}. Fix the config -- "
+            f"a typo here would silently copy nothing."
         )
 
+    if missing_ids and not declared and not fabric_columns:
+        raise ValueError(
+            f"'{param_name}' is missing {len(missing_ids)} HRU row(s) but declares no "
+            f"`fill_columns` or `fabric_columns`, so nothing would be filled and the gap "
+            f"would persist unnoticed. An absent HRU row is unambiguous -- unlike a NaN "
+            f"cell, it cannot be a legitimate 'not derivable' result. Add `fill_columns` "
+            f"for this param in its config entry."
+        )
+
+    # NaN census. A fabric column is NOT exempted here, even though
+    # `apply_fabric_columns` will write into it: this census runs on the frame as
+    # read from disk, BEFORE the absent rows are appended, so every NaN it counts is
+    # in a row that already exists -- and `apply_fabric_columns` only ever writes
+    # rows in `missing_ids`. Exempting them (as this originally did, on the reasoning
+    # that "it will be filled from the fabric") suppressed the warning for exactly
+    # the population the mechanism cannot reach.
     undeclared_with_nan = {}
     for col in param_df.columns:
         if col in resolved or col in ID_COLUMNS or col == id_feature:
@@ -128,20 +179,6 @@ def resolve_fill_plan(param_df, declared, missing_ids, id_feature, param_name, f
         n_nan = int(param_df[col].isna().sum())
         if n_nan:
             undeclared_with_nan[col] = n_nan
-
-    # fabric_columns: {csv_col: {source: gdf_col_or_"geometry", scale: float}}
-    # Validate that declared fabric columns are present in the frame (same contract
-    # as fill_columns — a typo must raise, not silently copy nothing).
-    fabric_columns: dict[str, tuple[str, float]] = {}
-    for csv_col, spec in (fabric_col_spec or {}).items():
-        if csv_col not in param_df.columns:
-            raise ValueError(
-                f"`fabric_columns` for '{param_name}' names '{csv_col}', which is not "
-                f"present in the parameter file. Fix the config."
-            )
-        fabric_columns[csv_col] = (spec["source"], float(spec.get("scale", 1.0)))
-        # Exclude from undeclared_with_nan — it will be filled from the fabric.
-        undeclared_with_nan.pop(csv_col, None)
 
     return FillPlan(fill_columns=resolved, fabric_columns=fabric_columns, undeclared_with_nan=undeclared_with_nan)
 
@@ -467,32 +504,98 @@ def warn_undeclared_merged_files(merged_dir: Path, declared_params, logger) -> l
     return undeclared
 
 
+def validate_fabric_sources(fabric_columns, merged_gdf, param_name) -> None:
+    """Check every `fabric_columns` source against the fabric GDF, before any fill runs.
+
+    The config half of the spec is validated in `resolve_fill_plan`, which has the
+    parameter frame but not the GDF. This is the other half, and it must be EAGER: a
+    typo'd `source` would otherwise surface only as a bare `KeyError` deep inside
+    `apply_fabric_columns`, and only on the runs where a row happens to be absent --
+    so a broken config could validate as fine indefinitely and fail on the exact day
+    the mechanism was needed.
+    """
+    bad = []
+    for csv_col, (source, _scale) in fabric_columns.items():
+        if source == "geometry":
+            if "geometry" not in merged_gdf.columns:
+                bad.append(f"{csv_col!r} -> geometry (the fabric GDF has no geometry column)")
+        elif source not in merged_gdf.columns:
+            bad.append(f"{csv_col!r} -> {source!r} (not a column in the fabric GDF)")
+    if bad:
+        raise ValueError(
+            f"`fabric_columns` for '{param_name}' names sources absent from the fabric "
+            f"geopackage: {bad}. Available columns: {sorted(merged_gdf.columns)}. Fix the "
+            f"config, or check that the profile's hru_gpkg is the fabric you meant."
+        )
+
+
 def apply_fabric_columns(complete_df, missing_ids, merged_gdf, fabric_columns, id_feature, logger):
     """Copy exact values from the fabric GDF into synthesized rows for declared fabric_columns.
 
+    WHY this exists: `hru_area` is `geometry.area` -- an exact fact already on disk in
+    the fabric gpkg, not a field to interpolate. Under the pre-`resolve_fill_plan`
+    regime ("fill everything except the id columns") the 77 HRUs absent from gfv2's
+    `nhm_ssflux_params.csv` had it KNN(k=1)-copied from whichever neighbour was
+    nearest: median 2.45x the true area, worst case 11,109x. Under the current
+    declaration-driven regime the same rows would instead land silently NaN, because
+    `hru_area` is a litho/slope INPUT that nobody declares fillable and the
+    `undeclared_with_nan` census runs before the absent rows are appended. Neither
+    outcome is acceptable when the true value is one attribute lookup away.
+
     For each column in `fabric_columns`, the value is read from the GDF column named
-    `source` (or computed as `geometry.area` when source == "geometry") and multiplied
-    by `scale`. Only synthesized (previously absent) rows are updated — existing rows
-    already carry the builder-computed value and must not be overwritten.
+    `source` (or computed as `geometry.area` when `source` is the sentinel "geometry")
+    and multiplied by `scale`.
+
+    Only synthesized (previously absent) rows are updated. For `hru_area` the existing
+    rows' values are `geometry.area` too (`zonal_runners/ssflux.py`), so this is about
+    blast radius rather than divergence: a mechanism that rewrote all 361,471 rows
+    from a second code path could silently shift the canonical product, and there is
+    no reason to take that risk to fix 77 rows.
+
+    RAISES rather than warns when an id cannot be served -- absent from the GDF, or
+    absent from the frame. Every other unrecoverable gap in this module raises (see
+    `fill_missing_values_knn`'s null-geometry guard and `resolve_fill_plan`), and the
+    failure mode of a warn-and-continue here is silent: the cell keeps its NaN, the
+    param is written to the canonical file, and `main()` exits 0.
     """
     if not missing_ids:
         return complete_df
 
-    gdf_indexed = merged_gdf.set_index(id_feature)
+    # A duplicated id makes `.loc[id]` return a DataFrame, `row.geometry.area` a
+    # Series, and the assignment below index-align into NaN instead of raising.
+    gdf_indexed = merged_gdf.set_index(id_feature, verify_integrity=True)
     df = complete_df.copy()
 
+    absent_from_gdf = [i for i in missing_ids if i not in gdf_indexed.index]
+    if absent_from_gdf:
+        raise ValueError(
+            f"fabric_columns: {len(absent_from_gdf)} id(s) needing fill are absent from "
+            f"the fabric geopackage (first few: {absent_from_gdf[:10]}). Every id in "
+            f"`missing_ids` comes from range(1, expected_max_hru_id + 1), so this means "
+            f"the fabric gpkg and expected_max_hru_id disagree -- a configuration error, "
+            f"not a data condition."
+        )
+
+    n_written = 0
     for csv_col, (source, scale) in fabric_columns.items():
         for hru_id in missing_ids:
-            if hru_id not in gdf_indexed.index:
-                logger.warning("  fabric_columns: %s not found in GDF for id %s", csv_col, hru_id)
-                continue
             row = gdf_indexed.loc[hru_id]
             val = row.geometry.area if source == "geometry" else row[source]
-            df.loc[df[id_feature] == hru_id, csv_col] = val * scale
+            target = df[id_feature] == hru_id
+            if not target.any():
+                raise ValueError(
+                    f"fabric_columns: id {hru_id} has no row in '{csv_col}'s frame to "
+                    f"write into. Synthesized rows are appended by fill_missing_values_knn "
+                    f"-- this means it did not run, or ran on a different id set."
+                )
+            df.loc[target, csv_col] = val * scale
+            n_written += 1
 
+    # Count actual writes, not len(missing_ids): a summary that reports the ATTEMPT
+    # count reads as an unqualified success in a SLURM log even when nothing landed.
     logger.info(
-        "  fabric_columns: copied exact values for %s into %d synthesized row(s)",
-        list(fabric_columns), len(missing_ids),
+        "  fabric_columns: copied exact values for %s into %d synthesized row(s) (%d cell(s))",
+        list(fabric_columns), len(missing_ids), n_written,
     )
     return df
 
@@ -523,7 +626,12 @@ def run_fill_sweep(targets, merged_gdf, expected_max, id_feature, k_neighbors, l
                     param_file.name, col, n,
                 )
 
-            if not plan.fill_columns:
+            validate_fabric_sources(plan.fabric_columns, merged_gdf, name)
+
+            # `fabric_columns` counts as work: a param declaring ONLY fabric columns
+            # must not be short-circuited here (this guard tested `fill_columns` alone
+            # and made `apply_fabric_columns` below unreachable for such a param).
+            if not plan.fill_columns and not plan.fabric_columns:
                 logger.info("  No fill_columns declared for %s; nothing to fill", name)
                 continue
 
@@ -540,6 +648,21 @@ def run_fill_sweep(targets, merged_gdf, expected_max, id_feature, k_neighbors, l
                 complete_df = apply_fabric_columns(
                     complete_df, missing_ids, merged_gdf, plan.fabric_columns, id_feature, logger,
                 )
+                # Post-condition, checked BEFORE the write: a fabric column that came
+                # out NaN on a synthesized row means the copy silently did not land,
+                # and nothing downstream would ever report it -- `merged/<name>.csv` is
+                # the always-filled canonical artifact consumers read unconditionally.
+                if missing_ids:
+                    synthesized = complete_df[id_feature].isin(missing_ids)
+                    for csv_col in plan.fabric_columns:
+                        n_nan = int(complete_df.loc[synthesized, csv_col].isna().sum())
+                        if n_nan:
+                            raise ValueError(
+                                f"fabric_columns: '{csv_col}' is still NaN on {n_nan} of "
+                                f"{len(missing_ids)} synthesized row(s) after copying from "
+                                f"the fabric. Refusing to write a canonical parameter file "
+                                f"with an unfilled gap."
+                            )
 
             write_filled_in_place(complete_df, param_file, param_df, dtypes, logger=logger)
 

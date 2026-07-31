@@ -806,9 +806,14 @@ class TestApplyFabricColumns:
         logger = logging.getLogger("test")
         gdf = self._gdf()
         # id=3 is synthesized (absent from original CSV)
+        # Existing rows carry SENTINEL values that deliberately differ from their own
+        # geometry.area (10000.0 / 40000.0). If this test used the true areas, an
+        # implementation that overwrote every row -- not just the synthesized ones --
+        # would still pass, and the "must not be overwritten" assertion below would
+        # prove nothing.
         df = pd.DataFrame({
             "nat_hru_id": [1, 2, 3],
-            "hru_area": [10000.0, 40000.0, 99999.0],  # id=3 has wrong neighbour value
+            "hru_area": [111.0, 222.0, 99999.0],  # id=3 has wrong neighbour value
             "my_param": [1.0, 2.0, 3.0],
         })
         result = maf.apply_fabric_columns(
@@ -817,9 +822,9 @@ class TestApplyFabricColumns:
             id_feature="nat_hru_id", logger=logger,
         )
         assert result.loc[result["nat_hru_id"] == 3, "hru_area"].iloc[0] == pytest.approx(2500.0)
-        # Existing rows must not be touched
-        assert result.loc[result["nat_hru_id"] == 1, "hru_area"].iloc[0] == pytest.approx(10000.0)
-        assert result.loc[result["nat_hru_id"] == 2, "hru_area"].iloc[0] == pytest.approx(40000.0)
+        # Existing rows must not be touched -- these are the sentinels, not the areas.
+        assert result.loc[result["nat_hru_id"] == 1, "hru_area"].iloc[0] == pytest.approx(111.0)
+        assert result.loc[result["nat_hru_id"] == 2, "hru_area"].iloc[0] == pytest.approx(222.0)
 
     def test_scale_applied(self):
         import logging
@@ -850,9 +855,157 @@ class TestApplyFabricColumns:
         )
         pd.testing.assert_frame_equal(result, df)
 
+    def test_plain_gdf_column_source(self):
+        """The non-`geometry` half of the mechanism: copy an ordinary GDF attribute."""
+        import logging
+        gdf = self._gdf()
+        gdf["areasqkm"] = [0.01, 0.04, 0.0025]
+        df = pd.DataFrame({"nat_hru_id": [1, 2, 3], "hru_area": [111.0, 222.0, np.nan]})
+        result = maf.apply_fabric_columns(
+            df, missing_ids=[3], merged_gdf=gdf,
+            fabric_columns={"hru_area": ("areasqkm", 1e6)},  # km² -> m²
+            id_feature="nat_hru_id", logger=logging.getLogger("test"),
+        )
+        assert result.loc[result["nat_hru_id"] == 3, "hru_area"].iloc[0] == pytest.approx(2500.0)
+
+    def test_id_absent_from_gdf_raises(self):
+        """An id needing fill that the fabric cannot serve must RAISE, not warn.
+
+        Warn-and-continue left the cell NaN, wrote it into the canonical parameter
+        file, and exited 0 -- while the summary log still reported a successful copy.
+        Every other unrecoverable gap in this module raises.
+        """
+        import logging
+        df = pd.DataFrame({"nat_hru_id": [1, 2, 4], "hru_area": [111.0, 222.0, np.nan]})
+        with pytest.raises(ValueError, match="absent from the fabric geopackage"):
+            maf.apply_fabric_columns(
+                df, missing_ids=[4], merged_gdf=self._gdf(),  # gdf has ids 1,2,3 only
+                fabric_columns={"hru_area": ("geometry", 1.0)},
+                id_feature="nat_hru_id", logger=logging.getLogger("test"),
+            )
+
+    def test_duplicate_id_in_gdf_raises(self):
+        """A duplicated id would make `.loc` return a frame and the write align to NaN."""
+        import logging
+
+        from shapely.geometry import box
+        gdf = gpd.GeoDataFrame(
+            {"nat_hru_id": [1, 2, 2]},
+            geometry=[box(0, 0, 10, 10), box(0, 0, 20, 20), box(0, 0, 30, 30)],
+            crs="EPSG:5070",
+        )
+        df = pd.DataFrame({"nat_hru_id": [1, 2], "hru_area": [111.0, np.nan]})
+        with pytest.raises(ValueError):
+            maf.apply_fabric_columns(
+                df, missing_ids=[2], merged_gdf=gdf,
+                fabric_columns={"hru_area": ("geometry", 1.0)},
+                id_feature="nat_hru_id", logger=logging.getLogger("test"),
+            )
+
+
+class TestFabricColumnsThroughRunFillSweep:
+    """The seam: `fabric_columns` must actually reach the on-disk file.
+
+    Every other fabric_columns test calls `apply_fabric_columns` directly. Without
+    this one, `run_fill_sweep`'s call to it could be deleted outright and the suite
+    would stay green -- the feature would ship inert. This also pins the ORDERING
+    (synthesize rows via KNN -> copy fabric values -> write), which nothing else does.
+    """
+
+    def _gdf(self):
+        from shapely.geometry import box
+        return gpd.GeoDataFrame(
+            {"hru_id": [1, 2, 3]},
+            geometry=[box(0, 0, 100, 100), box(0, 0, 200, 200), box(0, 0, 50, 50)],
+            crs="EPSG:5070",
+        )
+
+    def test_fabric_column_lands_in_the_written_file(self, tmp_path):
+        import logging
+        pf = tmp_path / "nhm_ssflux_params.csv"
+        # id=3 absent entirely; the existing rows' hru_area are sentinels, not areas.
+        pd.DataFrame({"hru_id": [1, 2], "hru_area": [111.0, 222.0], "v": [10.0, 20.0]}).to_csv(pf, index=False)
+
+        failed = maf.run_fill_sweep(
+            [("ssflux", pf, ["v"], {"hru_area": {"source": "geometry", "scale": 1.0}})],
+            self._gdf(), expected_max=3, id_feature="hru_id", k_neighbors=1,
+            logger=logging.getLogger("test"),
+        )
+
+        assert failed == []
+        result = pd.read_csv(pf).set_index("hru_id")
+        assert result.loc[3, "hru_area"] == pytest.approx(2500.0)  # exact, not a neighbour's
+        # KNN still filled the ordinary column: id=3's centroid (25,25) is nearest
+        # id=1's (50,50), not id=2's (100,100).
+        assert result.loc[3, "v"] == pytest.approx(10.0)
+        assert result.loc[1, "hru_area"] == pytest.approx(111.0)   # existing rows untouched
+        assert result.loc[2, "hru_area"] == pytest.approx(222.0)
+
+    def test_fabric_columns_only_param_is_not_short_circuited(self, tmp_path):
+        """A param declaring ONLY fabric_columns must still fill.
+
+        `if not plan.fill_columns: continue` made `apply_fabric_columns` unreachable
+        for such a param -- silently doing nothing rather than failing.
+        """
+        import logging
+        pf = tmp_path / "nhm_areaonly_params.csv"
+        pd.DataFrame({"hru_id": [1, 2], "hru_area": [111.0, 222.0]}).to_csv(pf, index=False)
+
+        failed = maf.run_fill_sweep(
+            [("areaonly", pf, [], {"hru_area": {"source": "geometry", "scale": 1.0}})],
+            self._gdf(), expected_max=3, id_feature="hru_id", k_neighbors=1,
+            logger=logging.getLogger("test"),
+        )
+
+        assert failed == []
+        result = pd.read_csv(pf).set_index("hru_id")
+        assert result.index.tolist() == [1, 2, 3]
+        assert result.loc[3, "hru_area"] == pytest.approx(2500.0)
+
+    def test_bad_source_fails_this_param_without_writing(self, tmp_path):
+        """A `source` absent from the GDF is caught eagerly, before any write."""
+        import logging
+        pf = tmp_path / "nhm_ssflux_params.csv"
+        pd.DataFrame({"hru_id": [1, 2], "hru_area": [111.0, 222.0], "v": [10.0, 20.0]}).to_csv(pf, index=False)
+
+        failed = maf.run_fill_sweep(
+            [("ssflux", pf, ["v"], {"hru_area": {"source": "typo_col", "scale": 1.0}})],
+            self._gdf(), expected_max=3, id_feature="hru_id", k_neighbors=1,
+            logger=logging.getLogger("test"),
+        )
+
+        assert failed == ["ssflux"]
+        # The canonical file is untouched -- no partial write.
+        assert pd.read_csv(pf)["hru_id"].tolist() == [1, 2]
+
 
 def test_resolve_fill_plan_parses_fabric_columns():
-    """fabric_columns spec is parsed into (source, scale) tuples and excluded from undeclared_with_nan."""
+    """fabric_columns spec is parsed into (source, scale) tuples."""
+    frame = pd.DataFrame({
+        "nat_hru_id": [1, 2],
+        "hru_area": [10000.0, 20000.0],
+        "my_param": [1.0, 2.0],
+    })
+    plan = maf.resolve_fill_plan(
+        frame,
+        declared=["my_param"],
+        missing_ids=set(),
+        id_feature="nat_hru_id",
+        param_name="ssflux",
+        fabric_col_spec={"hru_area": {"source": "geometry", "scale": 1.0}},
+    )
+    assert plan.fabric_columns == {"hru_area": ("geometry", 1.0)}
+
+
+def test_resolve_fill_plan_still_warns_on_nan_in_an_existing_fabric_column_row():
+    """A NaN in an EXISTING row of a fabric column must still be surfaced.
+
+    `apply_fabric_columns` writes only rows in `missing_ids`, and this census runs on
+    the pre-append frame -- so every NaN it sees is in a row the mechanism structurally
+    cannot reach. Exempting fabric columns from the census (the original behaviour,
+    justified as "it will be filled from the fabric") suppressed the module's only
+    warning for a gap that nothing fills.
+    """
     frame = pd.DataFrame({
         "nat_hru_id": [1, 2],
         "hru_area": [10000.0, np.nan],
@@ -866,9 +1019,39 @@ def test_resolve_fill_plan_parses_fabric_columns():
         param_name="ssflux",
         fabric_col_spec={"hru_area": {"source": "geometry", "scale": 1.0}},
     )
+    assert plan.undeclared_with_nan == {"hru_area": 1}
+
+
+def test_resolve_fill_plan_defaults_scale_to_one():
+    frame = pd.DataFrame({"nat_hru_id": [1], "hru_area": [10000.0], "my_param": [1.0]})
+    plan = maf.resolve_fill_plan(
+        frame, declared=["my_param"], missing_ids=set(), id_feature="nat_hru_id",
+        param_name="ssflux", fabric_col_spec={"hru_area": {"source": "geometry"}},
+    )
     assert plan.fabric_columns == {"hru_area": ("geometry", 1.0)}
-    # hru_area has a NaN but is a fabric column — must NOT appear in undeclared_with_nan
-    assert "hru_area" not in plan.undeclared_with_nan
+
+
+@pytest.mark.parametrize("spec", [
+    {"scale": 1.0},              # no `source`
+    "geometry",                  # scalar shorthand -- not a mapping
+    None,                        # empty YAML value
+    {"source": "geometry", "scale": "1e-6x"},   # unparseable scale
+    {"source": "geometry", "scale": 0},         # would zero every synthesized value
+])
+def test_resolve_fill_plan_malformed_fabric_spec_raises_with_context(spec):
+    """A malformed spec must raise the module's own instructive ValueError.
+
+    Each of these previously produced a context-free builtin (KeyError, TypeError,
+    ValueError) from `spec["source"]` / `float(...)`, five lines below a raise that
+    names the param, the column, and the remedy. In a SLURM log that surfaces only as
+    a truncated line inside `logger.exception`.
+    """
+    frame = pd.DataFrame({"nat_hru_id": [1], "hru_area": [10000.0], "my_param": [1.0]})
+    with pytest.raises(ValueError, match="malformed"):
+        maf.resolve_fill_plan(
+            frame, declared=["my_param"], missing_ids=set(), id_feature="nat_hru_id",
+            param_name="ssflux", fabric_col_spec={"hru_area": spec},
+        )
 
 
 def test_resolve_fill_plan_fabric_column_absent_from_frame_raises():
@@ -892,3 +1075,9 @@ def test_ssflux_config_declares_fabric_columns():
     assert "fabric_columns" in ssflux, "ssflux must declare fabric_columns"
     assert "hru_area" in ssflux["fabric_columns"], "hru_area must be a fabric_column for ssflux"
     assert ssflux["fabric_columns"]["hru_area"]["source"] == "geometry"
+    # The two lists must stay disjoint: declaring hru_area in BOTH would have KNN
+    # interpolate it and then the fabric copy overwrite -- harmless only by accident
+    # of ordering, and an interpolated hru_area is the bug this declaration fixes.
+    assert "hru_area" not in ssflux["fill_columns"], (
+        "hru_area must be a fabric_column ONLY -- KNN must never touch it"
+    )
