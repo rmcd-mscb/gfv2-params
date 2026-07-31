@@ -223,6 +223,39 @@ carries NaN cells only warns, naming the column and the NaN count — a NaN
 cell can be a legitimate "not derivable" result (`cv_empirical` is derivable
 for only ~42% of HRUs by design; `cv_subgrid` exists to rescue the rest).
 
+#### `fabric_columns` — exact values, not interpolated ones
+
+A param entry may also declare `fabric_columns`, a sibling of `fill_columns`
+for columns whose value is an exact fact already on disk in the fabric gpkg
+rather than something to interpolate:
+
+```yaml
+fabric_columns:
+  hru_area:
+    source: geometry   # or a fabric-GDF column name; `geometry` means geometry.area
+    scale: 1.0         # multiplier, in the fabric CRS's units
+```
+
+`apply_fabric_columns` copies these into **synthesized (previously absent)
+rows only** — existing rows keep their builder-computed value, so the
+mechanism cannot shift a canonical product it was not meant to touch. Today
+only `ssflux` declares one: `hru_area` is `geometry.area`, and the 77 gfv2
+HRUs absent from `nhm_ssflux_params.csv` would otherwise land NaN (it is a
+litho/slope *input*, so nobody declares it fillable) — or, under the retired
+"fill everything but the ids" regime, be KNN-copied from a neighbour at up to
+11,109× the true area.
+
+Both halves of the spec are validated eagerly and raise: the CSV column in
+`resolve_fill_plan`, the GDF `source` in `validate_fabric_sources` (before
+any fill runs, so a typo cannot lie dormant until the day a row goes
+missing). An id that the fabric cannot serve raises rather than warning, and
+a fabric column still NaN on a synthesized row raises *before* the write —
+`merged/<name>.csv` is read unconditionally by consumers, so a silent gap in
+it has no downstream reader to catch it. A `fabric_columns` column is **not**
+exempt from the undeclared-NaN warning: that census runs on the pre-append
+frame, so every NaN it counts is in an existing row, which this mechanism
+does not touch.
+
 `merged/<name>.csv` is the single canonical, always-gap-filled per-HRU file
 for every param that declares `fill_columns` — **consumers read
 `merged/*.csv`**. The retired `filled_` prefix required a consumer to know,

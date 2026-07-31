@@ -429,8 +429,18 @@ Two asymmetric guards fire per param:
   only ~42% of HRUs by design; `cv_subgrid` exists to rescue the rest), so it
   is left untouched rather than silently filled.
 - A param that is missing an HRU **row** entirely but declares no
-  `fill_columns` **raises** instead of passing silently — an absent row
-  admits no "not derivable" reading, unlike a NaN cell.
+  `fill_columns` (or `fabric_columns`) **raises** instead of passing silently
+  — an absent row admits no "not derivable" reading, unlike a NaN cell.
+
+A param may also declare **`fabric_columns`** for values that are exact facts
+already on disk in the fabric gpkg rather than things to interpolate. These
+are copied verbatim from the fabric into synthesized rows only — never
+KNN-filled, never applied to rows that already exist. Today only `ssflux`
+declares one (`hru_area: {source: geometry, scale: 1.0}`, i.e.
+`geometry.area` in the fabric CRS's units). Unlike the NaN-cell warning
+above, every `fabric_columns` failure **raises**: a malformed spec, a
+`source` absent from the fabric gpkg, an id the fabric cannot serve, or a
+value still NaN after the copy. See `docs/ARCHITECTURE.md`.
 
 Migrating an existing product off the old `filled_` layout is a one-time,
 separate step — see `scripts/migrate_filled_params.py` (dry-run by default,
