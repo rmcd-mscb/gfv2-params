@@ -40,11 +40,15 @@ class FillPlan:
 
     `fill_columns` is exactly the caller's declared list, intersected with nothing —
     a declared column missing from the frame is an error, not a silent skip.
+    `fabric_columns` maps CSV column name -> (gdf_column, scale) for columns whose
+    value is a known geometric fact (e.g. hru_area = geometry.area) and must be
+    copied from the fabric GDF rather than KNN-interpolated.
     `undeclared_with_nan` is the caller's warning material: columns carrying NaN that
     nobody declared fillable.
     """
 
     fill_columns: list[str] = field(default_factory=list)
+    fabric_columns: dict[str, tuple[str, float]] = field(default_factory=dict)
     undeclared_with_nan: dict[str, int] = field(default_factory=dict)
 
 
@@ -53,7 +57,7 @@ class FillPlan:
 ID_COLUMNS = {"hru_id", "nat_hru_id", "model_hru_idx", "vpu"}
 
 
-def resolve_fill_plan(param_df, declared, missing_ids, id_feature, param_name) -> FillPlan:
+def resolve_fill_plan(param_df, declared, missing_ids, id_feature, param_name, fabric_col_spec=None) -> FillPlan:
     """Decide what to fill for one param, and what to surface without filling.
 
     The selection is DECLARATION-driven, not gap-driven, because "has a NaN" does not
@@ -124,7 +128,21 @@ def resolve_fill_plan(param_df, declared, missing_ids, id_feature, param_name) -
         if n_nan:
             undeclared_with_nan[col] = n_nan
 
-    return FillPlan(fill_columns=resolved, undeclared_with_nan=undeclared_with_nan)
+    # fabric_columns: {csv_col: {source: gdf_col_or_"geometry", scale: float}}
+    # Validate that declared fabric columns are present in the frame (same contract
+    # as fill_columns — a typo must raise, not silently copy nothing).
+    fabric_columns: dict[str, tuple[str, float]] = {}
+    for csv_col, spec in (fabric_col_spec or {}).items():
+        if csv_col not in param_df.columns:
+            raise ValueError(
+                f"`fabric_columns` for '{param_name}' names '{csv_col}', which is not "
+                f"present in the parameter file. Fix the config."
+            )
+        fabric_columns[csv_col] = (spec["source"], float(spec.get("scale", 1.0)))
+        # Exclude from undeclared_with_nan — it will be filled from the fabric.
+        undeclared_with_nan.pop(csv_col, None)
+
+    return FillPlan(fill_columns=resolved, fabric_columns=fabric_columns, undeclared_with_nan=undeclared_with_nan)
 
 
 def fill_missing_values_knn(param_df, missing_ids, merged_gdf, param_columns, k, id_feature, logger):
@@ -302,10 +320,10 @@ def _load_yaml_doc(path: Path) -> dict:
 
 def iter_declared_params(
     zonal_cfg: dict, depstor_cfg: dict, snarea_cfg: dict | None = None
-) -> list[tuple[str, str, list[str]]]:
+) -> list[tuple[str, str, list[str], dict]]:
     """Every param with a canonical `merged/` output and its declared `fill_columns`.
 
-    Returns `(param_name, merged_filename, fill_columns)` tuples.
+    Returns `(param_name, merged_filename, fill_columns, fabric_columns)` tuples.
 
     `zonal_cfg["params"]` and `depstor_cfg["means"]` name their canonical file
     `merged_file`; `depstor_cfg["ratios"]` names it `output_file` instead (see
@@ -327,27 +345,27 @@ def iter_declared_params(
     `source_raster`/`script:` would break that orchestration. Hence the
     separate optional argument rather than a fourth zonal-shaped list.
     """
-    declared: list[tuple[str, str, list[str]]] = []
+    declared: list[tuple[str, str, list[str], dict]] = []
 
     for entry in zonal_cfg.get("params", []) or []:
         merged_file = entry.get("merged_file")
         if merged_file:
-            declared.append((entry["name"], merged_file, list(entry.get("fill_columns") or [])))
+            declared.append((entry["name"], merged_file, list(entry.get("fill_columns") or []), dict(entry.get("fabric_columns") or {})))
 
     for entry in depstor_cfg.get("means", []) or []:
         merged_file = entry.get("merged_file")
         if merged_file:
-            declared.append((entry["name"], merged_file, list(entry.get("fill_columns") or [])))
+            declared.append((entry["name"], merged_file, list(entry.get("fill_columns") or []), dict(entry.get("fabric_columns") or {})))
 
     for entry in depstor_cfg.get("ratios", []) or []:
         merged_file = entry.get("output_file")
         if merged_file:
-            declared.append((entry["name"], merged_file, list(entry.get("fill_columns") or [])))
+            declared.append((entry["name"], merged_file, list(entry.get("fill_columns") or []), dict(entry.get("fabric_columns") or {})))
 
     if snarea_cfg:
         merged_file = snarea_cfg.get("params_file")
         if merged_file:
-            declared.append(("snarea_curve", merged_file, list(snarea_cfg.get("fill_columns") or [])))
+            declared.append(("snarea_curve", merged_file, list(snarea_cfg.get("fill_columns") or []), dict(snarea_cfg.get("fabric_columns") or {})))
 
     return declared
 
@@ -411,6 +429,36 @@ def warn_undeclared_merged_files(merged_dir: Path, declared_params, logger) -> l
     return undeclared
 
 
+def apply_fabric_columns(complete_df, missing_ids, merged_gdf, fabric_columns, id_feature, logger):
+    """Copy exact values from the fabric GDF into synthesized rows for declared fabric_columns.
+
+    For each column in `fabric_columns`, the value is read from the GDF column named
+    `source` (or computed as `geometry.area` when source == "geometry") and multiplied
+    by `scale`. Only synthesized (previously absent) rows are updated — existing rows
+    already carry the builder-computed value and must not be overwritten.
+    """
+    if not missing_ids:
+        return complete_df
+
+    gdf_indexed = merged_gdf.set_index(id_feature)
+    df = complete_df.copy()
+
+    for csv_col, (source, scale) in fabric_columns.items():
+        for hru_id in missing_ids:
+            if hru_id not in gdf_indexed.index:
+                logger.warning("  fabric_columns: %s not found in GDF for id %s", csv_col, hru_id)
+                continue
+            row = gdf_indexed.loc[hru_id]
+            val = row.geometry.area if source == "geometry" else row[source]
+            df.loc[df[id_feature] == hru_id, csv_col] = val * scale
+
+    logger.info(
+        "  fabric_columns: copied exact values for %s into %d synthesized row(s)",
+        list(fabric_columns), len(missing_ids),
+    )
+    return df
+
+
 def run_fill_sweep(targets, merged_gdf, expected_max, id_feature, k_neighbors, logger) -> list[str]:
     """Fill every `(name, param_file, declared_columns)` in `targets`, isolating
     per-param failures.
@@ -423,11 +471,11 @@ def run_fill_sweep(targets, merged_gdf, expected_max, id_feature, k_neighbors, l
     decides the process exit code from the returned failure list.
     """
     failed_params: list[str] = []
-    for name, param_file, declared_columns in targets:
+    for name, param_file, declared_columns, fabric_col_spec in targets:
         logger.info("=== %s (%s) ===", name, param_file.name)
         try:
             param_df, missing_ids = find_missing_ids(param_file, expected_max, id_feature, logger)
-            plan = resolve_fill_plan(param_df, declared_columns, missing_ids, id_feature, name)
+            plan = resolve_fill_plan(param_df, declared_columns, missing_ids, id_feature, name, fabric_col_spec)
 
             for col, n in plan.undeclared_with_nan.items():
                 logger.warning(
@@ -449,6 +497,12 @@ def run_fill_sweep(targets, merged_gdf, expected_max, id_feature, k_neighbors, l
             complete_df = fill_missing_values_knn(
                 param_df, missing_ids, merged_gdf, plan.fill_columns, k_neighbors, id_feature, logger,
             )
+
+            if plan.fabric_columns:
+                complete_df = apply_fabric_columns(
+                    complete_df, missing_ids, merged_gdf, plan.fabric_columns, id_feature, logger,
+                )
+
             write_filled_in_place(complete_df, param_file, param_df, dtypes, logger=logger)
 
             final_ids = set(complete_df[id_feature])
@@ -548,8 +602,8 @@ def main():
                 "configs/depstor/depstor_params.yml, or configs/snarea/snarea_library.yml "
                 "-- add a `fill_columns` entry for it before filling."
             )
-        name, _merged_file, fill_columns = match
-        targets = [(name, param_file, fill_columns)]
+        name, _merged_file, fill_columns, fabric_col_spec = match
+        targets = [(name, param_file, fill_columns, fabric_col_spec)]
     else:
         # All-params mode (default): every declared param whose merged file has
         # already been produced for this fabric. A param not yet produced
@@ -557,12 +611,12 @@ def main():
         # WARNING (not silently at INFO -- an operator scanning the log for
         # problems should see it).
         targets = []
-        for name, merged_file, fill_columns in declared_params:
+        for name, merged_file, fill_columns, fabric_col_spec in declared_params:
             pf = merged_dir / merged_file
             if not pf.exists():
                 logger.warning("Skipping %s: %s not found (not yet produced for this fabric)", name, pf)
                 continue
-            targets.append((name, pf, fill_columns))
+            targets.append((name, pf, fill_columns, fabric_col_spec))
         if not targets:
             logger.warning("No declared params' merged files were found under %s", merged_dir)
             return 0

@@ -627,14 +627,14 @@ def test_iter_declared_params_excludes_fractions_includes_means_and_ratios():
     assert "perv_frac" not in names  # fraction excluded despite its merged_file key
 
     by_name = {d[0]: d for d in declared}
-    assert by_name["dprst_frac"] == ("dprst_frac", "nhm_dprst_frac_params.csv", ["dprst_frac"])
-    assert by_name["elevation"] == ("elevation", "nhm_elevation_params.csv", ["mean"])
+    assert by_name["dprst_frac"] == ("dprst_frac", "nhm_dprst_frac_params.csv", ["dprst_frac"], {})
+    assert by_name["elevation"] == ("elevation", "nhm_elevation_params.csv", ["mean"], {})
 
 
 def test_iter_declared_params_includes_snarea_when_given():
     snarea_cfg = {"params_file": "nhm_snarea_curve_params.csv", "fill_columns": ["hru_deplcrv"]}
     declared = maf.iter_declared_params({}, {}, snarea_cfg)
-    assert declared == [("snarea_curve", "nhm_snarea_curve_params.csv", ["hru_deplcrv"])]
+    assert declared == [("snarea_curve", "nhm_snarea_curve_params.csv", ["hru_deplcrv"], {})]
 
 
 def test_iter_declared_params_snarea_optional():
@@ -670,8 +670,8 @@ class TestRunFillSweep:
         pd.DataFrame({"hru_id": [1, 2], "v": [1.0, 2.0]}).to_csv(bad, index=False)
 
         targets = [
-            ("good_param", good, ["v"]),
-            ("bad_param", bad, ["typo_column"]),  # not present -> resolve_fill_plan raises
+            ("good_param", good, ["v"], {}),
+            ("bad_param", bad, ["typo_column"], {}),  # not present -> resolve_fill_plan raises
         ]
 
         failed = maf.run_fill_sweep(
@@ -692,7 +692,7 @@ class TestRunFillSweep:
         pd.DataFrame({"hru_id": [1, 2], "v": [10.0, 20.0]}).to_csv(good, index=False)
 
         failed = maf.run_fill_sweep(
-            [("good_param", good, ["v"])], self._merged_gdf(), expected_max=3,
+            [("good_param", good, ["v"], {})], self._merged_gdf(), expected_max=3,
             id_feature="hru_id", k_neighbors=1, logger=logger,
         )
         assert failed == []
@@ -763,3 +763,110 @@ class TestWarnUndeclaredMergedFiles:
         )
 
         assert undeclared == []
+
+
+# ---------------------------------------------------------------------------
+# fabric_columns: exact values copied from the GDF for synthesized rows.
+# ---------------------------------------------------------------------------
+
+class TestApplyFabricColumns:
+    def _gdf(self):
+        from shapely.geometry import box
+        # id=1: 100m x 100m = 10000 m²; id=2: 200m x 200m = 40000 m²; id=3: 50m x 50m = 2500 m²
+        return gpd.GeoDataFrame(
+            {"nat_hru_id": [1, 2, 3]},
+            geometry=[box(0, 0, 100, 100), box(0, 0, 200, 200), box(0, 0, 50, 50)],
+            crs="EPSG:5070",
+        )
+
+    def test_geometry_area_copied_for_synthesized_rows(self):
+        import logging
+        logger = logging.getLogger("test")
+        gdf = self._gdf()
+        # id=3 is synthesized (absent from original CSV)
+        df = pd.DataFrame({
+            "nat_hru_id": [1, 2, 3],
+            "hru_area": [10000.0, 40000.0, 99999.0],  # id=3 has wrong neighbour value
+            "my_param": [1.0, 2.0, 3.0],
+        })
+        result = maf.apply_fabric_columns(
+            df, missing_ids=[3], merged_gdf=gdf,
+            fabric_columns={"hru_area": ("geometry", 1.0)},
+            id_feature="nat_hru_id", logger=logger,
+        )
+        assert result.loc[result["nat_hru_id"] == 3, "hru_area"].iloc[0] == pytest.approx(2500.0)
+        # Existing rows must not be touched
+        assert result.loc[result["nat_hru_id"] == 1, "hru_area"].iloc[0] == pytest.approx(10000.0)
+        assert result.loc[result["nat_hru_id"] == 2, "hru_area"].iloc[0] == pytest.approx(40000.0)
+
+    def test_scale_applied(self):
+        import logging
+        logger = logging.getLogger("test")
+        from shapely.geometry import box
+        gdf = gpd.GeoDataFrame(
+            {"nat_hru_id": [1]},
+            geometry=[box(0, 0, 1000, 1000)],  # 1e6 m²
+            crs="EPSG:5070",
+        )
+        df = pd.DataFrame({"nat_hru_id": [1], "hru_area": [0.0]})
+        result = maf.apply_fabric_columns(
+            df, missing_ids=[1], merged_gdf=gdf,
+            fabric_columns={"hru_area": ("geometry", 1e-6)},  # m² -> km²
+            id_feature="nat_hru_id", logger=logger,
+        )
+        assert result.loc[result["nat_hru_id"] == 1, "hru_area"].iloc[0] == pytest.approx(1.0)
+
+    def test_no_missing_ids_returns_unchanged(self):
+        import logging
+        logger = logging.getLogger("test")
+        gdf = self._gdf()
+        df = pd.DataFrame({"nat_hru_id": [1, 2], "hru_area": [10000.0, 40000.0]})
+        result = maf.apply_fabric_columns(
+            df, missing_ids=[], merged_gdf=gdf,
+            fabric_columns={"hru_area": ("geometry", 1.0)},
+            id_feature="nat_hru_id", logger=logger,
+        )
+        pd.testing.assert_frame_equal(result, df)
+
+
+def test_resolve_fill_plan_parses_fabric_columns():
+    """fabric_columns spec is parsed into (source, scale) tuples and excluded from undeclared_with_nan."""
+    frame = pd.DataFrame({
+        "nat_hru_id": [1, 2],
+        "hru_area": [10000.0, np.nan],
+        "my_param": [1.0, 2.0],
+    })
+    plan = maf.resolve_fill_plan(
+        frame,
+        declared=["my_param"],
+        missing_ids=set(),
+        id_feature="nat_hru_id",
+        param_name="ssflux",
+        fabric_col_spec={"hru_area": {"source": "geometry", "scale": 1.0}},
+    )
+    assert plan.fabric_columns == {"hru_area": ("geometry", 1.0)}
+    # hru_area has a NaN but is a fabric column — must NOT appear in undeclared_with_nan
+    assert "hru_area" not in plan.undeclared_with_nan
+
+
+def test_resolve_fill_plan_fabric_column_absent_from_frame_raises():
+    frame = pd.DataFrame({"nat_hru_id": [1], "my_param": [1.0]})
+    with pytest.raises(ValueError, match="fabric_columns"):
+        maf.resolve_fill_plan(
+            frame,
+            declared=["my_param"],
+            missing_ids=set(),
+            id_feature="nat_hru_id",
+            param_name="ssflux",
+            fabric_col_spec={"hru_area": {"source": "geometry", "scale": 1.0}},
+        )
+
+
+def test_ssflux_config_declares_fabric_columns():
+    """Regression guard: ssflux must declare hru_area as a fabric_column."""
+    root = Path(__file__).resolve().parent.parent
+    doc = yaml.safe_load((root / "configs/zonal/zonal_params.yml").read_text())
+    ssflux = next(e for e in doc["params"] if e["name"] == "ssflux")
+    assert "fabric_columns" in ssflux, "ssflux must declare fabric_columns"
+    assert "hru_area" in ssflux["fabric_columns"], "hru_area must be a fabric_column for ssflux"
+    assert ssflux["fabric_columns"]["hru_area"]["source"] == "geometry"

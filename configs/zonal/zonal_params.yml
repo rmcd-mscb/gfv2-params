@@ -224,6 +224,12 @@ params:
       - gwflow_coef
       - dprst_seep_rate_open
       - dprst_flow_coef
+    # hru_area is geometry.area from the fabric — exact, not interpolatable.
+    # Synthesized rows get the true area rather than a neighbour's.
+    fabric_columns:
+      hru_area:
+        source: geometry
+        scale: 1.0
     # Lithology permeability + PRMS flux normalisation (lifted verbatim
     # from configs/zonal/ssflux_param.yml).
     k_perm_min: -16.48
