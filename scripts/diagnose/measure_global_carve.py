@@ -15,8 +15,12 @@ That was considered and REJECTED: it recovers waterbodies for which no signal ev
 produced evidence, on the strength of the clump proxy alone, and those must keep the
 unexempted clump behaviour exactly (see `drains_to_dprst` over-extension #145/#158/#161).
 This script measures the delta so the rejection rests on a reproducible number rather
-than a remembered one. The figure it prints is the "~8,471 km²" quoted in CLAUDE.md,
-docs/ARCHITECTURE.md, slurm_batch/HPC_REFERENCE.md and `dprst.py`.
+than a remembered one. CLAUDE.md, docs/ARCHITECTURE.md, slurm_batch/HPC_REFERENCE.md
+and `dprst.py` all quote a figure from this script -- but it is BUILD-DEPENDENT and
+drifts with every dprst cascade rebuild (measured 2026-08-04: 7,403 km² on gfv2,
+9,177 km² on the segment-driven gfv2_dev; the docs previously carried 6,518 km² and
+this docstring 8,471 km², both from earlier states). Re-run rather than quoting, and
+if you update the docs, carry the fabric and date with the number.
 
 Streams in row strips: the CONUS grid is ~16.9e9 cells, so a full-grid array of any of
 these rasters is ~17 GB and four of them will not co-reside.

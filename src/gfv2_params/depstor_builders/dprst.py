@@ -120,8 +120,11 @@ def build(step_cfg: dict, ctx: BuildContext, logger) -> dict:
     # All three terms are load-bearing and none is redundant. Dropping the
     # `endorheic_binary` term would turn this into a GLOBAL per-cell on-stream carve --
     # the design that was considered and REJECTED, because it also recovers a further
-    # ~6,518 km2 of non-endorheic waterbodies whose clump merely abuts an on-stream
+    # ~7,403 km2 of non-endorheic waterbodies whose clump merely abuts an on-stream
     # feature, and those must keep the unexempted clump behaviour exactly.
+    # That figure is BUILD-DEPENDENT -- it was 6,518 km2 at an earlier cascade state
+    # and is 9,177 km2 on the segment-driven gfv2_dev -- so re-measure it rather than
+    # trusting this comment.
     # (Reproduce: scripts/diagnose/measure_global_carve.py --fabric gfv2.)
     exempt = endorheic_binary == 1
     exempt &= connected_binary != 1

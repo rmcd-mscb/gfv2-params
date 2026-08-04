@@ -619,7 +619,7 @@ These are hard-won; violating them silently corrupts outputs.
   carve and land mask so both still apply to recovered cells (the
   imperv/dprst/perv partition stays disjoint). It is intentionally narrower than
   a global per-cell on-stream carve — dropping the `endorheic_wbody` term alone
-  *is* that carve, and it would recover a further ~6,518 km² of non-endorheic
+  *is* that carve, and it would recover a further ~7,403 km² (gfv2, measured 2026-08-04; the figure moves with each dprst cascade rebuild — 9,177 km² on the segment-driven gfv2_dev — so re-measure rather than trusting a quoted value) of non-endorheic
   waterbodies whose clump merely abuts an on-stream feature (reproduce with
   [`scripts/diagnose/measure_global_carve.py`](../scripts/diagnose/measure_global_carve.py));
   those must keep the

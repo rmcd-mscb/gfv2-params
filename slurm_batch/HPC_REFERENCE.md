@@ -502,7 +502,7 @@ a waterbody (without that term the 2 Mt Shasta Ice Mass COMIDs, which
 Runs before the impervious carve and land mask, so both still apply to
 recovered cells. This is deliberately narrower than a global per-cell
 on-stream carve — dropping the `endorheic_wbody` term alone *is* that carve,
-and it would additionally recover ~6,518 km² of non-endorheic waterbodies
+and it would additionally recover ~7,403 km² (gfv2, measured 2026-08-04; the figure moves with each dprst cascade rebuild — 9,177 km² on the segment-driven gfv2_dev — so re-measure rather than trusting a quoted value) of non-endorheic waterbodies
 whose clump merely abuts an on-stream feature (reproduce with
 `scripts/diagnose/measure_global_carve.py`); those keep the unexempted clump
 behaviour.
