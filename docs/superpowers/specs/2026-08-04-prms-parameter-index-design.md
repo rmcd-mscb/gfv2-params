@@ -2,7 +2,7 @@
 
 **Date:** 2026-08-04
 **Status:** design, awaiting review
-**Issue:** file on approval
+**Issue:** file on approval; D0b scoped out as #201
 **Companion:** `2026-08-04-snakemake-migration-design.md` (independent; this spec does not
 depend on it)
 
@@ -461,8 +461,8 @@ Per `CLAUDE.md`, no `pytest` on the HPC head node.
 here. It requires two new shared rasters (`sin(aspect)`, `cos(aspect)`), a config entry, a
 second zonal pass, an `atan2` combine, and a CONUS re-run — a builder change with a compute
 cost, not an index change. Folding it in would block a small shippable spec behind a large
-one. File as its own issue, referencing this spec for the measurement and TM6B9:603 for the
-required method.
+one. **Filed as issue #201**, carrying the measurement, the raster-boundary evidence, and
+TM6B9:603's required method.
 
 Until it lands, the index must mark `nhm_aspect_params.csv:mean` as **defective — not
 `hru_aspect`**, not merely as an undocumented rename. That is the whole point of having an
