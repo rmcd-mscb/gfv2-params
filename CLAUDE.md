@@ -120,6 +120,19 @@ These are hard-won; violating them silently corrupts outputs.
   construction. See `docs/ARCHITECTURE.md`,
   `docs/superpowers/specs/2026-07-12-endorheic-dprst-classifier-design.md`, and
   issue #147 (depression-respecting FDR investigation) for the provenance/tradeoff.
+  **The #147 A/B has now been run** (VPU 16, `slurm_batch/ab_drains_to_dprst.batch`):
+  `drains_to_dprst` land coverage is 0.4401 under the production FdrFac vs 0.4388
+  under a breached DEM — a 0.3% difference — while a richdem **fill-all** on the same
+  DEM gives 0.8079, nearly double, inflating 1,009 of 2,605 depressions by >2x and 411
+  by >10x. So the fill pathology #147 feared is real but **we are not exposed to it**:
+  stream-burning and walling already give water defined exits, so the FdrFac behaves
+  like a depression-respecting DEM. Do not swap the FDR chasing contributing-area
+  magnitude — there is nothing to win. (Open sub-question: production and breach agree
+  on the total but disagree on *attribution*, reshuffling 31% of contributing area
+  between depressions, 415 of them by >2x. Which is correct is not decided by that
+  A/B.) Note also that `Fdr_breached` sets `BREACH_FILL=True` and therefore has **no
+  interior code-0 cells**, so it can never serve as an endorheic-classifier input —
+  Signal A would go silently dark.
 - **Endorheic demotion is a STRICT SUBTRACTION, and its input is the FDR — not a
   vector sink file.** `wbody_connectivity` subtracts an endorheic COMID set from
   the on-stream union; the subtraction can only ever remove COMIDs, never add

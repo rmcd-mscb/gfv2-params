@@ -58,6 +58,10 @@ Configuration (CFG-*), Code Quality (CODE-*), Hygiene (HYG-*), Architecture (ARC
 - Default branch: `main`
 - CI runs `pytest tests/` on push to main and every PR
 - Do not run pytest on the HPC login node
+- `sbatch slurm_batch/ab_drains_to_dprst.batch [VPU] [FABRIC]` — the #147 FDR
+  A/B (production vs fill vs breach) on one VPU; defaults VPU 16 / gfv2_dev.
+  Already run; result recorded in CLAUDE.md's FDR bullet (production ≈ breach,
+  so do not swap the FDR chasing contributing-area magnitude)
 - Environment: pixi (`pyproject.toml`); SLURM batches use `pixi run --as-is`
 - `pixi run data-root` — prints `data_root` from base_config.yml (added PR #194)
 - `pixi run init-data-root` — scaffolds the data directory tree
