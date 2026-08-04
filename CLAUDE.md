@@ -296,6 +296,15 @@ These are hard-won; violating them silently corrupts outputs.
   sync the other: completed issues and new pixi tasks belong in both;
   deep architectural gotchas and code conventions belong only in `CLAUDE.md`.
 
+- **Triage a filed issue before working it** — verify its PREMISE, not just its
+  `file:line` cites. The depstor classifier was rewritten repeatedly
+  (#145 → #152 → #158 → #161 → #187), so issues filed against it go stale fast:
+  3 of 3 triaged on 2026-08-04 were premise-void or resolved-by-design, and one
+  proposed verbatim a design already rejected. The rejected designs are recorded
+  in the bullets above — check them before implementing any "candidate fix", and
+  re-measure any number a decision rests on rather than quoting it. Full checklist
+  in `.amazonq/rules/workflow.md`.
+
 - **Every code change needs a docs check.** Audit `docs/`, `README.md`, and
   `slurm_batch/RUNME.md` (and `HPC_REFERENCE.md`); update them on the same branch and surface findings
   before merge.

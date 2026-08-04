@@ -23,6 +23,40 @@ The established pattern for every work item:
 7. `gh pr create --title "..." --body "Closes #<N>\n\n## What\n..." --base main`
 8. After user confirms merge: `git checkout main && git pull origin main`
 
+### Triage first: verify the issue's PREMISE, not just its cites
+
+Before working a filed issue, check whether what it describes still exists. Not
+only its `file:line` citations (those drift) — the **premise**.
+
+The depstor classifier is the specific hazard: it was rewritten repeatedly
+(#145 → #152 → #158 → #161 → #187), so an issue filed against it more than a few
+weeks earlier is suspect. On 2026-08-04, three of three triaged issues had been
+overtaken:
+
+- **#156** proposed `dprst = wbody_binary & ~connected_wbody` — verbatim the
+  global per-cell carve that #145/#158/#161 evaluated and **rejected**.
+- **#155** asked whether NHD flowline permanence should gate promotion — but
+  #187 moved the on-stream source to the model's `nsegment` network, which
+  carries no `FCode` at all.
+- **#188** reported a classifier gap that a D8 trace showed was correct
+  behaviour.
+
+All three read as authoritative and quantified. The evidence in them was real;
+the framing had expired.
+
+Checks that catch this cheaply:
+
+1. Read the builder the issue targets **as it exists now**, plus CLAUDE.md's
+   bullet for that subsystem — those bullets record *rejected designs*, which is
+   what a stale issue most often re-proposes. Tells: "considered and rejected",
+   "deliberately narrower than", "do NOT restore".
+2. Treat the issue's "candidate fix" as the highest-risk section.
+3. **Re-measure any number you rely on.** The global-carve figure was quoted in
+   five places, disagreed with itself, and matched no current measurement — while
+   being the sole justification for a design decision.
+4. Closing as not-a-defect is a good outcome. State what changed and cite the
+   PR that made it obsolete.
+
 ## Multiline string replacement
 
 Never use `sed` for multiline replacements. Write a Python script to `/tmp/patch.py`,
