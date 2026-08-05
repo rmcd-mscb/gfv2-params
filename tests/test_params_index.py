@@ -9,6 +9,8 @@ new column reaching disk with no PRMS decision recorded.
 
 from __future__ import annotations
 
+import pytest
+
 from gfv2_params import params_index as pi
 
 
@@ -88,3 +90,90 @@ def test_iter_declared_params_carries_prms_block():
     }
     declared = pi.iter_declared_params(zonal, {})
     assert declared[0].prms["columns"]["hru_slope"]["prms"] == "hru_slope"
+
+
+# ---------------------------------------------------------------------------
+# Guard 1: prms.columns | prms.defects | prms.provenance is the DECLARED
+# COMPLETE column list for every entry.
+# ---------------------------------------------------------------------------
+
+
+def _flatten(fill_columns):
+    """fill_columns entries may be a list of alias alternatives, not only a string.
+
+    zonal_params.yml's lulc_nhm_v11 carries [retention, rad_trncf] because
+    lulc_prederived.py renamed the same computed quantity; fabrics built before the
+    rename carry `retention`, after carry `rad_trncf`. EVERY alternative must be
+    declared, so a fabric of either vintage is covered. Without this flatten the
+    guard raises `TypeError: unhashable type: 'list'` rather than failing usefully.
+    """
+    out = []
+    for item in fill_columns:
+        if isinstance(item, (list, tuple)):
+            out.extend(item)
+        else:
+            out.append(item)
+    return out
+
+
+def _declared_columns(declared):
+    """Every emitted column the entry has recorded a PRMS decision for.
+
+    Three buckets, because there are three distinct decisions: `columns` is "this
+    IS the PRMS parameter", `defects` is "this is SUPPOSED to be the PRMS parameter
+    and currently is not", `provenance` is "this is not a PRMS parameter at all".
+    """
+    return (
+        set(declared.prms.get("columns") or {})
+        | set(declared.prms.get("defects") or {})
+        | set(declared.prms.get("provenance") or {})
+    )
+
+
+@pytest.mark.parametrize("declared", pi.load_declared_params(), ids=lambda d: d.name)
+def test_guard1_prms_declares_every_fillable_column(declared):
+    """Guard 1 only proves the declaration is SELF-CONSISTENT.
+
+    It runs declaration -> declaration and cannot see disk, so it is a tautology on
+    most entries and vacuous on the three whose on-disk payload exceeds their
+    fill_columns (ssflux declares 7 of 10 columns, snarea 13 of 23, dprst_depth_avg
+    1 of 2). Guard 2 (tests/test_params_index_ondisk.py) is the one that catches a
+    new column reaching disk with no PRMS decision recorded.
+    """
+    assert declared.prms, (
+        f"{declared.name} has no `prms:` block. It is mandatory, not optional -- "
+        f"without it this guard passes vacuously."
+    )
+    required = set(_flatten(declared.fill_columns)) | set(declared.fabric_columns or {})
+    missing = required - _declared_columns(declared)
+    assert not missing, (
+        f"{declared.name}: {sorted(missing)} are declared fillable but appear in none "
+        f"of prms.columns / prms.defects / prms.provenance. Every emitted column "
+        f"needs a PRMS decision."
+    )
+
+
+@pytest.mark.parametrize("declared", pi.load_declared_params(), ids=lambda d: d.name)
+def test_guard1_prms_declares_a_builder(declared):
+    """`builder:` drives the index's by-builder view.
+
+    Kept in the config rather than a lookup table in the generator, which would
+    drift the moment a builder moves.
+    """
+    assert declared.prms.get("builder"), f"{declared.name} declares no prms.builder"
+
+
+@pytest.mark.parametrize("declared", pi.load_declared_params(), ids=lambda d: d.name)
+def test_guard1_no_column_is_declared_twice(declared):
+    """columns / defects / provenance are mutually exclusive verdicts.
+
+    A column in two buckets means two contradictory answers to "is this the PRMS
+    parameter?", and `_declared_columns`'s union would hide it from Guard 1.
+    """
+    buckets = [
+        set(declared.prms.get(k) or {}) for k in ("columns", "defects", "provenance")
+    ]
+    overlaps = (
+        (buckets[0] & buckets[1]) | (buckets[0] & buckets[2]) | (buckets[1] & buckets[2])
+    )
+    assert not overlaps, f"{declared.name}: {sorted(overlaps)} declared in two buckets"
