@@ -31,6 +31,65 @@ fill_columns:
   - snarea_curve_9
   - snarea_curve_10
 
+# iter_declared_params passes this WHOLE document as the entry (snarea_curve is
+# not a zonal_params.yml `params:` element -- it comes from the separate 3-stage
+# SNODAS pipeline), so `prms:` is a top-level key here rather than a per-entry one.
+# The 11 snarea_curve_N columns are one PRMS parameter, snarea_curve, which is
+# dimensioned (ndeplval) in PRMS -- hence 11 columns mapping to one name.
+prms:
+  builder: snarea/library.py
+  columns:
+    hru_deplcrv:
+      prms: hru_deplcrv
+      processes: [PRMSSnow]
+    snarea_thresh:
+      prms: snarea_thresh
+      processes: [PRMSSnow]
+    snarea_curve_0:
+      prms: snarea_curve
+      processes: [PRMSSnow]
+    snarea_curve_1:
+      prms: snarea_curve
+      processes: [PRMSSnow]
+    snarea_curve_2:
+      prms: snarea_curve
+      processes: [PRMSSnow]
+    snarea_curve_3:
+      prms: snarea_curve
+      processes: [PRMSSnow]
+    snarea_curve_4:
+      prms: snarea_curve
+      processes: [PRMSSnow]
+    snarea_curve_5:
+      prms: snarea_curve
+      processes: [PRMSSnow]
+    snarea_curve_6:
+      prms: snarea_curve
+      processes: [PRMSSnow]
+    snarea_curve_7:
+      prms: snarea_curve
+      processes: [PRMSSnow]
+    snarea_curve_8:
+      prms: snarea_curve
+      processes: [PRMSSnow]
+    snarea_curve_9:
+      prms: snarea_curve
+      processes: [PRMSSnow]
+    snarea_curve_10:
+      prms: snarea_curve
+      processes: [PRMSSnow]
+  provenance:
+    cv_assign: assigned CV bin
+    cv_subgrid: sub-grid CV estimate
+    cv_empirical: empirical CV -- derivable for only ~42% of HRUs BY DESIGN
+    cv_source: which CV estimate was used
+    sdc_status: derivation status
+    sca_class: snow-covered-area class
+    similarity: scale-free SDC similarity metric
+    n_seasons: seasons contributing
+    n_peak_years: peak years contributing
+    peak_swe_mm: peak SWE driving snarea_thresh
+
 ndepl_cv: 8 # 8 CV bins + 1 reserved default = ndepl 9 (grouping memory: elbow 5-8)
 calibrate: auto # auto | on | off
 calibrate_bias_tol: 0.1 # |median(cv_subgrid) - median(cv_empirical)| trigger

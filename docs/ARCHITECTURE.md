@@ -256,6 +256,38 @@ exempt from the undeclared-NaN warning: that census runs on the pre-append
 frame, so every NaN it counts is in an existing row, which this mechanism
 does not touch.
 
+#### `derived_columns` — PRMS quantities computed at merge time
+
+A zonal param entry may also declare `derived_columns`, which adds a column to
+the merged frame by transforming one that is already there:
+
+```yaml
+derived_columns:
+  hru_slope: { from: mean, transform: deg_to_fraction }
+```
+
+`transform` names a function in a **whitelist** in
+`zonal_runners/merge.py` (`_TRANSFORMS`), not `getattr(gfv2_params.raster_ops,
+name)`: a typo must raise, not silently resolve to some other module-level
+function. `apply_derived_columns` runs in `run_merge`, after the per-batch
+concat and before the CSV write, so **adding one needs no zonal re-run** — only
+`--mode merge --param <name>`. The source column is kept, not consumed: it is
+declared `prms.provenance`, and a reader needs it to check the derivation.
+
+Today only `slope` declares one. `slope.vrt` is
+`rd.TerrainAttribute(dem, "slope_degrees")`, so `mean` is degrees while PRMS
+`hru_slope` is a decimal fraction rise/run (~57× for small angles); rather than
+ship a footgun, the pipeline emits the PRMS quantity directly, reusing the same
+`raster_ops.deg_to_fraction` that `ssflux.py:63` already applies. See
+[Parameter index](parameter_index.md).
+
+Note the ordering constraint with `fill_columns`: a derived column that is also
+declared fillable (as `hru_slope` is) makes a **re-merge a prerequisite of the
+next fill sweep** on any fabric whose CSV predates the declaration —
+`resolve_fill_plan` raises on a declared column the file does not have. That is
+deliberate: the alternative is a silent NaN in a PRMS parameter for exactly the
+HRUs that were missing.
+
 `merged/<name>.csv` is the single canonical, always-gap-filled per-HRU file
 for every param that declares `fill_columns` — **consumers read
 `merged/*.csv`**. The retired `filled_` prefix required a consumer to know,

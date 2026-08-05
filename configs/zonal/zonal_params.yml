@@ -52,14 +52,83 @@ params:
     # "not derivable by design" meaning, unlike snarea_curve's cv_* columns
     # below -- so all are safe, and desirable, to fill for a missing HRU.
     fill_columns: [count, mean, std, min, "25%", "50%", "75%", max, sum]
+    # `prms.provenance` here is NOT a restatement of the note above. These eight
+    # ARE in fill_columns and ARE safe to fill; provenance answers a DIFFERENT
+    # question -- "is this a PRMS parameter?" -- and they are not. All four
+    # quadrants of (filled / not filled) x (PRMS param / not) exist in this repo.
+    prms:
+      builder: zonal_runners/zonal.py
+      columns:
+        # processes: [] -- hru_elev appears in NO pywatershed Process.get_parameters()
+        # list. PRMS consumes it in the temperature/precipitation distribution
+        # modules, which pywatershed handles by reading CBH files instead, and in
+        # the cov_type reset rule at TM6B9:707 (HRUs above 11,500 ft). An empty
+        # list is the honest answer; naming a process pywatershed does not have
+        # would put a phantom heading in the generated index.
+        mean:
+          prms: hru_elev
+          processes: []
+      provenance:
+        count: exactextract cell count
+        std: within-HRU standard deviation
+        min: within-HRU minimum
+        "25%": within-HRU 25th percentile
+        "50%": within-HRU median
+        "75%": within-HRU 75th percentile
+        max: within-HRU maximum
+        sum: within-HRU sum
 
   - name: slope
     script: zonal
     source_raster: "{data_root}/shared/conus/vrt/slope.vrt"
     categorical: false
     merged_file: nhm_slope_params.csv
-    # Same value-column set as elevation (observed on-disk; same zonal script).
-    fill_columns: [count, mean, std, min, "25%", "50%", "75%", max, sum]
+    # Same value-column set as elevation (observed on-disk; same zonal script),
+    # plus the derived hru_slope below. hru_slope IS declared fillable: without
+    # it, an HRU absent from the merged CSV would get `mean` KNN-filled but land
+    # NaN in the PRMS parameter itself. It is a monotone transform of `mean`, so
+    # interpolating it directly is exactly as defensible as interpolating `mean`.
+    #
+    # NB: this makes a re-merge a PREREQUISITE of the next fill sweep on any
+    # fabric -- resolve_fill_plan raises on a declared column the file does not
+    # have, so a slope CSV merged before this change must be re-merged with
+    # `derive_zonal_params.py --mode merge --param slope` first. That failure is
+    # loud and one command to fix; the alternative (silent NaN hru_slope for
+    # exactly the HRUs that were missing) is not.
+    fill_columns:
+      [count, mean, std, min, "25%", "50%", "75%", max, sum, hru_slope]
+    # PRMS hru_slope is a decimal fraction rise/run (TM6B9:536); slope.vrt is
+    # rd.TerrainAttribute(dem, "slope_degrees") (compute_slope_aspect.py:72), so
+    # `mean` is DEGREES -- a ~57x discrepancy for small angles. Emit the PRMS
+    # quantity directly rather than leaving a footgun. ssflux.py:63 already applies
+    # this same conversion to derive ssr2gw_rate/slowcoef_lin, so this makes the
+    # rest of the pipeline consistent with what ssflux already assumed rather than
+    # introducing a new convention. Applied in run_merge, so no zonal re-run.
+    #
+    # KNOWN APPROXIMATION: tan(mean) != mean(tan), and tan is convex, so this
+    # underestimates. Measured over all 361,471 gfv2 HRUs (2nd-order Taylor from
+    # on-disk mean/std): median 0.2%, p90 2.4%, p99 5.6%. Too small to justify a
+    # CONUS fractional-slope VRT -- none exists.
+    derived_columns:
+      hru_slope:
+        from: mean
+        transform: deg_to_fraction
+    prms:
+      builder: zonal_runners/zonal.py + zonal_runners/merge.py (derived_columns)
+      columns:
+        hru_slope:
+          prms: hru_slope
+          processes: [PRMSSolarGeometry, PRMSAtmosphere]
+      provenance:
+        mean: mean cell slope in DEGREES -- the raw stat hru_slope is derived from
+        count: exactextract cell count
+        std: within-HRU standard deviation
+        min: within-HRU minimum
+        "25%": within-HRU 25th percentile
+        "50%": within-HRU median
+        "75%": within-HRU 75th percentile
+        max: within-HRU maximum
+        sum: within-HRU sum
 
   - name: aspect
     script: zonal
@@ -68,6 +137,32 @@ params:
     merged_file: nhm_aspect_params.csv
     # Same value-column set as elevation (observed on-disk; same zonal script).
     fill_columns: [count, mean, std, min, "25%", "50%", "75%", max, sum]
+    prms:
+      builder: zonal_runners/zonal.py
+      columns: {}
+      # DEFECTIVE, not merely renamed. `mean` is an ARITHMETIC mean of a CIRCULAR
+      # variable; TM6B9:603 requires atan2(mean(sin), mean(cos)). Measured across
+      # all 361,471 gfv2 HRUs the median is 179.4 deg (due south), IQR 151.7-207.5
+      # -- that central tendency is the artifact, not the terrain. Unlike slope
+      # above there is no recovery: a circular mean cannot be reconstructed from
+      # an arithmetic one. Fixing it needs sin/cos rasters and a second zonal
+      # pass. Tracked as issue #201.
+      defects:
+        mean:
+          prms: hru_aspect
+          processes: [PRMSSolarGeometry, PRMSAtmosphere]
+          reason: arithmetic mean of a circular variable; TM6B9:603 requires atan2(mean(sin), mean(cos))
+          recovery: none -- not reconstructable from what is on disk
+          issue: 201
+      provenance:
+        count: exactextract cell count
+        std: within-HRU standard deviation
+        min: within-HRU minimum
+        "25%": within-HRU 25th percentile
+        "50%": within-HRU median
+        "75%": within-HRU 75th percentile
+        max: within-HRU maximum
+        sum: within-HRU sum
 
   # --- Soils (categorical + continuous via the same script dispatcher) ---
 
@@ -77,6 +172,17 @@ params:
     categorical: true
     merged_file: nhm_soils_params.csv
     fill_columns: [soils]
+    # IDENTITY mapping under a different name: TEXT_PRMS.tif is already in PRMS
+    # soil_type encoding (1=sand, 2=loam, 3=clay), verified against the raster's
+    # own cell counts. The ScienceBase metadata's edom block transposes sand and
+    # clay and is WRONG -- see docs/parameter_index.md's Known gaps.
+    prms:
+      builder: zonal_runners/soils.py
+      columns:
+        soils:
+          prms: soil_type
+          processes: [PRMSSoilzone]
+      provenance: {}
 
   - name: soil_moist_max
     script: soils
@@ -84,6 +190,13 @@ params:
     categorical: false
     merged_file: nhm_soil_moist_max_params.csv
     fill_columns: [soil_moist_max]
+    prms:
+      builder: zonal_runners/soils.py
+      columns:
+        soil_moist_max:
+          prms: soil_moist_max
+          processes: [PRMSRunoff, PRMSSoilzone]
+      provenance: {}
 
   # --- LULC sources (each derives cov_type / covden / interception + rad_trncf
   #     or retention) ---
@@ -127,6 +240,37 @@ params:
         covden_win,
         [retention, rad_trncf],
       ]
+    # BOTH alias alternatives are declared, mapping to the same PRMS name, so a
+    # fabric of either vintage is covered. Guard 1 flattens the alias group and
+    # requires every alternative, so declaring only one would fail.
+    prms:
+      builder: zonal_runners/lulc_prederived.py
+      columns:
+        cov_type:
+          prms: cov_type
+          processes: [PRMSCanopy, PRMSSnow, PRMSSoilzone]
+        covden_sum:
+          prms: covden_sum
+          processes: [PRMSCanopy, PRMSSnow]
+        covden_win:
+          prms: covden_win
+          processes: [PRMSCanopy, PRMSSnow]
+        srain_intcp:
+          prms: srain_intcp
+          processes: [PRMSCanopy]
+        wrain_intcp:
+          prms: wrain_intcp
+          processes: [PRMSCanopy]
+        snow_intcp:
+          prms: snow_intcp
+          processes: [PRMSCanopy]
+        retention:
+          prms: rad_trncf
+          processes: [PRMSSnow]
+        rad_trncf:
+          prms: rad_trncf
+          processes: [PRMSSnow]
+      provenance: {}
 
   # NALCMS 2020: no keep raster -> crosswalk evergreen_retention column.
 
@@ -148,6 +292,39 @@ params:
         covden_win,
         retention,
       ]
+
+    # `retention` here is NOT `rad_trncf`. lulc.py:186-193 computes
+    # zonal_mean(keep)/100 or the crosswalk's evergreen_retention column -- no
+    # Beer's-law step. The module DOES carry a rad_trncf path (lulc.py:195-243),
+    # but it is gated on `radtrn_raster`, which no `script: lulc` entry
+    # configures, so it never runs for these three. Mapping it to rad_trncf would
+    # assert two different derivations are the same PRMS parameter; it stays in
+    # provenance until someone verifies what, if anything, it corresponds to.
+    prms:
+      builder: zonal_runners/lulc.py
+      columns:
+        cov_type:
+          prms: cov_type
+          processes: [PRMSCanopy, PRMSSnow, PRMSSoilzone]
+        covden_sum:
+          prms: covden_sum
+          processes: [PRMSCanopy, PRMSSnow]
+        covden_win:
+          prms: covden_win
+          processes: [PRMSCanopy, PRMSSnow]
+        srain_intcp:
+          prms: srain_intcp
+          processes: [PRMSCanopy]
+        wrain_intcp:
+          prms: wrain_intcp
+          processes: [PRMSCanopy]
+        snow_intcp:
+          prms: snow_intcp
+          processes: [PRMSCanopy]
+      provenance:
+        retention: UNVERIFIED -- lulc.py's derivation differs from
+          lulc_prederived.py's Beer's-law rad_trncf; do not assume they are the
+          same parameter
 
   # NLCD 2021: no keep raster -> crosswalk evergreen_retention column.
 
@@ -174,6 +351,39 @@ params:
         retention,
       ]
 
+    # `retention` here is NOT `rad_trncf`. lulc.py:186-193 computes
+    # zonal_mean(keep)/100 or the crosswalk's evergreen_retention column -- no
+    # Beer's-law step. The module DOES carry a rad_trncf path (lulc.py:195-243),
+    # but it is gated on `radtrn_raster`, which no `script: lulc` entry
+    # configures, so it never runs for these three. Mapping it to rad_trncf would
+    # assert two different derivations are the same PRMS parameter; it stays in
+    # provenance until someone verifies what, if anything, it corresponds to.
+    prms:
+      builder: zonal_runners/lulc.py
+      columns:
+        cov_type:
+          prms: cov_type
+          processes: [PRMSCanopy, PRMSSnow, PRMSSoilzone]
+        covden_sum:
+          prms: covden_sum
+          processes: [PRMSCanopy, PRMSSnow]
+        covden_win:
+          prms: covden_win
+          processes: [PRMSCanopy, PRMSSnow]
+        srain_intcp:
+          prms: srain_intcp
+          processes: [PRMSCanopy]
+        wrain_intcp:
+          prms: wrain_intcp
+          processes: [PRMSCanopy]
+        snow_intcp:
+          prms: snow_intcp
+          processes: [PRMSCanopy]
+      provenance:
+        retention: UNVERIFIED -- lulc.py's derivation differs from
+          lulc_prederived.py's Beer's-law rad_trncf; do not assume they are the
+          same parameter
+
   # FORE-SCE bau_rcp45 2070: keep raster present -> raster-based retention.
 
   - name: lulc_foresce
@@ -198,6 +408,39 @@ params:
         covden_win,
         retention,
       ]
+
+    # `retention` here is NOT `rad_trncf`. lulc.py:186-193 computes
+    # zonal_mean(keep)/100 or the crosswalk's evergreen_retention column -- no
+    # Beer's-law step. The module DOES carry a rad_trncf path (lulc.py:195-243),
+    # but it is gated on `radtrn_raster`, which no `script: lulc` entry
+    # configures, so it never runs for these three. Mapping it to rad_trncf would
+    # assert two different derivations are the same PRMS parameter; it stays in
+    # provenance until someone verifies what, if anything, it corresponds to.
+    prms:
+      builder: zonal_runners/lulc.py
+      columns:
+        cov_type:
+          prms: cov_type
+          processes: [PRMSCanopy, PRMSSnow, PRMSSoilzone]
+        covden_sum:
+          prms: covden_sum
+          processes: [PRMSCanopy, PRMSSnow]
+        covden_win:
+          prms: covden_win
+          processes: [PRMSCanopy, PRMSSnow]
+        srain_intcp:
+          prms: srain_intcp
+          processes: [PRMSCanopy]
+        wrain_intcp:
+          prms: wrain_intcp
+          processes: [PRMSCanopy]
+        snow_intcp:
+          prms: snow_intcp
+          processes: [PRMSCanopy]
+      provenance:
+        retention: UNVERIFIED -- lulc.py's derivation differs from
+          lulc_prederived.py's Beer's-law rad_trncf; do not assume they are the
+          same parameter
 
   # --- ssflux (litho-weighted PRMS subsurface flux params) ---
   # Requires the CONUS-wide P2P weight matrix (build_weights mode) and a
@@ -244,6 +487,40 @@ params:
       hru_area:
         source: geometry
         scale: 1.0
+    # `processes:` is PER-COLUMN, and ssflux is why. This one entry spans
+    # PRMSSoilzone, PRMSGroundwater and PRMSRunoff across different columns, so an
+    # entry-level `processes: [PRMSRunoff]` would report 5 non-runoff parameters as
+    # feeding runoff. `hru_area` reaches here via fabric_columns, not fill_columns,
+    # and is still an emitted column that needs a PRMS decision -- Guard 1 unions
+    # both sources.
+    prms:
+      builder: zonal_runners/ssflux.py
+      columns:
+        soil2gw_max:
+          prms: soil2gw_max
+          processes: [PRMSSoilzone]
+        ssr2gw_rate:
+          prms: ssr2gw_rate
+          processes: [PRMSSoilzone]
+        fastcoef_lin:
+          prms: fastcoef_lin
+          processes: [PRMSSoilzone]
+        slowcoef_lin:
+          prms: slowcoef_lin
+          processes: [PRMSSoilzone]
+        gwflow_coef:
+          prms: gwflow_coef
+          processes: [PRMSGroundwater]
+        dprst_seep_rate_open:
+          prms: dprst_seep_rate_open
+          processes: [PRMSRunoff]
+        dprst_flow_coef:
+          prms: dprst_flow_coef
+          processes: [PRMSRunoff]
+      provenance:
+        k_perm_wtd: litho-weighted permeability, flux-normalisation input
+        mean_slope_fraction: tan(radians(slope mean)), flux-normalisation input
+        hru_area: fabric geometry.area in m2 -- NOT PRMS hru_area, which is acres
     # Lithology permeability + PRMS flux normalisation (lifted verbatim
     # from configs/zonal/ssflux_param.yml).
     k_perm_min: -16.48

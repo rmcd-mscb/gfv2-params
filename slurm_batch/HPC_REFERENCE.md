@@ -1337,6 +1337,7 @@ sacct -j <JOBID> -o JobID,State,Elapsed,MaxRSS
 | `slurm_batch/run_dprst_depth_batch.batch` | `submit_dprst_depth.sh` | `configs/depstor/depstor_rasters.yml` | `scripts/run_dprst_depth_batch.py --batch_id $SLURM_ARRAY_TASK_ID` |
 | `slurm_batch/mean_zonal_dprst_depth.batch` | `submit_dprst_depth.sh` | `configs/depstor/depstor_params.yml` | `scripts/derive_depstor_params.py --mode mean_zonal --mean dprst_depth_avg` |
 | `slurm_batch/mean_finalize_dprst_depth.batch` | `submit_dprst_depth.sh` | `configs/depstor/depstor_params.yml` | `scripts/derive_depstor_params.py --mode mean_finalize --mean dprst_depth_avg` |
+| `slurm_batch/copy_depstor_constants.batch` | `submit_depstor_params.sh` | `configs/depstor/depstor_params.yml` | `scripts/derive_depstor_params.py --mode copy_constants` — copies every `constants:` source into `merged/`, chained `afterok` on the ratios job. Seconds, no array; needs `submit_dprst_depth.sh` to have written `op_flow_thres_params.csv` first, and fails loudly if not |
 
 ### Stage 3 / fabric-prep batches
 

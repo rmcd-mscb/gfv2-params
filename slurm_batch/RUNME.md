@@ -328,7 +328,18 @@ slurm_batch/submit_depstor_params.sh "$BATCHES" gfv2 configs/base_config.yml
 **What it does:** `submit_zonal_params.sh` chains every zonal parameter (array
 + merge per param, `slope`→`ssflux` dependency and weights prereq handled
 automatically); `submit_depstor_params.sh` chains all 10 depstor fractions +
-the 6 PRMS ratios job.
+the 6 PRMS ratios job, and finally chains a `copy_constants` job (`afterok` on
+ratios) that copies every `constants:` entry — today just `op_flow_thres` — from
+`{fabric}/depstor_rasters/` into `{fabric}/params/merged/` under its canonical
+`nhm_*_params.csv` name.
+
+That last job is what makes "everything a PRMS consumer needs is in `merged/`"
+**true** rather than aspirational: `op_flow_thres` is a PRMSRunoff parameter a
+builder writes directly, so without it anyone globbing `merged/nhm_*_params.csv`
+silently drops a parameter — and nothing downstream complains
+(`merge_and_fill_params.py` warns and still exits 0). It is chained rather than
+manual for exactly that reason. It needs step 3c (`submit_dprst_depth.sh`) to
+have COMPLETED, and fails loudly naming the missing file if not.
 
 **Wait for:** all submitted jobs `COMPLETED` — monitor with `squeue -u "$USER"`.
 

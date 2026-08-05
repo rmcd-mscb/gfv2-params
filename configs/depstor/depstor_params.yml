@@ -121,6 +121,16 @@ means:
     # not a PRMS parameter -- and is deliberately excluded, same reasoning as
     # snarea_curve's cv_* columns.
     fill_columns: [dprst_depth_avg]
+    prms:
+      builder: depstor_builders/dprst_depth.py + dprst_depth/aggregate.py
+      columns:
+        dprst_depth_avg:
+          prms: dprst_depth_avg
+          processes: [PRMSRunoff]
+      provenance:
+        dprst_depth_provenance:
+          how each HRU's depth was derived (3dep_raw / hollister_flat /
+          calibrated / no_dprst_cells)
 
 # Ratio derivations -- final PRMS parameters in {output_dir}/{merged_subdir}/.
 # numerator/denominator reference fraction `name`s above; derive_depstor_params
@@ -137,6 +147,13 @@ ratios:
     clamp_to_one: false
     output_file: nhm_sro_to_dprst_perv_params.csv
     fill_columns: [sro_to_dprst_perv]
+    prms:
+      builder: depstor_builders/same_hru_drains.py + perv.py
+      columns:
+        sro_to_dprst_perv:
+          prms: sro_to_dprst_perv
+          processes: [PRMSRunoff]
+      provenance: {}
 
   - name: sro_to_dprst_imperv
     numerator: drains_imperv_frac
@@ -144,6 +161,13 @@ ratios:
     clamp_to_one: false
     output_file: nhm_sro_to_dprst_imperv_params.csv
     fill_columns: [sro_to_dprst_imperv]
+    prms:
+      builder: depstor_builders/same_hru_drains.py + imperv.py
+      columns:
+        sro_to_dprst_imperv:
+          prms: sro_to_dprst_imperv
+          processes: [PRMSRunoff]
+      provenance: {}
 
   - name: carea_max
     numerator: carea_t8_frac
@@ -151,6 +175,13 @@ ratios:
     clamp_to_one: true
     output_file: nhm_carea_max_params.csv
     fill_columns: [carea_max]
+    prms:
+      builder: depstor_builders/carea_map.py
+      columns:
+        carea_max:
+          prms: carea_max
+          processes: [PRMSRunoff]
+      provenance: {}
 
   - name: smidx_coef
     numerator: carea_t156_frac
@@ -158,6 +189,13 @@ ratios:
     clamp_to_one: true
     output_file: nhm_smidx_coef_params.csv
     fill_columns: [smidx_coef]
+    prms:
+      builder: depstor_builders/carea_map.py
+      columns:
+        smidx_coef:
+          prms: smidx_coef
+          processes: [PRMSRunoff]
+      provenance: {}
 
   # imperv_count / hru_pixel_count -- per-HRU fraction of land area classified
   # as impervious. Bounded in [0, 1] by construction.
@@ -167,6 +205,15 @@ ratios:
     clamp_to_one: false
     output_file: nhm_hru_percent_imperv_params.csv
     fill_columns: [hru_percent_imperv]
+    prms:
+      builder: depstor_builders/imperv.py + landmask.py
+      columns:
+        hru_percent_imperv:
+          {
+            prms: hru_percent_imperv,
+            processes: [PRMSRunoff, PRMSSoilzone, PRMSEt],
+          }
+      provenance: {}
 
   # dprst_count / hru_pixel_count -- per-HRU fraction of land area classified
   # as depression storage. Bounded in [0, 1] by construction.
@@ -180,3 +227,39 @@ ratios:
     clamp_to_one: false
     output_file: nhm_dprst_frac_params.csv
     fill_columns: [dprst_frac]
+    prms:
+      builder: depstor_builders/dprst.py + landmask.py
+      columns:
+        dprst_frac:
+          prms: dprst_frac
+          processes: [PRMSRunoff, PRMSSoilzone, PRMSEt]
+      provenance: {}
+
+# Constant per-HRU params a depstor BUILDER writes directly, with no zonal pass.
+# Copied into merged/ by `--mode copy_constants` so the "everything a consumer
+# needs is in merged/" invariant holds. Before this list existed, op_flow_thres
+# was invisible both to iter_declared_params AND to warn_undeclared_merged_files
+# (which globs merged_dir), so anyone assembling a parameter file by globbing
+# merged/nhm_*_params.csv silently dropped a PRMSRunoff parameter.
+#
+# NOT a `means:` entry: run_mean_zonal does Path(spec["source_raster"])
+# unconditionally and _find_mean advertises every means[].name as a runnable
+# --mean target, so a raster-less means entry is a KeyError waiting for the first
+# operator who types `--mean op_flow_thres`. op_flow_thres is a constant 1.0 built
+# from the fabric's id list (depstor_builders/dprst_depth.py:361-387) with no
+# raster at all.
+constants:
+  - name: op_flow_thres
+    source: "{data_root}/{fabric}/depstor_rasters/op_flow_thres_params.csv"
+    merged_file: nhm_op_flow_thres_params.csv
+    # A no-op rather than a KNN pass: the builder already writes one row per HRU
+    # (the id column comes from ctx.hru_gpkg), so there is no gap to fill. Declared
+    # anyway so the fill sweep's own guards see the file.
+    fill_columns: [op_flow_thres]
+    prms:
+      builder: depstor_builders/dprst_depth.py
+      columns:
+        op_flow_thres:
+          prms: op_flow_thres
+          processes: [PRMSRunoff]
+      provenance: {}

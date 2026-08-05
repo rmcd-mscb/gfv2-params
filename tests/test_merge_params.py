@@ -6,12 +6,14 @@ is the source of truth; the CLI shell in scripts/merge_params.py now
 delegates to it. These tests target the library function directly.
 """
 
+import math
 from pathlib import Path
 
 import pandas as pd
 import pytest
 
 from gfv2_params.zonal_runners import run_merge as process_files
+from gfv2_params.zonal_runners.merge import apply_derived_columns
 
 
 def _make_config(tmp_path, fabric="gfv2", source_type="elevation", expected_max=None):
@@ -97,3 +99,79 @@ class TestProcessFiles:
 
         with pytest.raises(ValueError, match="nat_hru_id"):
             process_files(config, logger)
+
+
+# ---------------------------------------------------------------------------
+# derived_columns: PRMS-quantity columns computed at merge time (D0a).
+#
+# Lives here rather than in tests/test_params_index.py because importing
+# gfv2_params.zonal_runners pulls the geo stack (raster_ops -> rasterio/GDAL),
+# and that module is deliberately geo-import-free.
+# ---------------------------------------------------------------------------
+
+
+def test_apply_derived_columns_converts_slope_degrees_to_rise_run():
+    """gfv2 HRU 1 is the worked example: mean = 4.4252 deg -> hru_slope = 0.0774.
+
+    Copied verbatim without this conversion, `mean` declares a 77-degree cliff
+    instead of a 4.4-degree hillslope.
+
+    tan(radians(4.4252)) is 0.07738825, not the 0.077398 the plan quoted -- close
+    enough to pass a 1e-3 tolerance and fail a 1e-4 one, which is exactly what it
+    did. The value here is the computed one.
+    """
+    df = pd.DataFrame({"nat_hru_id": [1, 2], "mean": [4.4252, 45.0]})
+    out = apply_derived_columns(
+        df, {"hru_slope": {"from": "mean", "transform": "deg_to_fraction"}}
+    )
+    assert math.isclose(out["hru_slope"][0], 0.07738825, rel_tol=1e-6)
+    assert math.isclose(out["hru_slope"][1], 1.0, rel_tol=1e-9)  # tan(45 deg) == 1
+    assert "mean" in out.columns  # the raw stat is kept as declared provenance
+
+
+def test_apply_derived_columns_rejects_an_unknown_transform():
+    """A whitelist, not getattr(raster_ops, name): a typo must raise."""
+    df = pd.DataFrame({"mean": [1.0]})
+    with pytest.raises(ValueError, match="not a known transform"):
+        apply_derived_columns(df, {"x": {"from": "mean", "transform": "nope"}})
+
+
+def test_apply_derived_columns_rejects_a_missing_source_column():
+    df = pd.DataFrame({"mean": [1.0]})
+    with pytest.raises(ValueError, match="not in the merged"):
+        apply_derived_columns(
+            df, {"x": {"from": "absent", "transform": "deg_to_fraction"}}
+        )
+
+
+def test_apply_derived_columns_is_a_noop_when_undeclared():
+    df = pd.DataFrame({"mean": [1.0]})
+    assert list(apply_derived_columns(df, None).columns) == ["mean"]
+    assert list(apply_derived_columns(df, {}).columns) == ["mean"]
+
+
+def test_run_merge_emits_the_declared_derived_column(tmp_path):
+    """End to end through run_merge: config -> merged CSV with hru_slope."""
+    config = _make_config(tmp_path, source_type="slope")
+    config["derived_columns"] = {
+        "hru_slope": {"from": "mean", "transform": "deg_to_fraction"}
+    }
+    batch_dir = Path(config["output_dir"]) / "slope"
+    pd.DataFrame({"nat_hru_id": [1, 2], "mean": [4.4252, 45.0]}).to_csv(
+        batch_dir / "base_nhm_slope_gfv2_batch_0_param.csv", index=False
+    )
+
+    import logging
+
+    process_files(config, logging.getLogger("test_derived"))
+
+    out = pd.read_csv(
+        Path(config["output_dir"]) / "merged" / "nhm_slope_params.csv"
+    )
+    assert "hru_slope" in out.columns
+    # Same computed value as the unit test above -- NOT the plan's 0.077398, which
+    # sat here passing on 2.5% of a 1e-5 budget while a docstring 55 lines up
+    # declared it wrong.
+    assert math.isclose(
+        out.loc[out["nat_hru_id"] == 1, "hru_slope"].iloc[0], 0.07738825, rel_tol=1e-6
+    )

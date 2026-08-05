@@ -11,6 +11,44 @@ from pathlib import Path
 
 import pandas as pd
 
+from gfv2_params import raster_ops
+
+# Transforms a `derived_columns:` entry may name. Deliberately a whitelist rather
+# than getattr(raster_ops, name): a typo must raise, not silently resolve to some
+# other module-level function that happens to share the name.
+_TRANSFORMS = {
+    "deg_to_fraction": raster_ops.deg_to_fraction,
+}
+
+
+def apply_derived_columns(df, derived_columns: dict | None):
+    """Add each declared derived column to a merged frame.
+
+    Applied AFTER concat so it runs once per param rather than once per batch, and
+    at merge time rather than zonal time -- which is why adding one needs no zonal
+    re-run, only `--mode merge`.
+
+    The source column is KEPT: it is declared provenance, not a temporary. For
+    `slope` that matters, since `mean` (degrees) is what `hru_slope` is derived
+    from and what a reader needs to check the derivation.
+    """
+    for out_col, spec in (derived_columns or {}).items():
+        src, tname = spec["from"], spec["transform"]
+        if tname not in _TRANSFORMS:
+            raise ValueError(
+                f"`{tname}` is not a known transform for derived column '{out_col}'. "
+                f"Known: {sorted(_TRANSFORMS)}."
+            )
+        if src not in df.columns:
+            raise ValueError(
+                f"derived column '{out_col}' reads '{src}', which is not in the merged "
+                f"frame (columns: {sorted(df.columns)})."
+            )
+        # The transform vectorises (deg_to_fraction is np.tan(np.deg2rad(x))),
+        # so hand it the Series rather than calling it 361k times per param.
+        df[out_col] = _TRANSFORMS[tname](df[src].astype(float))
+    return df
+
 
 def run_merge(config: dict, logger) -> None:
     """Concat per-batch CSVs for one param into the merged output CSV.
@@ -69,6 +107,11 @@ def run_merge(config: dict, logger) -> None:
                 "If this is expected, run merge_and_fill_params.py to fill gaps via KNN.",
                 len(gaps), id_feature, expected_max, len(existing_ids), gaps[:10],
             )
+
+    derived = config.get("derived_columns")
+    if derived:
+        merged_df = apply_derived_columns(merged_df, derived)
+        logger.info("Applied derived columns: %s", sorted(derived))
 
     output_path = final_output_dir / merged_file
     merged_df.to_csv(output_path, index=False)
