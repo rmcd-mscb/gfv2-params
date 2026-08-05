@@ -10,10 +10,19 @@ of defect it was written for. This is the guard that catches a new column reachi
 disk with no PRMS decision recorded -- which is exactly how the hru_slope and
 hru_aspect defects arose.
 
-Direction matters: this asserts DISK is a subset of DECLARED, not equality. Alias
-columns (lulc_nhm_v11's retention | rad_trncf) mean only one alternative is present
-on any given fabric, so declared-but-absent is expected and fine. Absent-but-
-undeclared is the failure.
+BOTH directions are checked, by two separate tests:
+
+* disk -> declared: a column reached disk with no PRMS decision recorded.
+* declared -> disk: `prms.columns` claims a PRMS parameter the file does not
+  actually carry. The generated index renders every `prms.columns` entry as a fact
+  about what is on disk, so without this the doc can advertise a parameter nobody
+  emits. This is not hypothetical -- `hru_slope` is this PR's headline deliverable
+  and, checked only one way, nothing anywhere verified it reached disk.
+
+Alias groups are the reason the second direction is not simple equality: only one
+alternative of lulc_nhm_v11's `retention` | `rad_trncf` exists on any given fabric,
+so alias members are exempted. They are derived from the list-valued entries of
+`fill_columns`, not hardcoded.
 
 Pure pandas + yaml: no rasterio/GDAL/pyogrio, so it is head-node safe -- but per
 CLAUDE.md, run it under srun on a compute node anyway, not on the login node.
@@ -31,13 +40,21 @@ from gfv2_params.params_index import load_declared_params
 
 _DECLARED = load_declared_params()
 
-# Columns that identify an HRU rather than parameterise it. Mirrors
-# scripts/merge_and_fill_params.py's ID_COLUMNS, duplicated rather than imported
-# because that module pulls in geopandas/sklearn and this test must not. The
-# active fabric's own id_feature is added on top: the four stages do not all agree
-# on the id column name (gfv2's id_feature is nat_hru_id, but the depstor mean and
-# snarea stages write hru_id), and an id column is never a PRMS parameter.
-_ID_COLUMNS = {"hru_id", "nat_hru_id", "model_hru_idx", "vpu"}
+def _alias_members(declared) -> set[str]:
+    """Column names that are alternatives of one another, not independent columns.
+
+    A list-valued `fill_columns` entry IS the alias declaration -- lulc_nhm_v11's
+    `[retention, rad_trncf]` marks the same computed quantity under two names across
+    fabric vintages. Exactly one member is on disk for a given fabric, so the
+    declared -> disk direction must exempt them. Derived, not hardcoded, so a new
+    alias group needs no edit here.
+    """
+    return {
+        alt
+        for item in declared.fill_columns
+        if isinstance(item, (list, tuple))
+        for alt in item
+    }
 
 
 def _merged_dir_and_id() -> tuple[Path, str]:
@@ -64,13 +81,59 @@ def test_guard2_declared_columns_cover_disk(declared):
         | set(declared.prms.get("provenance") or {})
     )
 
-    undeclared = header - declared_cols - _ID_COLUMNS - {id_feature}
+    undeclared = header - declared_cols - {id_feature}
     assert not undeclared, (
         f"{declared.name}: {sorted(undeclared)} exist in {path.name} but are declared "
         f"in none of prms.columns / prms.defects / prms.provenance. A new column "
         f"reached disk with no PRMS decision recorded -- that is exactly how the "
         f"hru_slope and hru_aspect defects arose."
     )
+
+
+@pytest.mark.parametrize("declared", _DECLARED, ids=lambda d: d.name)
+def test_guard2_declared_columns_are_present_on_disk(declared):
+    """The converse direction: prms.columns must not claim a column nobody emits.
+
+    scripts/build_parameter_index.py renders every prms.columns entry into
+    docs/parameter_index.md as a statement about what is in merged/, so a declared
+    column absent from disk means the published index advertises a PRMS parameter
+    that does not exist.
+
+    `hru_slope` is exactly why this matters. It is emitted by a `derived_columns:`
+    block applied at merge time, so if the operator never re-ran the merge, or a
+    future edit dropped the block, the config would still claim the column, the doc
+    would still advertise it, and the disk -> declared direction would still pass.
+    Nothing would notice. (There IS a loud path today via resolve_fill_plan, but
+    only because hru_slope was also added to fill_columns -- a derived column that
+    is not declared fillable would have no backstop at all.)
+    """
+    merged_dir, _ = _merged_dir_and_id()
+    if not merged_dir.exists():
+        pytest.skip(f"no data root on this host: {merged_dir}")
+
+    path = merged_dir / declared.merged_file
+    if not path.exists():
+        pytest.skip(f"not built for this fabric: {path}")
+
+    header = set(pd.read_csv(path, nrows=0).columns)
+    required = set(declared.prms.get("columns") or {}) - _alias_members(declared)
+    missing = required - header
+    assert not missing, (
+        f"{declared.name}: {sorted(missing)} are declared in prms.columns as PRMS "
+        f"parameters but are NOT in {path.name}. Either the file needs rebuilding "
+        f"(for a derived_columns output, re-run --mode merge for this param), or "
+        f"the declaration is wrong. docs/parameter_index.md is currently "
+        f"advertising a parameter that is not on disk."
+    )
+
+    # An alias group must contribute at least one member, or the parameter really
+    # is absent and the exemption above would hide it.
+    aliases = _alias_members(declared) & set(declared.prms.get("columns") or {})
+    if aliases:
+        assert aliases & header, (
+            f"{declared.name}: none of the alias alternatives {sorted(aliases)} is "
+            f"present in {path.name}. Exactly one is expected per fabric vintage."
+        )
 
 
 def test_guard2_is_gated_not_silently_empty():

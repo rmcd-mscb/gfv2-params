@@ -5,11 +5,14 @@ importable by the index generator (``scripts/build_parameter_index.py``) and by
 the two guards, not only by the fill sweep.
 
 Pure YAML: only the static ``name`` / ``merged_file`` / ``output_file`` /
-``fill_columns`` / ``fabric_columns`` / ``prms`` fields are read, none of which
-are ``{data_root}``/``{fabric}``-templated. That keeps this import safe with no
-data root -- the CI contract recorded at ``scripts/merge_and_fill_params.py``'s
-config-path block: tests may parse these files but must not touch a real data
-root.
+``params_file`` / ``fill_columns`` / ``fabric_columns`` / ``prms`` fields are
+read, none of which are ``{data_root}``/``{fabric}``-templated. A bare
+``yaml.safe_load`` is therefore enough -- no need for
+``gfv2_params.config.load_config``'s fabric-profile resolution.
+
+**CI contract:** tests may parse these config files but must not touch a real
+data root. This module is where that contract now lives; it moved here with
+``iter_declared_params``.
 
 Import-safe by construction: ``src/gfv2_params/__init__.py`` holds only
 ``__version__``, so ``import gfv2_params.params_index`` pulls in no geo
@@ -19,7 +22,8 @@ libraries.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import NamedTuple
+from types import MappingProxyType
+from typing import Mapping, NamedTuple
 
 import yaml
 
@@ -76,7 +80,15 @@ class DeclaredParam(NamedTuple):
     merged_file: str
     fill_columns: list
     fabric_columns: dict
-    prms: dict = {}
+    # MappingProxyType, not `{}`: a NamedTuple default is a single object shared
+    # by every instance built without it, so one `d.prms[k] = v` on a defaulted
+    # record would poison the class default process-wide. docs/python-patterns.md
+    # Pattern 5 names this exact gotcha and prescribes `field(default_factory=dict)`
+    # -- unavailable on a NamedTuple, so a read-only empty mapping is the
+    # equivalent. `== {}` and `bool(...)` both still behave, so the positional
+    # constructions in the tests are unaffected. A `None` sentinel was rejected:
+    # it would force None-handling into all nine `d.prms.get(...)` call sites.
+    prms: Mapping = MappingProxyType({})
 
 
 def _load_yaml_doc(path: Path) -> dict:

@@ -267,3 +267,87 @@ def test_generated_index_is_up_to_date():
             "docs/parameter_index.md is stale -- run "
             "`python scripts/build_parameter_index.py` and commit the result."
         )
+
+
+# The 8 processes any declared column may name. pywatershed 2.0.4's Process
+# classes plus the two PRMS-only consumers TM6B9 documents. Hardcoded rather than
+# imported: pywatershed lives in the `reference` pixi env, not `dev`, so importing
+# it would make this test env-dependent -- and the point is to catch a TYPO, which
+# a frozen list does as well as a live import.
+_KNOWN_PROCESSES = {
+    "PRMSRunoff",
+    "PRMSSoilzone",
+    "PRMSSnow",
+    "PRMSCanopy",
+    "PRMSGroundwater",
+    "PRMSEt",
+    "PRMSSolarGeometry",
+    "PRMSAtmosphere",
+}
+
+
+@pytest.mark.parametrize("declared", pi.load_declared_params(), ids=lambda d: d.name)
+def test_guard1_column_specs_are_well_formed(declared):
+    """Every columns/defects spec needs a `prms` name and a `processes` list.
+
+    Guard 1 otherwise looks only at the spec KEYS, so a spec like
+    `{processes: [PRMSRunoff]}` with the `prms:` key omitted passes Guard 1, passes
+    Guard 2, makes params_for_process silently return nothing useful, and then dies
+    inside scripts/build_parameter_index.py as a bare `KeyError: 'prms'` -- an error
+    pointing at a documentation generator rather than at the typo'd YAML.
+    """
+    for bucket in ("columns", "defects"):
+        for col, spec in (declared.prms.get(bucket) or {}).items():
+            where = f"{declared.name}.prms.{bucket}.{col}"
+            assert isinstance(spec, dict), f"{where} must be a mapping, got {spec!r}"
+            assert isinstance(spec.get("prms"), str) and spec["prms"], (
+                f"{where} has no `prms:` name. Without it the index generator "
+                f"raises a bare KeyError far from the config that caused it."
+            )
+            assert isinstance(spec.get("processes"), list), (
+                f"{where} has no `processes:` list. Use [] for a parameter no "
+                f"pywatershed Process consumes (hru_elev), not a missing key."
+            )
+
+
+@pytest.mark.parametrize("declared", pi.load_declared_params(), ids=lambda d: d.name)
+def test_guard1_process_names_are_known(declared):
+    """A misspelt process name fails NOTHING without this.
+
+    `PRMSSoilzon` silently drops that column from params_for_process("PRMSSoilzone")
+    and invents a phantom `### PRMSSoilzon` section in the generated index -- and
+    because the index is regenerated from the same typo, the staleness check still
+    passes. The doc would confidently document a process that does not exist.
+    """
+    for bucket in ("columns", "defects"):
+        for col, spec in (declared.prms.get(bucket) or {}).items():
+            unknown = set(spec.get("processes") or []) - _KNOWN_PROCESSES
+            assert not unknown, (
+                f"{declared.name}.prms.{bucket}.{col} names unknown process(es) "
+                f"{sorted(unknown)}. Known: {sorted(_KNOWN_PROCESSES)}. If this is a "
+                f"genuinely new pywatershed Process, add it to _KNOWN_PROCESSES."
+            )
+
+
+def test_every_config_entry_reaches_the_declaration():
+    """An entry with a typo'd `merged_file:` vanishes silently from the declaration.
+
+    iter_declared_params skips any entry whose merged_file/output_file is falsy, and
+    a skipped entry generates no parametrize case -- so the "prms: is mandatory" rule
+    and both guards simply never run on it, and it never reaches the index. The
+    backstop is a KeyError inside a SLURM-chained merge job, where it has to be
+    noticed in sacct; this catches it in CI instead.
+    """
+    declared = {d.name for d in pi.load_declared_params()}
+    for config, sections in (
+        (pi.ZONAL_PARAMS_CONFIG, ("params",)),
+        (pi.DEPSTOR_PARAMS_CONFIG, ("means", "ratios", "constants")),
+    ):
+        doc = pi._load_yaml_doc(config)
+        for section in sections:
+            for entry in doc.get(section) or []:
+                assert entry["name"] in declared, (
+                    f"{config.name}'s `{section}:` entry '{entry['name']}' never "
+                    f"reached load_declared_params() -- check its "
+                    f"merged_file:/output_file: key for a typo."
+                )
