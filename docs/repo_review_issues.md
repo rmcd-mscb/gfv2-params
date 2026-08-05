@@ -9,6 +9,7 @@ it can be copied into a GitHub/GitLab issue tracker individually.
 ## Usability (Earth Scientist / Non-CS User)
 
 ### US-1 · Add a "Quick Start for Scientists" section to RUNME.md
+**Status: DONE — PR #192.**
 **Priority:** High
 
 RUNME.md is written for engineers who already understand SLURM job arrays,
@@ -24,6 +25,7 @@ classifier design. Link to the full steps for anything non-standard.
 ---
 
 ### US-2 · Replace inline bash variable setup with a helper script
+**Status: DONE — PR #194.**
 **Priority:** High
 
 Step 4 of RUNME.md requires the user to run a Python one-liner inside bash to
@@ -47,6 +49,7 @@ BATCHES=$(pixi run data-root)/gfv2/batches
 ---
 
 ### US-3 · Promote the wholesale submit wrappers to the primary path in RUNME.md
+**Status: DONE — PR #196.**
 **Priority:** Medium
 
 `submit_zonal_params.sh` and `submit_depstor_params.sh` are currently
@@ -63,6 +66,7 @@ at a time" detail block for debugging use.
 ---
 
 ### US-4 · Document which steps are required vs. optional more clearly
+**Status: DONE — PR #198.**
 **Priority:** Medium
 
 Several steps in RUNME.md are marked "opt-in comparison only" or "(optional)"
@@ -202,10 +206,19 @@ development phases. They are not tests, not documentation, and not production
 code. They add noise to code search and create a false impression that they
 may be needed.
 
-**Proposed fix:**
-Delete the directory. The git history preserves these files if they are ever
-needed. If any script is genuinely still useful for reference, move it to
-`docs/` with a note explaining its purpose.
+**⚠️ Superseded in part — do NOT delete wholesale.** `notebooks/_archive/` is
+currently the ONLY written record of the known aspect-circularity simplification
+(the arithmetic-vs-circular mean of `hru_aspect`). That note is what lets
+[#201](https://github.com/rmcd-mscb/gfv2-params/issues/201) be framed as a
+*measured limitation* rather than an oversight, and both `CLAUDE.md` and
+`docs/superpowers/specs/2026-08-04-prms-parameter-index-design.md` now depend on
+the tree surviving. PR #205 excluded it from linting on the same basis.
+
+**Proposed fix (revised):**
+Port the aspect-circularity note into `docs/` FIRST — it belongs beside the
+`hru_aspect` entry in `docs/parameter_index.md`'s Known gaps. Only then consider
+pruning the rest of the directory. Git history is not a sufficient home for a
+caveat that a reader needs to find without knowing it exists.
 
 ---
 
