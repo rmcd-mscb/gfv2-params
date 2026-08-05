@@ -5,8 +5,9 @@ process that consumes it, the config entry that declares it, and the builder tha
 it.
 
 Process membership is from `pywatershed.<Process>.get_parameters()` (pywatershed 2.0.4, the
-`reference` pixi env), not inference. Column lists are observed on-disk headers from
-`gfv2/params/merged/`.
+`reference` pixi env), not inference. Column lists are observed on-disk headers from `gfv2/params/merged/`, except
+`lulc_nlcd` and `lulc_foresce`, which have never been built and are derived from the
+shared `script: lulc` builder.
 
 **19 config entries** are declared, of which **17** are built for gfv2 — `lulc_nlcd` and
 `lulc_foresce` have never been built on any fabric (see
@@ -321,10 +322,11 @@ transform, and the column was renamed to `rad_trncf` after gfv2/oregon were buil
 
 On `lulc_nalcms` / `lulc_nlcd` / `lulc_foresce` it is **not** `rad_trncf`.
 `lulc.py:186-193` computes `zonal_mean(keep)/100` or the crosswalk's `evergreen_retention`
-column. The module *does* carry a Beer's-law `rad_trncf` path (`lulc.py:194-239`), but it is
-gated on `radtrn_raster`, which is configured for none of these three entries
-(`zonal_params.yml:163-165` says so) — so it never runs for them. What
-PRMS parameter it corresponds to, if any, is unverified.
+column. The module *does* carry a Beer's-law `rad_trncf` path (`lulc.py:195-243`), but it is
+gated on `radtrn_raster`, which is configured for none of these three entries —
+each `script: lulc` entry in `zonal_params.yml` says so in its own comment, and
+`radtrn_raster` appears only on the `script: lulc_prederived` entry. So it never runs
+for them. What PRMS parameter it corresponds to, if any, is unverified.
 
 ### `soils` → `soil_type` is an identity mapping — and the source metadata says otherwise
 

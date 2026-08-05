@@ -198,7 +198,7 @@ Columns (continuous zonal, exactextract defaults):
 After the array job finishes, `--mode merge` concatenates every batch CSV
 into `{output_dir}/merged/{merged_file}` (one row per HRU, sorted by
 `id_feature`); see
-[`src/gfv2_params/zonal_runners/merge.py:15-75`](../src/gfv2_params/zonal_runners/merge.py#L15-L75).
+[`src/gfv2_params/zonal_runners/merge.py`](../src/gfv2_params/zonal_runners/merge.py)'s `run_merge`.
 For `elevation` that is
 `{data_root}/{fabric}/params/merged/nhm_elevation_params.csv`.
 

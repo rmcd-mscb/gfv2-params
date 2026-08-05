@@ -6,6 +6,7 @@ is the source of truth; the CLI shell in scripts/merge_params.py now
 delegates to it. These tests target the library function directly.
 """
 
+import math
 from pathlib import Path
 
 import pandas as pd
@@ -119,8 +120,6 @@ def test_apply_derived_columns_converts_slope_degrees_to_rise_run():
     enough to pass a 1e-3 tolerance and fail a 1e-4 one, which is exactly what it
     did. The value here is the computed one.
     """
-    import math
-
     df = pd.DataFrame({"nat_hru_id": [1, 2], "mean": [4.4252, 45.0]})
     out = apply_derived_columns(
         df, {"hru_slope": {"from": "mean", "transform": "deg_to_fraction"}}
@@ -170,4 +169,9 @@ def test_run_merge_emits_the_declared_derived_column(tmp_path):
         Path(config["output_dir"]) / "merged" / "nhm_slope_params.csv"
     )
     assert "hru_slope" in out.columns
-    assert abs(out.loc[out["nat_hru_id"] == 1, "hru_slope"].iloc[0] - 0.077398) < 1e-5
+    # Same computed value as the unit test above -- NOT the plan's 0.077398, which
+    # sat here passing on 2.5% of a 1e-5 budget while a docstring 55 lines up
+    # declared it wrong.
+    assert math.isclose(
+        out.loc[out["nat_hru_id"] == 1, "hru_slope"].iloc[0], 0.07738825, rel_tol=1e-6
+    )

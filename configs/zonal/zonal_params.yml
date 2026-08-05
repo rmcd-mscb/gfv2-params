@@ -295,7 +295,7 @@ params:
 
     # `retention` here is NOT `rad_trncf`. lulc.py:186-193 computes
     # zonal_mean(keep)/100 or the crosswalk's evergreen_retention column -- no
-    # Beer's-law step. The module DOES carry a rad_trncf path (lulc.py:194-239),
+    # Beer's-law step. The module DOES carry a rad_trncf path (lulc.py:195-243),
     # but it is gated on `radtrn_raster`, which no `script: lulc` entry
     # configures, so it never runs for these three. Mapping it to rad_trncf would
     # assert two different derivations are the same PRMS parameter; it stays in
@@ -353,7 +353,7 @@ params:
 
     # `retention` here is NOT `rad_trncf`. lulc.py:186-193 computes
     # zonal_mean(keep)/100 or the crosswalk's evergreen_retention column -- no
-    # Beer's-law step. The module DOES carry a rad_trncf path (lulc.py:194-239),
+    # Beer's-law step. The module DOES carry a rad_trncf path (lulc.py:195-243),
     # but it is gated on `radtrn_raster`, which no `script: lulc` entry
     # configures, so it never runs for these three. Mapping it to rad_trncf would
     # assert two different derivations are the same PRMS parameter; it stays in
@@ -411,7 +411,7 @@ params:
 
     # `retention` here is NOT `rad_trncf`. lulc.py:186-193 computes
     # zonal_mean(keep)/100 or the crosswalk's evergreen_retention column -- no
-    # Beer's-law step. The module DOES carry a rad_trncf path (lulc.py:194-239),
+    # Beer's-law step. The module DOES carry a rad_trncf path (lulc.py:195-243),
     # but it is gated on `radtrn_raster`, which no `script: lulc` entry
     # configures, so it never runs for these three. Mapping it to rad_trncf would
     # assert two different derivations are the same PRMS parameter; it stays in

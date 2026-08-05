@@ -134,11 +134,14 @@ def _declared_columns(declared):
 def test_guard1_prms_declares_every_fillable_column(declared):
     """Guard 1 only proves the declaration is SELF-CONSISTENT.
 
-    It runs declaration -> declaration and cannot see disk, so it is a tautology on
-    most entries and vacuous on the three whose on-disk payload exceeds their
-    fill_columns (ssflux declares 7 of 10 columns, snarea 13 of 23, dprst_depth_avg
-    1 of 2). Guard 2 (tests/test_params_index_ondisk.py) is the one that catches a
-    new column reaching disk with no PRMS decision recorded.
+    It runs declaration -> declaration and cannot see disk. On 16 of 19 entries
+    fill_columns and the declared columns are the same set, so it is a literal
+    tautology; on the other three the fill_columns cover only part of the on-disk
+    header (ssflux 7 of 10, snarea 13 of 23, dprst_depth_avg 1 of 2), leaving the
+    remainder unchecked HERE -- note `prms:` itself declares all of them, it is
+    `fill_columns` that is the smaller set. Guard 2
+    (tests/test_params_index_ondisk.py) is the one that catches a new column
+    reaching disk with no PRMS decision recorded.
     """
     assert declared.prms, (
         f"{declared.name} has no `prms:` block. It is mandatory, not optional -- "
