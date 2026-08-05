@@ -7,7 +7,6 @@
 #
 # VPU 08 includes RPU 03g — same cross-VPU case as the NHD merge.
 
-
 "01":
   TWI:
     rpus:
