@@ -1,0 +1,42 @@
+#!/bin/bash
+#SBATCH -p cpu
+#SBATCH -A impd
+#SBATCH --job-name=depstor_constants
+#SBATCH --output=logs/job_%j.out
+#SBATCH --error=logs/job_%j.err
+#SBATCH --time=00:10:00
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=2
+#SBATCH --mem=8G
+#
+# Copy every `constants:` entry in configs/depstor/depstor_params.yml from
+# {fabric}/depstor_rasters/ into {fabric}/params/merged/ under its canonical
+# nhm_*_params.csv name. Today that is just op_flow_thres.
+#
+# This job is what makes "everything a PRMS consumer needs is in merged/" TRUE
+# rather than aspirational. op_flow_thres is a PRMSRunoff parameter a depstor
+# builder writes directly, so before it was chained here the invariant rested on
+# an operator remembering a manual command: skip it and merge_and_fill_params
+# logs one WARNING among many and still exits 0, the on-disk guard SKIPS, and a
+# modeler globbing merged/nhm_*_params.csv silently drops the parameter. Chained,
+# not manual, for exactly the reason CLAUDE.md gives: a guard that lives only in
+# the producing builder never executes on the path operators actually use.
+#
+# Prereq: slurm_batch/submit_dprst_depth.sh must have COMPLETED — it writes
+# depstor_rasters/op_flow_thres_params.csv. If it has not, this job fails loudly
+# with a FileNotFoundError naming the missing source, which is the intent.
+#
+# Submitted with an afterok dependency on the ratios job by
+# slurm_batch/submit_depstor_params.sh. Standalone:
+#   sbatch --export=ALL,BASE_CONFIG=configs/base_config.yml,FABRIC=gfv2 \
+#       slurm_batch/copy_depstor_constants.batch
+
+cd "$SLURM_SUBMIT_DIR"
+BASE_CONFIG=${BASE_CONFIG:-configs/base_config.yml}
+FABRIC=${FABRIC:-gfv2}
+
+pixi run --as-is python scripts/derive_depstor_params.py \
+    --config configs/depstor/depstor_params.yml \
+    --base_config "$BASE_CONFIG" \
+    --fabric "$FABRIC" \
+    --mode copy_constants

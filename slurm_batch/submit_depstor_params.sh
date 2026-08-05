@@ -11,6 +11,14 @@
 # carea_max, smidx_coef, hru_percent_imperv, dprst_frac) into
 # {fabric}/params/merged/.
 #
+# Finally a copy_constants job (afterok on ratios) copies every `constants:`
+# entry -- today just op_flow_thres -- from {fabric}/depstor_rasters/ into
+# {fabric}/params/merged/. It is CHAINED rather than manual because it is what
+# makes "everything a PRMS consumer needs is in merged/" true: skipped, a
+# PRMSRunoff parameter goes missing and every downstream signal still reads
+# green (merge_and_fill_params warns and exits 0, the on-disk guard skips).
+# It needs submit_dprst_depth.sh to have COMPLETED first, and fails loudly if not.
+#
 # The 10 fractions are the canonical list from configs/depstor/depstor_params.yml; if
 # you add or remove fractions there, update FRACTIONS below.
 #
@@ -98,4 +106,10 @@ RATIOS_JOB_ID=$(sbatch --dependency=afterok:"$DEPENDS" \
                      slurm_batch/derive_depstor_ratios.batch | awk '{print $NF}')
 echo "  ratios afterok:$DEPENDS -> $RATIOS_JOB_ID"
 
-echo "Done. Final ratios job ID: $RATIOS_JOB_ID"
+echo "Submitting copy_constants job (afterok:$RATIOS_JOB_ID)"
+CONSTANTS_JOB_ID=$(sbatch --dependency=afterok:"$RATIOS_JOB_ID" \
+                     --export=ALL,BASE_CONFIG="$BASE_CONFIG",FABRIC="$FABRIC" \
+                     slurm_batch/copy_depstor_constants.batch | awk '{print $NF}')
+echo "  constants afterok:$RATIOS_JOB_ID -> $CONSTANTS_JOB_ID"
+
+echo "Done. Final copy_constants job ID: $CONSTANTS_JOB_ID"
