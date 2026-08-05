@@ -1,0 +1,16 @@
+# I1/I2 arm B: grouping. --group-components sets how many instances of a group
+# are packed into ONE submission; 4 mirrors the %4 array cap the production
+# wrappers use, so arm B is the closest grouped analogue of today's behaviour.
+executor: slurm
+jobs: 8
+printshellcmds: True
+latency-wait: 60
+group-components:
+  - importers=4
+default-resources:
+  slurm_account: impd
+  slurm_partition: cpu
+  mem_mb: 8000
+  runtime: 20
+groups:
+  - import_probe=importers

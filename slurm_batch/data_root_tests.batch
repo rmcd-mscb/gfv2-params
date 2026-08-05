@@ -1,0 +1,75 @@
+#!/bin/bash
+#SBATCH -p cpu
+#SBATCH -A impd
+#SBATCH --job-name=data_root_tests
+#SBATCH --output=logs/job_%j.out
+#SBATCH --error=logs/job_%j.err
+#SBATCH --time=00:30:00
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=2
+#SBATCH --mem=16G
+#
+# Run every DATA-ROOT-GATED test on a compute node, and print the job id that
+# their result must be recorded against.
+#
+# WHY THIS EXISTS (answers I5 of the Snakemake migration spec).
+#
+# A whole class of test in this repo asserts something about real on-disk
+# products, so it cannot run in CI: `.github/workflows/ci.yml` is
+# `runs-on: ubuntu-latest` with no data root, and these tests `pytest.skip` when
+# the data root is absent. CI therefore reports them GREEN while they assert
+# NOTHING. And CLAUDE.md forbids pytest on the HPC login node. So without a job
+# like this, such a test has nowhere to run at all -- which is exactly the
+# blocker the migration spec identified for its proposed parity gate.
+#
+# The convention, which the spec asks for and this job enforces:
+#
+#   A data-root-gated test's result is recorded BY SLURM JOB ID, in the relevant
+#   issue or PR. It is NEVER inferred from a green CI badge, because a green CI
+#   badge for these tests means "skipped".
+#
+# CURRENT MEMBERS
+#   tests/test_params_index_ondisk.py -- Guard 2 of the PRMS parameter index
+#       (PR #203). Asserts the declared column set matches the on-disk header in
+#       BOTH directions. 4 skip points, all data-root conditional.
+#
+# A Snakemake/.batch parity test joins this list when one exists (spec I5). It is
+# the same shape: it needs two real product trees to compare, so it can only run
+# where a data root does.
+#
+# USAGE
+#   sbatch slurm_batch/data_root_tests.batch                 # active fabric
+#   sbatch --export=ALL,FABRIC=oregon slurm_batch/data_root_tests.batch
+#
+# Then quote the job id. `sacct -j <id> --format=JobID,JobName,State,Elapsed`
+# is the receipt.
+
+cd "$SLURM_SUBMIT_DIR"
+FABRIC=${FABRIC:-}
+
+echo "=================================================================="
+echo " data-root-gated tests"
+echo " SLURM job id : ${SLURM_JOB_ID}   <-- RECORD THIS. A green CI badge"
+echo "                                      does not cover these tests."
+echo " host         : $(hostname)"
+echo " fabric       : ${FABRIC:-<active default from base_config.yml>}"
+echo "=================================================================="
+
+if [ -n "$FABRIC" ]; then
+    export FABRIC
+fi
+
+# -ra surfaces the skip REASONS. A run where everything skipped is a run that
+# proved nothing, and the reasons are how you tell that from a real pass.
+pixi run --as-is -e dev python -m pytest \
+    tests/test_params_index_ondisk.py \
+    -v -ra
+RC=$?
+
+echo "=================================================================="
+echo " exit code $RC for SLURM job ${SLURM_JOB_ID}"
+if [ $RC -ne 0 ]; then
+    echo " FAILED -- do not record this as a passing gate."
+fi
+echo "=================================================================="
+exit $RC
