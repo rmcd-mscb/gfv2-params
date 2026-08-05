@@ -313,7 +313,13 @@ with:
 
 - [ ] **Step 4: Check the same claim isn't repeated elsewhere**
 
-Run: `grep -rn "loops every param\|loops that exact\|loops the" --include=*.md --include=*.sh . | grep -v node_modules | grep -v "^./site/"`
+Run: `grep -rn "loops every\|loops that\|loops the" --include=*.md --include=*.sh --include=*.py . | grep -v node_modules | grep -v "^./site/"`
+
+**Match on the verb, not the phrase.** An earlier pattern here was
+`loops every param\|loops that exact\|loops the`, which missed six sites saying
+"loops every **entry**" — including `README.md` twice and `ADDING_A_PARAMETER.md:41`,
+Hop 1 of the very file being fixed. A too-specific grep reports clean and hides the
+biggest hits. Include `--include=*.py` too: `scripts/derive_zonal_params.py:17` carried it.
 Expected: remaining hits are in `slurm_batch/submit_zonal_params.sh`'s own header and `scripts/merge_and_fill_params.py`'s docstring, both of which describe the *intent* correctly ("if you add or remove entries there, also update PARAMS below"). Fix any other doc that repeats the false claim.
 
 - [ ] **Step 5: Run pre-commit**

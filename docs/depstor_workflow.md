@@ -437,9 +437,10 @@ produce, per fabric:
     └── nhm_hru_total_count_params.csv    # NEW in PR #72; denominator for the area-fraction ratios
 ```
 
-The 13 PRMS depstor parameters not produced here (`dprst_frac_open`,
-`dprst_frac_clos`, `dprst_depth_avg`, `dprst_seep_rate_clos`,
-`dprst_et_coef`, `op_flow_thres`, `va_open_exp`, `va_clos_exp`,
+`dprst_depth_avg` and `op_flow_thres` ARE produced as of #173 — see
+[`docs/parameter_index.md`](parameter_index.md). The remaining PRMS depstor
+parameters not produced here (`dprst_frac_open`, `dprst_frac_clos`,
+`dprst_seep_rate_clos`, `dprst_et_coef`, `va_open_exp`, `va_clos_exp`,
 `dprst_frac_init`, `imperv_stor_max`, `smidx_exp`) come from NHM defaults
 or a separate sourcing decision — see the "Out-of-scope PRMS dprst params"
 cell in `notebooks/qaqc_depstor_vpu01.ipynb`.

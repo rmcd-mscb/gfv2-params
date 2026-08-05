@@ -65,7 +65,9 @@ def _bash_array(script: Path, name: str) -> list[str]:
 def test_wrapper_array_matches_config_names(script_rel, array_name, config_rel, config_key):
     script = _REPO_ROOT / script_rel
     config = _REPO_ROOT / config_rel
-    if not script.exists():
+    # Guard BOTH sides: if the migration retires the config as well as the wrapper,
+    # `yaml.safe_load(...)[config_key]` would raise KeyError instead of skipping.
+    if not script.exists() or not config.exists():
         pytest.skip(f"{script_rel} retired by the Snakemake migration -- delete this test")
 
     from_bash = _bash_array(script, array_name)

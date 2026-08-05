@@ -250,8 +250,8 @@ via (highest precedence first):
 3. Run `prepare_fabric.py --fabric oregon` (reads `hru_gpkg` from the profile —
    no `--fabric_gpkg` needed), then submit Part 2 jobs via
    `slurm_batch/submit_zonal_params.sh $BATCHES oregon configs/base_config.yml`
-   (loops every entry in `configs/zonal/zonal_params.yml` and chains array
-   + merge per param). For Part 1 raster prep, `sbatch slurm_batch/build_shared_rasters.batch`.
+   (submits an array + merge per param in its hardcoded `PARAMS` array, which
+   mirrors `configs/zonal/zonal_params.yml`). For Part 1 raster prep, `sbatch slurm_batch/build_shared_rasters.batch`.
    The Part 2 zonal pass (and depstor) read the CONUS shared rasters from Part 1,
    so scope Part 1 to the VPUs your fabric overlaps — Oregon HRUs fall in VPU 17
    (incidental), so `VPUS=17 sbatch slurm_batch/build_shared_rasters.batch`
@@ -336,8 +336,10 @@ prereq).
 
 The slurm wrapper
 [`slurm_batch/submit_zonal_params.sh`](slurm_batch/submit_zonal_params.sh)
-loops every entry in `params:` and chains per-param array + merge jobs via
-`afterok`. When an entry carries `depends_on: build_weights` (typically
+does **not** read the YAML — it carries a hardcoded `PARAMS` bash array mirroring
+the `params:` list, and chains per-param array + merge jobs via `afterok`. Adding a
+param to the YAML without adding it to that array silently skips it;
+`tests/test_submit_wrapper_param_lists.py` guards the pair. When an entry carries `depends_on: build_weights` (typically
 `ssflux`), the wrapper first submits `build_zonal_weights.batch` and
 chains ssflux on its `afterok`.
 

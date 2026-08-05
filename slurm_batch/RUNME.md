@@ -351,7 +351,12 @@ THROTTLE=4                                                            # concurre
 **Zonal parameters** — run this pair for each `P`, in order: `elevation`,
 `slope`, `aspect`, `soils`, `soil_moist_max`, `lulc_nhm_v11`, `lulc_nalcms`,
 `lulc_nlcd`, `lulc_foresce`, and `ssflux` (`ssflux` last — it has an extra
-prereq, see below):
+prereq, see below).
+
+> **Note:** `lulc_nlcd` and `lulc_foresce` have no staged CONUS inputs
+> (`input/lulc_veg/{nlcd,foresce}/` are absent), so they fail on a gfv2 run
+> while the other eight merge normally. Skip them with
+> `export ZONAL_PARAMS="elevation slope aspect soils soil_moist_max lulc_nhm_v11 lulc_nalcms ssflux"`.
 
 ```bash
 P=elevation     # change P and re-run for each parameter above, in order

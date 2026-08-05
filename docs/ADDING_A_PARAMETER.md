@@ -38,8 +38,9 @@ pixi run -e dev python scripts/derive_zonal_params.py \
 
 This is exactly what one SLURM array task runs. The submit wrapper
 [`slurm_batch/submit_zonal_params.sh`](../slurm_batch/submit_zonal_params.sh)
-loops every entry in `zonal_params.yml` and submits an array zonal job +
-chained merge per param.
+submits an array zonal job + chained merge for each param in its hardcoded
+`PARAMS` array — it does **not** read `zonal_params.yml`. See step 5 of
+[To add a new param](#to-add-a-new-param).
 
 ### Hop 2 — Orchestrator dispatch
 
