@@ -405,7 +405,7 @@ def iter_declared_params(
     whose `params_file` names the real `nhm_snarea_curve_params.csv`. A
     synthetic `snarea_curve` entry could not live in `zonal_params.yml`
     instead. `slurm_batch/submit_zonal_params.sh` does not read the YAML -- it
-    carries a hardcoded `PARAMS` bash array (`:68-79`) mirroring that `params:`
+    carries a hardcoded `PARAMS` bash array mirroring that `params:`
     list -- and `tests/test_submit_wrapper_param_lists.py` requires the two to
     match. So a phantom entry would have to be added to the array too, and the
     wrapper would then submit a SLURM array job for an entry with no

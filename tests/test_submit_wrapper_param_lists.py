@@ -9,8 +9,14 @@ So a param added to the YAML and forgotten in the array is silently NOT RUN, and
 wrapper still exits 0. This test is the only thing that catches that.
 
 DELETE ME when the Snakemake migration retires the wrappers -- a Snakefile reads the YAML
-directly, so the duplication (and this guard) disappear. See
-``docs/superpowers/specs/2026-08-04-snakemake-migration-design.md``.
+directly, so the duplication (and this guard) disappear. Tracked as issue #141.
+
+Scope limit: this pins the DEFAULT ``PARAMS`` array only. ``submit_zonal_params.sh``
+supports a ``ZONAL_PARAMS`` environment override that replaces the array wholesale at
+runtime, and gfv2 in practice runs 8 of the 10 params because two LULC sources have
+unstaged inputs. So a green result here does NOT mean all declared params run on a given
+fabric -- it means the checked-in default and the config agree. Subsetting a run is what
+``ZONAL_PARAMS`` is for; commenting out array elements will fail this test, by design.
 
 Pure text + ``yaml.safe_load``: no geo imports, no data root, so it is CI-safe and
 head-node-safe.

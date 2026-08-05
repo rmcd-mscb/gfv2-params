@@ -8,6 +8,10 @@ Process membership is from `pywatershed.<Process>.get_parameters()` (pywatershed
 `reference` pixi env), not inference. Column lists are observed on-disk headers from
 `gfv2/params/merged/`.
 
+The 16 `nhm_*_params.csv` files below are the complete set. Note `gfv2/params/merged/` also
+still holds two `filled_nhm_*.csv` files from the retired `filled_` prefix convention
+(PR #189) — they are superseded, not parameters, and are not listed here.
+
 > **Hand-maintained as of 2026-08-04.** Generated from `configs/` once
 > `scripts/build_parameter_index.py` lands — see
 > `docs/superpowers/specs/2026-08-04-prms-parameter-index-design.md` in the repo
@@ -22,13 +26,21 @@ Process membership is from `pywatershed.<Process>.get_parameters()` (pywatershed
 - *provenance* marks an emitted column that is not a PRMS parameter — a diagnostic, an
   intermediate, or a raw statistic.
 
-Three columns need care before use. Each is explained in [Known gaps](#known-gaps):
+**Five columns are renames** (⚠️): `mean`→`hru_elev`, `mean`→`hru_slope`, `soils`→`soil_type`,
+`retention`→`rad_trncf`, and `op_flow_thres` (right name, wrong directory). Feed any of them
+to PRMS under its emitted name and PRMS will not recognise it.
+
+Three of those are *actively dangerous* rather than merely misnamed — they produce wrong
+numbers or silent omission. Each is explained in [Known gaps](#known-gaps):
 
 | Emitted | Reality |
 | --- | --- |
 | `nhm_slope_params.csv:mean` | degrees, not PRMS rise/run — **~57× if copied verbatim** |
 | `nhm_aspect_params.csv:mean` | **DEFECTIVE** — arithmetic mean of a circular variable ([#201](https://github.com/rmcd-mscb/gfv2-params/issues/201)) |
 | `op_flow_thres_params.csv` | a PRMSRunoff parameter that is **not in `merged/`** |
+
+The other two renames (`soils`→`soil_type`, `retention`→`rad_trncf`) are safe once you know
+them; the per-process tables below mark every one with ⚠️.
 
 ---
 
@@ -48,7 +60,7 @@ Three columns need care before use. Each is explained in [Known gaps](#known-gap
 | `hru_percent_imperv` | `nhm_hru_percent_imperv_params.csv` | `hru_percent_imperv` | `depstor_params.yml:164` | `depstor_builders/imperv.py` + `landmask.py` |
 | `dprst_frac` | `nhm_dprst_frac_params.csv` | `dprst_frac` | `depstor_params.yml:177` | `depstor_builders/dprst.py` + `landmask.py` |
 | `dprst_depth_avg` | `nhm_dprst_depth_avg_params.csv` | `dprst_depth_avg` | `depstor_params.yml:107` (`means:`) | `depstor_builders/dprst_depth.py` + `dprst_depth/aggregate.py` |
-| `op_flow_thres` ⚠️ | **`op_flow_thres_params.csv`** — in `depstor_rasters/`, **not** `merged/` | `op_flow_thres` | `depstor_rasters.yml:83` | `depstor_builders/dprst_depth.py:361` |
+| `op_flow_thres` ⚠️ | **`op_flow_thres_params.csv`** — in `depstor_rasters/`, **not** `merged/` | `op_flow_thres` | `depstor_rasters.yml:77` | `depstor_builders/dprst_depth.py:361` |
 
 `dprst_frac` also appears in `merged/_intermediates/` under the same filename — that copy is
 a partial-pixel **count**, not a `[0, 1]` fraction. The PRMS parameter is the one in
@@ -160,7 +172,7 @@ partial-pixel-weighted count CSVs to `merged/_intermediates/` and feed the ratio
 
 | Entry | Output | PRMS parameter |
 | --- | --- | --- |
-| `dprst_depth` `:70`, output name `:83` | `depstor_rasters/op_flow_thres_params.csv` | `op_flow_thres` — **not in `merged/`** |
+| `dprst_depth` `:70`, output name `:77` | `depstor_rasters/op_flow_thres_params.csv` | `op_flow_thres` — **not in `merged/`** |
 
 ### `configs/snarea/snarea_library.yml`
 
@@ -178,7 +190,7 @@ the rest. A NaN there is a result, not a gap, which is why they are excluded fro
 
 | Builder module | PRMS parameters produced |
 | --- | --- |
-| `zonal_runners/zonal.py` | `hru_elev`, `hru_slope` ⚠️, `hru_aspect` (DEFECTIVE) |
+| `zonal_runners/zonal.py` | `hru_elev` ⚠️, `hru_slope` ⚠️, `hru_aspect` (DEFECTIVE) |
 | `zonal_runners/soils.py` | `soil_type` ⚠️, `soil_moist_max` |
 | `zonal_runners/lulc_prederived.py` | `cov_type`, `covden_sum`, `covden_win`, `srain_intcp`, `wrain_intcp`, `snow_intcp`, `rad_trncf` ⚠️ |
 | `zonal_runners/lulc.py` | `cov_type`, `covden_sum`, `covden_win`, `srain_intcp`, `wrain_intcp`, `snow_intcp` (+ unverified `retention`) |
@@ -212,7 +224,9 @@ parameters are correct. But nothing currently *emits* `hru_slope`. Apply
 `tan(radians(mean))` yourself until the pipeline emits it directly.
 
 Known approximation once it does: `tan(mean θ) ≠ mean(tan θ)`, and `tan` is convex, so the
-conversion systematically underestimates. Measured over all 361,471 gfv2 HRUs: median
+conversion systematically underestimates. Estimated (second-order Taylor from the
+on-disk `mean`/`std` — `mean(tan θ)` is not recoverable from summary statistics) over all
+361,471 gfv2 HRUs: median
 **0.2%**, p90 2.4%, p99 5.6%.
 
 ### `hru_aspect` is DEFECTIVE — do not use `nhm_aspect_params.csv:mean`
@@ -250,7 +264,9 @@ transform, and the column was renamed to `rad_trncf` after gfv2/oregon were buil
 
 On `lulc_nalcms` / `lulc_nlcd` / `lulc_foresce` it is **not** `rad_trncf`.
 `lulc.py:186-193` computes `zonal_mean(keep)/100` or the crosswalk's `evergreen_retention`
-column — no Beer's-law step, and no `radtrn_raster` is configured for those entries. What
+column. The module *does* carry a Beer's-law `rad_trncf` path (`lulc.py:194-239`), but it is
+gated on `radtrn_raster`, which is configured for none of these three entries
+(`zonal_params.yml:163-165` says so) — so it never runs for them. What
 PRMS parameter it corresponds to, if any, is unverified.
 
 ### Unverified mappings

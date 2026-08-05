@@ -21,8 +21,8 @@ USGS HPC cluster.
   end-to-end. The pattern transfers.
 - **Which parameters feed a given PRMS process?** →
   [Parameter index](parameter_index.md) maps every emitted parameter to its
-  PRMS process, config entry, and builder — and flags the three columns whose
-  emitted name is not the PRMS quantity.
+  PRMS process, config entry, and builder — and flags every column whose
+  emitted name is not the PRMS quantity, plus one that is outright defective.
 - **Hit an unfamiliar Python idiom?** →
   [Python patterns](python-patterns.md) explains the 10 non-obvious idioms
   this codebase uses (placeholder strings, `require_config_key`, the

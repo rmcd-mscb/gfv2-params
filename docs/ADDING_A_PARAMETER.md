@@ -233,17 +233,24 @@ For `elevation` that is
 5. **Add the param to the submit wrapper's `PARAMS` array.**
    [`slurm_batch/submit_zonal_params.sh`](../slurm_batch/submit_zonal_params.sh)
    does **not** read the YAML — it carries a hardcoded bash array
-   (`PARAMS`, lines 68-79) and exports `PARAM=<name>` per element.
+   (`PARAMS`) and exports `PARAM=<name>` per element.
    A param present in the YAML but absent from that array is silently
    **not run**, and the wrapper still exits 0.
 
    Order matters: keep `slope` before `ssflux`, which reads the merged
    slope CSV at zonal time. If your param needs the CONUS weight matrix or
-   an upstream merge, add it to `NEEDS_WEIGHTS` (line 94) or
-   `NEEDS_MERGE_OF` (line 101) as well.
+   an upstream merge, add it to `NEEDS_WEIGHTS` or
+   `NEEDS_MERGE_OF` in the same file as well.
 
    [`tests/test_submit_wrapper_param_lists.py`](../tests/test_submit_wrapper_param_lists.py)
-   guards this, so CI will catch a forgotten entry — but only after you push.
+   guards this — it asserts the array and the YAML match exactly, **including
+   order** — so CI catches a forgotten or misplaced entry, but only after you push.
+   It does **not** cover `NEEDS_WEIGHTS`/`NEEDS_MERGE_OF`; verify those by hand.
+
+   Note the wrapper also honours a `ZONAL_PARAMS` environment override that
+   replaces the array wholesale at runtime — the documented way to run a subset
+   on fabrics with unstaged sources. If you submit from a shell exporting it,
+   your new param must be in *that* list too, or it still will not run.
 
 6. **Submit the full SLURM array** via
    [`slurm_batch/submit_zonal_params.sh`](../slurm_batch/submit_zonal_params.sh)

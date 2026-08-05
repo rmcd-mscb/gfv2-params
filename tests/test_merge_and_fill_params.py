@@ -512,7 +512,7 @@ def test_categorical_dtype_is_restored(tmp_path):
 # names the real `nhm_snarea_curve_params.csv`. Folding a synthetic
 # `snarea_curve` entry into zonal_params.yml's `params:` list would also reach
 # slurm_batch/submit_zonal_params.sh. That wrapper does not read the YAML — it
-# carries a hardcoded PARAMS bash array (:68-79) mirroring that list, and
+# carries a hardcoded PARAMS bash array mirroring that list, and
 # tests/test_submit_wrapper_param_lists.py requires the two to match — so the
 # phantom would have to be added to the array as well, and the wrapper would
 # then submit a SLURM array job for an entry with no `source_raster`/`script:`.
