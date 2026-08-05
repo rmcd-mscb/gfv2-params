@@ -360,12 +360,39 @@ Three independent reasons the data, not the metadata, is right:
 Cross-check against the delivered product: `nhm_soils_params.csv` gives 30.5% / 69.0% / 0.4%
 across 361,471 HRUs — the same shape, as expected for per-HRU dominant class.
 
+### `mean` → `hru_elev` is verified — and it is **metres**
+
+**Verified 2026-08-05.** This was the last inferred mapping in the index. It is documented,
+not inferred: [TM6B9:534](NHM_description_Regan_2018_TM6B9.md) defines **`hru_elev`** as
+"Mean elevation for each HRU", dimension `nhru`, units **meters**, and
+[TM6B9:601](NHM_description_Regan_2018_TM6B9.md) states it "was derived using the outline of
+the GF-defined HRU and the Digital Elevation Model". That is exactly what
+`nhm_elevation_params.csv:mean` is — an arithmetic zonal mean over the HRU outline. Only the
+*name* differs.
+
+Checked against the data as well as the document, because the `TEXT_PRMS.tif` metadata
+turned out to be wrong (see below) and a metadata claim is not evidence on its own:
+
+| Check | Observed |
+| --- | --- |
+| `shared/conus/vrt/elevation.vrt` | float32, CRS linear units **metre**, scale 1.0 / offset 0.0 |
+| sampled raster range | −84.6 m … 4,028.8 m |
+| `mean` across 361,471 gfv2 HRUs | min −84.6, median 427.8, p99 2,940.3, max 3,851.2 |
+
+Metres, unambiguously. As feet the maximum HRU mean would be 3,851 ft ≈ 1,174 m and CONUS's
+high country would simply be absent; the p99 of 2,940 would be 896 m, which is not the
+Rockies. The 327 HRUs with a negative mean are Death Valley and the Salton Sea, matching the
+raster's own −84.6 m floor.
+
+⚠️ **Two unit traps that follow from this.**
+[TM6B9:707](NHM_description_Regan_2018_TM6B9.md)'s `cov_type` reset rule is stated in
+**feet** ("exceeds 11,500 feet") for a parameter carried in metres — that threshold is
+3,505 m. And TM6B9 derived NHM v1.1's `hru_elev` from the **NHDPlus v1.0** DEM, whereas this
+pipeline uses `elevation.vrt`; same quantity, same units, different source, so per-HRU values
+will not match NHM v1.1 exactly.
+
 ### Unverified mappings
 
-- **`mean` → `hru_elev`** — inferred from `viz.py:505-507` plus
-  [TM6B9:601](NHM_description_Regan_2018_TM6B9.md). Elevation is neither circular nor
-  transformed, so the arithmetic zonal mean is the right statistic; only the *name* is
-  undocumented.
 - **pywatershed's process lists are pywatershed's view of PRMS**, not TM6B9's NHM module set.
   They agreed everywhere spot-checked, but `hru_elev` appears in no pywatershed process at
   all, so the two are not identical.
