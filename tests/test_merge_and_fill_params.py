@@ -22,6 +22,18 @@ fill_missing_values_knn = _mod.fill_missing_values_knn
 maf = _mod
 
 
+def _declared(name, merged_file, fill_columns, fabric_columns=None):
+    """Build a real DeclaredParam for a run_fill_sweep target.
+
+    A helper rather than an inline literal so the fixtures go through the SAME
+    constructor production does. Hand-built tuples are what let the last
+    DeclaredParam widening break four consumption sites while the suite stayed
+    green -- test and implementation wrong in the same direction, agreeing with
+    each other. See issue #204.
+    """
+    return maf.DeclaredParam(name, merged_file, fill_columns, fabric_columns or {})
+
+
 class TestFindMissingIds:
     def test_finds_missing_ids(self, tmp_path):
         import logging
@@ -683,8 +695,9 @@ class TestRunFillSweep:
         pd.DataFrame({"hru_id": [1, 2], "v": [1.0, 2.0]}).to_csv(bad, index=False)
 
         targets = [
-            ("good_param", good, ["v"], {}),
-            ("bad_param", bad, ["typo_column"], {}),  # not present -> resolve_fill_plan raises
+            (_declared("good_param", "nhm_good_params.csv", ["v"]), good),
+            # typo_column is not present -> resolve_fill_plan raises
+            (_declared("bad_param", "nhm_bad_params.csv", ["typo_column"]), bad),
         ]
 
         failed = maf.run_fill_sweep(
@@ -697,6 +710,41 @@ class TestRunFillSweep:
         result = pd.read_csv(good)
         assert result["hru_id"].tolist() == [1, 2, 3]
 
+    def test_consumes_the_real_producers_records(self, tmp_path):
+        """Feed `load_declared_params()`'s ACTUAL records in, not hand-built ones.
+
+        The counterpart to TestWarnUndeclaredMergedFiles's version of this test, and
+        the reason issue #204 was filed: run_fill_sweep used to take an anonymous
+        `(name, param_file, fill_columns, fabric_columns)` 4-tuple re-derived at the
+        call site, so it carried -- one layer down -- the exact shape whose widening
+        broke warn_undeclared_merged_files while the suite stayed green. Every
+        run_fill_sweep test hand-built that tuple, which is precisely the fixture
+        pattern that cannot catch a producer/consumer contract change.
+
+        This one takes a REAL DeclaredParam off the real configs and drives a fill
+        with it. If a future field widening breaks the unpacking, this fails.
+        """
+        import logging
+
+        declared = next(
+            d for d in maf.load_declared_params() if d.name == "soil_moist_max"
+        )
+        pf = tmp_path / declared.merged_file
+        pd.DataFrame({"hru_id": [1, 2], "soil_moist_max": [10.0, 20.0]}).to_csv(
+            pf, index=False
+        )
+
+        failed = maf.run_fill_sweep(
+            [(declared, pf)], self._merged_gdf(), expected_max=3,
+            id_feature="hru_id", k_neighbors=1,
+            logger=logging.getLogger("test_fill_sweep_real"),
+        )
+
+        assert failed == []
+        result = pd.read_csv(pf)
+        assert result["hru_id"].tolist() == [1, 2, 3]
+        assert result["soil_moist_max"].notna().all()
+
     def test_no_failures_returns_empty_list(self, tmp_path):
         import logging
         logger = logging.getLogger("test")
@@ -705,7 +753,8 @@ class TestRunFillSweep:
         pd.DataFrame({"hru_id": [1, 2], "v": [10.0, 20.0]}).to_csv(good, index=False)
 
         failed = maf.run_fill_sweep(
-            [("good_param", good, ["v"], {})], self._merged_gdf(), expected_max=3,
+            [(_declared("good_param", "nhm_good_params.csv", ["v"]), good)],
+            self._merged_gdf(), expected_max=3,
             id_feature="hru_id", k_neighbors=1, logger=logger,
         )
         assert failed == []
@@ -940,7 +989,8 @@ class TestFabricColumnsThroughRunFillSweep:
         pd.DataFrame({"hru_id": [1, 2], "hru_area": [111.0, 222.0], "v": [10.0, 20.0]}).to_csv(pf, index=False)
 
         failed = maf.run_fill_sweep(
-            [("ssflux", pf, ["v"], {"hru_area": {"source": "geometry", "scale": 1.0}})],
+            [(_declared("ssflux", "nhm_ssflux_params.csv", ["v"],
+                        {"hru_area": {"source": "geometry", "scale": 1.0}}), pf)],
             self._gdf(), expected_max=3, id_feature="hru_id", k_neighbors=1,
             logger=logging.getLogger("test"),
         )
@@ -965,7 +1015,8 @@ class TestFabricColumnsThroughRunFillSweep:
         pd.DataFrame({"hru_id": [1, 2], "hru_area": [111.0, 222.0]}).to_csv(pf, index=False)
 
         failed = maf.run_fill_sweep(
-            [("areaonly", pf, [], {"hru_area": {"source": "geometry", "scale": 1.0}})],
+            [(_declared("areaonly", "nhm_areaonly_params.csv", [],
+                        {"hru_area": {"source": "geometry", "scale": 1.0}}), pf)],
             self._gdf(), expected_max=3, id_feature="hru_id", k_neighbors=1,
             logger=logging.getLogger("test"),
         )
@@ -982,7 +1033,8 @@ class TestFabricColumnsThroughRunFillSweep:
         pd.DataFrame({"hru_id": [1, 2], "hru_area": [111.0, 222.0], "v": [10.0, 20.0]}).to_csv(pf, index=False)
 
         failed = maf.run_fill_sweep(
-            [("ssflux", pf, ["v"], {"hru_area": {"source": "typo_col", "scale": 1.0}})],
+            [(_declared("ssflux", "nhm_ssflux_params.csv", ["v"],
+                        {"hru_area": {"source": "typo_col", "scale": 1.0}}), pf)],
             self._gdf(), expected_max=3, id_feature="hru_id", k_neighbors=1,
             logger=logging.getLogger("test"),
         )

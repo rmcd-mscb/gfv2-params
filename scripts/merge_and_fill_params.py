@@ -497,8 +497,16 @@ def apply_fabric_columns(complete_df, missing_ids, merged_gdf, fabric_columns, i
 
 
 def run_fill_sweep(targets, merged_gdf, expected_max, id_feature, k_neighbors, logger) -> list[str]:
-    """Fill every `(name, param_file, fill_columns, fabric_col_spec)` in `targets`,
-    isolating per-param failures.
+    """Fill every `(DeclaredParam, param_file)` in `targets`, isolating per-param failures.
+
+    `targets` carries the DeclaredParam record ITSELF, not a positional re-derivation
+    of its fields. That is the whole point: this function used to take an anonymous
+    `(name, param_file, fill_columns, fabric_col_spec)` 4-tuple built at the call
+    site, which reproduced -- one layer down -- exactly the shape whose widening
+    broke `warn_undeclared_merged_files` (see `DeclaredParam`'s docstring). A sixth
+    field is now invisible here, as it is to every other consumer that reads by name.
+    `param_file` stays a companion value because it is COMPUTED (merged_dir /
+    merged_file), not declared.
 
     One param's config drift (e.g. a column rename that resolve_fill_plan can't
     resolve) must not starve every OTHER declared param of its fill -- a
@@ -508,11 +516,15 @@ def run_fill_sweep(targets, merged_gdf, expected_max, id_feature, k_neighbors, l
     decides the process exit code from the returned failure list.
     """
     failed_params: list[str] = []
-    for name, param_file, declared_columns, fabric_col_spec in targets:
+    for declared, param_file in targets:
+        name = declared.name
         logger.info("=== %s (%s) ===", name, param_file.name)
         try:
             param_df, missing_ids = find_missing_ids(param_file, expected_max, id_feature, logger)
-            plan = resolve_fill_plan(param_df, declared_columns, missing_ids, id_feature, name, fabric_col_spec)
+            plan = resolve_fill_plan(
+                param_df, declared.fill_columns, missing_ids, id_feature, name,
+                declared.fabric_columns,
+            )
 
             for col, n in plan.undeclared_with_nan.items():
                 logger.warning(
@@ -659,7 +671,7 @@ def main():
                 "configs/depstor/depstor_params.yml, or configs/snarea/snarea_library.yml "
                 "-- add a `fill_columns` entry for it before filling."
             )
-        targets = [(match.name, param_file, match.fill_columns, match.fabric_columns)]
+        targets = [(match, param_file)]
     else:
         # All-params mode (default): every declared param whose merged file has
         # already been produced for this fabric. A param not yet produced
@@ -672,7 +684,7 @@ def main():
             if not pf.exists():
                 logger.warning("Skipping %s: %s not found (not yet produced for this fabric)", d.name, pf)
                 continue
-            targets.append((d.name, pf, d.fill_columns, d.fabric_columns))
+            targets.append((d, pf))
         if not targets:
             logger.warning("No declared params' merged files were found under %s", merged_dir)
             return 0
