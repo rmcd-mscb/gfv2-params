@@ -8,7 +8,7 @@
 
 **Tech Stack:** Python 3.12/3.13, PyYAML, pandas, pytest, mkdocs-material, pixi.
 
-**Spec:** `docs/superpowers/specs/2026-08-04-prms-parameter-index-design.md`
+**Spec:** `docs/superpowers/specs/2026-08-04-prms-parameter-index-design.md` (Task 2 is outside the spec — see Self-Review)
 **Branch:** `docs/prms-parameter-index-spec`
 
 ## Global Constraints
@@ -26,7 +26,7 @@
 
 | File | Responsibility |
 | --- | --- |
-| `docs/parameter_index.md` | The deliverable. Three views over the mapping: by PRMS process, by config entry, by builder. Hand-written in Task 1, generated from Task 7 on. |
+| `docs/parameter_index.md` | The deliverable. Three views over the mapping: by PRMS process, by config entry, by builder. Hand-written in Task 1, generated from Task 8 on. |
 | `src/gfv2_params/params_index.py` | **New.** `DeclaredParam`, `iter_declared_params`, `load_declared_params`, `params_for_process`. Pure YAML — no geo imports, no data root. |
 | `scripts/merge_and_fill_params.py` | Loses `iter_declared_params`/`DeclaredParam`/`_load_declared_params`; imports them instead. Behaviour unchanged. |
 | `configs/zonal/zonal_params.yml` | Gains `prms:` per entry; `slope` also gains `derived_columns:`. |
@@ -37,12 +37,14 @@
 | `tests/test_params_index.py` | **New.** Guard 1 (declaration superset) + unit coverage ported from `test_merge_and_fill_params.py`. |
 | `tests/test_params_index_ondisk.py` | **New.** Guard 2, data-root-gated, skips in CI. |
 | `scripts/build_parameter_index.py` | **New.** Renders `docs/parameter_index.md`. |
+| `docs/ADDING_A_PARAMETER.md` | Step 5 corrected — the submit wrapper does not read the YAML. |
+| `tests/test_submit_wrapper_param_lists.py` | **New.** Guards both wrappers' hardcoded arrays against their configs. Deleted when the Snakemake migration retires the wrappers. |
 
 ---
 
 ### Task 1: Hand-write `docs/parameter_index.md` (PR 1 — standalone)
 
-Ships the answer before any schema work, and becomes the acceptance target for Task 7's generator. Reviewed row-by-row by a hydrologist: this is the step that removes the need to trust the mapping.
+Ships the answer before any schema work, and becomes the acceptance target for Task 8's generator. Reviewed row-by-row by a hydrologist: this is the step that removes the need to trust the mapping.
 
 **Files:**
 - Create: `docs/parameter_index.md`
@@ -51,7 +53,7 @@ Ships the answer before any schema work, and becomes the acceptance target for T
 
 **Interfaces:**
 - Consumes: Deliverable 1 of the spec (the 19-row mapping table) — the authoritative row data.
-- Produces: `docs/parameter_index.md` with three `##` sections whose headings Task 7 must reproduce exactly: `## By PRMS process`, `## By config entry`, `## By builder`.
+- Produces: `docs/parameter_index.md` with three `##` sections whose headings Task 8 must reproduce exactly: `## By PRMS process`, `## By config entry`, `## By builder`.
 
 - [ ] **Step 1: Create `docs/parameter_index.md`**
 
@@ -109,7 +111,7 @@ Fill the remaining `###` sections from the spec's Deliverable 1 rows using the i
 column layout. Three rows need their specific wording carried over verbatim:
 
 - **`hru_slope`** — currently emitted as `mean` in **degrees**; PRMS wants decimal fraction
-  rise/run. State the required conversion `tan(radians(mean))` and that Task 6 will emit it
+  rise/run. State the required conversion `tan(radians(mean))` and that Task 7 will emit it
   directly. Include the worked example: gfv2 HRU 1, `mean = 4.4252` → `hru_slope = 0.0774`.
 - **`hru_aspect`** — mark **DEFECTIVE — not `hru_aspect`**. Arithmetic mean of a circular
   variable; TM6B9:603 requires `atan2(mean(sin), mean(cos))`. Link issue #201.
@@ -165,11 +167,186 @@ written outside merged/."
 git push -u origin docs/prms-parameter-index-spec
 ```
 
-**PR 1 stops here.** Tasks 2-7 continue on the same branch after review, or on a follow-up branch.
+---
+
+### Task 2: Close the add-a-param trap — doc fix + bash-array guard (also PR 1)
+
+Adding a param requires editing a hardcoded bash array that **no documentation mentions and
+no test guards**. Miss it and `submit_zonal_params.sh` runs the other params, skips yours,
+and **exits 0**. The walkthrough a newcomer follows currently states the opposite of the
+truth.
+
+This is the cheapest real-defect fix in the plan and it is independent of everything else,
+so it ships alongside Task 1.
+
+**Files:**
+- Modify: `docs/ADDING_A_PARAMETER.md:239-241`
+- Create: `tests/test_submit_wrapper_param_lists.py`
+
+**Interfaces:**
+- Consumes: nothing. Pure text + `yaml.safe_load`; no package imports, so it is unaffected by Task 3's refactor.
+- Produces: nothing other tasks consume. Deleted when the Snakemake migration retires the wrappers (see `docs/superpowers/specs/2026-08-04-snakemake-migration-design.md`).
+
+- [ ] **Step 1: Write the failing test**
+
+Create `tests/test_submit_wrapper_param_lists.py`:
+
+```python
+"""The submit wrappers retype the config's `name:` lists; nothing else checks them.
+
+`slurm_batch/submit_zonal_params.sh` does NOT read the YAML -- it carries a hardcoded
+bash array (`PARAMS`) and exports PARAM=<name> per element, and
+`scripts/derive_zonal_params.py` then does a flat linear scan for a matching `name:`.
+`submit_depstor_params.sh` has the same shape with `FRACTIONS`.
+
+So a param added to the YAML and forgotten in the array is silently NOT RUN, and the
+wrapper still exits 0. This test is the only thing that catches that.
+
+DELETE ME when the Snakemake migration retires the wrappers -- a Snakefile reads the
+YAML directly and the duplication disappears.
+
+Pure text + yaml.safe_load: no geo imports, CI-safe.
+"""
+from __future__ import annotations
+
+import re
+from pathlib import Path
+
+import pytest
+import yaml
+
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+
+
+def _bash_array(script: Path, name: str) -> list[str]:
+    """Extract a `NAME=( ... )` bash array, dropping comments and blank lines."""
+    text = script.read_text()
+    m = re.search(rf"^{name}=\((.*?)^\)", text, re.S | re.M)
+    assert m, f"could not find a {name}=( ... ) array in {script}"
+    return [
+        line.split("#")[0].strip()
+        for line in m.group(1).strip().splitlines()
+        if line.split("#")[0].strip()
+    ]
+
+
+@pytest.mark.parametrize(
+    ("script_rel", "array_name", "config_rel", "config_key"),
+    [
+        ("slurm_batch/submit_zonal_params.sh", "PARAMS",
+         "configs/zonal/zonal_params.yml", "params"),
+        ("slurm_batch/submit_depstor_params.sh", "FRACTIONS",
+         "configs/depstor/depstor_params.yml", "fractions"),
+    ],
+)
+def test_wrapper_array_matches_config_names(script_rel, array_name, config_rel, config_key):
+    script = _REPO_ROOT / script_rel
+    config = _REPO_ROOT / config_rel
+    if not script.exists():
+        pytest.skip(f"{script_rel} retired by the Snakemake migration -- delete this test")
+
+    from_bash = _bash_array(script, array_name)
+    from_yaml = [e["name"] for e in yaml.safe_load(config.read_text())[config_key]]
+
+    assert from_bash == from_yaml, (
+        f"{script_rel}'s {array_name} array has drifted from {config_rel}'s "
+        f"`{config_key}:` names.\n"
+        f"  bash: {from_bash}\n"
+        f"  yaml: {from_yaml}\n"
+        f"Order matters as well as membership: the wrapper submits in array order, and "
+        f"ssflux must follow slope because it reads the merged slope CSV at zonal time."
+    )
+```
+
+- [ ] **Step 2: Verify it passes today, and would catch a real drift (login-node safe)**
+
+Run: `pixi run --as-is python -c "
+import re, yaml, pathlib
+def arr(p, n):
+    m = re.search(rf'^{n}=\((.*?)^\)', pathlib.Path(p).read_text(), re.S|re.M)
+    return [l.split('#')[0].strip() for l in m.group(1).strip().splitlines() if l.split('#')[0].strip()]
+b = arr('slurm_batch/submit_zonal_params.sh','PARAMS')
+y = [e['name'] for e in yaml.safe_load(open('configs/zonal/zonal_params.yml'))['params']]
+print('zonal match:', b == y)
+b2 = arr('slurm_batch/submit_depstor_params.sh','FRACTIONS')
+y2 = [e['name'] for e in yaml.safe_load(open('configs/depstor/depstor_params.yml'))['fractions']]
+print('depstor match:', b2 == y2)
+"`
+Expected: `zonal match: True` and `depstor match: True`. Both arrays are in sync today — the drift this guards is latent, not actual, which is exactly why it needs a test rather than a fix.
+
+Now prove it fails on drift: temporarily append `  fake_param` inside the `PARAMS=( ... )` array, re-run, expect `zonal match: False`, then **revert the edit**.
+
+- [ ] **Step 3: Fix `docs/ADDING_A_PARAMETER.md`**
+
+Replace step 5 (lines 239-241), which currently reads:
+
+```markdown
+5. **Submit the full SLURM array** via
+   [`slurm_batch/submit_zonal_params.sh`](../slurm_batch/submit_zonal_params.sh)
+   from a shell that has `pixi` on `PATH`. This loops every param in the
+   YAML and chains array zonal -> merge per param.
+```
+
+with:
+
+```markdown
+5. **Add the param to the submit wrapper's `PARAMS` array.**
+   [`slurm_batch/submit_zonal_params.sh`](../slurm_batch/submit_zonal_params.sh)
+   does **not** read the YAML — it carries a hardcoded bash array
+   (`PARAMS`, lines 68-79) and exports `PARAM=<name>` per element.
+   A param present in the YAML but absent from that array is silently
+   **not run**, and the wrapper still exits 0.
+
+   Order matters: keep `slope` before `ssflux`, which reads the merged
+   slope CSV at zonal time. If your param needs the CONUS weight matrix or
+   an upstream merge, add it to `NEEDS_WEIGHTS` (line 94) or
+   `NEEDS_MERGE_OF` (line 101) as well.
+
+   `tests/test_submit_wrapper_param_lists.py` guards this, so CI will catch
+   a forgotten entry — but only after you push.
+
+6. **Submit the full SLURM array** via
+   [`slurm_batch/submit_zonal_params.sh`](../slurm_batch/submit_zonal_params.sh)
+   from a shell that has `pixi` on `PATH`. It submits an array zonal job
+   plus a chained merge for each param in `PARAMS`.
+```
+
+- [ ] **Step 4: Check the same claim isn't repeated elsewhere**
+
+Run: `grep -rn "loops every param\|loops that exact\|loops the" --include=*.md --include=*.sh . | grep -v node_modules | grep -v "^./site/"`
+Expected: remaining hits are in `slurm_batch/submit_zonal_params.sh`'s own header and `scripts/merge_and_fill_params.py`'s docstring, both of which describe the *intent* correctly ("if you add or remove entries there, also update PARAMS below"). Fix any other doc that repeats the false claim.
+
+- [ ] **Step 5: Run pre-commit**
+
+Run: `pixi run -e dev pre-commit run --files docs/ADDING_A_PARAMETER.md tests/test_submit_wrapper_param_lists.py`
+Expected: all hooks pass (shellcheck does not run on the test; ruff formats the Python).
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add docs/ADDING_A_PARAMETER.md tests/test_submit_wrapper_param_lists.py
+git commit -m "fix(docs): ADDING_A_PARAMETER wrongly said the submit wrapper loops the YAML
+
+It does not. submit_zonal_params.sh carries a hardcoded PARAMS bash array
+(:68-79) and exports PARAM=<name> per element; derive_zonal_params.py then
+does a flat linear scan for a matching name:. A param added to the YAML and
+forgotten in the array is silently NOT RUN, and the wrapper exits 0.
+
+The script's own header states the requirement, but the walkthrough a
+newcomer follows stated the opposite.
+
+Adds tests/test_submit_wrapper_param_lists.py, which asserts both wrappers'
+arrays match their configs' name: lists in membership AND order (ssflux must
+follow slope). Both are in sync today -- the drift is latent, which is why it
+needs a guard rather than a fix. Delete the test when the Snakemake migration
+retires the wrappers."
+```
+
+**PR 1 stops here** — Tasks 1 and 2 together. Tasks 3-8 continue on the same branch after review, or on a follow-up branch.
 
 ---
 
-### Task 2: `params_index.py` — move `iter_declared_params`, widen `DeclaredParam`
+### Task 3: `params_index.py` — move `iter_declared_params`, widen `DeclaredParam`
 
 **Files:**
 - Create: `src/gfv2_params/params_index.py`
@@ -179,7 +356,7 @@ git push -u origin docs/prms-parameter-index-spec
 
 **Interfaces:**
 - Produces: `DeclaredParam(name: str, merged_file: str, fill_columns: list, fabric_columns: dict, prms: dict)` — a `NamedTuple` with `prms` defaulting to `{}`; `iter_declared_params(zonal_cfg, depstor_cfg, snarea_cfg=None) -> list[DeclaredParam]`; `load_declared_params() -> list[DeclaredParam]` reading the four repo configs.
-- Consumed by: Tasks 3, 4, 5, 6, 7 and `scripts/merge_and_fill_params.py`.
+- Consumed by: Tasks 4, 5, 6, 7, 8 and `scripts/merge_and_fill_params.py`.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -338,7 +515,7 @@ def load_declared_params() -> list[DeclaredParam]:
     )
 ```
 
-The `constants:` loop is included now so Task 5 adds only config plus a copy mode. It is a
+The `constants:` loop is included now so Task 6 adds only config plus a copy mode. It is a
 no-op until then.
 
 - [ ] **Step 4: Rewrite `scripts/merge_and_fill_params.py` to import**
@@ -416,14 +593,14 @@ Expected: `pytest tests/` passes on CI. `tests/test_params_index.py` runs; `test
 
 ---
 
-### Task 3: `prms:` metadata + Guard 1 (declaration superset)
+### Task 4: `prms:` metadata + Guard 1 (declaration superset)
 
 **Files:**
 - Modify: `configs/zonal/zonal_params.yml` (10 entries), `configs/depstor/depstor_params.yml` (1 mean + 6 ratios), `configs/snarea/snarea_library.yml` (top-level)
 - Modify: `tests/test_params_index.py`
 
 **Interfaces:**
-- Consumes: `DeclaredParam.prms` from Task 2.
+- Consumes: `DeclaredParam.prms` from Task 3.
 - Produces: `prms.columns: {emitted_column: {prms: str, processes: list[str]}}` and `prms.provenance: {emitted_column: str}` on every declared entry.
 
 - [ ] **Step 1: Write the failing guard**
@@ -683,7 +860,7 @@ git push
 
 ---
 
-### Task 4: Guard 2 — on-disk header check (data-root-gated)
+### Task 5: Guard 2 — on-disk header check (data-root-gated)
 
 Guard 1 is declaration → declaration and **cannot** catch the D2/D3 class it was written for. Guard 2 is the one that sees disk.
 
@@ -691,7 +868,7 @@ Guard 1 is declaration → declaration and **cannot** catch the D2/D3 class it w
 - Create: `tests/test_params_index_ondisk.py`
 
 **Interfaces:**
-- Consumes: `load_declared_params()` from Task 2, `load_base_config`/`require_config_key` from `gfv2_params.config`.
+- Consumes: `load_declared_params()` from Task 3, `load_base_config`/`require_config_key` from `gfv2_params.config`.
 
 - [ ] **Step 1: Write the test**
 
@@ -776,7 +953,7 @@ git push
 
 ---
 
-### Task 5: `constants:` + `op_flow_thres` into `merged/` (D1)
+### Task 6: `constants:` + `op_flow_thres` into `merged/` (D1)
 
 **Files:**
 - Modify: `configs/depstor/depstor_params.yml` (new top-level `constants:` list)
@@ -784,7 +961,7 @@ git push
 - Modify: `tests/test_params_index.py`
 
 **Interfaces:**
-- Consumes: the `constants:` loop already present in `iter_declared_params` (Task 2).
+- Consumes: the `constants:` loop already present in `iter_declared_params` (Task 3).
 - Produces: `merged/nhm_op_flow_thres_params.csv`.
 
 - [ ] **Step 1: Add the config block**
@@ -898,7 +1075,7 @@ git push
 
 ---
 
-### Task 6: `derived_columns:` + emit `hru_slope` (D0a)
+### Task 7: `derived_columns:` + emit `hru_slope` (D0a)
 
 **Files:**
 - Modify: `configs/zonal/zonal_params.yml` (the `slope` entry)
@@ -1043,7 +1220,7 @@ git push
 
 ---
 
-### Task 7: `build_parameter_index.py` — generate the index
+### Task 8: `build_parameter_index.py` — generate the index
 
 **Files:**
 - Create: `scripts/build_parameter_index.py`
@@ -1133,12 +1310,14 @@ git push
 
 ## Self-Review
 
-**Spec coverage.** Design A (`prms:` metadata) → Task 3. Design B (`params_index.py`, `DeclaredParam` widening, the six affected test sites) → Task 2. Design C (two guards) → Tasks 3 and 4. Design D (`constants:`/`op_flow_thres`) → Task 5. Design E (generated index) → Tasks 1 and 7. Design F (`derived_columns:`/`hru_slope`) → Task 6. Deliverable 1 → Task 1. D0b is scoped out to issue #201 and appears only as the DEFECTIVE marking in Tasks 1 and 3 — intentional, per the spec's "Scoped out" section.
+**Spec coverage.** Design A (`prms:` metadata) → Task 4. Design B (`params_index.py`, `DeclaredParam` widening, the six affected test sites) → Task 3. Design C (two guards) → Tasks 4 and 5. Design D (`constants:`/`op_flow_thres`) → Task 6. Design E (generated index) → Tasks 1 and 8. Design F (`derived_columns:`/`hru_slope`) → Task 7. Deliverable 1 → Task 1. D0b is scoped out to issue #201 and appears only as the DEFECTIVE marking in Tasks 1 and 4 — intentional, per the spec's "Scoped out" section.
 
-**Gap found and closed while reviewing:** Task 7 needs builder attribution to render the "By builder" view, but that data lives in no config. Added a `builder:` key to Task 7 Step 4 rather than leaving the generator with a hardcoded lookup that would drift.
+**Task 2 is not from the spec.** It closes a live defect found while answering "what files must I modify to add a param?": the submit wrappers' hardcoded arrays are undocumented and unguarded, and `ADDING_A_PARAMETER.md:239-241` asserts the opposite of the truth. Independent of the index work, near-zero risk, and deleted when the Snakemake migration retires the wrappers — so it rides in PR 1 rather than waiting.
+
+**Gap found and closed while reviewing:** Task 8 needs builder attribution to render the "By builder" view, but that data lives in no config. Added a `builder:` key to Task 8 Step 4 rather than leaving the generator with a hardcoded lookup that would drift.
 
 **Placeholder scan.** No TBD/TODO. Every code step carries real code. Task 1 Step 1 cites the spec's Deliverable 1 for row data rather than repeating 19 rows — that data exists and is committed, so it is a citation, not a placeholder; the section skeleton and the three rows needing special wording are given in full.
 
-**Type consistency.** `DeclaredParam` is 5-field with `prms: dict = {}` throughout. `iter_declared_params(zonal_cfg, depstor_cfg, snarea_cfg=None)`, `load_declared_params()`, `params_for_process(process, declared=None)`, `apply_derived_columns(df, derived_columns)` are used with those exact signatures in every task that references them. `prms.columns` values are `{prms: str, processes: list[str]}` in Tasks 3, 5, 6 and read that way in Task 7.
+**Type consistency.** `DeclaredParam` is 5-field with `prms: dict = {}` throughout. `iter_declared_params(zonal_cfg, depstor_cfg, snarea_cfg=None)`, `load_declared_params()`, `params_for_process(process, declared=None)`, `apply_derived_columns(df, derived_columns)` are used with those exact signatures in every task that references them. `prms.columns` values are `{prms: str, processes: list[str]}` in Tasks 4, 6, 7 and read that way in Task 8.
 
 **Adaptation to this repo's constraints.** The skill's standard "run the test, watch it fail" cycle cannot run locally — CLAUDE.md forbids pytest on the head node. Every failing-test step is therefore either an import-free one-liner (pure YAML/`py_compile`) or an explicit `srun` on a compute node, with CI as the authoritative gate. This is stated in Global Constraints and applied per-step.
