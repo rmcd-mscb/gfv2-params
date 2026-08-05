@@ -38,8 +38,9 @@ pixi run -e dev python scripts/derive_zonal_params.py \
 
 This is exactly what one SLURM array task runs. The submit wrapper
 [`slurm_batch/submit_zonal_params.sh`](../slurm_batch/submit_zonal_params.sh)
-loops every entry in `zonal_params.yml` and submits an array zonal job +
-chained merge per param.
+submits an array zonal job + chained merge for each param in its hardcoded
+`PARAMS` array — it does **not** read `zonal_params.yml`. See step 5 of
+[To add a new param](#to-add-a-new-param).
 
 ### Hop 2 — Orchestrator dispatch
 
@@ -230,10 +231,32 @@ For `elevation` that is
        --fabric gfv2_vpu01
    ```
    Check the per-batch CSV under `{data_root}/{fabric}/params/<newname>/`.
-5. **Submit the full SLURM array** via
+5. **Add the param to the submit wrapper's `PARAMS` array.**
    [`slurm_batch/submit_zonal_params.sh`](../slurm_batch/submit_zonal_params.sh)
-   from a shell that has `pixi` on `PATH`. This loops every param in the
-   YAML and chains array zonal -> merge per param.
+   does **not** read the YAML — it carries a hardcoded bash array
+   (`PARAMS`) and exports `PARAM=<name>` per element.
+   A param present in the YAML but absent from that array is silently
+   **not run**, and the wrapper still exits 0.
+
+   Order matters: keep `slope` before `ssflux`, which reads the merged
+   slope CSV at zonal time. If your param needs the CONUS weight matrix or
+   an upstream merge, add it to `NEEDS_WEIGHTS` or
+   `NEEDS_MERGE_OF` in the same file as well.
+
+   [`tests/test_submit_wrapper_param_lists.py`](../tests/test_submit_wrapper_param_lists.py)
+   guards this — it asserts the array and the YAML match exactly, **including
+   order** — so CI catches a forgotten or misplaced entry, but only after you push.
+   It does **not** cover `NEEDS_WEIGHTS`/`NEEDS_MERGE_OF`; verify those by hand.
+
+   Note the wrapper also honours a `ZONAL_PARAMS` environment override that
+   replaces the array wholesale at runtime — the documented way to run a subset
+   on fabrics with unstaged sources. If you submit from a shell exporting it,
+   your new param must be in *that* list too, or it still will not run.
+
+6. **Submit the full SLURM array** via
+   [`slurm_batch/submit_zonal_params.sh`](../slurm_batch/submit_zonal_params.sh)
+   from a shell that has `pixi` on `PATH`. It submits an array zonal job
+   plus a chained merge for each param in `PARAMS`.
 
 ## See also
 

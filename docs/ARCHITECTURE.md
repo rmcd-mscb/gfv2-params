@@ -650,6 +650,16 @@ zonal param family):
 2. **Register in the package's `__init__.py`** — add to the `BUILDERS` /
    `STEP_ORDER` / `BATCH_RUNNERS` registries as appropriate.
 3. **Add a config block** in the matching unified config under `configs/`.
+   For **depstor** this is mandatory and enforced: `build_depstor_rasters.py`
+   raises if a `STEP_ORDER` step has no block in `depstor_rasters.yml`, and
+   `tests/test_expected_outputs.py` asserts the two agree. (It used to be
+   silent — a registered-but-unconfigured step was skipped, and
+   `_hydrate_existing_outputs` then served the previous run's artifact for its
+   output key, so a `--from` rebuild re-emitted stale CONUS product at exit 0.)
+   **`shared_rasters` is deliberately different**: its config omits the opt-in
+   `compute_dem_derivatives` and `compute_breached_fdr` steps, so its
+   orchestrator tolerates registered-but-unconfigured steps by design. Don't
+   copy the depstor guard there.
 4. **Add a test** under `tests/test_<name>.py`. CI (`.github/workflows/ci.yml`)
    gates the merge; the head-node-pytest prohibition (see CLAUDE.md) does
    not apply to PR-driven CI.

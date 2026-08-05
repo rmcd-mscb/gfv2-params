@@ -404,10 +404,13 @@ def iter_declared_params(
     (`configs/snarea/snarea_library.yml`, Stage 3), a flat single-param config
     whose `params_file` names the real `nhm_snarea_curve_params.csv`. A
     synthetic `snarea_curve` entry could not live in `zonal_params.yml`
-    instead: `slurm_batch/submit_zonal_params.sh` loops that exact `params:`
-    list to submit one SLURM array job per param, and a phantom entry with no
-    `source_raster`/`script:` would break that orchestration. Hence the
-    separate optional argument rather than a fourth zonal-shaped list.
+    instead. `slurm_batch/submit_zonal_params.sh` does not read the YAML -- it
+    carries a hardcoded `PARAMS` bash array mirroring that `params:`
+    list -- and `tests/test_submit_wrapper_param_lists.py` requires the two to
+    match. So a phantom entry would have to be added to the array too, and the
+    wrapper would then submit a SLURM array job for an entry with no
+    `source_raster`/`script:`. Hence the separate optional argument rather than
+    a fourth zonal-shaped list.
     """
     def _record(name: str, merged_file: str, entry: dict) -> DeclaredParam:
         return DeclaredParam(

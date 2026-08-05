@@ -15,9 +15,9 @@
 #
 # For the chained-merge workflows (zonal + depstor params), use the
 # dedicated wrappers instead:
-#   slurm_batch/submit_zonal_params.sh   (loops every zonal param, chains
+#   slurm_batch/submit_zonal_params.sh   (loops its own PARAMS array, chains
 #                                         array -> merge per param)
-#   slurm_batch/submit_depstor_params.sh (loops every depstor fraction,
+#   slurm_batch/submit_depstor_params.sh (loops its own FRACTIONS array,
 #                                         chains array -> merge -> ratios)
 
 set -euo pipefail

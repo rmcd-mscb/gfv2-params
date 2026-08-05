@@ -14,9 +14,10 @@ Three modes:
         Compute the CONUS-wide P2P weight matrix that ssflux consumes.
         Honours --force.
 
-The slurm wrapper slurm_batch/submit_zonal_params.sh loops every entry in
-configs/zonal/zonal_params.yml's `params:` list and chains all three modes into a
-per-param afterok DAG (with build_weights submitted first for entries that
+The slurm wrapper slurm_batch/submit_zonal_params.sh carries a hardcoded PARAMS
+bash array mirroring configs/zonal/zonal_params.yml's `params:` list (it does NOT
+read the YAML; tests/test_submit_wrapper_param_lists.py guards the pair) and chains
+all three modes into a per-param afterok DAG (with build_weights submitted first for entries that
 carry `depends_on: build_weights`).
 
 Pattern mirrors scripts/derive_depstor_params.py (PR #72).
