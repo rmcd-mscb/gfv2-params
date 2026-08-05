@@ -70,7 +70,7 @@ a partial-pixel **count**, not a `[0, 1]` fraction. The PRMS parameter is the on
 
 | PRMS parameter | Emitted file | Column | Config entry | Builder |
 | --- | --- | --- | --- | --- |
-| `soil_type` ⚠️ | `nhm_soils_params.csv` | `soils` — identity, **1=sand, 2=loam, 3=clay**; the source metadata is wrong, see [Known gaps](#soils--soil_type-is-an-identity-mapping--and-the-source-metadata-says-otherwise) | `zonal_params.yml:74` | `zonal_runners/soils.py:78` |
+| `soil_type` ⚠️ | `nhm_soils_params.csv` | `soils` — identity, **1=sand, 2=loam, 3=clay**; the source metadata is wrong, see [Known gaps](#soils-soil_type-is-an-identity-mapping-and-the-source-metadata-says-otherwise) | `zonal_params.yml:74` | `zonal_runners/soils.py:78` |
 | `soil_moist_max` | `nhm_soil_moist_max_params.csv` | `soil_moist_max` | `zonal_params.yml:81` | `zonal_runners/soils.py` |
 | `cov_type` | `nhm_lulc_nhm_v11_params.csv` | `cov_type` | `zonal_params.yml:96` | `zonal_runners/lulc_prederived.py` |
 | `soil2gw_max` | `nhm_ssflux_params.csv` | `soil2gw_max` | `zonal_params.yml:208` | `zonal_runners/ssflux.py` |
