@@ -323,12 +323,23 @@ holds the full stack (through `carea_map_t8/t156_binary.tif`).
 BATCHES=$(pixi run data-root)/gfv2/batches
 slurm_batch/submit_zonal_params.sh   "$BATCHES" gfv2 configs/base_config.yml
 slurm_batch/submit_depstor_params.sh "$BATCHES" gfv2 configs/base_config.yml
+#     Copy the builder-written constants into merged/ (fast, no array job):
+pixi run --as-is python scripts/derive_depstor_params.py \
+  --config configs/depstor/depstor_params.yml \
+  --base_config configs/base_config.yml --fabric gfv2 --mode copy_constants
 ```
 
 **What it does:** `submit_zonal_params.sh` chains every zonal parameter (array
 + merge per param, `slope`→`ssflux` dependency and weights prereq handled
 automatically); `submit_depstor_params.sh` chains all 10 depstor fractions +
-the 6 PRMS ratios job.
+the 6 PRMS ratios job. `--mode copy_constants` then copies every
+`constants:` entry (today just `op_flow_thres`) from `{fabric}/depstor_rasters/`
+into `{fabric}/params/merged/` under its canonical `nhm_*_params.csv` name.
+That copy is what makes "everything a PRMS consumer needs is in `merged/`"
+true: `op_flow_thres` is a PRMSRunoff parameter a builder writes directly, so
+before it existed anyone globbing `merged/nhm_*_params.csv` silently dropped it.
+It needs step 3c (`submit_dprst_depth.sh`) to have run, and takes seconds — no
+SLURM job needed, but run it from a compute node if you prefer.
 
 **Wait for:** all submitted jobs `COMPLETED` — monitor with `squeue -u "$USER"`.
 

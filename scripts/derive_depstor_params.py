@@ -1,6 +1,6 @@
 """Drive every depstor aggregation step from configs/depstor/depstor_params.yml.
 
-Five modes:
+Six modes:
   --mode zonal --fraction <name> --batch_id <N>
         Array task: run gdptools exactextract for one fraction over one HRU
         batch (same pattern as scripts/derive_zonal_params.py --mode zonal,
@@ -18,6 +18,11 @@ Five modes:
   --mode mean_finalize --mean <name>
         Concat the mean_zonal batch CSVs and finalize units/floor/provenance
         via gfv2_params.dprst_depth.aggregate.finalize_depth_params().
+  --mode copy_constants
+        Copy every `constants:` source (a per-HRU CSV a depstor BUILDER wrote
+        directly, with no zonal pass) into merged/ under its canonical name,
+        so "everything a consumer needs is in merged/" holds. Takes no
+        --fraction/--mean.
 
 The slurm wrapper slurm_batch/submit_depstor_params.sh chains the
 zonal/merge/ratios modes into a single afterok DAG; mean_zonal/mean_finalize
@@ -431,6 +436,47 @@ def run_merge(args, logger) -> None:
     logger.info("Merged %d rows -> %s", len(merged), out_path)
 
 
+def run_copy_constants(args, logger) -> None:
+    """Copy each `constants:` source into merged/ under its canonical name.
+
+    A straight copy, not a computation: the builder already wrote one row per HRU
+    (depstor_builders/dprst_depth.py builds the id column from ctx.hru_gpkg), so
+    there is nothing to aggregate and the fill declaration is a no-op.
+
+    The point is the LOCATION, not the values. op_flow_thres is a PRMSRunoff
+    parameter that a builder writes to depstor_rasters/, which made it invisible
+    to both iter_declared_params and warn_undeclared_merged_files -- anyone
+    assembling a parameter file by globbing merged/nhm_*_params.csv dropped it
+    silently.
+
+    Raises on a missing source rather than skipping: a constant that is not there
+    means the depstor raster build has not run, and a silent skip would leave the
+    same hole this mode exists to close.
+    """
+    config = _load_resolved_config(args)
+    constants = config.get("constants", []) or []
+    if not constants:
+        logger.warning("No `constants:` entries in %s -- nothing to copy.", args.config)
+        return
+
+    _, merged_dir = _merge_paths(config)
+    merged_dir.mkdir(parents=True, exist_ok=True)
+
+    logger.info("=== copy_constants (%d) ===", len(constants))
+    for entry in constants:
+        src = Path(entry["source"])
+        if not src.exists():
+            raise FileNotFoundError(
+                f"constants entry '{entry['name']}' source not found: {src}. "
+                f"Run the depstor raster build first -- this file is written by a "
+                f"builder, not by a zonal pass."
+            )
+        dst = merged_dir / entry["merged_file"]
+        df = pd.read_csv(src)
+        df.to_csv(dst, index=False)
+        logger.info("copy_constants: %s -> %s (%d rows)", src, dst, len(df))
+
+
 def run_ratios(args, logger) -> None:
     config = _load_resolved_config(args)
     defaults = config["defaults"]
@@ -510,7 +556,7 @@ def main():
     parser.add_argument("--fabric", default=None, help="Fabric name (overrides FABRIC env / default_fabric)")
     parser.add_argument(
         "--mode", required=True,
-        choices=["zonal", "merge", "ratios", "mean_zonal", "mean_finalize"],
+        choices=["zonal", "merge", "ratios", "mean_zonal", "mean_finalize", "copy_constants"],
     )
     parser.add_argument("--fraction", default=None, help="Fraction name (required for zonal/merge)")
     parser.add_argument("--mean", default=None, help="Mean-aggregation name (required for mean_zonal/mean_finalize)")
@@ -533,6 +579,8 @@ def main():
         run_mean_zonal(args, logger)
     elif args.mode == "mean_finalize":
         run_mean_finalize(args, logger)
+    elif args.mode == "copy_constants":
+        run_copy_constants(args, logger)
     else:
         run_ratios(args, logger)
 

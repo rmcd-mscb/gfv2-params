@@ -177,3 +177,35 @@ def test_guard1_no_column_is_declared_twice(declared):
         (buckets[0] & buckets[1]) | (buckets[0] & buckets[2]) | (buckets[1] & buckets[2])
     )
     assert not overlaps, f"{declared.name}: {sorted(overlaps)} declared in two buckets"
+
+
+def test_op_flow_thres_is_declared_with_a_merged_file():
+    """D1: op_flow_thres is a PRMSRunoff param that was written outside merged/.
+
+    A depstor BUILDER wrote it straight to depstor_rasters/, so it was invisible to
+    iter_declared_params AND to warn_undeclared_merged_files (which globs merged_dir).
+    Anyone assembling a parameter file by globbing merged/nhm_*_params.csv dropped it
+    silently, and the fill sweep never saw it either.
+    """
+    declared = {d.name: d for d in pi.load_declared_params()}
+    assert "op_flow_thres" in declared
+    assert declared["op_flow_thres"].merged_file == "nhm_op_flow_thres_params.csv"
+    assert declared["op_flow_thres"].prms["columns"]["op_flow_thres"]["processes"] == [
+        "PRMSRunoff"
+    ]
+
+
+def test_op_flow_thres_is_not_a_means_entry():
+    """`constants:`, deliberately, not `means:`.
+
+    run_mean_zonal does Path(spec["source_raster"]) unconditionally and _find_mean
+    advertises every means[].name as a runnable --mean target, so a raster-less
+    means entry is a KeyError waiting for the first operator who types
+    `--mean op_flow_thres`. op_flow_thres is a constant 1.0 built from the fabric's
+    id list, with no raster at all.
+    """
+    depstor = pi._load_yaml_doc(pi.DEPSTOR_PARAMS_CONFIG)
+    assert "op_flow_thres" not in {e["name"] for e in depstor.get("means") or []}
+    assert "op_flow_thres" in {e["name"] for e in depstor.get("constants") or []}
+    for entry in depstor.get("constants") or []:
+        assert "source_raster" not in entry, f"{entry['name']} is not a zonal target"

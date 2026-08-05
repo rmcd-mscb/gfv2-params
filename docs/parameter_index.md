@@ -26,18 +26,21 @@ still holds two `filled_nhm_*.csv` files from the retired `filled_` prefix conve
 - *provenance* marks an emitted column that is not a PRMS parameter — a diagnostic, an
   intermediate, or a raw statistic.
 
-**Five columns are renames** (⚠️): `mean`→`hru_elev`, `mean`→`hru_slope`, `soils`→`soil_type`,
-`retention`→`rad_trncf`, and `op_flow_thres` (right name, wrong directory). Feed any of them
-to PRMS under its emitted name and PRMS will not recognise it.
+**Four columns are renames** (⚠️): `mean`→`hru_elev`, `mean`→`hru_slope`, `soils`→`soil_type`
+and `retention`→`rad_trncf`. Feed any of them to PRMS under its emitted name and PRMS will
+not recognise it.
 
-Three of those are *actively dangerous* rather than merely misnamed — they produce wrong
-numbers or silent omission. Each is explained in [Known gaps](#known-gaps):
+Two of them are *actively dangerous* rather than merely misnamed — they produce wrong
+numbers. Each is explained in [Known gaps](#known-gaps):
 
 | Emitted | Reality |
 | --- | --- |
 | `nhm_slope_params.csv:mean` | degrees, not PRMS rise/run — **~57× if copied verbatim** |
 | `nhm_aspect_params.csv:mean` | **DEFECTIVE** — arithmetic mean of a circular variable ([#201](https://github.com/rmcd-mscb/gfv2-params/issues/201)) |
-| `op_flow_thres_params.csv` | a PRMSRunoff parameter that is **not in `merged/`** |
+
+A third danger — `op_flow_thres` living outside `merged/`, so a `merged/nhm_*_params.csv`
+glob silently dropped a PRMSRunoff parameter — **is now fixed**; see
+[Known gaps](#op_flow_thres-was-not-in-merged-fixed).
 
 The other two renames (`soils`→`soil_type`, `retention`→`rad_trncf`) are safe once you know
 them; the per-process tables below mark every one with ⚠️.
@@ -60,7 +63,7 @@ them; the per-process tables below mark every one with ⚠️.
 | `hru_percent_imperv` | `nhm_hru_percent_imperv_params.csv` | `hru_percent_imperv` | `depstor_params.yml:164` | `depstor_builders/imperv.py` + `landmask.py` |
 | `dprst_frac` | `nhm_dprst_frac_params.csv` | `dprst_frac` | `depstor_params.yml:177` | `depstor_builders/dprst.py` + `landmask.py` |
 | `dprst_depth_avg` | `nhm_dprst_depth_avg_params.csv` | `dprst_depth_avg` | `depstor_params.yml:107` (`means:`) | `depstor_builders/dprst_depth.py` + `dprst_depth/aggregate.py` |
-| `op_flow_thres` ⚠️ | **`op_flow_thres_params.csv`** — in `depstor_rasters/`, **not** `merged/` | `op_flow_thres` | `depstor_rasters.yml:77` | `depstor_builders/dprst_depth.py:361` |
+| `op_flow_thres` | `nhm_op_flow_thres_params.csv` | `op_flow_thres` | `depstor_params.yml` (`constants:`) | `depstor_builders/dprst_depth.py:361` |
 
 `dprst_frac` also appears in `merged/_intermediates/` under the same filename — that copy is
 a partial-pixel **count**, not a `[0, 1]` fraction. The PRMS parameter is the one in
@@ -168,11 +171,14 @@ files — and by the `cov_type` reset rule at
 The 10 `fractions:` entries are **intermediates**, not parameters. They write
 partial-pixel-weighted count CSVs to `merged/_intermediates/` and feed the ratios above.
 
-### `configs/depstor/depstor_rasters.yml`
+`constants:` holds params a depstor **builder** writes directly, with no zonal pass —
+their source lives in `{fabric}/depstor_rasters/`, and
+`scripts/derive_depstor_params.py --mode copy_constants` copies each into `merged/` under
+its canonical name.
 
-| Entry | Output | PRMS parameter |
-| --- | --- | --- |
-| `dprst_depth` `:70`, output name `:77` | `depstor_rasters/op_flow_thres_params.csv` | `op_flow_thres` — **not in `merged/`** |
+| Entry | Merged file | PRMS parameter | Source |
+| --- | --- | --- | --- |
+| `op_flow_thres` (`constants:`) | `nhm_op_flow_thres_params.csv` | `op_flow_thres` | `depstor_rasters/op_flow_thres_params.csv` (`depstor_rasters.yml:77`) |
 
 ### `configs/snarea/snarea_library.yml`
 
@@ -249,13 +255,22 @@ is on disk** — a circular mean is not recoverable from an arithmetic one.
 
 Tracked as [#201](https://github.com/rmcd-mscb/gfv2-params/issues/201).
 
-### `op_flow_thres` is not in `merged/`
+### `op_flow_thres` was not in `merged/` — fixed
 
 A PRMSRunoff parameter written by a depstor builder to
-`{fabric}/depstor_rasters/op_flow_thres_params.csv`. Because it never reaches `merged/`, the
-gap-fill sweep never sees it and the "undeclared merged file" guard cannot flag it. If you
-assemble a parameter file by globbing `merged/nhm_*_params.csv`, **you will silently drop
-it**. It is a constant 1.0 for every HRU.
+`{fabric}/depstor_rasters/op_flow_thres_params.csv`. Because it never reached `merged/`, the
+gap-fill sweep never saw it and the "undeclared merged file" guard could not flag it — anyone
+assembling a parameter file by globbing `merged/nhm_*_params.csv` silently dropped it.
+
+It is now declared as a `constants:` entry in `depstor_params.yml` and copied into
+`merged/nhm_op_flow_thres_params.csv` by
+`scripts/derive_depstor_params.py --mode copy_constants` (step 4 of
+`slurm_batch/RUNME.md`). It is a constant 1.0 for every HRU.
+
+`constants:`, not `means:`, deliberately: `run_mean_zonal` reads
+`spec["source_raster"]` unconditionally and `_find_mean` advertises every `means[].name`
+as a runnable `--mean` target, so a raster-less `means` entry is a `KeyError` waiting for
+the first operator who types `--mean op_flow_thres`.
 
 ### `retention` means two different things
 
