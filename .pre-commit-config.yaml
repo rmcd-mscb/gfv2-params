@@ -68,6 +68,13 @@ repos:
     hooks:
       - id: prettier
         files: \.(yml|yaml)$
+        # environment.yml again -- prettier wants to reindent its `pip:` block from
+        # 4 spaces to 6. That is the same spot yamllint flags, and letting prettier
+        # rewrite it would reformat the deprecated conda fallback the repo has
+        # stopped maintaining. It is now excluded from all four hooks that would
+        # touch it (yamllint, end-of-file-fixer, trailing-whitespace, prettier),
+        # which is the consistent treatment for a file kept only for reference.
+        exclude: ^environment\.yml$
   # nbstripout strips outputs from .ipynb on commit. Notebooks are kept
   # output-free in git; figures get rendered to docs/figures/<fabric>/ via
   # scripts/render_figures.py (see notebooks/<fabric>/README.md).
