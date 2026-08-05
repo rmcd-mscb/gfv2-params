@@ -628,15 +628,26 @@ def test_iter_declared_params_excludes_fractions_includes_means_and_ratios():
     assert names == {"elevation", "dprst_depth_avg", "dprst_frac"}
     assert "perv_frac" not in names  # fraction excluded despite its merged_file key
 
+    # Attribute access, NOT tuple equality: DeclaredParam is a NamedTuple, so a
+    # 4-tuple comparison silently encodes today's field count and breaks on every
+    # widening (`prms` was the third). Naming the fields makes a new defaulted
+    # field invisible here, which is the whole point of the NamedTuple.
     by_name = {d[0]: d for d in declared}
-    assert by_name["dprst_frac"] == ("dprst_frac", "nhm_dprst_frac_params.csv", ["dprst_frac"], {})
-    assert by_name["elevation"] == ("elevation", "nhm_elevation_params.csv", ["mean"], {})
+    d = by_name["dprst_frac"]
+    assert (d.name, d.merged_file, d.fill_columns, d.fabric_columns) == (
+        "dprst_frac", "nhm_dprst_frac_params.csv", ["dprst_frac"], {})
+    d = by_name["elevation"]
+    assert (d.name, d.merged_file, d.fill_columns, d.fabric_columns) == (
+        "elevation", "nhm_elevation_params.csv", ["mean"], {})
 
 
 def test_iter_declared_params_includes_snarea_when_given():
     snarea_cfg = {"params_file": "nhm_snarea_curve_params.csv", "fill_columns": ["hru_deplcrv"]}
     declared = maf.iter_declared_params({}, {}, snarea_cfg)
-    assert declared == [("snarea_curve", "nhm_snarea_curve_params.csv", ["hru_deplcrv"], {})]
+    assert len(declared) == 1
+    d = declared[0]
+    assert (d.name, d.merged_file, d.fill_columns, d.fabric_columns) == (
+        "snarea_curve", "nhm_snarea_curve_params.csv", ["hru_deplcrv"], {})
 
 
 def test_iter_declared_params_snarea_optional():
@@ -782,7 +793,7 @@ class TestWarnUndeclaredMergedFiles:
         (tmp_path / "nhm_mystery_params.csv").write_text("hru_id,v\n1,1\n")
 
         undeclared = maf.warn_undeclared_merged_files(
-            tmp_path, maf._load_declared_params(), logging.getLogger("test_warn_undeclared_real"),
+            tmp_path, maf.load_declared_params(), logging.getLogger("test_warn_undeclared_real"),
         )
 
         assert undeclared == ["nhm_mystery_params.csv"]
