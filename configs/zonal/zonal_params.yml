@@ -83,24 +83,44 @@ params:
     source_raster: "{data_root}/shared/conus/vrt/slope.vrt"
     categorical: false
     merged_file: nhm_slope_params.csv
-    # Same value-column set as elevation (observed on-disk; same zonal script).
-    fill_columns: [count, mean, std, min, "25%", "50%", "75%", max, sum]
+    # Same value-column set as elevation (observed on-disk; same zonal script),
+    # plus the derived hru_slope below. hru_slope IS declared fillable: without
+    # it, an HRU absent from the merged CSV would get `mean` KNN-filled but land
+    # NaN in the PRMS parameter itself. It is a monotone transform of `mean`, so
+    # interpolating it directly is exactly as defensible as interpolating `mean`.
+    #
+    # NB: this makes a re-merge a PREREQUISITE of the next fill sweep on any
+    # fabric -- resolve_fill_plan raises on a declared column the file does not
+    # have, so a slope CSV merged before this change must be re-merged with
+    # `derive_zonal_params.py --mode merge --param slope` first. That failure is
+    # loud and one command to fix; the alternative (silent NaN hru_slope for
+    # exactly the HRUs that were missing) is not.
+    fill_columns:
+      [count, mean, std, min, "25%", "50%", "75%", max, sum, hru_slope]
+    # PRMS hru_slope is a decimal fraction rise/run (TM6B9:536); slope.vrt is
+    # rd.TerrainAttribute(dem, "slope_degrees") (compute_slope_aspect.py:72), so
+    # `mean` is DEGREES -- a ~57x discrepancy for small angles. Emit the PRMS
+    # quantity directly rather than leaving a footgun. ssflux.py:63 already applies
+    # this same conversion to derive ssr2gw_rate/slowcoef_lin, so this makes the
+    # rest of the pipeline consistent with what ssflux already assumed rather than
+    # introducing a new convention. Applied in run_merge, so no zonal re-run.
+    #
+    # KNOWN APPROXIMATION: tan(mean) != mean(tan), and tan is convex, so this
+    # underestimates. Measured over all 361,471 gfv2 HRUs (2nd-order Taylor from
+    # on-disk mean/std): median 0.2%, p90 2.4%, p99 5.6%. Too small to justify a
+    # CONUS fractional-slope VRT -- none exists.
+    derived_columns:
+      hru_slope:
+        from: mean
+        transform: deg_to_fraction
     prms:
-      builder: zonal_runners/zonal.py
-      columns: {}
-      # `mean` is DEGREES: slope.vrt is rd.TerrainAttribute(dem, "slope_degrees")
-      # (shared_rasters/compute_slope_aspect.py:72), while PRMS hru_slope is a
-      # decimal fraction rise/run (TM6B9:536) -- ~57x for small angles. Declared as
-      # a defect rather than as `mean: {prms: hru_slope}`, because that mapping
-      # would assert the degrees column IS the parameter, which is the defect.
-      # Unlike aspect below, this one is recoverable from what is on disk.
-      defects:
-        mean:
+      builder: zonal_runners/zonal.py + zonal_runners/merge.py (derived_columns)
+      columns:
+        hru_slope:
           prms: hru_slope
           processes: [PRMSSolarGeometry, PRMSAtmosphere]
-          reason: emitted in degrees; PRMS hru_slope is a decimal fraction rise/run
-          recovery: tan(radians(mean))
       provenance:
+        mean: mean cell slope in DEGREES -- the raw stat hru_slope is derived from
         count: exactextract cell count
         std: within-HRU standard deviation
         min: within-HRU minimum

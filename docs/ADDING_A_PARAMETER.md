@@ -202,6 +202,12 @@ into `{output_dir}/merged/{merged_file}` (one row per HRU, sorted by
 For `elevation` that is
 `{data_root}/{fabric}/params/merged/nhm_elevation_params.csv`.
 
+If the entry declares `derived_columns:`, `--mode merge` also adds those columns
+after the concat — that is how `slope` emits `hru_slope` (rise/run) alongside the
+raw `mean` (degrees), with no zonal re-run. See
+[`docs/ARCHITECTURE.md`](ARCHITECTURE.md) and the
+[Parameter index](parameter_index.md).
+
 ## To add a new param
 
 1. **Add a YAML entry** under `params:` in

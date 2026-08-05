@@ -26,24 +26,22 @@ still holds two `filled_nhm_*.csv` files from the retired `filled_` prefix conve
 - *provenance* marks an emitted column that is not a PRMS parameter — a diagnostic, an
   intermediate, or a raw statistic.
 
-**Four columns are renames** (⚠️): `mean`→`hru_elev`, `mean`→`hru_slope`, `soils`→`soil_type`
-and `retention`→`rad_trncf`. Feed any of them to PRMS under its emitted name and PRMS will
-not recognise it.
+**Three columns are renames** (⚠️): `mean`→`hru_elev`, `soils`→`soil_type` and
+`retention`→`rad_trncf`. Feed any of them to PRMS under its emitted name and PRMS will not
+recognise it. All three are safe once you know them; the per-process tables below mark every
+one with ⚠️.
 
-Two of them are *actively dangerous* rather than merely misnamed — they produce wrong
-numbers. Each is explained in [Known gaps](#known-gaps):
+**One column is actively dangerous** rather than merely misnamed — it produces wrong numbers:
 
 | Emitted | Reality |
 | --- | --- |
-| `nhm_slope_params.csv:mean` | degrees, not PRMS rise/run — **~57× if copied verbatim** |
 | `nhm_aspect_params.csv:mean` | **DEFECTIVE** — arithmetic mean of a circular variable ([#201](https://github.com/rmcd-mscb/gfv2-params/issues/201)) |
 
-A third danger — `op_flow_thres` living outside `merged/`, so a `merged/nhm_*_params.csv`
-glob silently dropped a PRMSRunoff parameter — **is now fixed**; see
-[Known gaps](#op_flow_thres-was-not-in-merged-fixed).
-
-The other two renames (`soils`→`soil_type`, `retention`→`rad_trncf`) are safe once you know
-them; the per-process tables below mark every one with ⚠️.
+Two further dangers this index originally flagged are **now fixed**:
+`hru_slope` is emitted directly in rise/run rather than left as degrees under the name `mean`
+(see [Known gaps](#hru_slope-was-degrees-on-disk-fixed)), and `op_flow_thres` is copied into
+`merged/` rather than living only in `depstor_rasters/` (see
+[Known gaps](#op_flow_thres-was-not-in-merged-fixed)).
 
 ---
 
@@ -123,7 +121,7 @@ a partial-pixel **count**, not a `[0, 1]` fraction. The PRMS parameter is the on
 
 | PRMS parameter | Emitted file | Column | Config entry | Builder |
 | --- | --- | --- | --- | --- |
-| `hru_slope` ⚠️ | `nhm_slope_params.csv` | `tan(radians(mean))` — `mean` is **degrees** | `zonal_params.yml:56` | `zonal_runners/zonal.py` |
+| `hru_slope` | `nhm_slope_params.csv` | `hru_slope` — decimal fraction rise/run. `mean` in the same file is *provenance*, in **degrees** | `zonal_params.yml` (`slope`, `derived_columns:`) | `zonal_runners/zonal.py` + `zonal_runners/merge.py` |
 | `hru_aspect` | `nhm_aspect_params.csv` | **DEFECTIVE** — see [#201](https://github.com/rmcd-mscb/gfv2-params/issues/201) | `zonal_params.yml:64` | `zonal_runners/zonal.py` |
 
 ### Not consumed by any pywatershed process — 1 parameter
@@ -146,7 +144,7 @@ files — and by the `cov_type` reset rule at
 | Entry | Merged file | PRMS parameters | Provenance columns |
 | --- | --- | --- | --- |
 | `elevation` `:43` | `nhm_elevation_params.csv` | `hru_elev` ⚠️ (from `mean`) | `count`, `std`, `min`, `25%`, `50%`, `75%`, `max`, `sum` |
-| `slope` `:56` | `nhm_slope_params.csv` | `hru_slope` ⚠️ (from `tan(radians(mean))`) | same 8 stats, plus `mean` itself |
+| `slope` `:56` | `nhm_slope_params.csv` | `hru_slope` (emitted, via `derived_columns:`) | same 8 stats, plus `mean` itself (degrees) |
 | `aspect` `:64` | `nhm_aspect_params.csv` | **none — DEFECTIVE** | all 9 columns |
 | `soils` `:74` | `nhm_soils_params.csv` | `soil_type` ⚠️ (from `soils`) | — |
 | `soil_moist_max` `:81` | `nhm_soil_moist_max_params.csv` | `soil_moist_max` | — |
@@ -196,7 +194,7 @@ the rest. A NaN there is a result, not a gap, which is why they are excluded fro
 
 | Builder module | PRMS parameters produced |
 | --- | --- |
-| `zonal_runners/zonal.py` | `hru_elev` ⚠️, `hru_slope` ⚠️, `hru_aspect` (DEFECTIVE) |
+| `zonal_runners/zonal.py` | `hru_elev` ⚠️, `hru_slope` (via `merge.py`'s `derived_columns:`), `hru_aspect` (DEFECTIVE) |
 | `zonal_runners/soils.py` | `soil_type` ⚠️, `soil_moist_max` |
 | `zonal_runners/lulc_prederived.py` | `cov_type`, `covden_sum`, `covden_win`, `srain_intcp`, `wrain_intcp`, `snow_intcp`, `rad_trncf` ⚠️ |
 | `zonal_runners/lulc.py` | `cov_type`, `covden_sum`, `covden_win`, `srain_intcp`, `wrain_intcp`, `snow_intcp` (+ unverified `retention`) |
@@ -215,25 +213,41 @@ part of `depstor_builders/`), driven by `scripts/derive_depstor_params.py --mode
 
 ## Known gaps
 
-### `hru_slope` is degrees on disk; PRMS wants rise/run
+### `hru_slope` was degrees on disk — fixed
 
 `slope.vrt` is built as `rd.TerrainAttribute(dem, attrib="slope_degrees")`
-(`shared_rasters/compute_slope_aspect.py:72`), so `nhm_slope_params.csv:mean` is **degrees**.
-PRMS `hru_slope` is a decimal fraction rise/run ([TM6B9:536](NHM_description_Regan_2018_TM6B9.md)).
+(`shared_rasters/compute_slope_aspect.py:72`), so `nhm_slope_params.csv:mean` is **degrees**,
+while PRMS `hru_slope` is a decimal fraction rise/run
+([TM6B9:536](NHM_description_Regan_2018_TM6B9.md)).
 
 For small angles the discrepancy is 180/π ≈ **57×**. gfv2 HRU 1: `mean = 4.4252` →
 `hru_slope = 0.0774`. Copied verbatim, that declares a 77° cliff instead of a 4.4° hillslope.
 
-**The pipeline is not wrong** — `zonal_runners/ssflux.py:63` applies
+**The pipeline was never wrong internally** — `zonal_runners/ssflux.py:63` applies
 `raster_ops.deg_to_fraction` before deriving `ssr2gw_rate`/`slowcoef_lin`, so the flux
-parameters are correct. But nothing currently *emits* `hru_slope`. Apply
-`tan(radians(mean))` yourself until the pipeline emits it directly.
+parameters have always been correct. What was missing is that nothing *emitted* `hru_slope`.
 
-Known approximation once it does: `tan(mean θ) ≠ mean(tan θ)`, and `tan` is convex, so the
-conversion systematically underestimates. Estimated (second-order Taylor from the
-on-disk `mean`/`std` — `mean(tan θ)` is not recoverable from summary statistics) over all
-361,471 gfv2 HRUs: median
-**0.2%**, p90 2.4%, p99 5.6%.
+`nhm_slope_params.csv` now carries an `hru_slope` column, declared as
+`derived_columns: {hru_slope: {from: mean, transform: deg_to_fraction}}` on the `slope` entry
+and applied by `zonal_runners/merge.py` at merge time. `mean` is kept alongside it as
+declared provenance, so the derivation stays checkable. Because it is applied in `run_merge`,
+**no zonal re-run is needed** — but an existing fabric does need one re-merge:
+
+```bash
+python scripts/derive_zonal_params.py --config configs/zonal/zonal_params.yml \
+  --base_config configs/base_config.yml --fabric <fabric> --mode merge --param slope
+```
+
+`hru_slope` is declared in `fill_columns`, so a slope CSV merged before this change will make
+the next fill sweep **raise** until it is re-merged. That failure is loud and one command to
+fix; the alternative — a silent NaN `hru_slope` for exactly the HRUs that were missing — is
+not. (Run on gfv2 2026-08-05; oregon and tjc still need it.)
+
+Known approximation: `tan(mean θ) ≠ mean(tan θ)`, and `tan` is convex, so the conversion
+systematically underestimates. Estimated (second-order Taylor from the on-disk `mean`/`std` —
+`mean(tan θ)` is not recoverable from summary statistics) over all 361,471 gfv2 HRUs: median
+**0.2%**, p90 2.4%, p99 5.6%. Too small to justify building a CONUS fractional-slope VRT;
+none exists, and `ssflux` has carried the same approximation since it was written.
 
 ### `hru_aspect` is DEFECTIVE — do not use `nhm_aspect_params.csv:mean`
 
