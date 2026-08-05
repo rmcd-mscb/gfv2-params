@@ -5,7 +5,6 @@ import pytest
 
 from gfv2_params.depstor import intersect_binaries
 
-
 # (a_val, b_val, expected_out)
 TRUTH_TABLE = [
     (1, 1, 1),       # both present → intersect

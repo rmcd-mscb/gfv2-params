@@ -6,7 +6,6 @@ import pytest
 
 from gfv2_params.depstor_builders.perv import compute_perv_binary
 
-
 # (imperv, dprst, land_valid, expected_perv)
 # Convention: imperv/dprst are 1 = present, 255 = absent/nodata.
 # land_valid is the HRU-fabric land mask (True = on land).

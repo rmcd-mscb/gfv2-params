@@ -47,11 +47,16 @@ print(
 )
 _t_imports = time.time()
 
-import pandas as pd
+# noqa: E402 on each -- these imports are DELIBERATELY below the heartbeat print.
+# Hoisting them to the top would defeat the whole point: the print has to reach the
+# SLURM log BEFORE the geo stack is touched, so a hang in rasterio/GDAL/PROJ/pyogrio
+# init under shared-FS metadata contention is localisable to the import chain rather
+# than looking like a silent task that never started.
+import pandas as pd  # noqa: E402
 
-from gfv2_params.config import load_config, require_config_key
-from gfv2_params.depstor_ratios import compute_ratio
-from gfv2_params.log import configure_logging
+from gfv2_params.config import load_config, require_config_key  # noqa: E402
+from gfv2_params.depstor_ratios import compute_ratio  # noqa: E402
+from gfv2_params.log import configure_logging  # noqa: E402
 
 print(f"[startup] base imports complete in {time.time() - _t_imports:.1f}s", flush=True)
 

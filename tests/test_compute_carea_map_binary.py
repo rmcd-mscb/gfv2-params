@@ -5,7 +5,6 @@ import pytest
 
 from gfv2_params.depstor import compute_carea_map_binary
 
-
 # (perv_val, onstream_val, twi_val, threshold, twi_nodata, land_val, expected_out)
 # Convention: perv/onstream are uint8 binary (1 = present, 255 = nodata).
 # twi is float32. land_val is the boolean template-DEM land mask.

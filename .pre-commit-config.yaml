@@ -1,3 +1,23 @@
+# Python trees excluded from BOTH linters below. These are reference artifacts,
+# not maintained source, and linting them produces failures nobody may act on:
+#
+#   docs/0b_TB_depr_stor.py  -- the original ArcPy depression-storage script. It is
+#     the authoritative record of the legacy behaviour that depstor_builders/
+#     reproduces, and CLAUDE.md cites it by line number (e.g. `:214` for the
+#     Con(rSro == hru) same-HRU rule, `:220-312` for the clamp-to-one convention).
+#     Reformatting it would break those cites and make it a less faithful copy;
+#     its 17 ruff findings (bare excepts, ArcPy globals ruff cannot see) are
+#     properties of the original, not defects to fix. The FILE STAYS -- this only
+#     stops linting it.
+#   notebooks/_archive/  -- exploratory notebooks kept deliberately. CLAUDE.md and
+#     the parameter-index spec both depend on this tree surviving: it holds the
+#     only written record of the known aspect-circularity simplification, which is
+#     why issue #201 can be framed as a measured limitation rather than an oversight.
+#
+# Scope this list tightly. Everything else -- src/, scripts/, tests/, and the live
+# notebooks/ scripts -- IS linted, and adding to this list is how that erodes.
+exclude: ^(docs/0b_TB_depr_stor\.py|notebooks/_archive/)
+
 repos:
   # isort for sorting Python imports
   - repo: https://github.com/pycqa/isort
@@ -18,8 +38,20 @@ repos:
     hooks:
       - id: yamllint
         files: \.(yml|yaml)$
-  - repo: https://github.com/koalaman/shellcheck-precommit
-    rev: v0.10.0
+        # environment.yml is the DEPRECATED conda fallback (CLAUDE.md: "do not add
+        # to it"), already excluded from end-of-file-fixer and trailing-whitespace
+        # below. Its `pip:` block uses 4-space nesting yamllint wants at 6; fixing
+        # that would mean editing a file the repo has stopped maintaining.
+        exclude: ^environment\.yml$
+  # shellcheck-py, NOT koalaman/shellcheck-precommit. The koalaman hook runs
+  # shellcheck inside docker, and docker is not installed on the HPC where this
+  # repo is developed -- so it did not fail, it ERRORED
+  # (`CalledProcessError: docker system info`), and since CI runs pytest only,
+  # shell scripts were effectively linted by nothing on any machine anyone used.
+  # shellcheck-py ships a pip-installed binary and runs here. Same shellcheck,
+  # same rules; it just works without a container runtime.
+  - repo: https://github.com/shellcheck-py/shellcheck-py
+    rev: v0.10.0.1
     hooks:
       - id: shellcheck
         files: \.(sh|slurm|sbatch)$
@@ -36,6 +68,13 @@ repos:
     hooks:
       - id: prettier
         files: \.(yml|yaml)$
+        # environment.yml again -- prettier wants to reindent its `pip:` block from
+        # 4 spaces to 6. That is the same spot yamllint flags, and letting prettier
+        # rewrite it would reformat the deprecated conda fallback the repo has
+        # stopped maintaining. It is now excluded from all four hooks that would
+        # touch it (yamllint, end-of-file-fixer, trailing-whitespace, prettier),
+        # which is the consistent treatment for a file kept only for reference.
+        exclude: ^environment\.yml$
   # nbstripout strips outputs from .ipynb on commit. Notebooks are kept
   # output-free in git; figures get rendered to docs/figures/<fabric>/ via
   # scripts/render_figures.py (see notebooks/<fabric>/README.md).

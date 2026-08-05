@@ -148,6 +148,10 @@ for PARAM in "${PARAMS[@]}"; do
     fi
 
     # Step C: array zonal job.
+    # shellcheck disable=SC2086  # $DEP_ARG is deliberately unquoted: it is either
+    # empty or a whole `--dependency=...` argument, and quoting it would pass an
+    # EMPTY string as an argument to sbatch whenever this param has no upstream
+    # dependency. The word-splitting is the mechanism, not an oversight.
     ARRAY_JOB_ID=$(sbatch --array="$ARRAY_SPEC" \
                          $DEP_ARG \
                          --export=ALL,BASE_CONFIG="$BASE_CONFIG",FABRIC="$FABRIC",PARAM="$PARAM" \

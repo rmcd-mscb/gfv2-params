@@ -31,13 +31,12 @@ def _():
     from pathlib import Path
 
     import geopandas as gpd
+    import marimo as mo
     import matplotlib.pyplot as plt
     import numpy as np
     import pandas as pd
     from pyogrio import list_layers, read_info
     from pyproj import CRS
-
-    import marimo as mo
 
     from gfv2_params.config import load_base_config
 
