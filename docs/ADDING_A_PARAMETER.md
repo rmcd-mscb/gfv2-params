@@ -230,10 +230,25 @@ For `elevation` that is
        --fabric gfv2_vpu01
    ```
    Check the per-batch CSV under `{data_root}/{fabric}/params/<newname>/`.
-5. **Submit the full SLURM array** via
+5. **Add the param to the submit wrapper's `PARAMS` array.**
    [`slurm_batch/submit_zonal_params.sh`](../slurm_batch/submit_zonal_params.sh)
-   from a shell that has `pixi` on `PATH`. This loops every param in the
-   YAML and chains array zonal -> merge per param.
+   does **not** read the YAML — it carries a hardcoded bash array
+   (`PARAMS`, lines 68-79) and exports `PARAM=<name>` per element.
+   A param present in the YAML but absent from that array is silently
+   **not run**, and the wrapper still exits 0.
+
+   Order matters: keep `slope` before `ssflux`, which reads the merged
+   slope CSV at zonal time. If your param needs the CONUS weight matrix or
+   an upstream merge, add it to `NEEDS_WEIGHTS` (line 94) or
+   `NEEDS_MERGE_OF` (line 101) as well.
+
+   [`tests/test_submit_wrapper_param_lists.py`](../tests/test_submit_wrapper_param_lists.py)
+   guards this, so CI will catch a forgotten entry — but only after you push.
+
+6. **Submit the full SLURM array** via
+   [`slurm_batch/submit_zonal_params.sh`](../slurm_batch/submit_zonal_params.sh)
+   from a shell that has `pixi` on `PATH`. It submits an array zonal job
+   plus a chained merge for each param in `PARAMS`.
 
 ## See also
 
