@@ -44,7 +44,9 @@ def apply_derived_columns(df, derived_columns: dict | None):
                 f"derived column '{out_col}' reads '{src}', which is not in the merged "
                 f"frame (columns: {sorted(df.columns)})."
             )
-        df[out_col] = df[src].astype(float).apply(_TRANSFORMS[tname])
+        # The transform vectorises (deg_to_fraction is np.tan(np.deg2rad(x))),
+        # so hand it the Series rather than calling it 361k times per param.
+        df[out_col] = _TRANSFORMS[tname](df[src].astype(float))
     return df
 
 

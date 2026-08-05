@@ -57,7 +57,8 @@ def _entry_locations() -> dict[str, str]:
     """Map entry name -> "<config-basename>:<line>", scanning the raw YAML text.
 
     A text scan rather than a YAML parse because PyYAML discards line numbers, and
-    the whole point of the cite is to be clickable at a specific line.
+    the whole point of the cite is to land a reader on a specific line (the cite
+    renders as inline code, so it is copy-pasteable rather than clickable).
     """
     locations: dict[str, str] = {}
     for config, sections in _ENTRY_SECTIONS.items():
@@ -86,10 +87,12 @@ def _natural_key(col: str):
 def _render_columns(cols: list[str]) -> str:
     """One table cell for the emitted column(s) behind a single PRMS parameter.
 
-    Two cases collapse many columns into one row: an ALIAS group (lulc_nhm_v11's
+    Row COLLAPSING happens in `_add`/`_collapse`; this only renders whatever
+    columns arrive. Two shapes reach it: a short ALIAS group (lulc_nhm_v11's
     `retention` | `rad_trncf`, the same quantity under two names across fabric
-    vintages) and a DIMENSIONED parameter (snarea_curve_0..10, one PRMS
-    `snarea_curve` of extent ndeplval).
+    vintages), joined with a pipe in declaration order; and a DIMENSIONED
+    parameter (snarea_curve_0..10, one PRMS `snarea_curve` of extent ndeplval),
+    abbreviated `first … last` once there are more than three.
     """
     if len(cols) > 3:
         ordered = sorted(cols, key=_natural_key)
@@ -145,7 +148,14 @@ def _process_rows(declared: list[DeclaredParam], locations: dict[str, str]):
             for process in processes:
                 _add(by_process[process], d, col, spec, False)
         for col, spec in (d.prms.get("defects") or {}).items():
-            for process in spec.get("processes") or []:
+            processes = spec.get("processes") or []
+            if not processes:
+                # Same fallback the columns loop has. Without it a defect whose
+                # consuming process is not yet known vanishes from the by-process
+                # view entirely -- the exact silent omission the defects bucket
+                # exists to prevent.
+                _add(unconsumed, d, col, spec, True)
+            for process in processes:
                 _add(by_process[process], d, col, spec, True)
 
     return (
@@ -331,6 +341,20 @@ def _replace_region(text: str, name: str, body: str) -> str:
     return pattern.sub(lambda _m: f"{begin}\n{body}\n{end}", text)
 
 
+def _display_path(path: Path) -> str:
+    """Repo-relative when possible, absolute otherwise.
+
+    `relative_to` RAISES on a path outside the repo, which made every log line in
+    `build` a crash whenever INDEX_PATH pointed elsewhere -- i.e. whenever a test
+    redirected it to a tmp_path. A progress message must never be the thing that
+    fails.
+    """
+    try:
+        return str(path.relative_to(_REPO_ROOT))
+    except ValueError:
+        return str(path)
+
+
 def build(check: bool = False) -> int:
     declared = load_declared_params()
     locations = _entry_locations()
@@ -341,17 +365,17 @@ def build(check: bool = False) -> int:
     new = _replace_region(new, "by-builder", render_by_builder(declared))
 
     if new == text:
-        print(f"{INDEX_PATH.relative_to(_REPO_ROOT)} is up to date.")
+        print(f"{_display_path(INDEX_PATH)} is up to date.")
         return 0
     if check:
         print(
-            f"{INDEX_PATH.relative_to(_REPO_ROOT)} is STALE -- re-run "
+            f"{_display_path(INDEX_PATH)} is STALE -- re-run "
             f"`python scripts/build_parameter_index.py`.",
             file=sys.stderr,
         )
         return 1
     INDEX_PATH.write_text(new)
-    print(f"Wrote {INDEX_PATH.relative_to(_REPO_ROOT)} ({len(declared)} declared entries).")
+    print(f"Wrote {_display_path(INDEX_PATH)} ({len(declared)} declared entries).")
     return 0
 
 
