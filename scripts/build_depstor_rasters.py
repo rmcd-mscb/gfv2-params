@@ -214,7 +214,37 @@ def main():
     unknown = set(step_index) - set(STEP_ORDER)
     if unknown:
         raise ValueError(f"Unknown step(s) in config: {sorted(unknown)}; expected subset of {STEP_ORDER}")
-    ordered_steps = [step_index[n] for n in STEP_ORDER if n in step_index]
+
+    # The reverse direction is the dangerous one, and it used to be silent.
+    #
+    # `ordered_steps` was built with `if n in step_index`, so a step registered in
+    # STEP_ORDER but absent from the YAML was simply DROPPED: the orchestrator logged a
+    # plausible-looking step count, ran the rest, and exited 0. Worse than a no-op --
+    # `_hydrate_existing_outputs` then pulls that step's artifact off disk from a PREVIOUS
+    # run with no validation, so a `--from dprst` cascade rebuild silently re-emits stale
+    # CONUS product. Same failure shape as the `endorheic_wbody` hazard in CLAUDE.md:
+    # a stale output directory is never a legitimate configuration, so fail loud.
+    #
+    # This is safe to require here because `configs/depstor/depstor_rasters.yml` is the
+    # ONE depstor raster config -- it is fabric-independent ({fabric} is templated, not
+    # duplicated), so every fabric runs the full stack and an omission is always a bug.
+    #
+    # Do NOT copy this guard to scripts/build_shared_rasters.py. That orchestrator's
+    # matching `if n in step_index` IS load-bearing: `compute_dem_derivatives` and
+    # `compute_breached_fdr` are opt-in steps deliberately absent from
+    # shared_rasters.yml (docs/ARCHITECTURE.md:299-305), so a strict guard there would
+    # break the normal path.
+    missing = set(STEP_ORDER) - set(step_index)
+    if missing:
+        raise ValueError(
+            f"Step(s) registered in STEP_ORDER but missing from the config: {sorted(missing)}. "
+            f"Every STEP_ORDER step must have a block in configs/depstor/depstor_rasters.yml -- "
+            f"a missing one would be skipped silently, and any downstream step would then "
+            f"consume the PREVIOUS run's artifact off disk. Add the step block, or remove the "
+            f"name from STEP_ORDER in src/gfv2_params/depstor_builders/__init__.py."
+        )
+
+    ordered_steps = [step_index[n] for n in STEP_ORDER]
 
     run_steps = _select_steps(ordered_steps, args.step, args.from_step)
 
