@@ -524,11 +524,28 @@ params:
     # Lithology permeability + PRMS flux normalisation (lifted verbatim
     # from configs/zonal/ssflux_param.yml).
     k_perm_min: -16.48
+    # Block mappings, not `{ name: x, min: y }` flow style: yamllint's braces rule
+    # wants no spaces inside braces and prettier inserts them, so flow style makes
+    # the two hooks fight forever. Values are unchanged.
     flux_params:
-      - { name: soil2gw_max, min: 0.1, max: 0.3 }
-      - { name: ssr2gw_rate, min: 0.3, max: 0.7 }
-      - { name: fastcoef_lin, min: 0.01, max: 0.6 }
-      - { name: slowcoef_lin, min: 0.005, max: 0.3 }
-      - { name: gwflow_coef, min: 0.005, max: 0.3 }
-      - { name: dprst_seep_rate_open, min: 0.005, max: 0.2 }
-      - { name: dprst_flow_coef, min: 0.005, max: 0.5 }
+      - name: soil2gw_max
+        min: 0.1
+        max: 0.3
+      - name: ssr2gw_rate
+        min: 0.3
+        max: 0.7
+      - name: fastcoef_lin
+        min: 0.01
+        max: 0.6
+      - name: slowcoef_lin
+        min: 0.005
+        max: 0.3
+      - name: gwflow_coef
+        min: 0.005
+        max: 0.3
+      - name: dprst_seep_rate_open
+        min: 0.005
+        max: 0.2
+      - name: dprst_flow_coef
+        min: 0.005
+        max: 0.5

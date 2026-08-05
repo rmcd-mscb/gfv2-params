@@ -1,3 +1,23 @@
+# Python trees excluded from BOTH linters below. These are reference artifacts,
+# not maintained source, and linting them produces failures nobody may act on:
+#
+#   docs/0b_TB_depr_stor.py  -- the original ArcPy depression-storage script. It is
+#     the authoritative record of the legacy behaviour that depstor_builders/
+#     reproduces, and CLAUDE.md cites it by line number (e.g. `:214` for the
+#     Con(rSro == hru) same-HRU rule, `:220-312` for the clamp-to-one convention).
+#     Reformatting it would break those cites and make it a less faithful copy;
+#     its 17 ruff findings (bare excepts, ArcPy globals ruff cannot see) are
+#     properties of the original, not defects to fix. The FILE STAYS -- this only
+#     stops linting it.
+#   notebooks/_archive/  -- exploratory notebooks kept deliberately. CLAUDE.md and
+#     the parameter-index spec both depend on this tree surviving: it holds the
+#     only written record of the known aspect-circularity simplification, which is
+#     why issue #201 can be framed as a measured limitation rather than an oversight.
+#
+# Scope this list tightly. Everything else -- src/, scripts/, tests/, and the live
+# notebooks/ scripts -- IS linted, and adding to this list is how that erodes.
+exclude: ^(docs/0b_TB_depr_stor\.py|notebooks/_archive/)
+
 repos:
   # isort for sorting Python imports
   - repo: https://github.com/pycqa/isort
@@ -18,6 +38,11 @@ repos:
     hooks:
       - id: yamllint
         files: \.(yml|yaml)$
+        # environment.yml is the DEPRECATED conda fallback (CLAUDE.md: "do not add
+        # to it"), already excluded from end-of-file-fixer and trailing-whitespace
+        # below. Its `pip:` block uses 4-space nesting yamllint wants at 6; fixing
+        # that would mean editing a file the repo has stopped maintaining.
+        exclude: ^environment\.yml$
   - repo: https://github.com/koalaman/shellcheck-precommit
     rev: v0.10.0
     hooks:
