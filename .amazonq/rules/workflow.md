@@ -79,6 +79,12 @@ Configuration (CFG-*), Code Quality (CODE-*), Hygiene (HYG-*), Architecture (ARC
 - US-2 → PR #194 — `pixi run data-root` task; replaced 3× Python one-liner in RUNME.md
 - US-3 → PR #196 — wholesale submit wrappers promoted to primary path in Step 4
 - US-4 → PR #198 — optional steps marked consistently with `> **Optional:**` blockquotes
+- PRMS parameter index (spec-driven, not from this tracker):
+  - PR #202 — hand-written `docs/parameter_index.md`; fixed the add-a-param trap
+    (`submit_zonal_params.sh` carries a hardcoded `PARAMS` array the docs claimed
+    was read from the YAML) + `tests/test_submit_wrapper_param_lists.py`
+  - PR #203 — `prms:` metadata on all 19 declared entries, two guards, generated
+    index, `hru_slope` emitted in rise/run, `op_flow_thres` into `merged/`
 
 ### Up next (priority order)
 - CFG-1 — remove commented opt-in keys from fabric profiles in base_config.yml
@@ -90,7 +96,23 @@ Configuration (CFG-*), Code Quality (CODE-*), Hygiene (HYG-*), Architecture (ARC
 
 - Remote: `git@github.com:rmcd-mscb/gfv2-params.git`
 - Default branch: `main`
-- CI runs `pytest tests/` on push to main and every PR
+- CI runs `pytest tests/` on push to main and every PR — and **only on those two
+  triggers**. Pushing a feature branch runs NOTHING; the Actions API returns zero
+  runs, which reads like "queued" but never resolves. Open the PR to start the gate.
+- CI runs **pytest only** — no pre-commit, no ruff, no yamllint, no shellcheck, no
+  docs-build. `pixi run -e dev pre-commit run --files <changed>` locally is the only
+  lint that will ever happen.
+- **shellcheck cannot run on the HPC.** Its pre-commit hook shells out to docker
+  (`docker system info`) and docker is not installed, so the hook errors rather than
+  passing. Combined with the point above, `.sh`/`.batch` files are linted by nothing
+  on any machine anyone actually uses. Substitute `bash -n` plus a dry run against a
+  stubbed `sbatch` (a script on PATH that echoes `Submitted batch job 123`), which
+  catches dependency-chain and expansion mistakes `bash -n` cannot — and say
+  explicitly that shellcheck did not run.
+- `pre-commit run --all-files` does NOT pass on main today: 4 pre-existing `E402`s in
+  `scripts/derive_depstor_params.py`'s startup-heartbeat import block and 14 yamllint
+  `braces` errors in `configs/zonal/zonal_params.yml`'s `flux_params:` block. Check
+  new findings against `main` (via `git stash`) before attributing them to your diff.
 - Do not run pytest on the HPC login node
 - `sbatch slurm_batch/ab_drains_to_dprst.batch [VPU] [FABRIC]` — the #147 FDR
   A/B (production vs fill vs breach) on one VPU; defaults VPU 16 / gfv2_dev.
@@ -98,4 +120,11 @@ Configuration (CFG-*), Code Quality (CODE-*), Hygiene (HYG-*), Architecture (ARC
   so do not swap the FDR chasing contributing-area magnitude)
 - Environment: pixi (`pyproject.toml`); SLURM batches use `pixi run --as-is`
 - `pixi run data-root` — prints `data_root` from base_config.yml (added PR #194)
+- `python scripts/build_parameter_index.py` — regenerates the three marked tables in
+  `docs/parameter_index.md` from the `prms:` blocks in `configs/`. `--check` exits 1
+  if stale, and `tests/test_params_index.py::test_generated_index_is_up_to_date`
+  enforces it, so a config edit without a regenerate fails CI (added PR #203)
+- `scripts/derive_depstor_params.py --mode copy_constants` — copies every
+  `constants:` entry into `merged/`. Chained `afterok` by
+  `submit_depstor_params.sh`; do not un-chain it (added PR #203)
 - `pixi run init-data-root` — scaffolds the data directory tree

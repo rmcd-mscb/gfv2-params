@@ -324,6 +324,35 @@ Repo-specific rules — uphold these when writing or reviewing code here:
   plus its DAG registration plus a config block, *and* a `tests/test_<builder>.py`
   (most builders have one — match the nearest existing test for style). Don't add
   a standalone script or YAML.
+- **Every declared config entry needs a `prms:` block, and it is not optional.**
+  `builder:`, plus every emitted column sorted into exactly one of three buckets:
+  `columns:` (this IS the PRMS parameter), `defects:` (this is *supposed* to be it
+  and currently is not — carries `reason`/`recovery`/`issue`), `provenance:` (not a
+  PRMS parameter at all). `processes:` is **per column, not per entry** — `ssflux`
+  alone spans PRMSSoilzone, PRMSGroundwater and PRMSRunoff across different columns,
+  so an entry-level key would report 5 non-runoff parameters as feeding runoff. Use
+  `processes: []` for a parameter no pywatershed Process consumes (`hru_elev`), never
+  a made-up process name — that would put a phantom heading in the generated index.
+  `params_for_process` reads `columns:` ONLY, so a defective column can never be
+  returned under a correct-looking parameter name. Guard 1
+  (`tests/test_params_index.py`) fails without the block; Guard 2
+  (`tests/test_params_index_ondisk.py`) checks the declaration against the on-disk
+  header in **both** directions but is data-root-gated, so it SKIPS in CI — record
+  its result by SLURM job id, never infer it from a green badge. After editing any
+  `prms:` block run `python scripts/build_parameter_index.py`; CI fails if the
+  generated tables in `docs/parameter_index.md` are stale.
+- **`prms.provenance` is orthogonal to `fill_columns`, not a restatement of it.**
+  `fill_columns` asks "is this KNN-interpolable?"; `prms.provenance` asks "is this a
+  PRMS parameter?". All four quadrants exist — the elevation/slope/aspect stats are
+  filled *and* not PRMS parameters, `op_flow_thres` is a PRMS parameter that was not
+  filled. Do not collapse the two.
+- **A `derived_columns:` output that is also in `fill_columns` makes a re-merge a
+  prerequisite of the next fill sweep.** `slope`'s `hru_slope` is the case:
+  `resolve_fill_plan` raises on a declared column the file does not have, so any
+  fabric whose CSV predates the declaration needs
+  `derive_zonal_params.py --mode merge --param slope` first. That is deliberate —
+  the alternative is a silent NaN in a PRMS parameter for exactly the HRUs that were
+  missing. Do not "fix" it by dropping the column from `fill_columns`.
 - **Paths and fabric inputs come from the profile, never hardcoded.** Read them
   with `require_config_key(...)` against the active fabric profile in
   `configs/base_config.yml`; use the `{data_root}`/`{fabric}`/`{vpu}`
