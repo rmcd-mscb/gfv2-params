@@ -43,8 +43,15 @@ repos:
         # below. Its `pip:` block uses 4-space nesting yamllint wants at 6; fixing
         # that would mean editing a file the repo has stopped maintaining.
         exclude: ^environment\.yml$
-  - repo: https://github.com/koalaman/shellcheck-precommit
-    rev: v0.10.0
+  # shellcheck-py, NOT koalaman/shellcheck-precommit. The koalaman hook runs
+  # shellcheck inside docker, and docker is not installed on the HPC where this
+  # repo is developed -- so it did not fail, it ERRORED
+  # (`CalledProcessError: docker system info`), and since CI runs pytest only,
+  # shell scripts were effectively linted by nothing on any machine anyone used.
+  # shellcheck-py ships a pip-installed binary and runs here. Same shellcheck,
+  # same rules; it just works without a container runtime.
+  - repo: https://github.com/shellcheck-py/shellcheck-py
+    rev: v0.10.0.1
     hooks:
       - id: shellcheck
         files: \.(sh|slurm|sbatch)$
