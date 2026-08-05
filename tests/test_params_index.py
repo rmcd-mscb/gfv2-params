@@ -209,3 +209,61 @@ def test_op_flow_thres_is_not_a_means_entry():
     assert "op_flow_thres" in {e["name"] for e in depstor.get("constants") or []}
     for entry in depstor.get("constants") or []:
         assert "source_raster" not in entry, f"{entry['name']} is not a zonal target"
+
+
+# ---------------------------------------------------------------------------
+# params_for_process + the index generator.
+# ---------------------------------------------------------------------------
+
+
+def test_params_for_process_is_column_grained_not_entry_grained():
+    """ssflux spans three processes; asking for PRMSRunoff must return only its
+    two runoff columns, not the whole 10-column file."""
+    hits = pi.params_for_process("PRMSRunoff")
+    ssflux_cols = {col for col, d in hits if d.name == "ssflux"}
+    assert ssflux_cols == {"dprst_seep_rate_open", "dprst_flow_coef"}
+    assert "gwflow_coef" not in ssflux_cols  # PRMSGroundwater
+    assert "soil2gw_max" not in ssflux_cols  # PRMSSoilzone
+
+
+def test_prms_runoff_has_the_expected_parameter_count():
+    hits = pi.params_for_process("PRMSRunoff")
+    assert len({col for col, _ in hits}) == 11
+
+
+def test_params_for_process_never_returns_a_defective_column():
+    """aspect's `mean` names PRMSSolarGeometry/PRMSAtmosphere in prms.defects.
+
+    Returning it here would hand a caller a broken column under a correct-looking
+    parameter name -- the exact failure the defects/columns split exists to prevent.
+    """
+    for process in ("PRMSSolarGeometry", "PRMSAtmosphere"):
+        hits = pi.params_for_process(process)
+        assert all(d.name != "aspect" for _, d in hits), process
+        assert {col for col, _ in hits} == {"hru_slope"}
+
+
+def test_generated_index_is_up_to_date():
+    """docs/parameter_index.md's generated regions must match the configs.
+
+    Pure text + YAML, so it runs on CI. This is what stops the index drifting from
+    the `prms:` blocks the moment someone edits a config -- the whole failure mode
+    that made a hand-maintained index untrustworthy.
+    """
+    import importlib.util
+    from pathlib import Path
+
+    import pytest
+
+    spec = importlib.util.spec_from_file_location(
+        "build_parameter_index",
+        Path(__file__).resolve().parent.parent / "scripts" / "build_parameter_index.py",
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    if module.build(check=True) != 0:
+        pytest.fail(
+            "docs/parameter_index.md is stale -- run "
+            "`python scripts/build_parameter_index.py` and commit the result."
+        )

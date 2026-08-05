@@ -168,3 +168,27 @@ def load_declared_params() -> list[DeclaredParam]:
         _load_yaml_doc(DEPSTOR_PARAMS_CONFIG),
         _load_yaml_doc(SNAREA_LIBRARY_CONFIG),
     )
+
+
+def params_for_process(
+    process: str, declared: list[DeclaredParam] | None = None
+) -> list[tuple[str, DeclaredParam]]:
+    """Every (emitted_column, DeclaredParam) whose column feeds `process`.
+
+    Column-grained, not entry-grained: `ssflux` alone spans PRMSSoilzone,
+    PRMSGroundwater and PRMSRunoff across different columns, so returning whole
+    entries would report 5 non-runoff parameters as feeding runoff.
+
+    Reads `prms.columns` ONLY -- never `prms.defects`. A defective column is one
+    that is supposed to be the PRMS parameter and currently is not (aspect's `mean`
+    is an arithmetic mean of a circular variable), so returning it here would hand a
+    caller a broken column under a correct-looking name. The index generator reads
+    `defects` separately and renders it as a DEFECTIVE row, which is the opposite of
+    silently including it.
+    """
+    out: list[tuple[str, DeclaredParam]] = []
+    for d in declared if declared is not None else load_declared_params():
+        for col, spec in (d.prms.get("columns") or {}).items():
+            if process in (spec.get("processes") or []):
+                out.append((col, d))
+    return out

@@ -215,6 +215,18 @@ raw `mean` (degrees), with no zonal re-run. See
    Mirror an existing entry of the same `script:` family — for a new
    continuous raster, copy the `elevation` block and change `name`,
    `source_raster`, and `merged_file`.
+
+   The entry needs a **`prms:` block**, and it is not optional: `builder:`,
+   plus every emitted column sorted into `columns:` (this IS the PRMS
+   parameter), `defects:` (this is *supposed* to be the PRMS parameter and
+   currently is not) or `provenance:` (this is not a PRMS parameter at all).
+   `processes:` is **per column**, not per entry — `ssflux` alone spans three
+   processes across different columns.
+   [`tests/test_params_index.py`](../tests/test_params_index.py)'s Guard 1
+   fails without it, and
+   [`tests/test_params_index_ondisk.py`](../tests/test_params_index_ondisk.py)'s
+   Guard 2 fails if a column reaches disk that none of the three buckets
+   declares. See the [Parameter index](parameter_index.md).
 2. **Confirm the source raster exists on disk.** Resolve any
    `{data_root}` placeholders by hand and `ls` the path.
 3. **Choose the `script:` tag** — `zonal` (continuous raster),
@@ -259,7 +271,17 @@ raw `mean` (degrees), with no zonal re-run. See
    on fabrics with unstaged sources. If you submit from a shell exporting it,
    your new param must be in *that* list too, or it still will not run.
 
-6. **Submit the full SLURM array** via
+6. **Regenerate the parameter index:**
+   ```bash
+   pixi run --as-is python scripts/build_parameter_index.py
+   ```
+   This rewrites the three generated tables in
+   [`docs/parameter_index.md`](parameter_index.md) from the `prms:` blocks and
+   nothing else; the surrounding prose is hand-maintained. CI fails if you skip
+   it — `test_generated_index_is_up_to_date` runs the same generator with
+   `--check`.
+
+7. **Submit the full SLURM array** via
    [`slurm_batch/submit_zonal_params.sh`](../slurm_batch/submit_zonal_params.sh)
    from a shell that has `pixi` on `PATH`. It submits an array zonal job
    plus a chained merge for each param in `PARAMS`.
