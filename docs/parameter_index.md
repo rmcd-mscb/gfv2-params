@@ -70,7 +70,7 @@ a partial-pixel **count**, not a `[0, 1]` fraction. The PRMS parameter is the on
 
 | PRMS parameter | Emitted file | Column | Config entry | Builder |
 | --- | --- | --- | --- | --- |
-| `soil_type` ⚠️ | `nhm_soils_params.csv` | `soils` | `zonal_params.yml:74` | `zonal_runners/soils.py:78` |
+| `soil_type` ⚠️ | `nhm_soils_params.csv` | `soils` — identity, **1=sand, 2=loam, 3=clay**; the source metadata is wrong, see [Known gaps](#soils--soil_type-is-an-identity-mapping--and-the-source-metadata-says-otherwise) | `zonal_params.yml:74` | `zonal_runners/soils.py:78` |
 | `soil_moist_max` | `nhm_soil_moist_max_params.csv` | `soil_moist_max` | `zonal_params.yml:81` | `zonal_runners/soils.py` |
 | `cov_type` | `nhm_lulc_nhm_v11_params.csv` | `cov_type` | `zonal_params.yml:96` | `zonal_runners/lulc_prederived.py` |
 | `soil2gw_max` | `nhm_ssflux_params.csv` | `soil2gw_max` | `zonal_params.yml:208` | `zonal_runners/ssflux.py` |
@@ -269,10 +269,42 @@ gated on `radtrn_raster`, which is configured for none of these three entries
 (`zonal_params.yml:163-165` says so) — so it never runs for them. What
 PRMS parameter it corresponds to, if any, is unverified.
 
+### `soils` → `soil_type` is an identity mapping — and the source metadata says otherwise
+
+**Verified 2026-08-05.** `TEXT_PRMS.tif` is already in PRMS `soil_type` encoding
+(**1 = sand, 2 = loam, 3 = clay**), so `nhm_soils_params.csv:soils` can be used as
+`soil_type` unchanged. Only the *name* differs.
+
+⚠️ **The ScienceBase metadata for `TEXT_PRMS.tif` contradicts this, and it is wrong.** Its
+`edom` block describes value 1 as "Percent clay greater than 40", value 2 as sand, value 3
+as loam — i.e. clay and sand transposed relative to PRMS. Anyone who follows it and remaps
+1↔3 will **silently invert sand and clay for every HRU**.
+
+The raster's own values settle it. Observed cell counts (`rasterio`, full CONUS grid,
+27317×15906 uint8):
+
+| Value | Cells | % of valid | metadata `edom` claims | actual |
+| --- | --- | --- | --- | --- |
+| 1 | 38,489,559 | 29.4% | clay > 40% | **sand** |
+| 2 | 91,238,514 | 69.6% | sand | **loam** |
+| 3 | 1,288,556 | 1.0% | loam | **clay** |
+
+Three independent reasons the data, not the metadata, is right:
+
+1. The metadata's own `Count` range — min **1,288,556**, max **91,238,514** — matches values
+   3 and 2 exactly, so this is the raster the metadata describes; only its class
+   *descriptions* are transposed.
+2. 29.4% of CONUS exceeding 40% clay is not credible; 1.0% is. Loam at 1.0% is absurd;
+   69.6% is right.
+3. [TM6B9:786](NHM_description_Regan_2018_TM6B9.md) assigns the **residual** to class 2
+   ("*or 2 for the remaining cells*"), and a residual category is naturally the majority —
+   which class 2 is.
+
+Cross-check against the delivered product: `nhm_soils_params.csv` gives 30.5% / 69.0% / 0.4%
+across 361,471 HRUs — the same shape, as expected for per-HRU dominant class.
+
 ### Unverified mappings
 
-- **`soils` → `soil_type`** — inferred from the source raster (`TEXT_PRMS.tif`, soil texture)
-  plus [TM6B9:786](NHM_description_Regan_2018_TM6B9.md). No repo artifact asserts it.
 - **`mean` → `hru_elev`** — inferred from `viz.py:505-507` plus
   [TM6B9:601](NHM_description_Regan_2018_TM6B9.md). Elevation is neither circular nor
   transformed, so the arithmetic zonal mean is the right statistic; only the *name* is
