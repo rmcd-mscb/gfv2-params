@@ -1,5 +1,3 @@
-import pytest
-
 from gfv2_params.download.copernicus_dem import tile_label, tiles_for_bbox
 
 

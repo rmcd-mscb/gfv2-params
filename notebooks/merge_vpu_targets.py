@@ -21,9 +21,9 @@ def _():
     from pathlib import Path
 
     import geopandas as gpd
+    import marimo as mo
     import pandas as pd
     import shapely
-    import marimo as mo
 
     from gfv2_params.config import VPUS_DETAILED, load_base_config
 

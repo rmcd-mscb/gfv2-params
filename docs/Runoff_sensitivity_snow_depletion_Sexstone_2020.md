@@ -2501,5 +2501,3 @@ depletion curve representation within a continental scale
 
 hydrologic model. Hydrological Processes. 2020;34:
 2365–2380. https://doi.org/10.1002/hyp.13735
-
-

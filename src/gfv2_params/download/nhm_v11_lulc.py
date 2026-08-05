@@ -18,9 +18,9 @@ to run the pipeline with these inputs.
 Extracts to: {data_root}/input/lulc_veg/nhm_v11/
 """
 
+import subprocess
 from pathlib import Path
 from zipfile import ZipFile
-import subprocess
 
 import requests
 import urllib3
