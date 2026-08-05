@@ -185,6 +185,9 @@ cython_debug/
 # repo specific
 output/
 logs/
+# Snakemake's run state + per-job logs, created by anything under workflow/.
+# Regenerated on every invocation; never a source artifact.
+.snakemake/
 
 # Fabric results-viewer figures: the PNGs under docs/figures/<fabric>/ are
 # committed (regenerate with `scripts/render_figures.py`); only the executed
