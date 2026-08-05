@@ -114,6 +114,10 @@ def test_apply_derived_columns_converts_slope_degrees_to_rise_run():
 
     Copied verbatim without this conversion, `mean` declares a 77-degree cliff
     instead of a 4.4-degree hillslope.
+
+    tan(radians(4.4252)) is 0.07738825, not the 0.077398 the plan quoted -- close
+    enough to pass a 1e-3 tolerance and fail a 1e-4 one, which is exactly what it
+    did. The value here is the computed one.
     """
     import math
 
@@ -121,7 +125,7 @@ def test_apply_derived_columns_converts_slope_degrees_to_rise_run():
     out = apply_derived_columns(
         df, {"hru_slope": {"from": "mean", "transform": "deg_to_fraction"}}
     )
-    assert math.isclose(out["hru_slope"][0], 0.077398, rel_tol=1e-4)
+    assert math.isclose(out["hru_slope"][0], 0.07738825, rel_tol=1e-6)
     assert math.isclose(out["hru_slope"][1], 1.0, rel_tol=1e-9)  # tan(45 deg) == 1
     assert "mean" in out.columns  # the raw stat is kept as declared provenance
 
