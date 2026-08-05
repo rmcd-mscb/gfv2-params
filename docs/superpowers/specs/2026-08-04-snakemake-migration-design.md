@@ -147,6 +147,71 @@ See below. One of them — I1 — cannot be answered by the method the previous 
 Each item is a question with a method. Migration dates get set **after** all five are
 answered, when tranche cost is knowable rather than guessed.
 
+> ### ✅ RUN 2026-08-05 — all five answered
+>
+> Probes and full findings: [`workflow/probe/`](../../../workflow/probe/). Snakemake
+> **9.25.1** in the `workflow` pixi env. Verdict per item below; two of the five
+> corrected assumptions in this spec, and one finding falls outside all five.
+>
+> | | Result |
+> | --- | --- |
+> | **I1** | **Answered — yes.** `--group-components=N` collapses submissions exactly at the divisor (16 instances → 4 job ids at N=4). Production 650 → **41** at N=16, so the spec's "~640 → 40" is achievable. |
+> | **I2** | **Partially answered.** The feared mechanism is RULED OUT — grouped members start serialised (+0.0/+3.2/+6.3/+9.1s), not simultaneously. Warm-cache import cost is a wash (0.190s grouped vs 0.177s ungrouped). Cold-cache-under-grouping remains **open** and is not manufacturable without root. |
+> | **I3** | **Answered, and this spec's premise was WRONG.** See correction below. |
+> | **I4** | **Answered.** Snakemake's default builds **0 of 2** good targets when one is unbuildable; bash builds 8 of 10 today. `--keep-going` recovers them and still exits 1. Recommend `--keep-going` as standard; `enabled: false` only as a documented second mechanism, never alone — it exits 0 and makes a broken entry invisible. |
+> | **I5** | **Answered.** `slurm_batch/data_root_tests.batch`, plus the convention that a data-root-gated result is recorded by SLURM job id. The pattern already had a precedent: Guard 2 (`tests/test_params_index_ondisk.py`, PR #203) is the same shape. |
+>
+> #### Correction to I3 — the stated mechanism and its test are both wrong
+>
+> This spec says "every `.batch` run bumps mtimes and makes downstream Snakemake
+> targets stale". **Measured false.** Snakemake 9 decides staleness from input
+> CONTENT, not mtime, despite `mtime` being in the default `--rerun-triggers` set:
+>
+> | change to a shared input | rerun? |
+> | --- | --- |
+> | `touch` (mtime only) | **no** — with *or* without `ancient()` |
+> | content change, no `ancient()` | yes |
+> | content change, with `ancient()` | **no**, output preserved |
+>
+> Consequently the proposed verification — "`--dry-run` after a deliberate `touch`
+> of a shared VRT, zero rules should trigger" — **passes even with no containment
+> at all** and cannot distinguish a contained workflow from an uncontained one. Do
+> not use it. `ancient()` is still the right rule, verified against the case that
+> actually matters (content change), but the check should be a STATIC test
+> asserting every `shared/`/`input/` path in the Snakefile is wrapped — checkable
+> in CI, no data root, cannot pass vacuously.
+>
+> The hazard itself is confirmed live: `carussel` owns `gfv2_car/` and
+> `gfv2_car_conus/` on the same `{data_root}`, consuming the same `shared/` and
+> `input/` trees.
+>
+> #### Finding outside the five — a nested `pixi run` inherits its parent's env
+>
+> This one falsifies a claimed property of PR #142. Snakemake must be launched from
+> the `workflow` env, which exports `PIXI_ENVIRONMENT_NAME=workflow`; every rule's
+> shell command inherits it, so a bare nested `pixi run --as-is` resolves to
+> **`.pixi/envs/workflow`**, not `default`.
+>
+> `workflow/spike/Snakefile` claims its rules "shell out via `pixi run --as-is` so
+> all geo work runs in the frozen default env (race-safe; CLAUDE.md constraint)".
+> That was never true as written — the spike's rules ran in the *workflow* env. It
+> only appeared to work because the spike declared
+> `workflow = { features = ["workflow"] }`, which *includes* the default feature and
+> therefore the whole geo stack. Give the controller env `no-default-feature = true`
+> — correct, so a scheduler does not carry GDAL — and every rule dies with
+> `ModuleNotFoundError: No module named 'geopandas'`, which is exactly what happened
+> on the first real submission here.
+>
+> **Every rule must pin `pixi run --as-is -e default`**, and a test should assert no
+> rule carries a bare `pixi run --as-is` without an explicit `-e`.
+>
+> #### What this does NOT settle
+>
+> The two blockers that gate a schedule are untouched by these five: the validation
+> baselines still do not exist (`gfv2_dev` has no `params/`), and the baseline cost
+> (~45.5 h wall / ~340 CPU-h per depstor cascade, two passes per A/B round) is still
+> unbudgeted. `retries:` semantics against a real OOM also remain unmeasured.
+
 ### I1 — Does `group:` collapse submissions into one SLURM job?
 
 **Why it matters.** Today one param = one array job of 64 tasks throttled `%4`; ten params =
