@@ -81,7 +81,10 @@ pythonpath = ["."]
 # Run `pixi install` to materialise envs under `.pixi/envs/`.
 # ---------------------------------------------------------------------------
 [tool.pixi.workspace]
-channels = ["conda-forge"]
+# bioconda supplies snakemake + its SLURM executor plugin (the `workflow`
+# feature below). conda-forge stays first so every runtime/geo package still
+# resolves from it.
+channels = ["conda-forge", "bioconda"]
 platforms = ["linux-64"]
 
 [tool.pixi.tasks]
@@ -176,6 +179,15 @@ ruff = "*"
 # generation still uses the richer `notebooks` env; dev only needs it to import.
 matplotlib-base = "*"
 
+[tool.pixi.feature.workflow.dependencies]
+# Snakemake, for the I1-I5 investigation in
+# docs/superpowers/specs/2026-08-04-snakemake-migration-design.md.
+# A FEATURE, not a [project.dependency]: this is orchestration tooling under
+# evaluation, not a runtime dep, and it must not be pulled into the frozen
+# default env that SLURM array tasks run in.
+snakemake = ">=8"
+snakemake-executor-plugin-slurm = "*"
+
 [tool.pixi.feature.docs.dependencies]
 mkdocs = "*"
 mkdocs-material = "*"
@@ -213,6 +225,12 @@ reference = { features = ["reference"], solve-group = "reference", no-default-fe
 # `pixi run -e marp marp-setup`); no-default-feature keeps the heavy geo stack
 # out so operators only pay ~250 MB when they render decks. Own solve-group.
 marp = { features = ["marp"], solve-group = "marp", no-default-feature = true }
+# The snakemake controller only. no-default-feature keeps the geo stack out --
+# every rule shells out to `pixi run --as-is` so the actual work still happens in
+# the frozen default env, which is the race-safety constraint CLAUDE.md sets for
+# concurrent array tasks. Own solve-group so a snakemake pin can never move the
+# production solve.
+workflow = { features = ["workflow"], solve-group = "workflow", no-default-feature = true }
 all = { features = ["notebooks", "dev", "docs"], solve-group = "default" }
 
 [tool.isort]
