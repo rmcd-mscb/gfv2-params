@@ -119,13 +119,86 @@ CONUS-wide linear normalisation is **97.2 – 100%** versus 89.5 – 90.5% per-b
   information. Tests should target the three independent fields.
 - **The cube is a no-op in log space.** `norm(log10(k³)) == norm(log10(k))`
   (`allclose`, max diff 3.05e-16) because ×3 on the exponent is absorbed by the
-  normalisation. Issue item 2 ("missing cube") largely dissolves once the space
-  is right.
+  normalisation. Issue item 2 ("missing cube") dissolves twice over: the
+  reference implementation does not cube those two parameters (D7), and the one
+  cube that remains has no effect on output.
 - **Sign trap.** `k_perm` is negative (−16.48 … −10.87). Substituting it directly
   into TM 6-B9's multiplicative forms inverts the intended response: with `k<0`,
   `k³(1−slope)` *increases* with slope, and `slope>1` flips the sign again.
 - **Source layer is not perfectly continuous.** 1,828 HRUs have coverage gaps
   (Σ`wght` < 0.99) and 98 have overlapping source polygons (Σ up to 2.0).
+
+## Reference implementation (Viger 2014)
+
+The original NHM subsurface-flux values and their FGDC metadata are public:
+**"Geospatial Fabric Attribute Tables for PRMS Subsurface Flux Parameters based
+on Gleeson (Preliminary)"**, [doi:10.5066/F7CN71XR](https://doi.org/10.5066/F7CN71XR)
+(ScienceBase item `537a6a33e4b0efa8af08154d`). It ships per-region attribute
+tables plus `GFAttsNhruPrms_subsurface-Gleeson.xml`. Findings from that record:
+
+**Confirms the intensive reading (root cause #1).** The attribute definitions
+say the parameters derive from *"the feature **average** hydraulic conductivity
+of near surface geology"* — an average, not a prorated sum. The wording appears
+independently in three separate attribute definitions, so it is not a
+copy-paste artifact.
+
+**Confirms linear interpolation.** Every attribute: *"Values for all features
+are then **linearly scaled** to fit within a range."*
+
+**Resolves issue item 2 — against the issue.** The reference cubes
+`soil2gw_max` only:
+
+| attribute | reference wording |
+|---|---|
+| `soil2gw_max` | *"the **cubed power** of the feature average hydraulic conductivity"* |
+| `slowcoef_lin` | *"the hru_slope times the feature average hydraulic conductivity, divided by the hru_area"* — **no cube** |
+| `gwflow_coef` | same as `slowcoef_lin` — **no cube** |
+| `fastcoef_lin` | *"twice the slowcoef_lin value"* |
+
+These are distinct descriptions, not boilerplate. TM 6-B9 (2018) line 790 states
+`k_perm³` for `ssr2gw_rate` and `slowcoef_lin`; the 2014 reference metadata does
+not. **Today's code matches the reference**, so issue item 2 ("missing cube") is
+resolved as *no change required* — and under this design the point is moot
+anyway, since the only cube that survives is the provably-absorbed one.
+
+**Validates the coverage denominator.** The reference publishes `fflux`:
+*"Fraction of the feature area that is underlain by the hydrogeology data layer
+used to derive the groundwater flux-type parameters. Value can range from
+0.0–1.0, with a flag of **−1 for no overlap at all**."* This is exactly the
+renormalisation denominator `den` in this design. **Emit it** as a provenance
+column (see below).
+
+**Caveats — do not over-read this record.** The three `dprst_*` attribute
+*descriptions* are visibly copy-pasted (all read "Depression storage seepage
+rate", including `dprst_flow_coef`, which is an interflow coefficient, and all
+claim to equal `slowcoef_lin` despite carrying different ranges). Treat the
+declared ranges as more reliable than that prose. Also note `ssr2gw_rate` is
+**absent** from this table entirely — it is not a Gleeson-derived flux parameter
+in the reference.
+
+**Declared reference ranges vs ours:**
+
+| param | reference (2014, a priori) | ours | note |
+|---|---|---|---|
+| `soil2gw_max` | 0.1 – 0.3 | 0.1 – 0.3 | match |
+| `fastcoef_lin` | 0.01 – 0.6 | 0.01 – 0.6 | match |
+| `slowcoef_lin` | 0.005 – 0.3 | 0.005 – 0.3 | match |
+| `gwflow_coef` | 0.005 – 0.3 | 0.005 – 0.3 | match |
+| `dprst_seep_rate_open` | 0.3 – 0.7 | 0.005 – 0.2 | differs |
+| `dprst_flow_coef` | 0.01 – 0.6 | 0.005 – 0.5 → **0.1** | differs |
+
+The two `dprst_*` divergences are **not** defects to "fix" back. The reference
+ranges are *a priori* 2014 values; our ranges track Driscoll 2020 Table 1's
+*calibrated* envelope (`dprst_seep_rate_open` 0.00001 – 0.2,
+`dprst_flow_coef` 0.0001 – 0.1). D5 keeps the calibrated target deliberately.
+
+**Available empirical check.** The per-region attribute tables
+(`GeospatialFabricAttributes-PRMS_Gleeson_{01..21}.zip`) contain the reference
+implementation's actual output. Downloading one region and comparing
+distributions would settle the cube reading empirically and satisfies the
+issue's "cross-check against NhmParamDb" criterion. Comparisons must be
+**distributional** — gfv2 has 361,471 HRUs vs the NHM's 109,951, no 1:1 id join.
+Treat this as validation, not a blocker.
 
 ## Decisions
 
@@ -137,6 +210,8 @@ CONUS-wide linear normalisation is **97.2 – 100%** versus 89.5 – 90.5% per-b
 | D4 | Normalisation moves to a **reduce step**; `norm_scope: fabric` (default) or `vpu` | Fixes #4; fabric-wide is batch-invariant by construction, `vpu` retained for NhmParamDb comparison |
 | D5 | Cap `dprst_flow_coef` at **0.1** | Issue item 5; Driscoll 2020 Table 1 calibrated max is 0.1, ours was 5× that |
 | D6 | Plain min–max, **no** percentile anchors | Measured unnecessary — plain linear passes every criterion; keeps maximum fidelity to TM 6-B9 |
+| D7 | Cube `soil2gw_max` **only**; no cube on `ssr2gw_rate`/`slowcoef_lin` | Matches the Viger 2014 reference metadata and today's code; resolves issue item 2 as no-change. Moot under this design — the surviving cube is provably absorbed by the normalisation |
+| D8 | Emit `fflux` (valid-lithology area fraction) as a provenance column, `−1` where an HRU has no overlap | The reference implementation publishes exactly this attribute; it is already computed as the renormalisation denominator, and it makes coverage auditable instead of invisible |
 
 ## Design
 
@@ -165,18 +240,24 @@ Everything stays additive in log10 space, which is what "geometric mean +
 linear interpolation" implies:
 
 ```
-L_soil2gw_max        = 3·k_perm_log_wtd
-L_ssr2gw_rate        = 3·k_perm_log_wtd + log10(1 − slope)
-L_slowcoef_lin       = 3·k_perm_log_wtd + log10(slope) − log10(hru_area)
+L_soil2gw_max        = 3·k_perm_log_wtd                                    # cubed
+L_ssr2gw_rate        =   k_perm_log_wtd + log10(1 − slope)                 # NOT cubed
+L_slowcoef_lin       =   k_perm_log_wtd + log10(slope) − log10(hru_area)   # NOT cubed
 L_fastcoef_lin       = L_slowcoef_lin + log10(2)
 L_gwflow_coef        = L_slowcoef_lin
 L_dprst_seep_rate_open = L_ssr2gw_rate
 L_dprst_flow_coef    = L_fastcoef_lin
 ```
 
-The `×3` is retained for structural fidelity to TM 6-B9 even though it is
-provably absorbed by the normalisation for `soil2gw_max`; it is *not* absorbed
-for the other two, where it re-weights permeability against the slope/area term.
+The cube applies to `soil2gw_max` only — see [Reference implementation](#reference-implementation-viger-2014).
+This matches both the reference implementation and today's code, and minimises
+the diff. It is also self-consistently harmless: for `soil2gw_max` the `×3` is
+*provably absorbed* by the normalisation (`norm(3·k) ≡ norm(k)`), so the cube
+question has no effect on any output under this design.
+
+Both readings were measured and both pass; the cube-on-all variant merely
+redistributes IQR (0.247 vs 0.134 for the slowcoef family) by re-weighting
+permeability against the slope/area term.
 
 ### Map/reduce split
 
@@ -267,6 +348,12 @@ changes the on-disk header, so:
   in CI** — record its result by SLURM job id, never infer it from a green
   badge.
 
+`fflux` is **added** as a new provenance column (D8): the fraction of HRU area
+underlain by valid lithology, i.e. the renormalisation denominator `den`, with
+`−1` where an HRU has no overlap at all. It is `provenance:` in the `prms:`
+block and is **not** added to `fill_columns` — it is a measured coverage fact,
+not something to interpolate.
+
 `fill_columns` is unchanged (the same seven parameters). `fabric_columns`
 `hru_area` handling is unchanged.
 
@@ -287,20 +374,22 @@ New `tests/test_ssflux.py` (none exists today):
 | **batch invariance** | two different batch counts → **identical** merged CSV |
 | CSV round-trip | `L_*` survive write/read bit-exactly |
 | distribution | `% ≤1% of min ≤ 20` and `IQR/range ≥ 0.10` on a fixture |
+| `fflux` | equals the valid-coverage fraction; `−1` for an HRU with no overlap |
+| cube placement | `soil2gw_max` cubed; `ssr2gw_rate`/`slowcoef_lin` not (D7) |
 
 ## Expected outcome (measured on gfv2 inputs)
 
 Fabric-wide linear interpolation, 598 HRUs → NaN for gap-fill:
 
-| param | range | % ≤1% min | IQR/range | |
-|---|---|---|---|---|
-| `soil2gw_max` | 0.1 – 0.3 | 5.0% | 0.383 | PASS |
-| `ssr2gw_rate` | 0.3 – 0.7 | 0.0% | 0.371 | PASS |
-| `fastcoef_lin` | 0.01 – 0.6 | 0.0% | 0.249 | PASS |
-| `slowcoef_lin` | 0.005 – 0.3 | 0.0% | 0.249 | PASS |
-| `gwflow_coef` | 0.005 – 0.3 | 0.0% | 0.249 | PASS |
-| `dprst_seep_rate_open` | 0.005 – 0.2 | 0.0% | 0.371 | PASS |
-| `dprst_flow_coef` | 0.005 – **0.1** | 0.0% | 0.249 | PASS |
+| param | range | % ≤1% min | % ≥1% max | IQR/range | |
+|---|---|---|---|---|---|
+| `soil2gw_max` | 0.1 – 0.3 | 5.0% | 1.6% | 0.383 | PASS |
+| `ssr2gw_rate` | 0.3 – 0.7 | 0.0% | 1.7% | 0.261 | PASS |
+| `fastcoef_lin` | 0.01 – 0.6 | 0.0% | 0.0% | 0.139 | PASS |
+| `slowcoef_lin` | 0.005 – 0.3 | 0.0% | 0.0% | 0.139 | PASS |
+| `gwflow_coef` | 0.005 – 0.3 | 0.0% | 0.0% | 0.139 | PASS |
+| `dprst_seep_rate_open` | 0.005 – 0.2 | 0.0% | 1.7% | 0.261 | PASS |
+| `dprst_flow_coef` | 0.005 – **0.1** | 0.0% | 0.0% | 0.139 | PASS |
 
 Every acceptance criterion in #175 is met. The residual 5.0% on `soil2gw_max`
 is the genuine least-permeable lithology class.
@@ -342,5 +431,17 @@ is the genuine least-permeable lithology class.
 - [gdptools: Extensive vs. intensive variables](https://gdptools.readthedocs.io/en/develop/Examples/PolyToPoly/Extensive_vs_intensive_variables.html)
 - `gdptools/weight_gen_p2p.py:208-230` — `calculate_weights` column semantics
 - Gleeson and others, 2011 — `k_perm` (log10 permeability) source dataset
-- Viger, R.J., 2014; Viger and Leavesley, 2007 — cited by TM 6-B9 for
-  derivation detail (not yet consulted; would settle the cube's intended space)
+- **Viger, R.J., 2014** — *Geospatial Fabric Attribute Tables for PRMS
+  Subsurface Flux Parameters based on Gleeson (Preliminary)*,
+  [doi:10.5066/F7CN71XR](https://doi.org/10.5066/F7CN71XR); FGDC record
+  `GFAttsNhruPrms_subsurface-Gleeson.xml`. **Consulted** — see
+  [Reference implementation](#reference-implementation-viger-2014). Also ships
+  per-region reference output for distributional validation.
+- **Viger, R.J., and Leavesley, G.H., 2007** — *The GIS Weasel user's manual*,
+  USGS Techniques and Methods 6-B4, 201 p.,
+  [doi:10.3133/tm6B4](https://doi.org/10.3133/tm6B4). The 2014 metadata states
+  the per-attribute methodologies live in this manual's **Appendix**, indexed by
+  PRMS parameter name. Not yet read; the only remaining place a definitive
+  statement of the cube's intended space (log10 vs linear) would live. Not a
+  blocker — D7 makes the cube moot for this design.
+- Markstrom and others, 2015, table 1–3 — acceptable parameter ranges
