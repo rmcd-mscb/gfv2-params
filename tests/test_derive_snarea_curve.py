@@ -11,7 +11,7 @@ import pandas as pd
 import pytest
 import xarray as xr
 
-from scripts.derive_snarea_curve import (  # noqa: E402
+from scripts.derive_snarea_curve import (
     cells_from_weights,
     read_daily_by_hru,
     validate_default_curve,

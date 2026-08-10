@@ -14,6 +14,23 @@ def _series(vals):
     return pd.Series(vals, index=idx, dtype="float64")
 
 
+def test_sdc_length_is_the_single_source_of_truth():
+    # Every curve-length-dependent construct in the package derives from
+    # season.SDC_LENGTH, so a change there propagates rather than leaving a
+    # stale `11` behind in one module.
+    from gfv2_params.snarea.build import _CURVE_COLS
+    from gfv2_params.snarea.library import CURVE_COLS
+    from gfv2_params.snarea.library import SWE_LEVELS as LIB_LEVELS
+    from gfv2_params.snarea.season import SDC_LENGTH, SWE_LEVELS
+
+    assert SDC_LENGTH == 11
+    assert len(SWE_LEVELS) == SDC_LENGTH
+    assert len(_CURVE_COLS) == SDC_LENGTH
+    assert len(CURVE_COLS) == SDC_LENGTH
+    # Stage 3 samples the SAME grid as Stage 2 — one definition, not two.
+    assert LIB_LEVELS is SWE_LEVELS
+
+
 def test_swe_levels():
     assert list(SWE_LEVELS) == [1.0, 0.9, 0.8, 0.7, 0.6, 0.5, 0.4, 0.3, 0.2, 0.1, 0.0]
 

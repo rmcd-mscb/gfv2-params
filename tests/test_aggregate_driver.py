@@ -117,6 +117,55 @@ def test_aggregate_source_years_filter_no_match_raises(tmp_path):
         )
 
 
+def test_compute_or_load_weights_accepts_a_str_path(tmp_path):
+    # aggregate_source's caller may pass weight_file as a plain str (it comes
+    # out of a config dict); the cache-hit branch must not depend on it already
+    # being a Path.
+    from gfv2_params.aggregate.driver import compute_or_load_weights
+
+    cached = tmp_path / "w.csv"
+    pd.DataFrame({"hru_id": [1, 2], "i": [0, 0], "j": [0, 1],
+                  "wght": [0.5, 0.5]}).to_csv(cached, index=False)
+    adapter = SourceAdapter(source_key="demo", variables=("swe",), files_glob="*.nc")
+    got = compute_or_load_weights(
+        adapter, xr.Dataset(), _two_polys(), "hru_id", ("2010-01-01", "2010-01-02"),
+        str(cached),
+    )
+    assert list(got["hru_id"]) == [1, 2]
+
+
+def test_compute_or_load_weights_raises_when_no_overlap(tmp_path):
+    # A fabric that does not intersect the grid yields an empty weight table;
+    # that must fail loud rather than aggregating every HRU to NaN.
+    import pytest
+
+    from gfv2_params.aggregate.driver import compute_or_load_weights
+
+    path = _synthetic_grid(tmp_path)
+    ds = xr.open_dataset(path)
+    far = gpd.GeoDataFrame({"hru_id": [1]}, geometry=[box(1e6, 1e6, 1.1e6, 1.1e6)],
+                           crs="EPSG:5070")
+    adapter = SourceAdapter(
+        source_key="demo", variables=("swe",), files_glob="demo_daily_*.nc",
+        source_crs="EPSG:5070", x_coord="x", y_coord="y", time_coord="time",
+    )
+    with pytest.raises((RuntimeError, ValueError)):
+        compute_or_load_weights(
+            adapter, ds, far, "hru_id", ("2010-01-01", "2010-01-02"),
+            tmp_path / "far.csv",
+        )
+
+
+def test_year_of_raises_without_a_four_digit_year():
+    import pytest
+
+    from gfv2_params.aggregate.driver import _year_of
+
+    assert _year_of(Path("snodas_daily_2010.nc")) == 2010
+    with pytest.raises(ValueError, match="4-digit year"):
+        _year_of(Path("snodas_daily_latest.nc"))
+
+
 def test_std_sidecar_emits_var_std(tmp_path):
     import pytest
 

@@ -35,9 +35,11 @@ def compute_or_load_weights(
     fabric_gdf: gpd.GeoDataFrame,
     id_col: str,
     period: tuple[str, str],
-    weight_file: Path,
+    weight_file: Path | str,
 ) -> pd.DataFrame:
     """Return grid→polygon weights, computing and caching them if absent."""
+    # Coerce: callers resolve this out of a config dict, so it may be a str.
+    weight_file = Path(weight_file)
     if weight_file.exists():
         logger.info("Loading cached weights: %s", weight_file)
         return pd.read_csv(weight_file)
@@ -216,6 +218,7 @@ def aggregate_source(
     """
     input_dir = Path(input_dir)
     output_dir = Path(output_dir)
+    weight_file = Path(weight_file)
     output_dir.mkdir(parents=True, exist_ok=True)
 
     files = sorted(input_dir.glob(adapter.files_glob))
@@ -239,20 +242,26 @@ def aggregate_source(
         # materialized as in-memory numpy — neither the hook (if any) nor
         # gdptools touches the full source grid, and gdptools' per-variable
         # .load() reuses in-memory data instead of re-reading chunks.
-        ds = xr.open_dataset(f)
-        ds = subset_to_gdf_bounds(
-            ds, fabric_gdf, adapter.source_crs, adapter.x_coord, adapter.y_coord
-        )
-        if adapter.pre_aggregate_hook is not None:
-            ds = adapter.pre_aggregate_hook(ds)
-        period = _period_bounds(ds, adapter.time_coord)
-        if weights is None:
-            weights = compute_or_load_weights(
-                adapter, ds, fabric_gdf, id_col, period, weight_file
+        # Context-managed: the loop runs once per year (22 for the SNODAS
+        # record), so leaving the handles to the GC held 22 open netCDF files
+        # for the whole run.
+        with xr.open_dataset(f) as raw:
+            ds = subset_to_gdf_bounds(
+                raw, fabric_gdf, adapter.source_crs, adapter.x_coord, adapter.y_coord
             )
-        logger.info("[%d/%d] year %d: aggregating %s ...",
-                    i, len(files), year, list(adapter.variables))
-        hru_ds = aggregate_variables(adapter, ds, fabric_gdf, id_col, weights, period)
+            if adapter.pre_aggregate_hook is not None:
+                ds = adapter.pre_aggregate_hook(ds)
+            period = _period_bounds(ds, adapter.time_coord)
+            if weights is None:
+                weights = compute_or_load_weights(
+                    adapter, ds, fabric_gdf, id_col, period, weight_file
+                )
+            logger.info("[%d/%d] year %d: aggregating %s ...",
+                        i, len(files), year, list(adapter.variables))
+            hru_ds = aggregate_variables(adapter, ds, fabric_gdf, id_col, weights, period)
+            # Inside the `with`: `ds` is a lazy .sel view of `raw`, so the
+            # aggregation must read through before the handle closes.
+            hru_ds.load()
         out = output_dir / f"{output_prefix}_agg_{year}.nc"
         hru_ds.to_netcdf(out)
         written.append(out)

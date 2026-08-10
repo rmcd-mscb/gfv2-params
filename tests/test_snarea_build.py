@@ -2,7 +2,11 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from gfv2_params.snarea.build import DEFAULT_SNAREA_CURVE, build_hru_record
+from gfv2_params.snarea.build import (
+    DEFAULT_SNAREA_CURVE,
+    build_hru_record,
+    build_snarea_curve,
+)
 from gfv2_params.snarea.selection import SelectionParams
 
 
@@ -94,3 +98,48 @@ def test_build_hru_record_defaults_subgrid_stats_without_swe_std():
     assert rec["n_peak_years"] == 0
     assert np.isnan(rec["cv_subgrid"])
     assert np.isnan(rec["peak_swe_mm"])
+
+
+# --- build_snarea_curve (the multi-HRU loop) --------------------------------
+
+_EXPECTED_COLUMNS = [
+    "hru_deplcrv", "sdc_status", "sca_class", "similarity", "n_seasons",
+    *[f"snarea_curve_{i}" for i in range(11)],
+    "cv_subgrid", "peak_swe_mm", "n_peak_years",
+]
+
+
+def test_build_snarea_curve_renames_id_and_pins_column_order():
+    # The id column is renamed from the internal "hru_id" to the fabric's
+    # id_feature, and must lead the frame — Stage 3 and the NHM param assembly
+    # both read this CSV positionally-ish, so a silent reorder is a real defect.
+    daily = {1: _daily_two_years(), 2: _daily_two_years()}
+    out = build_snarea_curve(
+        daily, {1: 100, 2: 100}, {1: 0.0, 2: 0.0}, "nat_hru_id",
+        SelectionParams(), DEFAULT_SNAREA_CURVE,
+    )
+    assert list(out.columns) == ["nat_hru_id", *_EXPECTED_COLUMNS]
+    assert "hru_id" not in out.columns
+
+
+def test_build_snarea_curve_defaults_missing_cells_and_water_keys():
+    # cells_by_hru / water_by_hru are read with .get defaults: an HRU absent
+    # from the weight table has 0 contributing cells and must be rejected by
+    # the min_cells criterion, not crash with a KeyError.
+    daily = {1: _daily_two_years(), 2: _daily_two_years()}
+    out = build_snarea_curve(
+        daily, {1: 100}, {}, "hru_id", SelectionParams(), DEFAULT_SNAREA_CURVE,
+    )
+    by_id = out.set_index("hru_id")
+    assert by_id.loc[1, "sdc_status"] == "derived"
+    assert by_id.loc[2, "sdc_status"] == "default_too_few_cells"
+
+
+def test_build_snarea_curve_emits_rows_sorted_by_id():
+    # The loop sorts its items, so an unordered input dict still yields a
+    # deterministic, ascending-id frame.
+    daily = {9: _daily_two_years(), 2: _daily_two_years(), 5: _daily_two_years()}
+    out = build_snarea_curve(
+        daily, {}, {}, "hru_id", SelectionParams(), DEFAULT_SNAREA_CURVE,
+    )
+    assert list(out["hru_id"]) == [2, 5, 9]
