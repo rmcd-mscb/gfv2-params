@@ -36,6 +36,21 @@ from a shell where `~/.pixi/bin` is on `PATH`.
 
 Lint/format runs via pre-commit: `pixi run -e dev pre-commit run --all-files`.
 
+**Run the `--all-files` sweep under `srun`, not on the login node** — the
+`prettier` hook (mirrors-prettier `v4.0.0-alpha.8` on node v24.1.0) needs
+between 16 GB and 64 GB to lint 17 small YAML files. On the login node it is
+SIGKILLed (`exit code -9`) and at `--mem=16G` SLURM reports `oom_kill`; at 64 GB
+it passes. The memory demand is a broken-tool artifact, not file size — the
+largest tracked YAML is 27 KB, and any single file passes in isolation.
+
+```bash
+srun -p cpu -A impd --time=00:20:00 --ntasks=1 --cpus-per-task=4 --mem=64G \
+  pixi run -e dev pre-commit run --all-files
+```
+
+Targeted runs (`--files a b c`) are fine on the login node — prettier is scoped
+to `\.(yml|yaml)$`, so it no-ops unless you touched YAML.
+
 Local docs preview: `pixi run -e docs docs-serve` (live-reload on
 `localhost:8000`); `pixi run -e docs docs-build` renders the static site
 to `./site/`. Configuration: [`mkdocs.yml`](mkdocs.yml).
