@@ -98,8 +98,11 @@ def run_ssflux_batch(config: dict, batch_id: int, logger) -> None:
         raise ValueError(f"Non-numeric {id_feature} values in target fabric") from exc
 
     # Carried so the reducer can honour `norm_scope: vpu`. gfv2 is multi-VPU and
-    # keys this off the per-HRU `vpu` attribute; single-VPU fabrics declare a
-    # `vpu` scalar in their base_config profile instead.
+    # keys this off the per-HRU `vpu` attribute on the batch gpkg. Single-VPU
+    # fabrics (oregon, tjc) declare a `vpu` scalar in their base_config
+    # profile instead; scripts/derive_zonal_params.py's `_build_param_cfg`
+    # threads that scalar from the resolved fabric profile into `config["vpu"]`
+    # when present, which is what the fallback below reads.
     if "vpu" in target_gdf.columns:
         vpu_df = target_gdf[[id_feature, "vpu"]].copy()
     else:
@@ -173,6 +176,23 @@ def run_ssflux_reduce(df, config: dict, logger):
                 "Multi-VPU fabrics carry it per HRU; single-VPU fabrics must declare "
                 "a `vpu` scalar in their base_config profile."
             )
+        n_null = int(df["vpu"].isna().sum())
+        if n_null > 0:
+            raise ValueError(
+                f"norm_scope: vpu found {n_null} of {len(df)} HRU(s) with a null "
+                "'vpu' value. A null VPU cannot be normalised per-region -- "
+                "groupby(dropna=True) would silently drop those rows from every "
+                "group, leaving them NaN and indistinguishable from the "
+                "legitimate no-lithology NaN, so they'd be silently KNN gap-filled "
+                "downstream. Fix the source data so every HRU carries a VPU label."
+            )
+        # Per-batch CSVs are read back independently (see run_merge), so
+        # pandas' per-file dtype inference can disagree on the same VPU label
+        # ("01" -> int 1 in one file, str "01" in another); NHDPlus VPU labels
+        # also include non-numeric ones ("10L", "10U"). Cast to string before
+        # grouping so mixed int/str labels can't diverge into separate groups
+        # and groupby(sort=True) doesn't raise TypeError comparing int to str.
+        df = df.assign(vpu=df["vpu"].astype(str))
         groups = list(df.groupby("vpu").groups.items())
     else:
         groups = [("__fabric__", df.index)]

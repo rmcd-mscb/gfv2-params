@@ -93,8 +93,8 @@ def _build_param_cfg(config: dict, entry: dict) -> dict:
       4. config["fabric"] — active fabric name (from base_config.yml profile via
          `_load_resolved_config`).
       5. base_config.yml fabric profile fields: `expected_max_hru_id` (optional),
-         `id_feature` and `hru_gpkg` (required via `require_config_key`),
-         `hru_layer` (defaults to "nhru").
+         `vpu` (optional; single-VPU fabrics only), `id_feature` and `hru_gpkg`
+         (required via `require_config_key`), `hru_layer` (defaults to "nhru").
 
     Note: `{data_root}`/`{fabric}`/`{vpu}` placeholder expansion happens
     upstream in `_load_resolved_config` (via `_resolve_nested`), so values
@@ -108,6 +108,13 @@ def _build_param_cfg(config: dict, entry: dict) -> dict:
     param_cfg["fabric"] = config["fabric"]
     if "expected_max_hru_id" in config:
         param_cfg["expected_max_hru_id"] = config["expected_max_hru_id"]
+    # vpu is a single-VPU fabric's profile scalar (oregon: "17", tjc: "12"),
+    # read by ssflux's run_ssflux_batch as the norm_scope: vpu fallback when
+    # the batch gpkg carries no per-HRU `vpu` column. Multi-VPU fabrics
+    # (gfv2) omit it from the profile and rely on that per-HRU column
+    # instead, so this stays optional like expected_max_hru_id.
+    if "vpu" in config:
+        param_cfg["vpu"] = config["vpu"]
     # id_feature is a fabric property (base_config.yml profile), not a per-step
     # default — pull it from the resolved base config so it flows through to
     # the merged parameter CSVs.

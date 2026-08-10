@@ -62,6 +62,18 @@ def test_batch_invariance_is_bit_exact():
     split = run_ssflux_reduce(shuffled, _cfg(), _Logger()).sort_values(ID).reset_index(drop=True)
     pd.testing.assert_frame_equal(whole, split)
 
+    # `shuffled` still has a fresh, monotonic RangeIndex (ignore_index=True),
+    # under which `out.index.get_indexer(idx)` is the identity by
+    # construction -- a broken positional-assignment path would pass
+    # unnoticed. Feed a reversed, non-monotonic index and confirm the result
+    # is unchanged.
+    reindexed = df.copy()
+    reindexed.index = reindexed.index[::-1]
+    reversed_out = (
+        run_ssflux_reduce(reindexed, _cfg(), _Logger()).sort_values(ID).reset_index(drop=True)
+    )
+    pd.testing.assert_frame_equal(whole, reversed_out)
+
 
 def test_nan_rows_survive_for_gap_fill():
     df = _frame(20)
@@ -82,6 +94,30 @@ def test_vpu_scope_normalises_within_each_region():
 def test_vpu_scope_requires_the_column():
     with pytest.raises(ValueError, match="vpu"):
         run_ssflux_reduce(_frame(10), _cfg("vpu"), _Logger())
+
+
+def test_vpu_scope_rejects_partial_null_vpu():
+    """A partially-null vpu column must raise, not silently vanish under
+    groupby(dropna=True) -- that would produce NaN params indistinguishable
+    from the legitimate no-lithology NaN and get silently KNN gap-filled."""
+    df = _frame(40, with_vpu=True)
+    df.loc[df[ID] == 3, "vpu"] = None
+    with pytest.raises(ValueError, match="null"):
+        run_ssflux_reduce(df, _cfg("vpu"), _Logger())
+
+
+def test_vpu_scope_handles_mixed_dtype_and_nonnumeric_labels():
+    """NHDPlus VPU labels include non-numeric ones (10L, 10U); independent
+    per-batch-file read_csv dtype inference can also give int vs str for the
+    same numeric-looking label. Both must group and sort without raising."""
+    df = _frame(30)
+    df["vpu"] = ["10L"] * 10 + ["10U"] * 10 + [1] * 10
+    out = run_ssflux_reduce(df, _cfg("vpu"), _Logger())
+    assert set(out["vpu"]) == {"10L", "10U", "1"}
+    for vpu in ("10L", "10U", "1"):
+        sub = out[out["vpu"] == vpu]["soil2gw_max"]
+        assert sub.min() == pytest.approx(0.1)
+        assert sub.max() == pytest.approx(0.3)
 
 
 def test_unknown_norm_scope_raises():
