@@ -37,9 +37,23 @@ FLUX_PARAMS = [
 
 
 class _Logger:
-    def info(self, *a, **k): pass
+    def __init__(self):
+        self.info_calls = []
+
+    def info(self, msg, *args, **k):
+        self.info_calls.append((msg, args))
+
     def debug(self, *a, **k): pass
     def warning(self, *a, **k): pass
+
+    def n_groups(self):
+        """Pull the group count out of run_ssflux_reduce's own summary log
+        line ("Normalised %d ssflux params over scope=%s (%d group(s))"),
+        without needing the reducer to expose its internal `groups` list."""
+        for msg, args in self.info_calls:
+            if "Normalised" in msg:
+                return args[-1]
+        raise AssertionError("expected a 'Normalised ...' info log call")
 
 
 def _frame(n=50, with_vpu=False):
@@ -100,15 +114,35 @@ def test_nan_rows_survive_for_gap_fill():
 
 
 def test_vpu_scope_normalises_within_each_region():
-    """Input labels are zero-padded ("01"/"02"); the output column carries
-    the canonical form (leading zero stripped, see
-    test_vpu_scope_normalises_mixed_leading_zero_and_int_labels_into_one_group)
-    so the assertions below read "1"/"2", not the padded input labels."""
-    out = run_ssflux_reduce(_frame(40, with_vpu=True), _cfg("vpu"), _Logger())
-    for vpu in ("1", "2"):
+    """Input labels are zero-padded ("01"/"02") and must come back out of the
+    reducer UNCHANGED -- `vpu` is declared in `prms: provenance` as "per-HRU
+    VPU" and must record the fabric's label verbatim, not a canonicalised
+    form (canonicalisation is for grouping only, see
+    test_vpu_scope_normalises_mixed_leading_zero_and_int_labels_into_one_group).
+    The two distinct raw labels must still normalise as two groups."""
+    logger = _Logger()
+    out = run_ssflux_reduce(_frame(40, with_vpu=True), _cfg("vpu"), logger)
+    assert set(out["vpu"]) == {"01", "02"}
+    for vpu in ("01", "02"):
         sub = out[out["vpu"] == vpu]["soil2gw_max"]
         assert sub.min() == pytest.approx(0.1)
         assert sub.max() == pytest.approx(0.3)
+    assert logger.n_groups() == 2
+
+
+def test_vpu_column_is_not_mutated_by_reducer():
+    """Explicit guard on the fidelity requirement: the emitted `vpu` values
+    must be byte-for-byte identical to what was passed in, including dtype --
+    the reducer may build a throwaway canonicalised key for grouping, but
+    must never assign it back onto the returned frame's `vpu` column."""
+    df = _frame(30)
+    df["vpu"] = ["10L"] * 10 + ["10U"] * 10 + [1] * 10
+    out = run_ssflux_reduce(df, _cfg("vpu"), _Logger())
+    merged = df[[ID, "vpu"]].merge(
+        out[[ID, "vpu"]], on=ID, suffixes=("_in", "_out")
+    )
+    assert (merged["vpu_in"] == merged["vpu_out"]).all()
+    assert list(merged["vpu_in"]) == list(merged["vpu_out"])
 
 
 def test_vpu_scope_requires_the_column():
@@ -129,12 +163,14 @@ def test_vpu_scope_rejects_partial_null_vpu():
 def test_vpu_scope_handles_mixed_dtype_and_nonnumeric_labels():
     """NHDPlus VPU labels include non-numeric ones (10L, 10U); independent
     per-batch-file read_csv dtype inference can also give int vs str for the
-    same numeric-looking label. Both must group and sort without raising."""
+    same numeric-looking label. Both must group and sort without raising, and
+    the emitted `vpu` column must still carry the RAW input values verbatim
+    (int 1, not canonicalised str "1")."""
     df = _frame(30)
     df["vpu"] = ["10L"] * 10 + ["10U"] * 10 + [1] * 10
     out = run_ssflux_reduce(df, _cfg("vpu"), _Logger())
-    assert set(out["vpu"]) == {"10L", "10U", "1"}
-    for vpu in ("10L", "10U", "1"):
+    assert set(out["vpu"]) == {"10L", "10U", 1}
+    for vpu in ("10L", "10U", 1):
         sub = out[out["vpu"] == vpu]["soil2gw_max"]
         assert sub.min() == pytest.approx(0.1)
         assert sub.max() == pytest.approx(0.3)
@@ -327,7 +363,10 @@ def test_vpu_scope_normalises_mixed_leading_zero_and_int_labels_into_one_group()
     inconsistently ACROSS batch files -- "01" from one file, int 1 from
     another, for the SAME VPU -- which a bare astype(str) would leave as two
     distinct groupby keys ("01" vs "1"), silently splitting one VPU's HRUs
-    into two normalisation groups. Both must land in ONE group."""
+    into two normalisation groups. Both must land in ONE group -- proven via
+    the reducer's own group-count log line, since the emitted `vpu` column no
+    longer collapses to a single canonical value (it stays verbatim, see
+    test_vpu_column_is_not_mutated_by_reducer)."""
     assert _canonical_vpu_label("01") == "1"
     assert _canonical_vpu_label(1) == "1"
     assert _canonical_vpu_label(" 02 ") == "2"
@@ -335,31 +374,36 @@ def test_vpu_scope_normalises_mixed_leading_zero_and_int_labels_into_one_group()
 
     df = _frame(20)
     df["vpu"] = ["01"] * 10 + [1] * 10
-    out = run_ssflux_reduce(df, _cfg("vpu"), _Logger())
-    assert set(out["vpu"]) == {"1"}
+    logger = _Logger()
+    out = run_ssflux_reduce(df, _cfg("vpu"), logger)
+    # emitted verbatim -- both raw forms still present, NOT collapsed to "1"
+    assert set(out["vpu"]) == {"01", 1}
+    assert logger.n_groups() == 1
     assert out["soil2gw_max"].min() == pytest.approx(0.1)
     assert out["soil2gw_max"].max() == pytest.approx(0.3)
 
 
 def test_coverage_threshold_config_override_is_honoured():
-    """median_tol/max_bad_fraction/hard_bad_fraction are optional keys on the
-    ssflux entry in configs/zonal/zonal_params.yml; run_ssflux_batch threads
-    whichever ones are present into validate_weight_coverage via
-    _coverage_kwargs. Prove both ends: _coverage_kwargs extracts only the
-    keys actually set (absent keys keep today's behaviour exactly), and
-    threading a real override changes validate_weight_coverage's outcome."""
-    config = {"id_feature": ID, "hard_bad_fraction": 0.9, "unrelated_key": 123}
+    """median_tol/max_bad_fraction/band_lo/band_hi/magnitude_bad_fraction are
+    optional keys on the ssflux entry in configs/zonal/zonal_params.yml;
+    run_ssflux_batch threads whichever ones are present into
+    validate_weight_coverage via _coverage_kwargs. Prove both ends:
+    _coverage_kwargs extracts only the keys actually set (absent keys keep
+    today's behaviour exactly), and threading a real override changes
+    validate_weight_coverage's outcome."""
+    config = {"id_feature": ID, "magnitude_bad_fraction": 0.9, "unrelated_key": 123}
     kwargs = _coverage_kwargs(config)
-    assert kwargs == {"hard_bad_fraction": 0.9}
+    assert kwargs == {"magnitude_bad_fraction": 0.9}
 
     # 60 HRUs at sum=1.0, 40 at sum=0.05: median stays 1.0 (so the median
-    # check doesn't fire) but the tail is 40% bad, past the default
-    # hard_bad_fraction=0.35 ceiling. Raises by default; must not raise once
-    # the config's looser ceiling is threaded through.
+    # check doesn't fire) but 40% of sums fall outside the default [0.5, 2.0]
+    # magnitude band, past the default magnitude_bad_fraction=0.05 ceiling.
+    # Raises by default; must not raise once the config's looser ceiling is
+    # threaded through.
     rows = [(i, -12.0, 1.0) for i in range(1, 61)] + [
         (i, -12.0, 0.05) for i in range(61, 101)
     ]
     w = pd.DataFrame(rows, columns=[ID, "k_perm", "normalized_area_weight"])
-    with pytest.raises(ValueError, match="ceiling"):
+    with pytest.raises(ValueError, match="band"):
         validate_weight_coverage(w, ID, _Logger())
     validate_weight_coverage(w, ID, _Logger(), **kwargs)

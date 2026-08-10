@@ -200,11 +200,12 @@ def test_weight_coverage_passes_when_weights_sum_to_one():
 def test_weight_coverage_warns_on_gaps_and_overlaps():
     w = _weights([(1, -10.0, 0.4), (2, -11.0, 2.0), (3, -12.0, 1.0)])
     log = _CapturingLogger()
-    # This tiny 3-HRU fixture is 2/3 "bad" by construction, which is well
-    # past the (CONUS-batch-sized) hard ceiling; raise both max_bad_fraction
-    # and hard_bad_fraction so this stays a test of the tail-count warning
-    # path specifically, not an accidental hit of the ceiling raise.
-    validate_weight_coverage(w, ID, log, max_bad_fraction=0.9, hard_bad_fraction=0.95)
+    # This tiny 3-HRU fixture is 2/3 "bad" by the tol=0.01 tail test, and one
+    # of the three (sum=0.4) is also outside the [0.5, 2.0] magnitude band;
+    # raise both max_bad_fraction and magnitude_bad_fraction so this stays a
+    # test of the soft tail-count warning path specifically, not an
+    # accidental hit of the magnitude raise.
+    validate_weight_coverage(w, ID, log, max_bad_fraction=0.9, magnitude_bad_fraction=0.95)
     assert any("outside" in m for m in log.warnings)
 
 
@@ -220,50 +221,79 @@ def test_weight_coverage_raises_when_median_is_displaced():
 
 
 def test_weight_coverage_clustered_gap_batch_warns_not_raises():
-    """A batch that happens to contain a large cluster of legitimate coverage
-    gaps (~32% of HRUs, matching the measured 1,828-in-~5,650 CONUS batch)
-    must WARN, not raise, as long as the median stays near 1.0 -- the old
-    tail-fraction raise fired here and blamed the extensive form, aborting a
-    CONUS array task over a correct, if clustered, renormalised result."""
+    """A batch that happens to contain a large cluster of legitimate,
+    MILDLY-off coverage gaps (sums 0.6-0.95, comfortably inside the
+    [band_lo, band_hi]=[0.5, 2.0] magnitude band) at a high fraction (~32% of
+    HRUs, matching the measured 1,828-in-~5,650 CONUS batch) must WARN, not
+    raise, as long as the median stays near 1.0 and the magnitude stays
+    in-band -- proving the new rule keys on MAGNITUDE, not a bare tail count.
+    An old tail-fraction-only raise fired here and blamed the extensive form,
+    aborting a CONUS array task over a correct, if clustered, renormalised
+    result."""
     n_gap = 32
     n_full = 68
-    rows = [(i, -12.0, 0.5) for i in range(1, n_gap + 1)]
+    rng = np.random.default_rng(1)
+    rows = [
+        (i, -12.0, float(v))
+        for i, v in zip(range(1, n_gap + 1), rng.uniform(0.6, 0.95, n_gap))
+    ]
     rows += [(i, -12.0, 1.0) for i in range(n_gap + 1, n_gap + n_full + 1)]
     w = _weights(rows)
     log = _CapturingLogger()
     sums = w.groupby(ID)["normalized_area_weight"].sum()
     assert sums.median() == pytest.approx(1.0)
+    assert ((sums >= 0.5) & (sums <= 2.0)).all(), "fixture must stay inside the magnitude band"
     validate_weight_coverage(w, ID, log, max_bad_fraction=0.05)
     assert any("outside" in m for m in log.warnings)
 
 
-def test_weight_coverage_raises_on_hard_ceiling_even_with_median_at_one():
+def test_weight_coverage_partial_regression_at_low_fraction_raises():
+    """The point of the whole change: a PARTIAL extensive-form regression
+    affecting only ~10% of HRUs (well under the old hard_bad_fraction=0.35
+    ceiling, which would have silently passed this) must now RAISE, because
+    the affected HRUs sit at extensive-form MAGNITUDE (~0.02), far outside
+    the [0.5, 2.0] plausible band."""
+    n_bad = 10
+    n_good = 90
+    rows = [(i, -12.0, 0.02) for i in range(1, n_bad + 1)]
+    rows += [(i, -12.0, 1.0) for i in range(n_bad + 1, n_bad + n_good + 1)]
+    w = _weights(rows)
+    sums = w.groupby(ID)["normalized_area_weight"].sum()
+    assert sums.median() == pytest.approx(1.0)
+    with pytest.raises(ValueError, match="band"):
+        validate_weight_coverage(w, ID, _CapturingLogger())
+
+
+def test_weight_coverage_raises_on_magnitude_ceiling_even_with_median_at_one():
     """The median-only check has a blind spot: up to just under 50% of HRUs
     can carry the extensive-form bug while the median stays exactly at 1.0,
     because the median only reflects the majority. 60 HRUs at sum=1.0 plus 40
     at sum=0.05 (the exact extensive-form signature, on a MINORITY of rows)
-    keeps the median at 1.0 -- but at 40% bad, it is well past the hard
-    ceiling (default 0.35, picked with real margin above the documented 32%
-    legitimate clustered-gap case) and must raise."""
+    keeps the median at 1.0 -- and now raises because 40% of sums fall
+    outside the [0.5, 2.0] plausible band (default magnitude_bad_fraction is
+    0.05), not because of a tuned tail-count ceiling. This is the old
+    hard_bad_fraction=0.35 counterexample; it must still raise under the
+    magnitude discriminator."""
     rows = [(i, -12.0, 1.0) for i in range(1, 61)]
     rows += [(i, -12.0, 0.05) for i in range(61, 101)]
     w = _weights(rows)
     sums = w.groupby(ID)["normalized_area_weight"].sum()
     assert sums.median() == pytest.approx(1.0)
-    with pytest.raises(ValueError, match="ceiling"):
+    with pytest.raises(ValueError, match="band"):
         validate_weight_coverage(w, ID, _CapturingLogger())
 
 
-def test_weight_coverage_hard_ceiling_is_configurable():
-    """hard_bad_fraction is a keyword, not a hardcoded constant."""
+def test_weight_coverage_magnitude_ceiling_is_configurable():
+    """band_lo/band_hi/magnitude_bad_fraction are keywords, not hardcoded
+    constants."""
     rows = [(i, -12.0, 1.0) for i in range(1, 61)]
     rows += [(i, -12.0, 0.05) for i in range(61, 101)]
     w = _weights(rows)
-    with pytest.raises(ValueError, match="ceiling"):
-        validate_weight_coverage(w, ID, _CapturingLogger(), hard_bad_fraction=0.35)
+    with pytest.raises(ValueError, match="band"):
+        validate_weight_coverage(w, ID, _CapturingLogger(), magnitude_bad_fraction=0.05)
     # raising the ceiling above the actual 40% bad fraction: no raise, only warn
     log = _CapturingLogger()
-    validate_weight_coverage(w, ID, log, hard_bad_fraction=0.9, max_bad_fraction=0.05)
+    validate_weight_coverage(w, ID, log, magnitude_bad_fraction=0.9, max_bad_fraction=0.05)
     assert any("outside" in m for m in log.warnings)
 
 
@@ -275,9 +305,9 @@ def test_weight_coverage_median_tol_is_configurable():
     # default median_tol=0.1 tolerates 0.85 (within 1.0 +/- 0.1 is false --
     # 0.85 is exactly on the edge at tol 0.15); use an explicit tight/loose
     # pair to prove the kwarg is actually threaded through. All 3 HRUs sit at
-    # the same 0.85 (100% "bad" by the tol=0.01 tail test), so also raise
-    # hard_bad_fraction past that once the median check is loosened -- this
-    # test is about median_tol, not the separate hard-ceiling behaviour.
+    # the same 0.85, which is inside the default [0.5, 2.0] magnitude band,
+    # so no magnitude override is needed here -- this test is about
+    # median_tol, not the separate magnitude-ceiling behaviour.
     with pytest.raises(ValueError, match="normalized_area_weight"):
         validate_weight_coverage(w, ID, log, median_tol=0.1)
-    validate_weight_coverage(w, ID, log, median_tol=0.2, hard_bad_fraction=1.0)
+    validate_weight_coverage(w, ID, log, median_tol=0.2)

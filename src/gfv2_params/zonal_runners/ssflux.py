@@ -28,7 +28,13 @@ from .ssflux_math import (
 # means the function's own default is used -- _coverage_kwargs only forwards
 # keys that are actually present, so an operator touching zero of them gets
 # today's behaviour exactly.
-_COVERAGE_THRESHOLD_KEYS = ("median_tol", "max_bad_fraction", "hard_bad_fraction")
+_COVERAGE_THRESHOLD_KEYS = (
+    "median_tol",
+    "max_bad_fraction",
+    "band_lo",
+    "band_hi",
+    "magnitude_bad_fraction",
+)
 
 
 def _coverage_kwargs(config: dict) -> dict:
@@ -282,8 +288,15 @@ def run_ssflux_reduce(df, config: dict, logger):
         # normalisation groups. Canonicalise numeric-looking labels through
         # int() first so "01" and 1 collapse to the same "1"; non-numeric
         # labels ("10L"/"10U") fall through unchanged.
-        df = df.assign(vpu=df["vpu"].map(_canonical_vpu_label))
-        groups = list(df.groupby("vpu").groups.items())
+        #
+        # This canonicalisation is for GROUPING ONLY -- build a throwaway key
+        # Series and group on that, never assign it back onto df["vpu"]. `vpu`
+        # is declared in the `prms: provenance` block as "per-HRU VPU" and
+        # must record the fabric's label VERBATIM; a fabric whose VPU
+        # attribute is "01" must still read "01" in the merged CSV, not the
+        # canonicalised "1".
+        group_key = df["vpu"].map(_canonical_vpu_label)
+        groups = list(df.groupby(group_key).groups.items())
     else:
         groups = [("__fabric__", df.index)]
 

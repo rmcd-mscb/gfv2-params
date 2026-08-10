@@ -471,13 +471,21 @@ params:
     #                             # above which the mismatch is WARNED about
     #                             # (not raised); lower it to surface a smaller
     #                             # coverage-gap cluster sooner.
-    #   hard_bad_fraction: 0.35  # tail fraction above which the mismatch is
+    #   band_lo: 0.5              # plausible per-HRU weight-sum band used by
+    #   band_hi: 2.0               # the magnitude raise below (default
+    #                             # [0.5, 2.0]). Real CONUS data measures
+    #                             # 0.111% of HRUs outside this band vs. 85.4%
+    #                             # under the #175 extensive-form bug.
+    #   magnitude_bad_fraction: 0.05  # fraction of HRUs outside [band_lo,
+    #                             # band_hi] above which the mismatch is
     #                             # RAISED even with a near-1.0 median (catches
     #                             # a partial extensive-form regression the
-    #                             # median alone can miss). Only raise this
-    #                             # after confirming a specific batch's larger
-    #                             # tail is a legitimate clustered gap -- never
-    #                             # to silence a real regression.
+    #                             # median alone can miss -- keyed on
+    #                             # magnitude, not a bare tail count). Only
+    #                             # raise this after confirming a specific
+    #                             # batch's larger tail is a legitimate
+    #                             # clustered gap -- never to silence a real
+    #                             # regression.
     source_shapefile: "{data_root}/input/soils_litho/Lithology_exp_Konly_Project.shp"
     merged_slope_file: "{data_root}/{fabric}/params/merged/nhm_slope_params.csv"
     merged_file: nhm_ssflux_params.csv

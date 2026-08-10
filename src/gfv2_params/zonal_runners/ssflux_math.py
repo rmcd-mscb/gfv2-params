@@ -57,7 +57,9 @@ def validate_weight_coverage(
     tol: float = 0.01,
     max_bad_fraction: float = 0.05,
     median_tol: float = 0.1,
-    hard_bad_fraction: float = 0.35,
+    band_lo: float = 0.5,
+    band_hi: float = 2.0,
+    magnitude_bad_fraction: float = 0.05,
 ) -> None:
     """Assert the weights behave like gdptools' intensive ``wght``.
 
@@ -82,15 +84,38 @@ def validate_weight_coverage(
     MAJORITY of HRUs. A frame with 60% of sums at 1.0 and 40% at 0.05 (the
     exact extensive-form signature on a minority of rows) still has a median
     of 1.0 -- up to just under 50% of HRUs could carry the bug completely
-    undetected by the median alone. So the tail fraction also gets a hard
-    ceiling (``hard_bad_fraction``): the documented legitimate worst case is
-    the clustered-gap batch above at ~32%, so a ceiling picked with real
-    margin above that (default 0.35) is not reachable by legitimate data, and
-    a tail this large is treated as a probable partial extensive-form
-    regression and raised, not merely logged. Between ``max_bad_fraction`` and
-    ``hard_bad_fraction`` the caller only gets a warning -- the median being
-    near 1.0 does not, on its own, prove the extensive form is absent for a
-    large minority of HRUs, so that warning must not claim it does.
+    undetected by the median alone. So a second check covers the minority
+    case, keyed on MAGNITUDE rather than a bare tail count.
+
+    An earlier version of this check used a tail-COUNT ceiling
+    (``hard_bad_fraction``, default 0.35) sitting between the documented ~32%
+    legitimate clustered-gap worst case and an illustrative 40% counterexample
+    -- three points of margin that is not margin, and the 32% figure was not
+    even reproducible from the config (gfv2 ``batch_size`` is 10000, so the
+    1,828 known gap HRUs are ~18% of a batch, not 32%). Measured against the
+    real CONUS weights file (``shared/conus/weights/lith_weights_gfv2.csv``,
+    361,394 HRUs) against the extensive-form construction #175's bug produced::
+
+        per-HRU weight sum      REAL (intensive)   EXTENSIVE (#175 bug)
+        outside [0.5, 2.0]      0.111% (402 HRUs)   85.4%
+        below 0.1               0.071% (255)        63.1%
+        median                  1.0000              0.02215
+
+    So "fraction of HRUs whose weight sum falls outside [``band_lo``,
+    ``band_hi``] = [0.5, 2.0]" separates real data from the bug by ~770x,
+    versus the tail-count rule's ~1.1x margin. Real CONUS data sits at
+    0.111%, so the default ``magnitude_bad_fraction`` of 0.05 (5%) carries
+    ~45x margin over real data -- and, unlike the count rule, it also catches
+    a PARTIAL extensive-form regression affecting as little as ~6% of HRUs;
+    the old count rule needed 35% of HRUs to be affected before it would even
+    consider raising. Raised as a probable partial extensive-form regression,
+    not merely logged.
+
+    Between ``max_bad_fraction`` (the ``[1-tol, 1+tol]`` tail, a soft
+    coverage-gap/overlap signal) and the magnitude band raise, the caller only
+    gets a warning -- the median being near 1.0 does not, on its own, prove
+    the extensive form is absent for a large minority of HRUs, so that warning
+    must not claim it does.
     """
     if weight_col not in weights.columns:
         raise ValueError(
@@ -111,17 +136,31 @@ def validate_weight_coverage(
 
     bad = ~np.isclose(sums.to_numpy(), 1.0, rtol=0.0, atol=tol)
     bad_fraction = float(bad.mean()) if len(sums) else 0.0
-    if bad_fraction > hard_bad_fraction:
+
+    # Magnitude discriminator (replaces the old tail-COUNT hard_bad_fraction
+    # ceiling -- see the docstring for the measured real-vs-extensive table
+    # this threshold rests on). Keyed on how far outside a plausible band the
+    # sum falls, not merely how many HRUs are outside a tight tolerance, so a
+    # cluster of mildly-off legitimate coverage gaps (sums like 0.6-0.95, well
+    # inside [band_lo, band_hi]) cannot trip it no matter how large the
+    # cluster, while a minority of HRUs at extensive-form magnitude
+    # (sums ~0.02-0.05, far outside the band) trips it even at a small
+    # fraction.
+    out_of_band = (sums.to_numpy() < band_lo) | (sums.to_numpy() > band_hi)
+    magnitude_fraction = float(out_of_band.mean()) if len(sums) else 0.0
+    if magnitude_fraction > magnitude_bad_fraction:
         raise ValueError(
-            f"{bad_fraction:.1%} of HRUs have sum({weight_col}) outside 1.0 +/- "
-            f"{tol} (median {median:.4f}), above the hard ceiling of "
-            f"{hard_bad_fraction:.0%}. The documented legitimate worst case is a "
-            "spatially-clustered batch of coverage gaps at ~32% (#175); a tail "
-            "this large -- even with a median near 1.0, which only rules out a "
-            "WHOLESALE extensive-form regression -- is treated as a probable "
-            f"PARTIAL extensive-form regression affecting a minority of HRUs. "
-            f"'{weight_col}' must be gdptools' intensive `wght` -- do not "
-            "substitute area_weight / <source>_area."
+            f"{magnitude_fraction:.1%} of HRUs have sum({weight_col}) outside "
+            f"the plausible band [{band_lo}, {band_hi}] (median {median:.4f}), "
+            f"above the ceiling of {magnitude_bad_fraction:.0%}. Real CONUS "
+            "data measures 0.111% of HRUs outside this band (402 of 361,394), "
+            "vs. 85.4% under the #175 extensive-form bug -- a ~770x "
+            "separation. A fraction this large -- even with a median near "
+            "1.0, which only rules out a WHOLESALE extensive-form regression "
+            "-- is treated as a probable PARTIAL extensive-form regression "
+            f"affecting a minority of HRUs. '{weight_col}' must be gdptools' "
+            "intensive `wght` -- do not substitute area_weight / "
+            "<source>_area."
         )
     if bad_fraction > max_bad_fraction:
         logger.warning(
