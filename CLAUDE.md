@@ -45,11 +45,23 @@ largest tracked YAML is 27 KB, and any single file passes in isolation.
 
 ```bash
 srun -p cpu -A impd --time=00:20:00 --ntasks=1 --cpus-per-task=4 --mem=64G \
-  pixi run -e dev pre-commit run --all-files
+  pixi run -e dev --as-is pre-commit run --all-files
 ```
 
 Targeted runs (`--files a b c`) are fine on the login node — prettier is scoped
 to `\.(yml|yaml)$`, so it no-ops unless you touched YAML.
+
+**Anything launched through `srun`/`sbatch` takes `--as-is`, tests included** —
+the same rule as the SLURM batches above, for the same reason: without it each
+task re-checks the lock and can mutate `.pixi/envs/.../conda-meta`, which
+concurrent jobs then race on. It is also markedly faster, since the lock check
+is skipped — a full `pytest tests/` run measured 56.6 s with `--as-is` versus
+174.2 s without.
+
+```bash
+srun -p cpu -A impd --time=00:30:00 --ntasks=1 --cpus-per-task=4 --mem=32G \
+  pixi run -e dev --as-is pytest tests/ -q
+```
 
 Local docs preview: `pixi run -e docs docs-serve` (live-reload on
 `localhost:8000`); `pixi run -e docs docs-build` renders the static site
