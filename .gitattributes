@@ -1,0 +1,16 @@
+# Reference PDFs in docs/ are managed by git-lfs. These are source documents
+# (USGS reports, journal articles) kept alongside their markdown companions so
+# the historical and current workflow stay documented together; they are large
+# and never diffed, which is exactly the LFS case.
+#
+# git-lfs is NOT assumed on PATH -- HPC nodes have no system git-lfs and no
+# sudo. It ships in the `dev` pixi feature. After cloning:
+#     pixi shell -e dev && git lfs install && git lfs pull
+# Without that you will see small pointer files instead of real PDFs.
+#
+# NOTE: PDFs committed before this file was added (DepStor_workflow.pdf,
+# "Snow Depletion Curves.pdf", hyp.13735.pdf, tm6b9.pdf) remain ordinary git
+# objects in history. Converting them would require `git lfs migrate` to rewrite
+# already-pushed history and force-push, which would break every existing clone
+# -- deliberately not done. New PDFs go to LFS from here on.
+*.pdf filter=lfs diff=lfs merge=lfs -text
