@@ -2,15 +2,18 @@
 # Usage: ./submit_snarea_pipeline.sh <fabric> [base_config] [extra sbatch opts...]
 #
 # One-command recipe for the full 3-stage SNODAS -> snarea_curve pipeline.
-# Submits four SLURM jobs chained --dependency=afterok, so each waits for the
+# Submits five SLURM jobs chained --dependency=afterok, so each waits for the
 # previous to succeed, and prints the job IDs:
 #
 #   1. Stage 1 aggregate  (derive_snodas_aggregate.batch, ARRAY over spatial
 #      batches sized from the fabric manifest: oregon N=2, gfv2 N=64)
 #   2. merge              (merge_snodas_aggregate.batch, --mode merge)
-#   3. Stage 2 derive     (derive_snarea_curve.batch; --mem parameterized —
+#   3. coverage           (derive_snodas_coverage.batch, --mode coverage — the
+#      per-HRU valid-data diagnostic; reuses Stage 1's cached weights, no
+#      re-aggregation. Stage 2 joins it in as the `coverage` column.)
+#   4. Stage 2 derive     (derive_snarea_curve.batch; --mem parameterized —
 #      384G CONUS default, smaller for oregon)
-#   4. Stage 3 library    (derive_snarea_library.batch, CV/lognormal library)
+#   5. Stage 3 library    (derive_snarea_library.batch, CV/lognormal library)
 #
 # Because every job is afterok on the prior one, a failed Stage-1 array task
 # aborts the whole chain (merge/derive/library stay PENDING then cancel) — a
@@ -135,15 +138,19 @@ echo "--- merge ---"
 MID=$(submit --dependency=afterok:"$AID" --export="$EXPORT" -- slurm_batch/merge_snodas_aggregate.batch)
 echo "  merge afterok:$AID -> $MID"
 
+echo "--- coverage diagnostic ---"
+CID=$(submit --dependency=afterok:"$MID" --export="$EXPORT" -- slurm_batch/derive_snodas_coverage.batch)
+echo "  coverage afterok:$MID -> $CID"
+
 echo "--- Stage 2: derive snarea_curve ---"
-S2=$(submit --dependency=afterok:"$MID" --mem="$STAGE2_MEM" "${STAGE2_TIME_ARG[@]}" --export="$EXPORT" \
+S2=$(submit --dependency=afterok:"$CID" --mem="$STAGE2_MEM" "${STAGE2_TIME_ARG[@]}" --export="$EXPORT" \
      -- slurm_batch/derive_snarea_curve.batch)
-echo "  derive afterok:$MID -> $S2"
+echo "  derive afterok:$CID -> $S2"
 
 echo "--- Stage 3: snarea_curve library ---"
 S3=$(submit --dependency=afterok:"$S2" --export="$EXPORT" -- slurm_batch/derive_snarea_library.batch)
 echo "  library afterok:$S2 -> $S3"
 
 echo ""
-echo "Done. Chain: $AID (agg) -> $MID (merge) -> $S2 (derive) -> $S3 (library)"
-echo "Monitor: squeue -u \$USER   |   sacct -j $AID,$MID,$S2,$S3"
+echo "Done. Chain: $AID (agg) -> $MID (merge) -> $CID (coverage) -> $S2 (derive) -> $S3 (library)"
+echo "Monitor: squeue -u \$USER   |   sacct -j $AID,$MID,$CID,$S2,$S3"

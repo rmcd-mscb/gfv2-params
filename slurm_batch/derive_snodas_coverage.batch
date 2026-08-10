@@ -1,0 +1,40 @@
+#!/bin/bash
+#SBATCH -p cpu
+#SBATCH -A impd
+#SBATCH --job-name=snodas_cov
+#SBATCH --output=logs/job_%j.out
+#SBATCH --error=logs/job_%j.err
+#SBATCH --time=02:00:00
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=4
+#SBATCH --mem=32G
+#
+# Per-HRU SNODAS valid-data coverage (issue #166) — the diagnostic that tells a
+# genuinely snow-free HRU apart from one sitting outside the SNODAS domain.
+# gdptools' masked_mean returns 0.0 (NOT NaN) when every source cell is fill, so
+# without this the two are indistinguishable: at CONUS, 1,087 HRUs (0.30%) land
+# in `default_no_snow` purely because they are off the edge of the data.
+#
+# Cheap: it reuses the gdptools weights Stage 1 already cached and reads ONE day
+# per per-year SNODAS file. No re-aggregation. Runs per batch, because each
+# batch's weight (i, j) index that batch's own bounds-subset of the source grid
+# — the consolidated weight file row-concats those index spaces and is unusable
+# for anything positional.
+#
+# Must run AFTER Stage 1 (needs {fabric}/weights_agg/*_batch*.csv) and BEFORE
+# Stage 2, which joins the result in as the `coverage` column. Stage 2 does not
+# require it: a missing table just leaves `coverage` NaN and logs a warning.
+# submit_snarea_pipeline.sh chains it automatically.
+#
+#   sbatch --export=ALL,FABRIC=gfv2 slurm_batch/derive_snodas_coverage.batch
+
+cd "$SLURM_SUBMIT_DIR"
+BASE_CONFIG=${BASE_CONFIG:-configs/base_config.yml}
+FABRIC=${FABRIC:-oregon}
+
+pixi run --as-is python scripts/derive_aggregate.py \
+    --source snodas \
+    --fabric "$FABRIC" \
+    --config configs/aggregate/aggregate_sources.yml \
+    --base_config "$BASE_CONFIG" \
+    --mode coverage

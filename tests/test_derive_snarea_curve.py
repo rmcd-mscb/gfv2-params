@@ -13,9 +13,18 @@ import xarray as xr
 
 from scripts.derive_snarea_curve import (
     cells_from_weights,
+    coverage_from_file,
     read_daily_by_hru,
     validate_default_curve,
 )
+
+
+def test_coverage_from_file(tmp_path):
+    p = tmp_path / "cov.csv"
+    pd.DataFrame({"hru_id": [1, 2, 3], "coverage": [1.0, 0.0, 0.42],
+                  "n_years_sampled": [22, 22, 22]}).to_csv(p, index=False)
+    got = coverage_from_file(p, "hru_id")
+    assert got == {1: 1.0, 2: 0.0, 3: 0.42}
 
 
 def test_cells_from_weights(tmp_path):

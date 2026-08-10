@@ -542,7 +542,9 @@ one array task per batch, source grid clipped to each batch's extent), then
 into one final `snodas_agg_<year>.nc` per calendar year (area-weighted mean
 SWE + snow-covered-area fraction, now also the per-cell SWE std dev `swe_std`
 sidecar used by Stage 2's sub-grid CV, via the gdptools-backed `aggregate`
-harness); Stage 2 derives per-HRU empirical depletion curves and sub-grid CV
+harness); `derive_snodas_coverage.batch` then computes the per-HRU valid-data
+`coverage` diagnostic (below); Stage 2 derives per-HRU empirical depletion
+curves and sub-grid CV
 from those daily series (Driscoll, Hay & Bock 2017 selection method) and
 writes the intermediate `_intermediates/nhm_snarea_curve_derived.csv` (not yet
 the terminal params); Stage 3 (`derive_snarea_library.py`) builds the
@@ -551,8 +553,25 @@ daily-SWE reload — and writes the terminal `nhm_snarea_curve_library.csv`,
 `nhm_snarea_curve_params.csv`, `nhm_snarea_curve_validation.csv`, and the
 pyWatershed `nhm_snarea_curve.nc`. Fabric-independent — no code change to run
 against `gfv2`, `gfv2_vpu01`, or `oregon`. `submit_snarea_pipeline.sh` submits
-all four jobs (including Stage 2) as an afterok chain; run any stage directly
+all five jobs (including Stage 2) as an afterok chain; run any stage directly
 with `pixi run python ...` / `sbatch` when you want to inspect between stages.
+
+**The `coverage` diagnostic (do not treat it as a gate).** gdptools' `masked_mean`
+returns **0.0, not NaN**, for an HRU whose SNODAS cells are every one of them
+fill — so an HRU outside the SNODAS domain reports `swe = 0` all year and lands
+in `default_no_snow`, indistinguishable from Florida. At CONUS that is **1,087
+HRUs (0.30%)**, plus **35,315 (9.8%)** aggregating over only part of their area.
+The coverage step measures the weight-weighted valid fraction per HRU (reusing
+Stage 1's cached weights and reading one day per year-file — minutes, no
+re-aggregation) and Stage 2 joins it in as a `coverage` column alongside
+`n_years_total`/`n_years_dropped`. It **never** changes `sdc_status` or a curve:
+gating on it was measured and rejected, since a `coverage >= 0.999` gate would
+flip ~13.3k CONUS HRUs off their empirical curve onto the default. If the table
+is missing, Stage 2 logs a warning and leaves `coverage` NaN — "not measured",
+which is deliberately distinct from a measured 0.0. Because SNODAS's valid
+footprint *expands* across the record (31 of the 32 CONUS HRUs reading
+zero-coverage in 2004 carry real snow by 2015), coverage is averaged over one
+sampled day per year rather than probed once.
 
 **Wait for:** the merge job `COMPLETED`, printing one `snodas_agg_<year>.nc`
 per year written; Stage 2 prints the `sdc_status` breakdown and writes the

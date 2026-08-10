@@ -314,6 +314,35 @@ These are hard-won; violating them silently corrupts outputs.
   any other fabric use `threshold_mode: percentile` in
   `configs/depstor/depstor_rasters.yml` with `twi_raster` pointing at
   `twi_hydrodem.vrt` and run the `twi_reference` shared-raster step first.
+- **gdptools' `masked_mean` returns `0.0`, NOT NaN, for a polygon whose source
+  cells are all fill** — so "outside the source's domain" is indistinguishable
+  from "genuinely zero" in the aggregated output. For SNODAS this means an HRU
+  off the edge of the domain reports `swe = 0` every day and lands in
+  `default_no_snow` next to Florida: **1,087 CONUS HRUs (0.30%)**, plus **35,315
+  (9.8%)** aggregating over only part of their area. The fix is the `coverage`
+  diagnostic (`gfv2_params.aggregate.coverage`, `derive_aggregate.py --mode
+  coverage`), joined into Stage 2's CSV alongside `n_years_total` /
+  `n_years_dropped`. It is a **diagnostic, never a gate** — a `coverage >= 0.999`
+  selection criterion was measured and rejected because it flips ~13.3k CONUS
+  HRUs off their empirical curve onto the default. A missing coverage table
+  leaves the column NaN ("not measured"), deliberately distinct from a measured
+  `0.0`. Note the source footprint is **not static**: SNODAS's valid domain
+  expands across the record (31 of the 32 CONUS HRUs reading zero-coverage in
+  2004 carry real snow by 2015), so coverage is averaged over one sampled day
+  per year — a single-year probe would call a late-covered HRU permanently
+  absent. Relatedly, an all-fill *year* is silently consumed as a snow-free year
+  and dropped by `annual_sdc`, which is why `n_years_dropped` exists.
+- **A consolidated gdptools weight file mixes per-batch index spaces — its
+  `(i, j)` are NOT global.** Batched aggregation clips the source grid to each
+  batch's own bounds (`driver.subset_to_gdf_bounds`), so every batch's weight
+  `(i, j)` index that batch's subset. `derive_aggregate.py --mode merge`
+  row-concats the per-batch tables into `{source}_weights_{fabric}.csv`, which is
+  therefore safe ONLY for index-agnostic use — `cells_from_weights` does a
+  `groupby().size()`, a count, which is why it has always been fine. Anything
+  positional (the coverage diagnostic, any future per-cell join) must read the
+  per-batch CSVs and pair each with its own `batch_{NNNN}.gpkg`. Mismatched
+  indices do not error on their own — they silently address the wrong cells and
+  return plausible numbers — so `coverage_from_weights` bounds-checks and raises.
 - **`k_perm` is INTENSIVE — aggregate it as an area-weighted mean, never an
   area-prorated sum.** `ssflux.py` originally used gdptools' *extensive* form
   (`Σ Vᵢ·aᵢ/Aᵢ`, dividing by the SOURCE polygon area, the column gdptools labels

@@ -70,9 +70,12 @@ def test_seasons_uses_water_year_grouping():
     sca[accum] = np.linspace(0.1, 1.0, int(accum.sum()))
     frame = pd.DataFrame({"swe": swe, "sca": sca})
 
-    seasons = _seasons(frame)
+    seasons, n_years_total = _seasons(frame)
     assert len(seasons) == 1          # the real Jan-Mar melt (WY2021), not the Dec spike
     assert seasons[0][0] == 1.0       # normalized SDC starts at 1.0
+    # WY2021 (Jan-Sep) and WY2022 (the Nov-Dec accumulation) were both examined;
+    # only WY2021 yielded a curve.
+    assert n_years_total == 2
 
 
 def test_build_hru_record_has_subgrid_columns():
@@ -100,12 +103,50 @@ def test_build_hru_record_defaults_subgrid_stats_without_swe_std():
     assert np.isnan(rec["peak_swe_mm"])
 
 
+# --- dropped-season diagnostics ---------------------------------------------
+
+
+def _one_good_one_dry_water_year():
+    """WY2010 melts out cleanly; WY2011 has snow that never melts (dropped)."""
+    good = pd.DataFrame(
+        {"swe": [5, 10, 8, 6, 4, 2, 0], "sca": [.5, 1.0, .9, .7, .5, .3, 0.0]},
+        index=pd.date_range("2010-01-31", periods=7, freq="D"),
+    )
+    never_melts = pd.DataFrame(
+        {"swe": [5, 10, 9, 8, 7, 6, 5], "sca": [.5, 1.0, .9, .8, .7, .6, .5]},
+        index=pd.date_range("2011-01-31", periods=7, freq="D"),
+    )
+    return pd.concat([good, never_melts])
+
+
+def test_dropped_water_years_are_visible_in_the_record():
+    # A water year that yields no usable curve is silently omitted from the
+    # season list, so n_seasons alone cannot distinguish "22 clean years" from
+    # "21 unusable + 1". n_years_total / n_years_dropped make that visible.
+    rec = build_hru_record(
+        hru_id=1, daily=_one_good_one_dry_water_year(), n_cells=100,
+        water_frac=0.0, params=SelectionParams(), default_curve=DEFAULT_SNAREA_CURVE)
+    assert rec["n_seasons"] == 1
+    assert rec["n_years_total"] == 2
+    assert rec["n_years_dropped"] == 1
+
+
+def test_no_years_dropped_when_every_season_is_usable():
+    rec = build_hru_record(
+        hru_id=1, daily=_daily_two_years(), n_cells=100, water_frac=0.0,
+        params=SelectionParams(), default_curve=DEFAULT_SNAREA_CURVE)
+    assert rec["n_seasons"] == 2
+    assert rec["n_years_total"] == 2
+    assert rec["n_years_dropped"] == 0
+
+
 # --- build_snarea_curve (the multi-HRU loop) --------------------------------
 
 _EXPECTED_COLUMNS = [
     "hru_deplcrv", "sdc_status", "sca_class", "similarity", "n_seasons",
+    "n_years_total", "n_years_dropped",
     *[f"snarea_curve_{i}" for i in range(11)],
-    "cv_subgrid", "peak_swe_mm", "n_peak_years",
+    "cv_subgrid", "peak_swe_mm", "n_peak_years", "coverage",
 ]
 
 
@@ -133,6 +174,22 @@ def test_build_snarea_curve_defaults_missing_cells_and_water_keys():
     by_id = out.set_index("hru_id")
     assert by_id.loc[1, "sdc_status"] == "derived"
     assert by_id.loc[2, "sdc_status"] == "default_too_few_cells"
+
+
+def test_build_snarea_curve_carries_coverage_through():
+    # coverage is a DIAGNOSTIC: it rides along per HRU but never changes
+    # sdc_status or the curve. An HRU with no coverage entry gets NaN, not 0 —
+    # "not measured" must not read as "no data".
+    daily = {1: _daily_two_years(), 2: _daily_two_years()}
+    out = build_snarea_curve(
+        daily, {1: 100, 2: 100}, {}, "hru_id", SelectionParams(),
+        DEFAULT_SNAREA_CURVE, coverage_by_hru={1: 0.25},
+    )
+    by_id = out.set_index("hru_id")
+    assert by_id.loc[1, "coverage"] == pytest.approx(0.25)
+    assert np.isnan(by_id.loc[2, "coverage"])
+    # low coverage does NOT demote the HRU
+    assert by_id.loc[1, "sdc_status"] == "derived"
 
 
 def test_build_snarea_curve_emits_rows_sorted_by_id():
