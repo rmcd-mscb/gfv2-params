@@ -29,7 +29,7 @@ from pathlib import Path
 
 from gfv2_params.config import load_config, require_config_key
 from gfv2_params.log import configure_logging
-from gfv2_params.zonal_runners import BATCH_RUNNERS, run_build_weights, run_merge
+from gfv2_params.zonal_runners import BATCH_RUNNERS, MERGE_REDUCERS, run_build_weights, run_merge
 
 
 def _resolve_nested(value, replacements: dict):
@@ -143,7 +143,16 @@ def run_merge_mode(args, logger) -> None:
     entry = _find_param(config, args.param)
     param_cfg = _build_param_cfg(config, entry)
     logger.info("=== merge: param=%s ===", args.param)
-    run_merge(param_cfg, logger)
+    reducer_tag = param_cfg.get("reducer")
+    reducer = None
+    if reducer_tag is not None:
+        if reducer_tag not in MERGE_REDUCERS:
+            raise ValueError(
+                f"Unknown reducer '{reducer_tag}' for param '{args.param}'. "
+                f"Available: {sorted(MERGE_REDUCERS)}"
+            )
+        reducer = MERGE_REDUCERS[reducer_tag]
+    run_merge(param_cfg, logger, reducer=reducer)
 
 
 def run_build_weights_mode(args, logger) -> None:

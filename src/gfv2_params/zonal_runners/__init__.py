@@ -81,6 +81,7 @@ from .zonal import run_zonal_batch
 
 __all__ = [
     "BATCH_RUNNERS",
+    "MERGE_REDUCERS",
     "run_build_weights",
     "run_lulc_batch",
     "run_lulc_prederived_batch",
@@ -103,3 +104,9 @@ BATCH_RUNNERS = {
     "lulc_prederived": run_lulc_prederived_batch,
     "ssflux": run_ssflux_batch,
 }
+
+# Dispatch table: `reducer:` tag in configs/zonal/zonal_params.yml -> a
+# (df, config, logger) -> df callable applied once to the CONCATENATED merged
+# frame. Mirrors BATCH_RUNNERS above. Params with no `reducer:` tag are
+# unaffected. Used by scripts/derive_zonal_params.py.
+MERGE_REDUCERS = {}

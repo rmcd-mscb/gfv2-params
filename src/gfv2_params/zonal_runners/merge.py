@@ -50,12 +50,19 @@ def apply_derived_columns(df, derived_columns: dict | None):
     return df
 
 
-def run_merge(config: dict, logger) -> None:
+def run_merge(config: dict, logger, *, reducer=None) -> None:
     """Concat per-batch CSVs for one param into the merged output CSV.
 
     Originally extracted from the now-retired scripts/merge_params.py:process_files()
     (see PR #85). Validates no
     duplicates, warns on gaps (if expected_max_hru_id is set in config).
+
+    ``reducer`` is an optional ``(df, config, logger) -> df`` callable applied
+    once to the CONCATENATED frame, before the file is written. It exists for
+    params whose final values need a statistic over the whole population and so
+    cannot be computed per batch -- ssflux's min/max interpolation. The
+    orchestrator resolves it from the config's ``reducer:`` tag via
+    MERGE_REDUCERS; params without that tag keep today's behaviour exactly.
     """
     source_type = config["source_type"]
     id_feature = config["id_feature"]
@@ -112,6 +119,16 @@ def run_merge(config: dict, logger) -> None:
     if derived:
         merged_df = apply_derived_columns(merged_df, derived)
         logger.info("Applied derived columns: %s", sorted(derived))
+
+    if reducer is not None:
+        merged_df = reducer(merged_df, config, logger)
+        if not isinstance(merged_df, pd.DataFrame):
+            raise TypeError(
+                f"reducer must return a pandas DataFrame, got "
+                f"{type(merged_df).__name__}. It is applied to the concatenated "
+                "frame and its return value is what gets written."
+            )
+        logger.info("Applied merge reducer: %s", config.get("reducer"))
 
     output_path = final_output_dir / merged_file
     merged_df.to_csv(output_path, index=False)
