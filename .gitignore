@@ -203,3 +203,8 @@ docs/presentations/*.html
 docs/presentations/*.pdf
 docs/presentations/*.pptx
 .launch/
+
+# Subagent-driven-development scratch (ledger, briefs, review packages).
+# Per-plan workspaces under .superpowers/sdd/<plan>/ — never part of the record;
+# git history is. Safe to delete.
+.superpowers/
