@@ -10,6 +10,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
+import pyproj
 import xarray as xr
 
 # gdptools area-weighted reductions we allow (a typo should fail at construction).
@@ -43,6 +44,18 @@ class SourceAdapter:
                 f"SourceAdapter.stat_method={self.stat_method!r} is not a gdptools "
                 f"STATSMETHODS value; expected one of {sorted(_ALLOWED_STAT_METHODS)}"
             )
+        # A typo'd CRS is not caught until gdptools reprojects, deep inside a
+        # multi-hour aggregation — and a *parseable but wrong* one is never
+        # caught at all. Parsing here at least fails the unparseable case at
+        # construction, like stat_method above. Any pyproj-accepted spelling
+        # (EPSG string, integer code, PROJ string, WKT) stays valid.
+        try:
+            pyproj.CRS.from_user_input(self.source_crs)
+        except Exception as exc:  # pyproj raises CRSError, a subclass of RuntimeError
+            raise ValueError(
+                f"SourceAdapter.source_crs={self.source_crs!r} is not a CRS pyproj "
+                f"can parse: {exc}"
+            ) from exc
         if self.grid_variable is None:
             object.__setattr__(self, "grid_variable", self.variables[0])
         elif self.grid_variable not in self.variables:
