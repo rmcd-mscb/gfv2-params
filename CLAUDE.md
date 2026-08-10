@@ -384,6 +384,22 @@ Repo-specific rules — uphold these when writing or reviewing code here:
   its result by SLURM job id, never infer it from a green badge. After editing any
   `prms:` block run `python scripts/build_parameter_index.py`; CI fails if the
   generated tables in `docs/parameter_index.md` are stale.
+- **`merged/<name>.csv` IS the gap-filled product — Guard 3 enforces it on disk.**
+  PR #189 retired the `filled_` prefix: `merged/<name>.csv` is the single canonical,
+  always-gap-filled per-HRU file, with the pre-fill copy preserved at
+  `merged/_unfilled/<name>.csv`. Nothing checked that, and the convention silently
+  rotted — until issue #211, gfv2 and tjc served the PRE-FILL half under the
+  canonical name (2,009 and 23 NaN respectively) with the real values stranded in
+  `filled_nhm_soil_moist_max_params.csv`. Guard 3
+  (`tests/test_merged_products_ondisk.py`) fails on any surviving `filled_*` and on
+  any NaN in a declared-fillable column; like Guard 2 it is data-root-gated and
+  SKIPS in CI, so record it by SLURM job id. **Never run
+  `scripts/migrate_filled_params.py` against a param whose `merged/<name>.csv` was
+  rebuilt more recently than its `filled_` copy** — migration moves `filled_` OVER
+  the canonical name, so on a freshly rebuilt param it overwrites the rebuild with
+  stale data. That is why ssflux's legacy `filled_` copy was deleted rather than
+  migrated after the #175 rebuild. Always dry-run first (the script defaults to it)
+  and confirm the plan lists only the params you intend.
 - **`prms.provenance` is orthogonal to `fill_columns`, not a restatement of it.**
   `fill_columns` asks "is this KNN-interpolable?"; `prms.provenance` asks "is this a
   PRMS parameter?". All four quadrants exist — the elevation/slope/aspect stats are
