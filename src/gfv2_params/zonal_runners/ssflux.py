@@ -23,6 +23,41 @@ from .ssflux_math import (
     validate_weight_coverage,
 )
 
+# validate_weight_coverage's keyword-only thresholds, individually overridable
+# from the ssflux entry in configs/zonal/zonal_params.yml. Absent from config
+# means the function's own default is used -- _coverage_kwargs only forwards
+# keys that are actually present, so an operator touching zero of them gets
+# today's behaviour exactly.
+_COVERAGE_THRESHOLD_KEYS = ("median_tol", "max_bad_fraction", "hard_bad_fraction")
+
+
+def _coverage_kwargs(config: dict) -> dict:
+    """Pull whichever weight-coverage thresholds the config overrides.
+
+    Keeps validate_weight_coverage's own defaults for anything the config
+    doesn't set, rather than re-stating them here and risking the two
+    drifting apart.
+    """
+    return {k: config[k] for k in _COVERAGE_THRESHOLD_KEYS if k in config}
+
+
+def _canonical_vpu_label(value) -> str:
+    """Canonical string form of a VPU label for norm_scope: vpu grouping.
+
+    Independent per-batch-file ``read_csv`` dtype inference can turn the same
+    VPU into "01" (str) in one file and 1 (int) in another; a bare
+    ``astype(str)`` would keep those as the distinct strings "01" and "1" and
+    silently split one VPU's HRUs into two normalisation groups. Numeric-
+    looking labels are canonicalised through ``int()`` so both collapse to
+    "1"; NHDPlus's non-numeric labels ("10L", "10U") pass through unchanged
+    (after stripping whitespace) since ``int()`` rejects them.
+    """
+    s = str(value).strip()
+    try:
+        return str(int(s))
+    except (TypeError, ValueError):
+        return s
+
 
 def run_ssflux_batch(config: dict, batch_id: int, logger) -> None:
     """One HRU batch of subsurface flux parameter derivation.
@@ -79,7 +114,7 @@ def run_ssflux_batch(config: dict, batch_id: int, logger) -> None:
     # Permeability is INTENSIVE: area-weighted mean, not an area-prorated sum.
     # k_perm == 0 is Gleeson's no-data flag and is excluded, not floored to
     # k_perm_min -- see ssflux_math.aggregate_k_perm_log and issue #175.
-    validate_weight_coverage(w, id_feature, logger)
+    validate_weight_coverage(w, id_feature, logger, **_coverage_kwargs(config))
     agg = aggregate_k_perm_log(w, id_feature)
     agg[id_feature] = agg[id_feature].astype(int)
     k_perm_agg = agg.sort_values(by=id_feature).reset_index(drop=True)
@@ -169,32 +204,55 @@ def run_ssflux_reduce(df, config: dict, logger):
             "so re-run --mode zonal before merging."
         )
 
-    # A pre-#175 batch CSV left behind by a failed/unrun array task carries no
-    # L_* columns at all, so pd.concat's column union backfills them with NaN
-    # for every row that file contributed -- the `missing` check above passes
-    # because SOME batch has the columns. The exact invariant this frame must
-    # satisfy is: an L_* column is NaN *iff* k_perm_log_wtd is NaN (slope/area
-    # nulls already raise in the map phase; derive_log_params guards area; so
-    # k_perm_log_wtd is the only legitimate source of NaN in an L_* column).
-    # A row with a non-NaN k_perm_log_wtd but a NaN L_* can therefore only
-    # have come from a stale pre-#175 batch file -- raise rather than let it
-    # merge silently and get KNN gap-filled downstream like real no-data.
-    if "k_perm_log_wtd" in df.columns:
-        has_k = df["k_perm_log_wtd"].notna()
-        stale_mask = pd.Series(False, index=df.index)
-        for fp in flux_params:
-            stale_mask |= has_k & df[f"L_{fp['name']}"].isna()
-        n_stale = int(stale_mask.sum())
-        if n_stale > 0:
-            output_dir = config.get("output_dir", "<output_dir>")
+    # A pre-#175 batch CSV left behind by a failed/unrun array task carries
+    # NEITHER k_perm_log_wtd NOR L_*/fflux -- its real (pre-#175) schema is
+    # <id>, k_perm_wtd, mean_slope_fraction, hru_area, <7 param columns>.
+    # pd.concat's column union backfills every column that file lacks with
+    # NaN for the rows it contributed, which is why a check keyed on
+    # "k_perm_log_wtd populated but L_* NaN" can never fire for a real stale
+    # file: such a row has k_perm_log_wtd == NaN too (it never had that
+    # column at all), so `has_k` is False and the AND short-circuits to
+    # False. That check only ever caught a hand-built test frame that forced
+    # k_perm_log_wtd populated on the "stale" rows -- an impossible state for
+    # an actual pre-#175 CSV.
+    #
+    # Two checks that actually detect a real stale/foreign batch file:
+    output_dir = config.get("output_dir", "<output_dir>")
+
+    # (a) Retired-column check: k_perm_wtd was RENAMED to k_perm_log_wtd by
+    # #175 (root cause #1, extensive -> intensive aggregation). Its presence
+    # in the merged frame at all is conclusive proof some batch predates the
+    # rewrite.
+    if "k_perm_wtd" in df.columns:
+        raise ValueError(
+            "Merged frame contains the retired 'k_perm_wtd' column -- at least "
+            "one batch CSV predates the #175 aggregation rewrite (k_perm_wtd, "
+            "the extensive-form column, was replaced by k_perm_log_wtd, the "
+            f"intensive-form one). Clear stale files from {output_dir}/ssflux/ "
+            "and re-run the affected --mode zonal batch(es), then --mode merge."
+        )
+
+    # (b) Coverage-column check: the map phase (run_ssflux_batch via
+    # aggregate_k_perm_log) always emits a populated `fflux` -- either a real
+    # coverage fraction or the FFLUX_NO_OVERLAP (-1.0) sentinel, NEVER NaN.
+    # This is what separates a stale row from a legitimate no-lithology HRU:
+    # both have NaN k_perm_log_wtd/L_*, but only the legitimate HRU has a
+    # populated fflux. A NaN fflux can therefore only mean the contributing
+    # file didn't produce this column at all -- stale or foreign. (If `fflux`
+    # is missing from EVERY batch, the frame predates #175 entirely and the
+    # `missing` L_* check above already raised -- this check only needs to
+    # catch the mixed case where at least one fresh batch contributed it.)
+    if "fflux" in df.columns:
+        n_nan_fflux = int(df["fflux"].isna().sum())
+        if n_nan_fflux > 0:
             raise ValueError(
-                f"{n_stale} row(s) have a populated k_perm_log_wtd but NaN in an "
-                "L_* column. This is the signature of a stale pre-#175 batch CSV "
-                f"left in {output_dir}/ssflux/ by a failed or un-rerun --mode zonal "
-                "array task -- pd.concat backfills its missing L_* columns with "
-                "NaN, which would otherwise merge silently and get KNN gap-filled "
-                "like real no-lithology data. Re-run the failed --mode zonal "
-                "batch(es) and re-run --mode merge."
+                f"{n_nan_fflux} row(s) have a NaN 'fflux'. The map phase always "
+                "emits fflux as either a real coverage fraction or the "
+                "FFLUX_NO_OVERLAP (-1.0) sentinel -- never NaN -- so these rows "
+                "came from a batch CSV that did not produce this column, i.e. a "
+                f"stale pre-#175 or foreign file. Clear stale files from "
+                f"{output_dir}/ssflux/ and re-run the failed --mode zonal "
+                "batch(es), then --mode merge."
             )
 
     if scope == "vpu":
@@ -216,11 +274,15 @@ def run_ssflux_reduce(df, config: dict, logger):
             )
         # Per-batch CSVs are read back independently (see run_merge), so
         # pandas' per-file dtype inference can disagree on the same VPU label
-        # ("01" -> int 1 in one file, str "01" in another); NHDPlus VPU labels
-        # also include non-numeric ones ("10L", "10U"). Cast to string before
-        # grouping so mixed int/str labels can't diverge into separate groups
-        # and groupby(sort=True) doesn't raise TypeError comparing int to str.
-        df = df.assign(vpu=df["vpu"].astype(str))
+        # ("01" -> int 1 in one file, str "01" in another, both meaning the
+        # same VPU); NHDPlus VPU labels also include non-numeric ones ("10L",
+        # "10U"). A bare astype(str) is not enough -- it turns "01" into the
+        # string "01" and int 1 into the string "1", which are DIFFERENT
+        # groupby keys, silently splitting one VPU's HRUs into two
+        # normalisation groups. Canonicalise numeric-looking labels through
+        # int() first so "01" and 1 collapse to the same "1"; non-numeric
+        # labels ("10L"/"10U") fall through unchanged.
+        df = df.assign(vpu=df["vpu"].map(_canonical_vpu_label))
         groups = list(df.groupby("vpu").groups.items())
     else:
         groups = [("__fabric__", df.index)]

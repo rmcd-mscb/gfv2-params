@@ -22,10 +22,14 @@ K_PERM_NODATA = 0.0
 # reference implementation (Viger 2014, doi:10.5066/F7CN71XR).
 FFLUX_NO_OVERLAP = -1.0
 
-# mean_slope_fraction is tan(slope), so it is unbounded above; 317 CONUS HRUs
-# are exactly 0 and 3 exceed 1 (up to 66.85 deg), where log10(slope) and
-# log10(1 - slope) are undefined. Clamp rather than drop: these are real HRUs
-# that still need a parameter value.
+# mean_slope_fraction is tan(slope), so it is unbounded above; 320 CONUS HRUs
+# are exactly 0 (measured from the slope INPUT, nhm_slope_params.csv,
+# 361,471 rows -- not the stale ssflux output, which undercounts at 317
+# because it has only 361,394 rows; re-measure from nhm_slope_params.csv
+# rather than trusting this number, per CLAUDE.md's re-measure convention)
+# and 3 exceed 1 (up to 66.85 deg), where log10(slope) and log10(1 - slope)
+# are undefined. Clamp rather than drop: these are real HRUs that still need
+# a parameter value.
 SLOPE_FLOOR = 1e-4
 SLOPE_CEIL = 1.0 - 1e-4
 
@@ -53,6 +57,7 @@ def validate_weight_coverage(
     tol: float = 0.01,
     max_bad_fraction: float = 0.05,
     median_tol: float = 0.1,
+    hard_bad_fraction: float = 0.35,
 ) -> None:
     """Assert the weights behave like gdptools' intensive ``wght``.
 
@@ -68,12 +73,24 @@ def validate_weight_coverage(
     cluster" -- see #175 (median 0.022 across the extensive form vs a clustered
     per-batch tail that is a red herring).
 
-    The signature that actually distinguishes the extensive form is the
-    **median**: the extensive construction that caused #175 displaced the
-    median itself (0.022 vs 1.0), because it scales with source-polygon size,
-    not target coverage. Raise only when the median strays from 1.0 by more
-    than ``median_tol``; individual out-of-tolerance HRUs (the tail) are only
-    ever warned about, at whatever ``max_bad_fraction`` the caller configures.
+    The **median** is the strongest signal: the extensive construction that
+    caused #175 displaced the median itself (0.022 vs 1.0), because it scales
+    with source-polygon size, not target coverage. Raise when the median
+    strays from 1.0 by more than ``median_tol``.
+
+    The median check alone has a blind spot, though: it only reflects the
+    MAJORITY of HRUs. A frame with 60% of sums at 1.0 and 40% at 0.05 (the
+    exact extensive-form signature on a minority of rows) still has a median
+    of 1.0 -- up to just under 50% of HRUs could carry the bug completely
+    undetected by the median alone. So the tail fraction also gets a hard
+    ceiling (``hard_bad_fraction``): the documented legitimate worst case is
+    the clustered-gap batch above at ~32%, so a ceiling picked with real
+    margin above that (default 0.35) is not reachable by legitimate data, and
+    a tail this large is treated as a probable partial extensive-form
+    regression and raised, not merely logged. Between ``max_bad_fraction`` and
+    ``hard_bad_fraction`` the caller only gets a warning -- the median being
+    near 1.0 does not, on its own, prove the extensive form is absent for a
+    large minority of HRUs, so that warning must not claim it does.
     """
     if weight_col not in weights.columns:
         raise ValueError(
@@ -94,13 +111,28 @@ def validate_weight_coverage(
 
     bad = ~np.isclose(sums.to_numpy(), 1.0, rtol=0.0, atol=tol)
     bad_fraction = float(bad.mean()) if len(sums) else 0.0
+    if bad_fraction > hard_bad_fraction:
+        raise ValueError(
+            f"{bad_fraction:.1%} of HRUs have sum({weight_col}) outside 1.0 +/- "
+            f"{tol} (median {median:.4f}), above the hard ceiling of "
+            f"{hard_bad_fraction:.0%}. The documented legitimate worst case is a "
+            "spatially-clustered batch of coverage gaps at ~32% (#175); a tail "
+            "this large -- even with a median near 1.0, which only rules out a "
+            "WHOLESALE extensive-form regression -- is treated as a probable "
+            f"PARTIAL extensive-form regression affecting a minority of HRUs. "
+            f"'{weight_col}' must be gdptools' intensive `wght` -- do not "
+            "substitute area_weight / <source>_area."
+        )
     if bad_fraction > max_bad_fraction:
         logger.warning(
             "%.1f%% of HRUs have sum(%s) outside 1.0 +/- %s (median %.4f, "
-            "min %.4g, max %.4g) -- median is close to 1.0 so this is not the "
-            "extensive-form signature; likely a clustered batch of legitimate "
-            "lithology coverage gaps/overlaps, which the aggregation "
-            "renormalises by the per-HRU sum.",
+            "min %.4g, max %.4g). The median is close to 1.0, which only rules "
+            "out a wholesale extensive-form regression -- it does NOT prove the "
+            "extensive form is absent for this minority. This is consistent "
+            "with EITHER a clustered batch of legitimate lithology coverage "
+            "gaps/overlaps (which the aggregation renormalises by the per-HRU "
+            "sum) OR a partial extensive-form regression affecting a minority "
+            "of HRUs; it warrants checking.",
             bad_fraction * 100, weight_col, tol, median,
             float(sums.min()), float(sums.max()),
         )

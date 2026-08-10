@@ -121,6 +121,10 @@ def run_merge(config: dict, logger, *, reducer=None) -> None:
         logger.info("Applied derived columns: %s", sorted(derived))
 
     if reducer is not None:
+        reducer_name = config.get("reducer") or getattr(reducer, "__name__", repr(reducer))
+        pre_n = len(merged_df)
+        pre_ids = set(merged_df[id_feature])
+
         merged_df = reducer(merged_df, config, logger)
         if not isinstance(merged_df, pd.DataFrame):
             raise TypeError(
@@ -128,6 +132,32 @@ def run_merge(config: dict, logger, *, reducer=None) -> None:
                 f"{type(merged_df).__name__}. It is applied to the concatenated "
                 "frame and its return value is what gets written."
             )
+
+        # MERGE_REDUCERS is explicitly designed for extension beyond ssflux
+        # (see zonal_runners/__init__.py), so this invariant protects every
+        # future reducer, not just today's one: pre-reducer validation above
+        # (duplicate check, gap warning) is worthless if the reducer itself is
+        # free to silently drop or relabel rows on the way out.
+        post_n = len(merged_df)
+        if post_n != pre_n:
+            raise ValueError(
+                f"reducer '{reducer_name}' changed the row count from {pre_n} "
+                f"to {post_n}. A reducer must transform columns only -- it may "
+                "not add or drop rows."
+            )
+        if id_feature not in merged_df.columns:
+            raise ValueError(
+                f"reducer '{reducer_name}' dropped the id column '{id_feature}' "
+                "from its output."
+            )
+        post_ids = set(merged_df[id_feature])
+        if post_ids != pre_ids:
+            raise ValueError(
+                f"reducer '{reducer_name}' changed the set of {id_feature} "
+                f"values ({len(pre_ids)} -> {len(post_ids)} distinct ids). A "
+                "reducer must preserve row identity, not just row count."
+            )
+
         logger.info("Applied merge reducer: %s", config.get("reducer"))
 
     output_path = final_output_dir / merged_file

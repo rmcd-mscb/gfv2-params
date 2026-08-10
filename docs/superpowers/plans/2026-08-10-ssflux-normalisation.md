@@ -254,10 +254,14 @@ K_PERM_NODATA = 0.0
 # reference implementation (Viger 2014, doi:10.5066/F7CN71XR).
 FFLUX_NO_OVERLAP = -1.0
 
-# mean_slope_fraction is tan(slope), so it is unbounded above; 317 CONUS HRUs
-# are exactly 0 and 3 exceed 1 (up to 66.85 deg), where log10(slope) and
-# log10(1 - slope) are undefined. Clamp rather than drop: these are real HRUs
-# that still need a parameter value.
+# mean_slope_fraction is tan(slope), so it is unbounded above; 320 CONUS HRUs
+# are exactly 0 (measured from the slope INPUT, nhm_slope_params.csv,
+# 361,471 rows -- not the stale ssflux output, which undercounts at 317
+# because it has only 361,394 rows; re-measure from nhm_slope_params.csv
+# rather than trusting this number, per CLAUDE.md's re-measure convention)
+# and 3 exceed 1 (up to 66.85 deg), where log10(slope) and log10(1 - slope)
+# are undefined. Clamp rather than drop: these are real HRUs that still need
+# a parameter value.
 SLOPE_FLOOR = 1e-4
 SLOPE_CEIL = 1.0 - 1e-4
 

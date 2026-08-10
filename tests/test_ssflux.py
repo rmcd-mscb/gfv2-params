@@ -5,7 +5,23 @@ import pandas as pd
 import pytest
 
 from gfv2_params.zonal_runners import MERGE_REDUCERS, run_ssflux_reduce
-from gfv2_params.zonal_runners.ssflux_math import PARAM_NAMES
+from gfv2_params.zonal_runners.ssflux import _canonical_vpu_label, _coverage_kwargs
+from gfv2_params.zonal_runners.ssflux_math import (
+    FFLUX_NO_OVERLAP,
+    PARAM_NAMES,
+    aggregate_k_perm_log,
+    derive_log_params,
+    validate_weight_coverage,
+)
+
+# The 8 real discrete Gleeson log10-permeability classes (see the design doc
+# and ssflux_math.py) -- used by test_output_is_not_degenerate so that test
+# exercises the actual achievable spatial pattern, not an arbitrary
+# distribution the production pipeline could never see.
+GLEESON_K_PERM_CLASSES = np.array(
+    [-10.87, -11.79, -12.47, -12.50, -12.78, -14.05, -15.05, -16.48]
+)
+K_PERM_MIN_LEGACY = -16.48  # pre-#175 floor substituted for the no-data flag
 
 ID = "nat_hru_id"
 
@@ -84,8 +100,12 @@ def test_nan_rows_survive_for_gap_fill():
 
 
 def test_vpu_scope_normalises_within_each_region():
+    """Input labels are zero-padded ("01"/"02"); the output column carries
+    the canonical form (leading zero stripped, see
+    test_vpu_scope_normalises_mixed_leading_zero_and_int_labels_into_one_group)
+    so the assertions below read "1"/"2", not the padded input labels."""
     out = run_ssflux_reduce(_frame(40, with_vpu=True), _cfg("vpu"), _Logger())
-    for vpu in ("01", "02"):
+    for vpu in ("1", "2"):
         sub = out[out["vpu"] == vpu]["soil2gw_max"]
         assert sub.min() == pytest.approx(0.1)
         assert sub.max() == pytest.approx(0.3)
@@ -131,32 +151,68 @@ def test_missing_L_column_raises():
         run_ssflux_reduce(df, _cfg(), _Logger())
 
 
-def test_stale_pre175_batch_raises_on_populated_k_with_nan_L():
-    """A pre-#175 batch CSV left by a failed array task has no L_* columns.
+def test_stale_pre175_batch_raises_via_retired_kperm_wtd_column():
+    """Simulates a REAL stale merge, not the impossible frame the old test used.
 
-    pd.concat's column union backfills them with NaN for every row that file
-    contributed, which passes the `missing` check (some OTHER batch has the
-    columns) -- but k_perm_log_wtd is populated for those rows since it's an
-    older-schema column both pre- and post-#175. That combination (non-NaN
-    k_perm_log_wtd, NaN L_*) can only come from a stale batch and must raise,
-    not merge silently into a KNN-fillable NaN.
+    A genuine pre-#175 batch CSV has schema <id>, k_perm_wtd,
+    mean_slope_fraction, hru_area, <7 param columns> -- it has NEITHER
+    k_perm_log_wtd NOR L_*/fflux at all. pd.concat's column union backfills
+    those with NaN for every row the stale file contributed (passing the
+    `missing` check, since the fresh batch has L_*), and k_perm_log_wtd is
+    ALSO NaN for those rows (never populated) -- so the retired guard
+    (`has_k & L_isna`) could never fire on this real shape; it required a
+    hand-built frame that forced k_perm_log_wtd populated on "stale" rows,
+    which is not a state a real stale file produces. The retired 'k_perm_wtd'
+    column itself is what makes this conclusively detectable.
     """
-    df = _frame(10)
-    df["k_perm_log_wtd"] = -12.0
-    stale_rows = df[ID].isin([3, 7])
-    df.loc[stale_rows, [f"L_{p}" for p in PARAM_NAMES]] = np.nan
-    with pytest.raises(ValueError, match="stale"):
-        run_ssflux_reduce(df, _cfg(), _Logger())
+    fresh = _frame(10)
+    fresh["k_perm_log_wtd"] = -12.0
+    fresh["fflux"] = 0.9
+    old_schema = pd.DataFrame(
+        {
+            ID: np.arange(11, 14),
+            "k_perm_wtd": [1.2e-12, 3.4e-13, 5.6e-14],
+            "mean_slope_fraction": [0.1, 0.2, 0.3],
+            "hru_area": [1e5, 2e5, 3e5],
+        }
+    )
+    for p in PARAM_NAMES:
+        old_schema[p] = 0.05
+    merged = pd.concat([fresh, old_schema], ignore_index=True)
+    with pytest.raises(ValueError, match="k_perm_wtd"):
+        run_ssflux_reduce(merged, _cfg(), _Logger())
+
+
+def test_foreign_batch_without_fflux_raises_even_without_retired_column():
+    """A foreign/corrupted file carrying neither the retired k_perm_wtd NOR
+    fflux must still be caught -- by the coverage-column check, which is why
+    both checks are needed and not just the retired-column one."""
+    fresh = _frame(10)
+    fresh["k_perm_log_wtd"] = -12.0
+    fresh["fflux"] = 0.9
+    foreign = pd.DataFrame({ID: np.arange(11, 13)})
+    merged = pd.concat([fresh, foreign], ignore_index=True)
+    with pytest.raises(ValueError, match="fflux"):
+        run_ssflux_reduce(merged, _cfg(), _Logger())
 
 
 def test_legitimate_nan_k_perm_with_nan_L_does_not_raise():
-    """A genuine no-lithology HRU (NaN k_perm_log_wtd, NaN L_*) is fine."""
+    """A genuine no-lithology HRU (NaN k_perm_log_wtd, NaN L_*) must NOT raise.
+
+    This is exactly the case the retired `has_k` check could never actually
+    distinguish from a stale row (see the test above) -- what separates it is
+    that `fflux` is POPULATED here (FFLUX_NO_OVERLAP, -1.0), never NaN, unlike
+    a genuinely stale/foreign row.
+    """
     df = _frame(10)
     df["k_perm_log_wtd"] = -12.0
+    df["fflux"] = 0.9
     df.loc[df[ID] == 5, "k_perm_log_wtd"] = np.nan
+    df.loc[df[ID] == 5, "fflux"] = FFLUX_NO_OVERLAP
     df.loc[df[ID] == 5, [f"L_{p}" for p in PARAM_NAMES]] = np.nan
     out = run_ssflux_reduce(df, _cfg(), _Logger())
     assert out.loc[out[ID] == 5, "soil2gw_max"].isna().all()
+    assert out["soil2gw_max"].notna().sum() == 9
 
 
 def test_csv_round_trip_is_lossless(tmp_path):
@@ -169,16 +225,141 @@ def test_csv_round_trip_is_lossless(tmp_path):
 
 
 def test_output_is_not_degenerate():
-    """#175's acceptance criteria, on a realistic log-normal-ish input.
+    """#175's acceptance criteria, end to end through the real pipeline
+    functions on a realistic Gleeson-class input.
 
-    The pre-fix product had >=89.5% of HRUs within 1% of the range minimum and
-    an IQR spanning 0.1% of the range. Both thresholds here would have failed it.
+    The prior version of this test fed i.i.d. Gaussians straight into
+    run_ssflux_reduce -- it never called aggregate_k_perm_log or
+    derive_log_params, so it would still pass with the entire #175 fix
+    reverted (it tests only that interpolate_to_range maps a normal
+    distribution onto a range, which was never broken). This version instead
+    builds a weight frame from the 8 real discrete Gleeson k_perm classes
+    (plus a no-data slice) and runs it through aggregate_k_perm_log ->
+    derive_log_params -> run_ssflux_reduce -- the actual #175 pipeline.
+
+    It then proves the fix mattered by computing the INVERSE: reconstructing
+    the retired pre-#175 pipeline (extensive aggregation via
+    10**k_perm * area_weight/flux_id_area, then plain linear min-max on the
+    raw, not log10, values -- verbatim from git c5a896d^:ssflux.py) on the
+    IDENTICAL input, and asserting it fails every threshold. If it didn't,
+    this test would not be distinguishing the fix from the bug it replaced.
     """
-    out = run_ssflux_reduce(_frame(5000), _cfg(), _Logger())
+    rng = np.random.default_rng(0)
+    n_hru = 3000
+    ids = np.arange(1, n_hru + 1)
+    # ~5% no-data, echoing Gleeson's measured ~4.7% (see ssflux_math.py).
+    is_nodata = rng.random(n_hru) < 0.05
+    k_perm = np.where(is_nodata, 0.0, rng.choice(GLEESON_K_PERM_CLASSES, size=n_hru))
+    slope_fraction = rng.uniform(0.01, 1.2, n_hru)
+    hru_area = rng.uniform(1e5, 5e7, n_hru)
+
+    # One fully-covering source polygon per HRU (area_weight/flux_id_area ==
+    # normalized_area_weight == 1) -- the common single-dominant-lithology
+    # case, and the simplest input on which the OLD extensive form and the
+    # NEW intensive form are directly comparable: no artificial area-ratio
+    # skew is needed to demonstrate the bug, linear min-max on a
+    # log-distributed variable already fails it on its own (see below).
+    weights = pd.DataFrame(
+        {
+            ID: ids,
+            "k_perm": k_perm,
+            "normalized_area_weight": 1.0,
+            "area_weight": 1.0,
+            "flux_id_area": 1.0,
+        }
+    )
+    meta = pd.DataFrame({ID: ids, "mean_slope_fraction": slope_fraction, "hru_area": hru_area})
+
+    # ---- the actual #175 pipeline: aggregate -> derive -> reduce ----
+    agg = aggregate_k_perm_log(weights, ID)
+    df_new = agg.merge(meta, on=ID)
+    log_params = derive_log_params(
+        df_new["k_perm_log_wtd"].to_numpy(),
+        df_new["mean_slope_fraction"].to_numpy(),
+        df_new["hru_area"].to_numpy(),
+    )
+    for name, values in log_params.items():
+        df_new[f"L_{name}"] = values
+    out_new = run_ssflux_reduce(df_new, _cfg(), _Logger())
+
     for p in FLUX_PARAMS:
-        col = out[p["name"]].to_numpy()
-        rng = p["max"] - p["min"]
-        at_min = np.mean(col <= p["min"] + 0.01 * rng)
-        iqr = np.subtract(*np.percentile(col, [75, 25])) / rng
+        col = out_new[p["name"]].dropna().to_numpy()
+        span = p["max"] - p["min"]
+        at_min = np.mean(col <= p["min"] + 0.01 * span)
+        iqr = np.subtract(*np.percentile(col, [75, 25])) / span
         assert at_min <= 0.20, f"{p['name']}: {at_min:.1%} pinned at range minimum"
         assert iqr >= 0.10, f"{p['name']}: IQR spans only {iqr:.3f} of the range"
+
+    # ---- the inverse: the retired extensive + linear pipeline, by hand ----
+    old = weights.copy()
+    old["k_perm"] = old["k_perm"].replace(0.0, K_PERM_MIN_LEGACY)
+    old["k_perm_actual"] = 10.0 ** old["k_perm"]
+    old["k_perm_wtd_sum"] = old["k_perm_actual"] * (old["area_weight"] / old["flux_id_area"])
+    extensive = old.groupby(ID)["k_perm_wtd_sum"].sum().rename("k_perm_wtd").reset_index()
+    old_df = extensive.merge(meta, on=ID)
+    old_df["r_soil2gw_max"] = old_df["k_perm_wtd"] ** 3
+    old_df["r_ssr2gw_rate"] = old_df["k_perm_wtd"] * (1 - old_df["mean_slope_fraction"])
+    old_df["r_slowcoef_lin"] = (
+        old_df["k_perm_wtd"] * old_df["mean_slope_fraction"]
+    ) / old_df["hru_area"]
+    old_df["r_fastcoef_lin"] = 2 * old_df["r_slowcoef_lin"]
+    old_df["r_gwflow_coef"] = old_df["r_slowcoef_lin"]
+    old_df["r_dprst_seep_rate_open"] = old_df["r_ssr2gw_rate"]
+    old_df["r_dprst_flow_coef"] = old_df["r_fastcoef_lin"]
+
+    for p in FLUX_PARAMS:
+        rcol = f"r_{p['name']}"
+        vv = old_df[rcol].to_numpy()
+        lo_in, hi_in = vv.min(), vv.max()
+        scaled = (vv - lo_in) / (hi_in - lo_in) * (p["max"] - p["min"]) + p["min"]
+        span = p["max"] - p["min"]
+        at_min = np.mean(scaled <= p["min"] + 0.01 * span)
+        iqr = np.subtract(*np.percentile(scaled, [75, 25])) / span
+        assert at_min > 0.20 or iqr < 0.10, (
+            f"{p['name']}: the retired extensive+linear pipeline passed the "
+            "acceptance thresholds on this input -- this test no longer "
+            "distinguishes the #175 fix from the bug it replaced"
+        )
+
+
+def test_vpu_scope_normalises_mixed_leading_zero_and_int_labels_into_one_group():
+    """Per-file read_csv dtype inference can strip leading zeros
+    inconsistently ACROSS batch files -- "01" from one file, int 1 from
+    another, for the SAME VPU -- which a bare astype(str) would leave as two
+    distinct groupby keys ("01" vs "1"), silently splitting one VPU's HRUs
+    into two normalisation groups. Both must land in ONE group."""
+    assert _canonical_vpu_label("01") == "1"
+    assert _canonical_vpu_label(1) == "1"
+    assert _canonical_vpu_label(" 02 ") == "2"
+    assert _canonical_vpu_label("10L") == "10L"
+
+    df = _frame(20)
+    df["vpu"] = ["01"] * 10 + [1] * 10
+    out = run_ssflux_reduce(df, _cfg("vpu"), _Logger())
+    assert set(out["vpu"]) == {"1"}
+    assert out["soil2gw_max"].min() == pytest.approx(0.1)
+    assert out["soil2gw_max"].max() == pytest.approx(0.3)
+
+
+def test_coverage_threshold_config_override_is_honoured():
+    """median_tol/max_bad_fraction/hard_bad_fraction are optional keys on the
+    ssflux entry in configs/zonal/zonal_params.yml; run_ssflux_batch threads
+    whichever ones are present into validate_weight_coverage via
+    _coverage_kwargs. Prove both ends: _coverage_kwargs extracts only the
+    keys actually set (absent keys keep today's behaviour exactly), and
+    threading a real override changes validate_weight_coverage's outcome."""
+    config = {"id_feature": ID, "hard_bad_fraction": 0.9, "unrelated_key": 123}
+    kwargs = _coverage_kwargs(config)
+    assert kwargs == {"hard_bad_fraction": 0.9}
+
+    # 60 HRUs at sum=1.0, 40 at sum=0.05: median stays 1.0 (so the median
+    # check doesn't fire) but the tail is 40% bad, past the default
+    # hard_bad_fraction=0.35 ceiling. Raises by default; must not raise once
+    # the config's looser ceiling is threaded through.
+    rows = [(i, -12.0, 1.0) for i in range(1, 61)] + [
+        (i, -12.0, 0.05) for i in range(61, 101)
+    ]
+    w = pd.DataFrame(rows, columns=[ID, "k_perm", "normalized_area_weight"])
+    with pytest.raises(ValueError, match="ceiling"):
+        validate_weight_coverage(w, ID, _Logger())
+    validate_weight_coverage(w, ID, _Logger(), **kwargs)

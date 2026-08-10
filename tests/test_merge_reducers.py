@@ -62,3 +62,54 @@ def test_reducer_must_return_a_dataframe(tmp_path):
 
 def test_merge_reducers_is_a_dict():
     assert isinstance(MERGE_REDUCERS, dict)
+
+
+def test_reducer_that_drops_a_row_raises(tmp_path):
+    """MERGE_REDUCERS is explicitly designed for extension beyond ssflux, so
+    this protects every future reducer: pre-reducer validation (duplicate
+    check, gap warning) is worthless if the reducer itself can silently drop
+    rows on the way out."""
+    cfg = _write_batches(tmp_path)
+
+    def reducer(df, config, logger):
+        return df.iloc[:-1]
+
+    with pytest.raises(ValueError, match="row count"):
+        run_merge(cfg, _Logger(), reducer=reducer)
+
+
+def test_reducer_that_relabels_an_id_raises(tmp_path):
+    """Same row count, but a different id set -- must also raise; count alone
+    isn't enough to prove row identity survived."""
+    cfg = _write_batches(tmp_path)
+
+    def reducer(df, config, logger):
+        out = df.copy()
+        out.loc[out.index[0], "nat_hru_id"] = 999
+        return out
+
+    with pytest.raises(ValueError, match="nat_hru_id"):
+        run_merge(cfg, _Logger(), reducer=reducer)
+
+
+def test_reducer_that_drops_the_id_column_raises(tmp_path):
+    cfg = _write_batches(tmp_path)
+
+    def reducer(df, config, logger):
+        return df.drop(columns=["nat_hru_id"])
+
+    with pytest.raises(ValueError, match="nat_hru_id"):
+        run_merge(cfg, _Logger(), reducer=reducer)
+
+
+def test_reducer_that_preserves_rows_and_ids_is_unaffected(tmp_path):
+    """The invariant check must not false-positive on a well-behaved reducer."""
+    cfg = _write_batches(tmp_path)
+
+    def reducer(df, config, logger):
+        return df.assign(scaled=df["L_x"] * 2)
+
+    run_merge(cfg, _Logger(), reducer=reducer)
+    out = pd.read_csv(tmp_path / "merged" / "out.csv")
+    assert len(out) == 4
+    assert set(out["nat_hru_id"]) == {1, 2, 3, 4}

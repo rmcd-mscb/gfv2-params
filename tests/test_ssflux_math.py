@@ -200,7 +200,11 @@ def test_weight_coverage_passes_when_weights_sum_to_one():
 def test_weight_coverage_warns_on_gaps_and_overlaps():
     w = _weights([(1, -10.0, 0.4), (2, -11.0, 2.0), (3, -12.0, 1.0)])
     log = _CapturingLogger()
-    validate_weight_coverage(w, ID, log, max_bad_fraction=0.9)
+    # This tiny 3-HRU fixture is 2/3 "bad" by construction, which is well
+    # past the (CONUS-batch-sized) hard ceiling; raise both max_bad_fraction
+    # and hard_bad_fraction so this stays a test of the tail-count warning
+    # path specifically, not an accidental hit of the ceiling raise.
+    validate_weight_coverage(w, ID, log, max_bad_fraction=0.9, hard_bad_fraction=0.95)
     assert any("outside" in m for m in log.warnings)
 
 
@@ -233,6 +237,36 @@ def test_weight_coverage_clustered_gap_batch_warns_not_raises():
     assert any("outside" in m for m in log.warnings)
 
 
+def test_weight_coverage_raises_on_hard_ceiling_even_with_median_at_one():
+    """The median-only check has a blind spot: up to just under 50% of HRUs
+    can carry the extensive-form bug while the median stays exactly at 1.0,
+    because the median only reflects the majority. 60 HRUs at sum=1.0 plus 40
+    at sum=0.05 (the exact extensive-form signature, on a MINORITY of rows)
+    keeps the median at 1.0 -- but at 40% bad, it is well past the hard
+    ceiling (default 0.35, picked with real margin above the documented 32%
+    legitimate clustered-gap case) and must raise."""
+    rows = [(i, -12.0, 1.0) for i in range(1, 61)]
+    rows += [(i, -12.0, 0.05) for i in range(61, 101)]
+    w = _weights(rows)
+    sums = w.groupby(ID)["normalized_area_weight"].sum()
+    assert sums.median() == pytest.approx(1.0)
+    with pytest.raises(ValueError, match="ceiling"):
+        validate_weight_coverage(w, ID, _CapturingLogger())
+
+
+def test_weight_coverage_hard_ceiling_is_configurable():
+    """hard_bad_fraction is a keyword, not a hardcoded constant."""
+    rows = [(i, -12.0, 1.0) for i in range(1, 61)]
+    rows += [(i, -12.0, 0.05) for i in range(61, 101)]
+    w = _weights(rows)
+    with pytest.raises(ValueError, match="ceiling"):
+        validate_weight_coverage(w, ID, _CapturingLogger(), hard_bad_fraction=0.35)
+    # raising the ceiling above the actual 40% bad fraction: no raise, only warn
+    log = _CapturingLogger()
+    validate_weight_coverage(w, ID, log, hard_bad_fraction=0.9, max_bad_fraction=0.05)
+    assert any("outside" in m for m in log.warnings)
+
+
 def test_weight_coverage_median_tol_is_configurable():
     """The threshold is a keyword, not a hardcoded constant (spec robustness
     rule 5: 'a configured threshold')."""
@@ -240,7 +274,10 @@ def test_weight_coverage_median_tol_is_configurable():
     log = _CapturingLogger()
     # default median_tol=0.1 tolerates 0.85 (within 1.0 +/- 0.1 is false --
     # 0.85 is exactly on the edge at tol 0.15); use an explicit tight/loose
-    # pair to prove the kwarg is actually threaded through.
+    # pair to prove the kwarg is actually threaded through. All 3 HRUs sit at
+    # the same 0.85 (100% "bad" by the tol=0.01 tail test), so also raise
+    # hard_bad_fraction past that once the median check is loosened -- this
+    # test is about median_tol, not the separate hard-ceiling behaviour.
     with pytest.raises(ValueError, match="normalized_area_weight"):
         validate_weight_coverage(w, ID, log, median_tol=0.1)
-    validate_weight_coverage(w, ID, log, median_tol=0.2)
+    validate_weight_coverage(w, ID, log, median_tol=0.2, hard_bad_fraction=1.0)

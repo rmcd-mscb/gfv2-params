@@ -458,6 +458,26 @@ params:
     # `vpu` reproduces TM 6-B9's per-GF-region wording; it needs the per-HRU
     # `vpu` attribute and introduces discontinuities at region boundaries.
     norm_scope: fabric
+    # Weight-coverage validation thresholds (validate_weight_coverage in
+    # zonal_runners/ssflux_math.py), all optional -- absent means the code's
+    # own default is used exactly as before this was exposed. Uncomment to
+    # override for one fabric's run without a code change:
+    #   median_tol: 0.1          # how far median(sum(wght)) may stray from 1.0
+    #                             # before raising; this is the primary signal
+    #                             # of the #175 extensive-form regression, so
+    #                             # only loosen it for a source layer with a
+    #                             # deliberately different expected coverage.
+    #   max_bad_fraction: 0.05   # tail fraction of HRUs outside 1.0 +/- tol
+    #                             # above which the mismatch is WARNED about
+    #                             # (not raised); lower it to surface a smaller
+    #                             # coverage-gap cluster sooner.
+    #   hard_bad_fraction: 0.35  # tail fraction above which the mismatch is
+    #                             # RAISED even with a near-1.0 median (catches
+    #                             # a partial extensive-form regression the
+    #                             # median alone can miss). Only raise this
+    #                             # after confirming a specific batch's larger
+    #                             # tail is a legitimate clustered gap -- never
+    #                             # to silence a real regression.
     source_shapefile: "{data_root}/input/soils_litho/Lithology_exp_Konly_Project.shp"
     merged_slope_file: "{data_root}/{fabric}/params/merged/nhm_slope_params.csv"
     merged_file: nhm_ssflux_params.csv

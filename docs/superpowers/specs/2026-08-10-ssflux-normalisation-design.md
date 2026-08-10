@@ -307,7 +307,11 @@ Rules for the implementation:
    tolerance there would risk swallowing a genuine measurement — keep exact and
    comment why.
 2. **Guard every `log10` domain.** `slope` is clipped to `[1e-4, 1 − 1e-4]`
-   (317 HRUs at `slope == 0`; 3 at `slope ≥ 1`, up to 66.85°, where `1 − slope`
+   (320 HRUs at `slope == 0`, measured from the slope input
+   `nhm_slope_params.csv` (361,471 rows) — not the stale ssflux output, which
+   undercounts at 317 because it has only 361,394 rows; re-measure from
+   `nhm_slope_params.csv` rather than trusting this number, per CLAUDE.md's
+   re-measure convention; 3 at `slope ≥ 1`, up to 66.85°, where `1 − slope`
    is meaningless). `hru_area` must be `> 0`. A non-positive argument must raise
    or produce an explicit NaN — never a silent `-inf` that then propagates
    through min/max and destroys the whole range.
