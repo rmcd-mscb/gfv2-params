@@ -44,8 +44,17 @@ def validate_default_curve(arr: np.ndarray) -> None:
         raise ValueError(f"default_curve must be non-increasing, got {arr}")
 
 
-def _seasons(daily: pd.DataFrame) -> list[np.ndarray]:
+def _seasons(daily: pd.DataFrame) -> tuple[list[np.ndarray], int]:
     """Up to one annual SDC per WATER YEAR (Oct 1 – Sep 30) in the frame.
+
+    Returns ``(curves, n_years_total)`` — the usable curves, and how many water
+    years were examined to get them. The count is what makes a dropped year
+    visible: an HRU where most years never melt out reports the same
+    ``n_seasons`` as one with that many clean years (see #166), and the
+    difference is the only signal that the record is thin. A year is dropped
+    when SNODAS shows no snow, when the snow never melts out, or when the
+    record is too short — including, at the domain edge, a year that is
+    entirely SNODAS fill and therefore reads as snow-free.
 
     Water-year framing (vs calendar year) keeps each snow season's accumulation
     (Oct–Dec) and melt (Jan–Jul) in one window, so the annual peak is the spring
@@ -58,11 +67,13 @@ def _seasons(daily: pd.DataFrame) -> list[np.ndarray]:
     """
     water_year = daily.index.year + (daily.index.month >= 10).astype(int)
     out = []
+    n_total = 0
     for _wy, grp in daily.groupby(water_year):
+        n_total += 1
         curve = annual_sdc(grp["swe"], grp["sca"])
         if curve is not None:
             out.append(curve)
-    return out
+    return out, n_total
 
 
 def _constant_frac(daily: pd.DataFrame) -> float:
@@ -83,8 +94,9 @@ def build_hru_record(
     water_frac: float,
     params: SelectionParams,
     default_curve: np.ndarray,
+    coverage: float = float("nan"),
 ) -> dict:
-    seasons = _seasons(daily)
+    seasons, n_years_total = _seasons(daily)
     has_snow = daily["swe"].max() > 0
     sim = float("nan")
     rep = default_curve
@@ -119,6 +131,8 @@ def build_hru_record(
         "sca_class": classify(rep),
         "similarity": sim,
         "n_seasons": n_seasons,
+        "n_years_total": n_years_total,
+        "n_years_dropped": n_years_total - n_seasons,
     }
     record.update({c: float(rep[i]) for i, c in enumerate(_CURVE_COLS)})
 
@@ -128,6 +142,12 @@ def build_hru_record(
         else {"cv_subgrid": float("nan"), "peak_swe_mm": float("nan"), "n_peak_years": 0}
     )
     record.update(stats)
+    # Diagnostic only: the fraction of the HRU's SNODAS weight that falls on
+    # valid (non-fill) cells. It never gates selection — see #166, where a
+    # gate would have flipped ~13k CONUS HRUs off their empirical curve — but
+    # without it a zero-coverage HRU is indistinguishable from a snow-free one,
+    # since gdptools' masked_mean returns 0.0 (not NaN) for an all-fill HRU.
+    record["coverage"] = float(coverage)
     return record
 
 
@@ -140,17 +160,22 @@ def build_snarea_curve(
     default_curve: np.ndarray,
     logger: logging.Logger | None = None,
     log_every: int = 25_000,
+    coverage_by_hru: dict | None = None,
 ) -> pd.DataFrame:
     """Per-HRU derivation loop. Pass ``logger`` to emit progress every
     ``log_every`` HRUs — the loop is silent otherwise, which reads as a hang at
     CONUS scale (361k HRUs take minutes)."""
     items = sorted(daily_by_hru.items())
     n = len(items)
+    # NaN, not 0.0: an HRU missing from the coverage table was NOT MEASURED,
+    # which must not be read as "measured, and empty".
+    coverage_by_hru = coverage_by_hru or {}
     rows = []
     for i, (hru_id, daily) in enumerate(items, start=1):
         rows.append(build_hru_record(
             hru_id, daily, cells_by_hru.get(hru_id, 0),
             water_by_hru.get(hru_id, 0.0), params, default_curve,
+            coverage=coverage_by_hru.get(hru_id, float("nan")),
         ))
         if logger is not None and (i % log_every == 0 or i == n):
             logger.info("  derived %d/%d HRUs (%.0f%%)", i, n, 100 * i / n)
