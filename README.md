@@ -17,7 +17,23 @@ pixi run -e dev pytest tests/test_wbt.py -v           # example: run a small tes
 ```
 
 Install pixi once per user (see https://pixi.sh/latest/installation/) and ensure
-`~/.pixi/bin` is on your `PATH`. For the full HPC workflow (downloads → shared
+`~/.pixi/bin` is on your `PATH`.
+
+The reference PDFs under [`docs/`](docs/) are stored with
+[git-lfs](https://git-lfs.com). Install it once per user so plain `git` can
+resolve them — without it you get small pointer files instead of real PDFs:
+
+```bash
+pixi global install git-lfs   # lands in ~/.pixi/bin, already on your PATH
+git lfs install               # once per clone
+git lfs pull                  # fetch the PDFs for an existing clone
+```
+
+(`git-lfs` is also in the `dev` feature, so `pixi shell -e dev` works too — but
+the global install is preferable because git's LFS filters run outside the pixi
+environment.)
+
+For the full HPC workflow (downloads → shared
 rasters → fabric → zonal + depstor params), see
 [`slurm_batch/RUNME.md`](slurm_batch/RUNME.md) (runbook) and
 [`slurm_batch/HPC_REFERENCE.md`](slurm_batch/HPC_REFERENCE.md) (per-stage detail).

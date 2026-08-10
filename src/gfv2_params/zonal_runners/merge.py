@@ -50,18 +50,38 @@ def apply_derived_columns(df, derived_columns: dict | None):
     return df
 
 
-def run_merge(config: dict, logger) -> None:
+def run_merge(config: dict, logger, *, reducer=None) -> None:
     """Concat per-batch CSVs for one param into the merged output CSV.
 
     Originally extracted from the now-retired scripts/merge_params.py:process_files()
     (see PR #85). Validates no
     duplicates, warns on gaps (if expected_max_hru_id is set in config).
+
+    ``reducer`` is an optional ``(df, config, logger) -> df`` callable applied
+    once to the CONCATENATED frame, before the file is written. It exists for
+    params whose final values need a statistic over the whole population and so
+    cannot be computed per batch -- ssflux's min/max interpolation. The
+    orchestrator resolves it from the config's ``reducer:`` tag via
+    MERGE_REDUCERS; params without that tag keep today's behaviour exactly.
     """
     source_type = config["source_type"]
     id_feature = config["id_feature"]
     merged_file = config["merged_file"]
     fabric = config["fabric"]
     expected_max = config.get("expected_max_hru_id")
+    # pandas infers dtypes PER FILE, not across the whole param. A categorical
+    # column that is all numeric-looking-with-leading-zeros in some batches and
+    # alphanumeric in others (ssflux's `vpu`: "01".."09" vs "03N"/"10L") gets
+    # inferred as int64 in the numeric-only batches and str in the mixed ones --
+    # int64 silently strips the leading zero ("01" -> 1). Measured on a real
+    # gfv2_dev rebuild: 12/20 ssflux batches inferred `vpu` int64, 8/20 str,
+    # producing 28 distinct vpu labels in the merged product where the fabric
+    # has only 21, 8 of which (1,2,4,5,6,7,8,9) don't exist in the fabric at
+    # all -- the same VPU split across two labels depending on which batch an
+    # HRU landed in. `read_dtypes:` lets a param's config pin the dtype for any
+    # such column so every batch is read the same way; it's a property of any
+    # categorical string column emitted per batch, not a vpu special case.
+    read_dtypes = config.get("read_dtypes")
 
     input_dir = Path(config["output_dir"]) / source_type
     final_output_dir = Path(config["output_dir"]) / config.get("merged_subdir", "merged")
@@ -81,7 +101,7 @@ def run_merge(config: dict, logger) -> None:
     dfs = []
     for f in files:
         logger.debug("Reading: %s", f)
-        df = pd.read_csv(f)
+        df = pd.read_csv(f, dtype=read_dtypes) if read_dtypes else pd.read_csv(f)
         if id_feature not in df.columns:
             raise ValueError(f"'{id_feature}' column not found in file: {f}")
         dfs.append(df)
@@ -112,6 +132,46 @@ def run_merge(config: dict, logger) -> None:
     if derived:
         merged_df = apply_derived_columns(merged_df, derived)
         logger.info("Applied derived columns: %s", sorted(derived))
+
+    if reducer is not None:
+        reducer_name = config.get("reducer") or getattr(reducer, "__name__", repr(reducer))
+        pre_n = len(merged_df)
+        pre_ids = set(merged_df[id_feature])
+
+        merged_df = reducer(merged_df, config, logger)
+        if not isinstance(merged_df, pd.DataFrame):
+            raise TypeError(
+                f"reducer must return a pandas DataFrame, got "
+                f"{type(merged_df).__name__}. It is applied to the concatenated "
+                "frame and its return value is what gets written."
+            )
+
+        # MERGE_REDUCERS is explicitly designed for extension beyond ssflux
+        # (see zonal_runners/__init__.py), so this invariant protects every
+        # future reducer, not just today's one: pre-reducer validation above
+        # (duplicate check, gap warning) is worthless if the reducer itself is
+        # free to silently drop or relabel rows on the way out.
+        post_n = len(merged_df)
+        if post_n != pre_n:
+            raise ValueError(
+                f"reducer '{reducer_name}' changed the row count from {pre_n} "
+                f"to {post_n}. A reducer must transform columns only -- it may "
+                "not add or drop rows."
+            )
+        if id_feature not in merged_df.columns:
+            raise ValueError(
+                f"reducer '{reducer_name}' dropped the id column '{id_feature}' "
+                "from its output."
+            )
+        post_ids = set(merged_df[id_feature])
+        if post_ids != pre_ids:
+            raise ValueError(
+                f"reducer '{reducer_name}' changed the set of {id_feature} "
+                f"values ({len(pre_ids)} -> {len(post_ids)} distinct ids). A "
+                "reducer must preserve row identity, not just row count."
+            )
+
+        logger.info("Applied merge reducer: %s", config.get("reducer"))
 
     output_path = final_output_dir / merged_file
     merged_df.to_csv(output_path, index=False)

@@ -451,14 +451,55 @@ params:
   - name: ssflux
     script: ssflux
     depends_on: build_weights
+    # Normalisation runs once over the whole merged frame, not per batch --
+    # min/max over an arbitrary SLURM chunk made identical HRUs disagree (#175).
+    reducer: ssflux
+    # `fabric` (one min/max over every HRU) is batch-invariant by construction.
+    # `vpu` reproduces TM 6-B9's per-GF-region wording; it needs the per-HRU
+    # `vpu` attribute and introduces discontinuities at region boundaries.
+    norm_scope: fabric
+    # Weight-coverage validation thresholds (validate_weight_coverage in
+    # zonal_runners/ssflux_math.py), all optional -- absent means the code's
+    # own default is used exactly as before this was exposed. Uncomment to
+    # override for one fabric's run without a code change:
+    #   median_tol: 0.1          # how far median(sum(wght)) may stray from 1.0
+    #                             # before raising; this is the primary signal
+    #                             # of the #175 extensive-form regression, so
+    #                             # only loosen it for a source layer with a
+    #                             # deliberately different expected coverage.
+    #   max_bad_fraction: 0.05   # tail fraction of HRUs outside 1.0 +/- tol
+    #                             # above which the mismatch is WARNED about
+    #                             # (not raised); lower it to surface a smaller
+    #                             # coverage-gap cluster sooner.
+    #   band_lo: 0.5              # plausible per-HRU weight-sum band used by
+    #   band_hi: 2.0               # the magnitude raise below (default
+    #                             # [0.5, 2.0]). Real CONUS data measures
+    #                             # 0.111% of HRUs outside this band vs. 85.4%
+    #                             # under the #175 extensive-form bug.
+    #   magnitude_bad_fraction: 0.05  # fraction of HRUs outside [band_lo,
+    #                             # band_hi] above which the mismatch is
+    #                             # RAISED even with a near-1.0 median (catches
+    #                             # a partial extensive-form regression the
+    #                             # median alone can miss -- keyed on
+    #                             # magnitude, not a bare tail count). Only
+    #                             # raise this after confirming a specific
+    #                             # batch's larger tail is a legitimate
+    #                             # clustered gap -- never to silence a real
+    #                             # regression.
     source_shapefile: "{data_root}/input/soils_litho/Lithology_exp_Konly_Project.shp"
     merged_slope_file: "{data_root}/{fabric}/params/merged/nhm_slope_params.csv"
     merged_file: nhm_ssflux_params.csv
-    # Observed on-disk header (oregon + gfv2) is k_perm_wtd, mean_slope_fraction,
-    # hru_area, soil2gw_max, ssr2gw_rate, fastcoef_lin, slowcoef_lin, gwflow_coef,
-    # dprst_seep_rate_open, dprst_flow_coef. The first three are litho/slope
-    # INPUTS to the flux normalisation below, not PRMS parameters themselves --
-    # only the 7 derived flux params are declared fillable.
+    # Expected on-disk header (verified against run_ssflux_batch/run_ssflux_reduce;
+    # no fabric has been rebuilt against this yet, so this is the header the
+    # NEXT rebuild will produce, not an observed one) is <id_feature>,
+    # k_perm_log_wtd, fflux, mean_slope_fraction, hru_area, vpu, soil2gw_max,
+    # ssr2gw_rate, fastcoef_lin, slowcoef_lin, gwflow_coef,
+    # dprst_seep_rate_open, dprst_flow_coef. The five columns between
+    # <id_feature> and the 7 derived flux params are litho/slope/vpu INPUTS to
+    # the flux normalisation below, not PRMS parameters themselves -- only the
+    # 7 derived flux params are declared fillable. fflux and vpu are measured
+    # facts (prms.provenance), deliberately NOT interpolable and so NOT in
+    # fill_columns.
     fill_columns:
       - soil2gw_max
       - ssr2gw_rate
@@ -487,6 +528,18 @@ params:
       hru_area:
         source: geometry
         scale: 1.0
+    # `vpu` is written verbatim per batch ("01".."09", but also "03N"/"03S"/
+    # "03W"/"10L"/"10U"), and pandas infers dtype PER FILE at merge time: a
+    # batch containing only numeric-looking labels reads `vpu` as int64
+    # (silently stripping the leading zero, "01" -> 1) while a batch with a
+    # mixed-alphanumeric label reads it as str. Measured on a real gfv2_dev
+    # rebuild: 12/20 ssflux batches went int64, 8/20 str, producing 28 distinct
+    # vpu labels in the merged product against the fabric's 21 -- 8 of them
+    # (1,2,4,5,6,7,8,9) not present in the fabric at all. `read_dtypes` pins
+    # the dtype at read time so every batch is parsed identically; see
+    # run_merge in zonal_runners/merge.py.
+    read_dtypes:
+      vpu: str
     # `processes:` is PER-COLUMN, and ssflux is why. This one entry spans
     # PRMSSoilzone, PRMSGroundwater and PRMSRunoff across different columns, so an
     # entry-level `processes: [PRMSRunoff]` would report 5 non-runoff parameters as
@@ -518,12 +571,22 @@ params:
           prms: dprst_flow_coef
           processes: [PRMSRunoff]
       provenance:
-        k_perm_wtd: litho-weighted permeability, flux-normalisation input
+        k_perm_log_wtd:
+          area-weighted mean of log10 permeability (geometric mean, gdptools
+          INTENSIVE form) -- flux-normalisation input, replaces the pre-#175
+          k_perm_wtd which used the EXTENSIVE form and was not an average at all
+        fflux: fraction of HRU area underlain by valid (non-no-data) lithology.
+          Normally 0.0-1.0; -1 where there is no overlap at all (98 HRUs with
+          overlapping source lithology polygons can push it above 1.0, up to
+          ~2.0 -- a real diagnostic of the source layer, deliberately left
+          unclipped rather than hidden). Matches the reference implementation's
+          fflux attribute (Viger 2014, doi:10.5066/F7CN71XR). A measured
+          coverage fact, deliberately NOT in fill_columns
+        vpu: "per-HRU VPU, carried so the reducer can honour norm_scope: vpu"
         mean_slope_fraction: tan(radians(slope mean)), flux-normalisation input
         hru_area: fabric geometry.area in m2 -- NOT PRMS hru_area, which is acres
     # Lithology permeability + PRMS flux normalisation (lifted verbatim
     # from configs/zonal/ssflux_param.yml).
-    k_perm_min: -16.48
     # Block mappings, not `{ name: x, min: y }` flow style: yamllint's braces rule
     # wants no spaces inside braces and prettier inserts them, so flow style makes
     # the two hooks fight forever. Values are unchanged.
@@ -548,4 +611,7 @@ params:
         max: 0.2
       - name: dprst_flow_coef
         min: 0.005
-        max: 0.5
+        # 0.1, not 0.5: Driscoll 2020 Table 1 gives the NHM's calibrated range as
+        # 0.0001-0.1 (median 0.048), and pywatershed's default 0.05 sits on that
+        # median. The old 0.5 was 5x the calibrated maximum.
+        max: 0.1

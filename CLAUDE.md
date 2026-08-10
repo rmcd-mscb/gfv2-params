@@ -36,6 +36,33 @@ from a shell where `~/.pixi/bin` is on `PATH`.
 
 Lint/format runs via pre-commit: `pixi run -e dev pre-commit run --all-files`.
 
+**Run the `--all-files` sweep under `srun`, not on the login node** — the
+`prettier` hook (mirrors-prettier `v4.0.0-alpha.8` on node v24.1.0) needs
+between 16 GB and 64 GB to lint 17 small YAML files. On the login node it is
+SIGKILLed (`exit code -9`) and at `--mem=16G` SLURM reports `oom_kill`; at 64 GB
+it passes. The memory demand is a broken-tool artifact, not file size — the
+largest tracked YAML is 27 KB, and any single file passes in isolation.
+
+```bash
+srun -p cpu -A impd --time=00:20:00 --ntasks=1 --cpus-per-task=4 --mem=64G \
+  pixi run -e dev --as-is pre-commit run --all-files
+```
+
+Targeted runs (`--files a b c`) are fine on the login node — prettier is scoped
+to `\.(yml|yaml)$`, so it no-ops unless you touched YAML.
+
+**Anything launched through `srun`/`sbatch` takes `--as-is`, tests included** —
+the same rule as the SLURM batches above, for the same reason: without it each
+task re-checks the lock and can mutate `.pixi/envs/.../conda-meta`, which
+concurrent jobs then race on. It is also markedly faster, since the lock check
+is skipped — a full `pytest tests/` run measured 56.6 s with `--as-is` versus
+174.2 s without.
+
+```bash
+srun -p cpu -A impd --time=00:30:00 --ntasks=1 --cpus-per-task=4 --mem=32G \
+  pixi run -e dev --as-is pytest tests/ -q
+```
+
 Local docs preview: `pixi run -e docs docs-serve` (live-reload on
 `localhost:8000`); `pixi run -e docs docs-build` renders the static site
 to `./site/`. Configuration: [`mkdocs.yml`](mkdocs.yml).
@@ -287,6 +314,22 @@ These are hard-won; violating them silently corrupts outputs.
   any other fabric use `threshold_mode: percentile` in
   `configs/depstor/depstor_rasters.yml` with `twi_raster` pointing at
   `twi_hydrodem.vrt` and run the `twi_reference` shared-raster step first.
+- **`k_perm` is INTENSIVE — aggregate it as an area-weighted mean, never an
+  area-prorated sum.** `ssflux.py` originally used gdptools' *extensive* form
+  (`Σ Vᵢ·aᵢ/Aᵢ`, dividing by the SOURCE polygon area, the column gdptools labels
+  "for extensive variables"), which is correct for population or volume but not
+  for a property of the medium. Per-HRU weight sums spanned 3.6e13× instead of
+  1.0, inflating spread from a physical 5.6 to an artifactual 15.4 orders of
+  magnitude and pinning ~90% of HRUs at the range minimum (#175). Use
+  `normalized_area_weight` (gdptools' `wght`) and renormalise by its per-HRU sum
+  — that also corrects the 1,828 coverage-gap and 98 overlapping-source HRUs.
+  Related traps: `k_perm == 0` is a **no-data flag**, not a measurement, and must
+  be excluded rather than floored to `k_perm_min` (-16.48 is simultaneously the
+  genuine least-permeable lithology class, 26,441 polygons); `k_perm` has only
+  **8 distinct values**, so ~5% of HRUs sitting at the range minimum is real
+  geology, not a defect. Normalisation is a **reduce step** — never per batch;
+  and never fix the per-batch scope before fixing the log-space aggregation, or
+  degeneracy goes from ~90% to 97-100%.
 
 ## Working in this repo
 

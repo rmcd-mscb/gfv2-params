@@ -29,7 +29,7 @@ from pathlib import Path
 
 from gfv2_params.config import load_config, require_config_key
 from gfv2_params.log import configure_logging
-from gfv2_params.zonal_runners import BATCH_RUNNERS, run_build_weights, run_merge
+from gfv2_params.zonal_runners import BATCH_RUNNERS, MERGE_REDUCERS, run_build_weights, run_merge
 
 
 def _resolve_nested(value, replacements: dict):
@@ -93,8 +93,8 @@ def _build_param_cfg(config: dict, entry: dict) -> dict:
       4. config["fabric"] — active fabric name (from base_config.yml profile via
          `_load_resolved_config`).
       5. base_config.yml fabric profile fields: `expected_max_hru_id` (optional),
-         `id_feature` and `hru_gpkg` (required via `require_config_key`),
-         `hru_layer` (defaults to "nhru").
+         `vpu` (optional; single-VPU fabrics only), `id_feature` and `hru_gpkg`
+         (required via `require_config_key`), `hru_layer` (defaults to "nhru").
 
     Note: `{data_root}`/`{fabric}`/`{vpu}` placeholder expansion happens
     upstream in `_load_resolved_config` (via `_resolve_nested`), so values
@@ -108,6 +108,13 @@ def _build_param_cfg(config: dict, entry: dict) -> dict:
     param_cfg["fabric"] = config["fabric"]
     if "expected_max_hru_id" in config:
         param_cfg["expected_max_hru_id"] = config["expected_max_hru_id"]
+    # vpu is a single-VPU fabric's profile scalar (oregon: "17", tjc: "12"),
+    # read by ssflux's run_ssflux_batch as the norm_scope: vpu fallback when
+    # the batch gpkg carries no per-HRU `vpu` column. Multi-VPU fabrics
+    # (gfv2) omit it from the profile and rely on that per-HRU column
+    # instead, so this stays optional like expected_max_hru_id.
+    if "vpu" in config:
+        param_cfg["vpu"] = config["vpu"]
     # id_feature is a fabric property (base_config.yml profile), not a per-step
     # default — pull it from the resolved base config so it flows through to
     # the merged parameter CSVs.
@@ -143,7 +150,16 @@ def run_merge_mode(args, logger) -> None:
     entry = _find_param(config, args.param)
     param_cfg = _build_param_cfg(config, entry)
     logger.info("=== merge: param=%s ===", args.param)
-    run_merge(param_cfg, logger)
+    reducer_tag = param_cfg.get("reducer")
+    reducer = None
+    if reducer_tag is not None:
+        if reducer_tag not in MERGE_REDUCERS:
+            raise ValueError(
+                f"Unknown reducer '{reducer_tag}' for param '{args.param}'. "
+                f"Available: {sorted(MERGE_REDUCERS)}"
+            )
+        reducer = MERGE_REDUCERS[reducer_tag]
+    run_merge(param_cfg, logger, reducer=reducer)
 
 
 def run_build_weights_mode(args, logger) -> None:

@@ -10,7 +10,7 @@ source_raster, batch_dir, target_layer, id_feature, output_dir, merged_file,
 categorical, fabric, the fabric-profile hru_gpkg/hru_layer that
 run_build_weights reads, plus per-script extras like canopy_raster,
 crosswalk_file, keep_raster, source_shapefile, merged_slope_file,
-weight_dir, k_perm_min, flux_params). The orchestrator builds this dict by
+weight_dir, reducer, norm_scope, flux_params). The orchestrator builds this dict by
 flattening the active param entry in ``configs/zonal/zonal_params.yml`` onto
 the top-level ``defaults:`` block (plus the resolved fabric profile).
 
@@ -75,18 +75,20 @@ from .lulc import run_lulc_batch
 from .lulc_prederived import run_lulc_prederived_batch
 from .merge import run_merge
 from .soils import run_soils_batch
-from .ssflux import run_ssflux_batch
+from .ssflux import run_ssflux_batch, run_ssflux_reduce
 from .weights import run_build_weights
 from .zonal import run_zonal_batch
 
 __all__ = [
     "BATCH_RUNNERS",
+    "MERGE_REDUCERS",
     "run_build_weights",
     "run_lulc_batch",
     "run_lulc_prederived_batch",
     "run_merge",
     "run_soils_batch",
     "run_ssflux_batch",
+    "run_ssflux_reduce",
     "run_zonal_batch",
 ]
 
@@ -102,4 +104,12 @@ BATCH_RUNNERS = {
     "lulc": run_lulc_batch,
     "lulc_prederived": run_lulc_prederived_batch,
     "ssflux": run_ssflux_batch,
+}
+
+# Dispatch table: `reducer:` tag in configs/zonal/zonal_params.yml -> a
+# (df, config, logger) -> df callable applied once to the CONCATENATED merged
+# frame. Mirrors BATCH_RUNNERS above. Params with no `reducer:` tag are
+# unaffected. Used by scripts/derive_zonal_params.py.
+MERGE_REDUCERS = {
+    "ssflux": run_ssflux_reduce,
 }

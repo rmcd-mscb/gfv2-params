@@ -9,6 +9,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
 import yaml
 
 from gfv2_params.zonal_runners import BATCH_RUNNERS
@@ -120,6 +121,43 @@ def test_ssflux_declares_weights_dependency():
     assert "nhm_slope_params.csv" in ssflux["merged_slope_file"], (
         "ssflux merged_slope_file must point at the slope merge output "
         "(nhm_slope_params.csv) so the dispatch chain is correct"
+    )
+
+
+def test_ssflux_config_values_are_not_silently_reverted():
+    """Guards the exact three values #175 changed. An accidental YAML revert
+    (e.g. a bad merge) would resurrect the degenerate pre-#175 output
+    silently -- reducer/norm_scope govern WHERE normalisation happens
+    (per-batch vs. whole-fabric, root cause #4) and dprst_flow_coef.max is
+    the calibrated cap (D5, Driscoll 2020 Table 1)."""
+    config = _load_config_raw()
+    ssflux = next((e for e in config["params"] if e["name"] == "ssflux"), None)
+    assert ssflux is not None, "ssflux entry missing"
+    assert ssflux.get("reducer") == "ssflux", (
+        "ssflux must declare `reducer: ssflux` -- without it, normalisation "
+        "reverts to run_merge's default per-batch-invariant-only behaviour "
+        "and #175's fabric-wide min/max is silently lost"
+    )
+    assert ssflux.get("norm_scope") == "fabric", (
+        "ssflux's default norm_scope must be `fabric` (batch-invariant by "
+        "construction) unless deliberately switched to `vpu`"
+    )
+    flux_params = {fp["name"]: fp for fp in ssflux["flux_params"]}
+    assert flux_params["dprst_flow_coef"]["max"] == pytest.approx(0.1), (
+        "dprst_flow_coef.max must stay 0.1 (Driscoll 2020 Table 1's calibrated "
+        "cap, D5) -- 0.5 was 5x the calibrated maximum"
+    )
+    # `vpu` is written verbatim per batch ("01".."09" and alphanumeric labels
+    # like "03N"/"10L"), and pandas infers dtype PER FILE at merge time -- a
+    # numeric-only batch reads it as int64 (dropping the leading zero) while a
+    # mixed-alphanumeric batch reads it as str. Measured on a real gfv2_dev
+    # rebuild: 28 distinct vpu labels merged in where the fabric has only 21.
+    # `read_dtypes: {vpu: str}` pins the read dtype so every batch parses
+    # identically; without it this silently regresses to that split.
+    assert ssflux.get("read_dtypes") == {"vpu": "str"}, (
+        "ssflux must declare `read_dtypes: {vpu: str}` -- without it, "
+        "pandas' per-file dtype inference splits the vpu label across "
+        "int64 and str depending on which batch an HRU landed in"
     )
 
 

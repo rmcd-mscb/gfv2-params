@@ -175,12 +175,23 @@ ruff = "*"
 # scripts/render_snarea_figures.py (matplotlib at module import). Runtime figure
 # generation still uses the richer `notebooks` env; dev only needs it to import.
 matplotlib-base = "*"
+# git-lfs manages the reference PDFs in docs/ (see .gitattributes). It lives in
+# `dev` rather than being assumed present on PATH because the HPC nodes have no
+# system git-lfs and no sudo. Anyone cloning this repo needs it to get real PDFs
+# instead of pointer files: `pixi shell -e dev && git lfs install && git lfs pull`.
+git-lfs = "*"
 
 [tool.pixi.feature.docs.dependencies]
 mkdocs = "*"
 mkdocs-material = "*"
 mkdocstrings = "*"
 mkdocstrings-python = "*"
+# poppler provides pdftotext, used to convert the reference PDFs in docs/ into
+# the markdown companions beside them (e.g. tm6b4.pdf ->
+# GIS_Weasel_Viger_Leavesley_2007_TM6B4.md). Prefer `pdftotext -layout` over
+# ghostscript's txtwrite: it preserves table columns, which matters for the
+# parameter tables in TM 6-B9 and Driscoll 2020.
+poppler = "*"
 
 [tool.pixi.feature.docs.pypi-dependencies]
 # include-markdown plugin pulls README.md / RUNME.md / CLAUDE.md into the

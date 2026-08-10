@@ -64,7 +64,7 @@ class DeclaredParam(NamedTuple):
           defects: {}                         # emitted column that does NOT represent
                                               # its PRMS parameter (see below)
           provenance:                         # emitted column that is not a PRMS param
-            k_perm_wtd: litho-weighted permeability, flux-normalisation input
+            k_perm_log_wtd: litho-weighted permeability, flux-normalisation input
 
     `processes` is PER-COLUMN, not per-entry: `ssflux` alone spans PRMSSoilzone,
     PRMSGroundwater and PRMSRunoff across different columns, so an entry-level key
