@@ -146,6 +146,27 @@ def _synthetic_fabric(id_feature="nat_hru_id"):
     )
 
 
+def test_load_param_preserves_mixed_vpu_labels_verbatim(tmp_path):
+    """The merged ssflux CSV's `vpu` column mixes zero-padded numeric labels
+    ("01", "03") with alphanumeric NHDPlus ones ("03N", "10L", "10U"). Bare
+    `pd.read_csv` per-read dtype inference sees a column that looks numeric
+    and casts it to int, silently stripping "01" to 1 (and emits a
+    DtypeWarning on the mixed-type column). `load_param` must read `vpu` as
+    str so every label round-trips verbatim."""
+    fabric = _synthetic_fabric()
+    df = pd.DataFrame(
+        {"nat_hru_id": [1, 2, 3], "vpu": ["01", "03N", "10L"], "mean": [1.0, 2.0, 3.0]}
+    )
+    csv = tmp_path / "p.csv"
+    df.to_csv(csv, index=False)
+
+    gdf = viz.load_param(tmp_path, "p.csv", fabric, "nat_hru_id")
+    by_id = gdf.set_index("nat_hru_id")["vpu"]
+    assert by_id[1] == "01"
+    assert by_id[2] == "03N"
+    assert by_id[3] == "10L"
+
+
 def test_load_param_left_join_preserves_all_hrus(tmp_path):
     fabric = _synthetic_fabric()
     # CSV covers only HRUs 1 and 2

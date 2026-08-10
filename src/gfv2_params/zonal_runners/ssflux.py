@@ -121,7 +121,22 @@ def run_ssflux_batch(config: dict, batch_id: int, logger) -> None:
     # k_perm == 0 is Gleeson's no-data flag and is excluded, not floored to
     # k_perm_min -- see ssflux_math.aggregate_k_perm_log and issue #175.
     validate_weight_coverage(w, id_feature, logger, **_coverage_kwargs(config))
-    agg = aggregate_k_perm_log(w, id_feature)
+
+    # Build the output index from the batch's FULL target HRU list, not just
+    # the weight frame's own unique ids -- an HRU with zero lithology-weight
+    # rows (no overlap at all) must still get a row (NaN k_perm_log_wtd,
+    # fflux == FFLUX_NO_OVERLAP), which is what that sentinel is documented to
+    # mean but was previously unreachable for. See issue #209.
+    target_ids = target_gdf[id_feature]
+    n_zero_coverage = len(set(target_ids) - set(w[id_feature].unique()))
+    if n_zero_coverage:
+        logger.warning(
+            "%d of %d HRUs in batch %d have zero lithology-weight rows (no "
+            "overlap at all); emitted with fflux=FFLUX_NO_OVERLAP and NaN "
+            "k_perm_log_wtd for the downstream KNN gap-fill -- see issue #209.",
+            n_zero_coverage, len(target_ids), batch_id,
+        )
+    agg = aggregate_k_perm_log(w, id_feature, all_ids=target_ids)
     agg[id_feature] = agg[id_feature].astype(int)
     k_perm_agg = agg.sort_values(by=id_feature).reset_index(drop=True)
 

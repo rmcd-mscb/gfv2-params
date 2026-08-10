@@ -191,6 +191,7 @@ def aggregate_k_perm_log(
     *,
     weight_col: str = "normalized_area_weight",
     k_col: str = "k_perm",
+    all_ids=None,
 ) -> pd.DataFrame:
     """Area-weighted mean of log10 permeability -- gdptools' INTENSIVE form.
 
@@ -205,6 +206,15 @@ def aggregate_k_perm_log(
     Dividing by ``den`` is load-bearing beyond no-data exclusion: the lithology
     layer is not perfectly continuous (1,828 CONUS HRUs have coverage gaps, 98
     have overlapping source polygons).
+
+    ``all_ids`` (optional): the full target HRU id list (e.g. a batch's
+    ``target_gdf[id_feature]``). When supplied, the output index is built from
+    it instead of from the weight frame's own unique ids -- an HRU with ZERO
+    weight rows (no lithology-polygon overlap at all) still gets a row, with
+    NaN ``k_perm_log_wtd`` and ``fflux == FFLUX_NO_OVERLAP`` -- see issue #209.
+    Without it (the default), behaviour is unchanged from before #209: the
+    output index is only the ids that appear in ``weights``, so a
+    zero-coverage HRU is silently absent from the result.
 
     Returns one row per HRU with ``k_perm_log_wtd`` (NaN where no valid
     lithology) and ``fflux`` (valid-coverage fraction, ``FFLUX_NO_OVERLAP``
@@ -225,21 +235,26 @@ def aggregate_k_perm_log(
     # Exact comparison is deliberate: a stored no-data flag, not a computed value.
     valid = w[k_col].notna() & (w[k_col] != K_PERM_NODATA)
 
-    all_ids = pd.Index(w[id_feature].unique(), name=id_feature).sort_values()
+    if all_ids is None:
+        target_ids = pd.Index(w[id_feature].unique(), name=id_feature).sort_values()
+    else:
+        target_ids = pd.Index(
+            pd.unique(pd.Index(all_ids)), name=id_feature
+        ).sort_values()
     v = w[valid]
-    num = (v[k_col] * v[weight_col]).groupby(v[id_feature]).sum().reindex(all_ids)
-    den = v[weight_col].groupby(v[id_feature]).sum().reindex(all_ids)
+    num = (v[k_col] * v[weight_col]).groupby(v[id_feature]).sum().reindex(target_ids)
+    den = v[weight_col].groupby(v[id_feature]).sum().reindex(target_ids)
 
     den_arr = den.to_numpy()
     covered = np.isfinite(den_arr) & (den_arr > 0.0)
 
-    k_log = np.full(len(all_ids), np.nan)
+    k_log = np.full(len(target_ids), np.nan)
     np.divide(num.to_numpy(), den_arr, out=k_log, where=covered)
 
     fflux = np.where(covered, den_arr, FFLUX_NO_OVERLAP)
 
     return pd.DataFrame(
-        {id_feature: all_ids.to_numpy(), "k_perm_log_wtd": k_log, "fflux": fflux}
+        {id_feature: target_ids.to_numpy(), "k_perm_log_wtd": k_log, "fflux": fflux}
     )
 
 

@@ -91,6 +91,32 @@ def test_aggregation_is_batch_partition_invariant():
     pd.testing.assert_frame_equal(whole, split, check_exact=True)
 
 
+def test_all_ids_gives_zero_coverage_hru_a_row_with_sentinel_fflux():
+    """Issue #209: an HRU with ZERO weight rows (no lithology overlap at all)
+    must still get a row when the caller supplies the full target HRU list --
+    NaN k_perm_log_wtd (feeding the KNN gap-fill) and fflux ==
+    FFLUX_NO_OVERLAP, making that sentinel reachable for the case it's
+    actually named for."""
+    w = _weights([(1, -10.0, 1.0)])  # HRU 2 has NO weight rows at all
+    out = aggregate_k_perm_log(w, ID, all_ids=pd.Index([1, 2], name=ID))
+    assert set(out[ID]) == {1, 2}
+    row2 = out.loc[out[ID] == 2].iloc[0]
+    assert np.isnan(row2["k_perm_log_wtd"])
+    assert row2["fflux"] == FFLUX_NO_OVERLAP
+    # the HRU that DOES have weight rows is unaffected
+    row1 = out.loc[out[ID] == 1].iloc[0]
+    assert row1["k_perm_log_wtd"] == pytest.approx(-10.0)
+    assert row1["fflux"] == pytest.approx(1.0)
+
+
+def test_omitting_all_ids_preserves_current_behavior():
+    """Without all_ids, a zero-coverage HRU stays absent from the output --
+    the pre-#209 behaviour, unchanged for existing callers."""
+    w = _weights([(1, -10.0, 1.0)])
+    out = aggregate_k_perm_log(w, ID)
+    assert set(out[ID]) == {1}
+
+
 def test_aggregation_rejects_missing_weight_column():
     w = _weights([(1, -10.0, 0.5)]).rename(columns={"normalized_area_weight": "wght"})
     with pytest.raises(ValueError, match="normalized_area_weight"):

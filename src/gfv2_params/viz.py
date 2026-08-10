@@ -257,7 +257,14 @@ def load_param(params_dir, csv_name, fabric_gdf, id_feature):
     Left join preserves every HRU (missing HRUs in the CSV become NaN). Returns
     a GeoDataFrame indexed like `fabric_gdf`.
     """
-    df = pd.read_csv(Path(params_dir) / csv_name)
+    # `vpu` (when present) mixes zero-padded numeric labels ("01", "02") with
+    # alphanumeric ones ("03N", "10L", "10U"). Per-read dtype inference sees a
+    # column that LOOKS all-numeric and casts it to int, silently stripping
+    # the leading zero ("01" -> 1) -- PR #208 fixed the write side
+    # (`read_dtypes:` in run_merge); this is the read side for ad-hoc
+    # notebook loads. Forcing str is harmless for the many param CSVs that
+    # have no `vpu` column at all: an unmatched key in `dtype=` is a no-op.
+    df = pd.read_csv(Path(params_dir) / csv_name, dtype={"vpu": str})
     gdf = fabric_gdf[[id_feature, "geometry"]].merge(df, on=id_feature, how="left")
     return gdf
 
