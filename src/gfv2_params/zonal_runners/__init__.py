@@ -75,7 +75,7 @@ from .lulc import run_lulc_batch
 from .lulc_prederived import run_lulc_prederived_batch
 from .merge import run_merge
 from .soils import run_soils_batch
-from .ssflux import run_ssflux_batch
+from .ssflux import run_ssflux_batch, run_ssflux_reduce
 from .weights import run_build_weights
 from .zonal import run_zonal_batch
 
@@ -88,6 +88,7 @@ __all__ = [
     "run_merge",
     "run_soils_batch",
     "run_ssflux_batch",
+    "run_ssflux_reduce",
     "run_zonal_batch",
 ]
 
@@ -109,4 +110,6 @@ BATCH_RUNNERS = {
 # (df, config, logger) -> df callable applied once to the CONCATENATED merged
 # frame. Mirrors BATCH_RUNNERS above. Params with no `reducer:` tag are
 # unaffected. Used by scripts/derive_zonal_params.py.
-MERGE_REDUCERS = {}
+MERGE_REDUCERS = {
+    "ssflux": run_ssflux_reduce,
+}
