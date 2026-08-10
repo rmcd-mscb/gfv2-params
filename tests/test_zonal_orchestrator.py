@@ -147,6 +147,18 @@ def test_ssflux_config_values_are_not_silently_reverted():
         "dprst_flow_coef.max must stay 0.1 (Driscoll 2020 Table 1's calibrated "
         "cap, D5) -- 0.5 was 5x the calibrated maximum"
     )
+    # `vpu` is written verbatim per batch ("01".."09" and alphanumeric labels
+    # like "03N"/"10L"), and pandas infers dtype PER FILE at merge time -- a
+    # numeric-only batch reads it as int64 (dropping the leading zero) while a
+    # mixed-alphanumeric batch reads it as str. Measured on a real gfv2_dev
+    # rebuild: 28 distinct vpu labels merged in where the fabric has only 21.
+    # `read_dtypes: {vpu: str}` pins the read dtype so every batch parses
+    # identically; without it this silently regresses to that split.
+    assert ssflux.get("read_dtypes") == {"vpu": "str"}, (
+        "ssflux must declare `read_dtypes: {vpu: str}` -- without it, "
+        "pandas' per-file dtype inference splits the vpu label across "
+        "int64 and str depending on which batch an HRU landed in"
+    )
 
 
 def test_lulc_entries_use_per_source_names():

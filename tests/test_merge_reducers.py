@@ -113,3 +113,63 @@ def test_reducer_that_preserves_rows_and_ids_is_unaffected(tmp_path):
     out = pd.read_csv(tmp_path / "merged" / "out.csv")
     assert len(out) == 4
     assert set(out["nat_hru_id"]) == {1, 2, 3, 4}
+
+
+# ---------------------------------------------------------------------------
+# read_dtypes: per-file dtype inference is not stable across batch files
+# ---------------------------------------------------------------------------
+# This reproduces the real ssflux `vpu` defect: pandas infers a categorical
+# column's dtype PER FILE. If one batch's values are all numeric-looking with
+# leading zeros ("01", "02") and another batch mixes in an alphanumeric label
+# ("03N"), the first batch reads as int64 (silently stripping the leading
+# zero: "01" -> 1) and the second as str -- so the same label ends up split
+# across two representations in the merged frame. Measured on a real gfv2_dev
+# rebuild: 28 distinct vpu labels merged where the fabric has only 21.
+
+
+def _write_mixed_dtype_batches(tmp_path):
+    d = tmp_path / "ssflux"
+    d.mkdir(parents=True)
+    # Batch 0: all-numeric-looking labels -> pandas infers int64, drops the
+    # leading zero ("01" -> 1, "02" -> 2).
+    pd.DataFrame(
+        {"nat_hru_id": [1, 2], "vpu": ["01", "02"]}
+    ).to_csv(d / "base_nhm_ssflux_testfab_batch_0000_param.csv", index=False)
+    # Batch 1: mixed alphanumeric label -> pandas infers str/object.
+    pd.DataFrame(
+        {"nat_hru_id": [3, 4], "vpu": ["01", "03N"]}
+    ).to_csv(d / "base_nhm_ssflux_testfab_batch_0001_param.csv", index=False)
+    return {
+        "source_type": "ssflux",
+        "id_feature": "nat_hru_id",
+        "merged_file": "out.csv",
+        "fabric": "testfab",
+        "output_dir": str(tmp_path),
+    }
+
+
+def test_merge_without_read_dtypes_exhibits_the_vpu_split(tmp_path):
+    """Documents the failure mode: without `read_dtypes`, the same "01" label
+    survives as the string "01" in the mixed batch but as the int 1 in the
+    all-numeric batch."""
+    cfg = _write_mixed_dtype_batches(tmp_path)
+    run_merge(cfg, _Logger())
+    out = pd.read_csv(tmp_path / "merged" / "out.csv", dtype={"nat_hru_id": int})
+    labels = set(out["vpu"].astype(str))
+    # The defect: "01" got silently split into "1" (from the int64 batch) and
+    # "01" (from the str batch) -- two labels in the merged frame for one
+    # fabric VPU.
+    assert labels == {"1", "2", "01", "03N"}
+
+
+def test_merge_with_read_dtypes_preserves_labels_verbatim(tmp_path):
+    """`read_dtypes: {vpu: str}` forces every batch to be read identically,
+    so no leading zero is stripped and no label splits."""
+    cfg = _write_mixed_dtype_batches(tmp_path)
+    cfg["read_dtypes"] = {"vpu": "str"}
+    run_merge(cfg, _Logger())
+    out = pd.read_csv(tmp_path / "merged" / "out.csv", dtype={"vpu": str})
+    assert set(out["vpu"]) == {"01", "02", "03N"}
+    # nat_hru_id 1 and 3 both carry "01" -- confirm it's the same string, not
+    # coincidentally-equal ints and strs.
+    assert out.set_index("nat_hru_id")["vpu"].to_dict() == {1: "01", 2: "02", 3: "01", 4: "03N"}

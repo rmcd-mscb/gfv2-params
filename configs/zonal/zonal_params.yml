@@ -528,6 +528,18 @@ params:
       hru_area:
         source: geometry
         scale: 1.0
+    # `vpu` is written verbatim per batch ("01".."09", but also "03N"/"03S"/
+    # "03W"/"10L"/"10U"), and pandas infers dtype PER FILE at merge time: a
+    # batch containing only numeric-looking labels reads `vpu` as int64
+    # (silently stripping the leading zero, "01" -> 1) while a batch with a
+    # mixed-alphanumeric label reads it as str. Measured on a real gfv2_dev
+    # rebuild: 12/20 ssflux batches went int64, 8/20 str, producing 28 distinct
+    # vpu labels in the merged product against the fabric's 21 -- 8 of them
+    # (1,2,4,5,6,7,8,9) not present in the fabric at all. `read_dtypes` pins
+    # the dtype at read time so every batch is parsed identically; see
+    # run_merge in zonal_runners/merge.py.
+    read_dtypes:
+      vpu: str
     # `processes:` is PER-COLUMN, and ssflux is why. This one entry spans
     # PRMSSoilzone, PRMSGroundwater and PRMSRunoff across different columns, so an
     # entry-level `processes: [PRMSRunoff]` would report 5 non-runoff parameters as

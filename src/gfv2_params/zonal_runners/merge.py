@@ -69,6 +69,19 @@ def run_merge(config: dict, logger, *, reducer=None) -> None:
     merged_file = config["merged_file"]
     fabric = config["fabric"]
     expected_max = config.get("expected_max_hru_id")
+    # pandas infers dtypes PER FILE, not across the whole param. A categorical
+    # column that is all numeric-looking-with-leading-zeros in some batches and
+    # alphanumeric in others (ssflux's `vpu`: "01".."09" vs "03N"/"10L") gets
+    # inferred as int64 in the numeric-only batches and str in the mixed ones --
+    # int64 silently strips the leading zero ("01" -> 1). Measured on a real
+    # gfv2_dev rebuild: 12/20 ssflux batches inferred `vpu` int64, 8/20 str,
+    # producing 28 distinct vpu labels in the merged product where the fabric
+    # has only 21, 8 of which (1,2,4,5,6,7,8,9) don't exist in the fabric at
+    # all -- the same VPU split across two labels depending on which batch an
+    # HRU landed in. `read_dtypes:` lets a param's config pin the dtype for any
+    # such column so every batch is read the same way; it's a property of any
+    # categorical string column emitted per batch, not a vpu special case.
+    read_dtypes = config.get("read_dtypes")
 
     input_dir = Path(config["output_dir"]) / source_type
     final_output_dir = Path(config["output_dir"]) / config.get("merged_subdir", "merged")
@@ -88,7 +101,7 @@ def run_merge(config: dict, logger, *, reducer=None) -> None:
     dfs = []
     for f in files:
         logger.debug("Reading: %s", f)
-        df = pd.read_csv(f)
+        df = pd.read_csv(f, dtype=read_dtypes) if read_dtypes else pd.read_csv(f)
         if id_feature not in df.columns:
             raise ValueError(f"'{id_feature}' column not found in file: {f}")
         dfs.append(df)
