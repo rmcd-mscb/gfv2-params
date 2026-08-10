@@ -42,6 +42,38 @@ def test_classify():
     assert classify(mid) == "mid"
 
 
+def _curve_with_sca_at_half(v):
+    """An 11-point descending curve whose SCA at normalized SWE=0.5 is exactly v."""
+    c = np.linspace(1.0, 0.0, 11)
+    c[5] = v
+    return c
+
+
+def test_classify_boundaries_are_inclusive_to_mid():
+    # The bands are low (<0.45), mid ([0.45, 0.55]), high (>0.55): both edges
+    # belong to `mid`. Flipping either comparison to a strict/non-strict
+    # opposite moves an edge HRU into the wrong band.
+    assert classify(_curve_with_sca_at_half(0.45)) == "mid"
+    assert classify(_curve_with_sca_at_half(0.55)) == "mid"
+    assert classify(_curve_with_sca_at_half(0.45 - 1e-9)) == "low"
+    assert classify(_curve_with_sca_at_half(0.55 + 1e-9)) == "high"
+
+
+def test_passes_selection_boundaries_are_inclusive():
+    # n_cells == min_cells passes (the check is `<`), and each ratio criterion
+    # passes at exactly its threshold.
+    p = SelectionParams(min_cells=25, max_water_frac=0.5, min_seasonal_sca=0.5,
+                        max_constant_frac=0.8, max_similarity=0.15)
+    ok, status = passes_selection(
+        has_snow=True, n_cells=25, water_frac=0.5, seasonal_sca_max=0.5,
+        constant_frac=0.8, similarity_value=0.15, params=p)
+    assert (ok, status) == (True, "derived")
+    ok, status = passes_selection(
+        has_snow=True, n_cells=24, water_frac=0.5, seasonal_sca_max=0.5,
+        constant_frac=0.8, similarity_value=0.15, params=p)
+    assert (ok, status) == (False, "default_too_few_cells")
+
+
 def test_selection_params_recalibrated_defaults():
     # Pin the Oregon-recalibrated defaults so an accidental revert to the
     # paper's 25 / 0.15 is caught (see 2026-07-06 investigation).
