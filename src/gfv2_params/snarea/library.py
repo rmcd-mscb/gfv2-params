@@ -16,18 +16,22 @@ import pandas as pd
 import xarray as xr
 from scipy.stats import norm
 
+from .season import SDC_LENGTH, SWE_LEVELS
+
 _MM_PER_INCH = 25.4
 
-# Descending, matching snarea/season.py SWE_LEVELS.
-SWE_LEVELS = np.round(np.arange(1.0, -1e-4, -0.1), 1)  # 1.0 .. 0.0, 11 values
+# SWE_LEVELS (descending, 1.0 -> 0.0) is imported from .season rather than
+# redefined here: two independent definitions of the same sample grid can drift,
+# and Stage 2's empirical curves are sampled on it while Stage 3 fits analytic
+# curves to those same points.
 
 # Curve column names for snarea_curve_0..10 (descending).
-CURVE_COLS = [f"snarea_curve_{i}" for i in range(11)]
+CURVE_COLS = [f"snarea_curve_{i}" for i in range(SDC_LENGTH)]
 
 # CV search grid: 0.05..3.0 step 0.05 covers the validated range (median ~0.45,
 # up to ~1.2 CONUS) with headroom.
 CV_GRID = np.round(np.arange(0.05, 3.0001, 0.05), 2)
-_INTERIOR = slice(1, 10)  # endpoints (0, 10) are fixed 1.0/0.0 for every cv
+_INTERIOR = slice(1, SDC_LENGTH - 1)  # endpoints are fixed 1.0/0.0 for every cv
 
 
 def sdc_from_cv(cv: float, mu: float = 1.0, n: int = 4000) -> np.ndarray:
@@ -84,8 +88,10 @@ def build_library(
     if cv.size == 0:
         raise ValueError("build_library: no finite CV values to bin")
     default_curve = np.asarray(default_curve, dtype=float)
-    if default_curve.shape != (11,):
-        raise ValueError(f"default_curve must be shape (11,), got {default_curve.shape}")
+    if default_curve.shape != (SDC_LENGTH,):
+        raise ValueError(
+            f"default_curve must be shape ({SDC_LENGTH},), got {default_curve.shape}"
+        )
 
     rows = [
         {

@@ -10,7 +10,12 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-SWE_LEVELS = np.round(np.arange(1.0, -0.0001, -0.1), 1)  # 1.0 .. 0.0, 11 values
+# Number of fixed normalized-SWE sample points per depletion curve. PRMS reads
+# snarea_curve as ndeplval = SDC_LENGTH * ndepl, so this is the one place the
+# curve length is defined — every `snarea_curve_0..10` column list, shape check
+# and interior slice in this package derives from it.
+SDC_LENGTH = 11
+SWE_LEVELS = np.round(np.linspace(1.0, 0.0, SDC_LENGTH), 1)  # 1.0 .. 0.0
 
 
 def melt_season(swe: pd.Series, sca: pd.Series):

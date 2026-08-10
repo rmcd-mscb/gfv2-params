@@ -14,14 +14,14 @@ import numpy as np
 import pandas as pd
 
 from .representative import median_sdc, select_representative, similarity
-from .season import annual_sdc
+from .season import SDC_LENGTH, annual_sdc
 from .selection import SelectionParams, classify, passes_selection
 from .subgrid import representative_peak_stats
 
 # Placeholder: SCA declines linearly with normalized SWE (1.0 → 0.0).
-DEFAULT_SNAREA_CURVE = np.round(np.linspace(1.0, 0.0, 11), 4)
+DEFAULT_SNAREA_CURVE = np.round(np.linspace(1.0, 0.0, SDC_LENGTH), 4)
 
-_CURVE_COLS = [f"snarea_curve_{i}" for i in range(11)]
+_CURVE_COLS = [f"snarea_curve_{i}" for i in range(SDC_LENGTH)]
 
 
 def validate_default_curve(arr: np.ndarray) -> None:
@@ -34,8 +34,10 @@ def validate_default_curve(arr: np.ndarray) -> None:
     pytest's rootdir-on-sys.path), so a script-to-script import would break when
     run directly via `python scripts/derive_snarea_library.py`.
     """
-    if arr.shape != (11,):
-        raise ValueError(f"default_curve must have shape (11,), got {arr.shape}")
+    if arr.shape != (SDC_LENGTH,):
+        raise ValueError(
+            f"default_curve must have shape ({SDC_LENGTH},), got {arr.shape}"
+        )
     if not np.all((arr >= 0.0) & (arr <= 1.0)):
         raise ValueError(f"default_curve values must all be within [0.0, 1.0], got {arr}")
     if not np.all(np.diff(arr) <= 1e-9):
