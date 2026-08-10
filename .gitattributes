@@ -4,8 +4,11 @@
 # and never diffed, which is exactly the LFS case.
 #
 # git-lfs is NOT assumed on PATH -- HPC nodes have no system git-lfs and no
-# sudo. It ships in the `dev` pixi feature. After cloning:
-#     pixi shell -e dev && git lfs install && git lfs pull
+# sudo. Install it per user (git's LFS filters run OUTSIDE the pixi env, so a
+# global install beats `pixi shell -e dev`, though the `dev` feature has it too):
+#     pixi global install git-lfs   # -> ~/.pixi/bin, already on PATH
+#     git lfs install               # once per clone
+#     git lfs pull                  # fetch PDFs into an existing clone
 # Without that you will see small pointer files instead of real PDFs.
 #
 # NOTE: PDFs committed before this file was added (DepStor_workflow.pdf,
