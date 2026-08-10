@@ -439,9 +439,18 @@ is the genuine least-permeable lithology class.
   per-region reference output for distributional validation.
 - **Viger, R.J., and Leavesley, G.H., 2007** — *The GIS Weasel user's manual*,
   USGS Techniques and Methods 6-B4, 201 p.,
-  [doi:10.3133/tm6B4](https://doi.org/10.3133/tm6B4). The 2014 metadata states
-  the per-attribute methodologies live in this manual's **Appendix**, indexed by
-  PRMS parameter name. Not yet read; the only remaining place a definitive
-  statement of the cube's intended space (log10 vs linear) would live. Not a
-  blocker — D7 makes the cube moot for this design.
+  [doi:10.3133/tm6B4](https://doi.org/10.3133/tm6B4). **Consulted and ruled
+  out** — local copy at `docs/tm6b4.pdf`, notes in
+  `docs/GIS_Weasel_Viger_Leavesley_2007_TM6B4.md`. The 2014 metadata claims the
+  per-attribute methodologies live in this manual's Appendix indexed by PRMS
+  parameter name; **that pointer does not hold for the flux table**. Full-text
+  search returns zero hits for `soil2gw_max`, `ssr2gw_rate`, `slowcoef_lin`,
+  `fastcoef_lin`, `gwflow_coef`, `k_perm`, `Gleeson` or `conductivity` — and
+  cannot, since Gleeson (2011) postdates the manual by four years. Its Appendix
+  documents 37 generic `param_*.aml` zone-summary methods (area, slope,
+  majority, feature counts), none parameter-specific.
+  **Conclusion: no definitive statement of the cube's intended space exists in
+  any reference TM 6-B9 cites.** D7 resolves it from the FGDC attribute
+  definitions instead, and makes the cube moot for this design. Do not re-run
+  this search.
 - Markstrom and others, 2015, table 1–3 — acceptable parameter ranges
