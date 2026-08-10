@@ -4,6 +4,13 @@
 # only resolves {data_root}/{fabric} placeholders in top-level string values.
 snodas_agg_dir: "{data_root}/{fabric}/snodas"
 weight_file: "{data_root}/{fabric}/weights_agg/snodas_weights_{fabric}.csv"
+# Per-HRU SNODAS valid-data coverage, written by
+#   pixi run python scripts/derive_aggregate.py --source snodas --fabric <f> --mode coverage
+# Optional: absent -> the `coverage` column is NaN and nothing else changes. It is
+# a DIAGNOSTIC, never a selection gate — gdptools' masked_mean returns 0.0 (not
+# NaN) for an all-fill HRU, so without it an HRU outside the SNODAS domain is
+# indistinguishable from a snow-free one (#166: 1,087 CONUS HRUs, 0.30%).
+coverage_file: "{data_root}/{fabric}/weights_agg/snodas_coverage_{fabric}.csv"
 output_dir: "{data_root}/{fabric}/params/merged/_intermediates"
 merged_file: nhm_snarea_curve_derived.csv
 

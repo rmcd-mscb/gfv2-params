@@ -15,11 +15,18 @@ import pandas as pd
 import pyproj
 
 from gfv2_params.aggregate import aggregate_source
+from gfv2_params.aggregate.coverage import coverage_over_years
+from gfv2_params.aggregate.driver import _year_of
 from gfv2_params.aggregate.snodas import SNODAS_ADAPTER
 from gfv2_params.config import load_config, require_config_key
 from gfv2_params.log import configure_logging
 
 ADAPTERS = {"snodas": SNODAS_ADAPTER}
+
+
+def coverage_file_path(weight_dir: Path, source: str, fabric: str) -> Path:
+    """Canonical per-HRU coverage table (Stage 2 reads this path)."""
+    return Path(weight_dir) / f"{source}_coverage_{fabric}.csv"
 
 
 def _resolve(value, repl: dict):
@@ -44,6 +51,76 @@ def _resolve(value, repl: dict):
     if isinstance(value, dict):
         return {k: _resolve(v, repl) for k, v in value.items()}
     return value
+
+
+def run_coverage(
+    adapter,
+    source_dir: Path,
+    weight_dir: Path,
+    batch_dir: Path,
+    source: str,
+    fabric: str,
+    id_feature: str,
+    hru_layer: str,
+    logger,
+    years: list[int] | None = None,
+) -> Path:
+    """Write the per-HRU source-coverage diagnostic for the whole fabric.
+
+    Reuses the weight tables Stage 1 already cached — no re-aggregation — and
+    reads one day per per-year source file to sample the valid-data footprint
+    (see gfv2_params.aggregate.coverage). Minutes, not hours.
+
+    Runs PER BATCH because each batch's weight ``(i, j)`` index that batch's own
+    bounds-subset of the source grid: the consolidated weight file row-concats
+    64 different index spaces and is unusable for anything positional. Falls
+    back to the whole-fabric weight file when a run was not batched.
+    """
+    files = sorted(Path(source_dir).glob(adapter.files_glob))
+    if years is not None:
+        files = [f for f in files if _year_of(f) in years]
+    if not files:
+        raise FileNotFoundError(f"No files match {source_dir}/{adapter.files_glob}")
+
+    batch_weights = sorted(Path(weight_dir).glob(f"{source}_weights_{fabric}_batch*.csv"))
+    parts: list[pd.DataFrame] = []
+
+    if batch_weights:
+        logger.info("Coverage: %d batches x %d year-file(s)", len(batch_weights), len(files))
+        for n, wf in enumerate(batch_weights, start=1):
+            batch_id = int(wf.stem.split("batch")[-1])
+            gdf = gpd.read_file(Path(batch_dir) / f"batch_{batch_id:04d}.gpkg",
+                                layer=hru_layer)
+            logger.info("[%d/%d] batch %04d: %d HRUs", n, len(batch_weights),
+                        batch_id, len(gdf))
+            parts.append(coverage_over_years(
+                adapter, gdf, id_feature, pd.read_csv(wf), files))
+    else:
+        raise FileNotFoundError(
+            f"No per-batch weight CSVs in {weight_dir} matching "
+            f"{source}_weights_{fabric}_batch*.csv. Coverage is computed per "
+            f"batch because each batch's weight (i, j) index that batch's own "
+            f"bounds-subset; run --mode aggregate --batch_id first."
+        )
+
+    out = pd.concat(parts, ignore_index=True)
+    dupes = int(out[id_feature].duplicated().sum())
+    if dupes:
+        raise ValueError(
+            f"{dupes} duplicate {id_feature} across batch coverage tables — "
+            f"overlapping or re-run per-batch weight files in {weight_dir}."
+        )
+    path = coverage_file_path(weight_dir, source, fabric)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    out.sort_values(id_feature).to_csv(path, index=False)
+    zero = int((out["coverage"] <= 1e-9).sum())
+    logger.info(
+        "Coverage: %d HRUs; %d with ZERO coverage in every sampled year "
+        "(they report source-zero, indistinguishable from a true zero); "
+        "%d partial (<0.999) -> %s",
+        len(out), zero, int((out["coverage"] < 0.999).sum() - zero), path,
+    )
+    return path
 
 
 def run_merge(
@@ -182,7 +259,8 @@ def main() -> None:
     ap.add_argument("--years", nargs="*", type=int, default=None)
     ap.add_argument("--config", default="configs/aggregate/aggregate_sources.yml")
     ap.add_argument("--base_config", default="configs/base_config.yml")
-    ap.add_argument("--mode", choices=["aggregate", "merge"], default="aggregate")
+    ap.add_argument("--mode", choices=["aggregate", "merge", "coverage"],
+                     default="aggregate")
     ap.add_argument("--batch_id", type=int, default=None,
                      help="Spatial batch index (aggregate mode only); omit to run whole-fabric.")
     args = ap.parse_args()
@@ -229,6 +307,15 @@ def main() -> None:
     # snodas_dir may be overridden in the profile; fall back to the source entry.
     snodas_dir = _resolve(cfg.get("snodas_dir", src["snodas_dir"]), repl)
     hru_layer = cfg.get("hru_layer", "nhru")
+
+    if args.mode == "coverage":
+        out = run_coverage(
+            ADAPTERS[args.source], Path(snodas_dir), Path(cfg["weight_dir"]),
+            Path(cfg["batch_dir"]), args.source, args.fabric, id_feature,
+            hru_layer, logger, years=args.years,
+        )
+        logger.info("Wrote per-HRU coverage -> %s", out)
+        return
 
     if args.batch_id is not None:
         batch_gpkg = Path(cfg["batch_dir"]) / f"batch_{args.batch_id:04d}.gpkg"

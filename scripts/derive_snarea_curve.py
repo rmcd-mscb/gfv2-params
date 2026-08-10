@@ -29,6 +29,7 @@ from gfv2_params.snarea.selection import SelectionParams
 __all__ = [
     "read_daily_by_hru",
     "cells_from_weights",
+    "coverage_from_file",
     "validate_default_curve",
     "main",
 ]
@@ -82,9 +83,24 @@ def read_daily_by_hru(
 
 
 def cells_from_weights(weight_file: Path, id_col: str) -> dict[int, int]:
-    """Per-HRU contributing SNODAS cell count from the gdptools weight table."""
+    """Per-HRU contributing SNODAS cell count from the gdptools weight table.
+
+    Note this is a ``groupby().size()`` — a COUNT of weight rows, which is
+    index-agnostic. That is why the consolidated weight file is safe here even
+    though it row-concats 64 per-batch tables whose ``(i, j)`` index disjoint
+    grid subsets. Anything positional must read the per-batch files instead
+    (see gfv2_params.aggregate.coverage).
+    """
     w = pd.read_csv(weight_file)
     return w.groupby(id_col).size().astype(int).to_dict()
+
+
+def coverage_from_file(coverage_file: Path, id_col: str) -> dict[int, float]:
+    """Per-HRU SNODAS coverage fraction written by ``derive_aggregate.py
+    --mode coverage``. Missing file -> empty dict, so every HRU's `coverage`
+    column is NaN ("not measured") rather than 0.0 ("measured, and empty")."""
+    c = pd.read_csv(coverage_file)
+    return dict(zip(c[id_col], c["coverage"]))
 
 
 def main() -> None:
@@ -120,8 +136,28 @@ def main() -> None:
         water = dict(zip(wdf[id_feature], wdf["water_frac"]))
         logger.info("Loaded water fraction for %d HRUs from %s", len(water), args.water_csv)
 
+    coverage: dict[int, float] = {}
+    cov_file = Path(cfg["coverage_file"]) if "coverage_file" in cfg else None
+    if cov_file is not None and cov_file.exists():
+        coverage = coverage_from_file(cov_file, id_feature)
+        zero = sum(1 for v in coverage.values() if v <= 1e-9)
+        logger.info(
+            "Loaded SNODAS coverage for %d HRUs from %s (%d with zero coverage "
+            "in every sampled year — their swe=0 is a data gap, not snow-free)",
+            len(coverage), cov_file, zero,
+        )
+    else:
+        logger.warning(
+            "No coverage table at %s — the `coverage` column will be NaN. "
+            "Run `derive_aggregate.py --mode coverage` to populate it; without "
+            "it an HRU outside the SNODAS domain is indistinguishable from a "
+            "snow-free one (gdptools masked_mean returns 0.0, not NaN).",
+            cov_file,
+        )
+
     logger.info("Deriving representative snarea_curve for %d HRUs ...", len(daily))
-    table = build_snarea_curve(daily, cells, water, id_feature, sel, default_curve, logger=logger)
+    table = build_snarea_curve(daily, cells, water, id_feature, sel, default_curve,
+                               logger=logger, coverage_by_hru=coverage)
     out = out_dir / cfg["merged_file"]
     table.to_csv(out, index=False)
     logger.info("Wrote %d HRU curves -> %s", len(table), out)
