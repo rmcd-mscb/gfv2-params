@@ -179,12 +179,18 @@ by `_record` from the config entry. `run_fill_sweep` re-applies it after
 `write_filled_in_place`. So:
 
 - `mean_sin` and `mean_cos` are declared fillable — both linear, safe to interpolate;
-- `hru_aspect` is **not** declared fillable — it is recomputed from whatever its
-  sources ended up being, and is therefore always exactly `atan2` of the two columns
-  sitting next to it in the same file;
-- derived column names are excluded from `resolve_fill_plan`'s `undeclared_with_nan`
-  census, since a transient NaN there is expected mid-sweep rather than a gap nobody
-  declared.
+- `hru_aspect` is recomputed from whatever its sources ended up being, and is
+  therefore always exactly `atan2` of the two columns sitting next to it in the same
+  file. **It is still declared in `fill_columns`** — the KNN value is overwritten by
+  the re-derivation, and the declaration is what keeps `resolve_fill_plan`'s
+  raise-on-a-declared-column-the-file-lacks as the only CI-visible tripwire for a
+  deleted `derived_columns:` block. `hru_slope` stays declared for the same reason.
+  ([Amended 2026-08-10](../plans/2026-08-10-hru-aspect-circular-mean.md): this
+  section originally said `hru_aspect` would not be declared fillable and that
+  `hru_slope` would be removed from it. That collides with CLAUDE.md:443 and would
+  have discarded the tripwire — Guard 2, the fallback, is data-root-gated and SKIPs
+  in CI. The user ruled CLAUDE.md governs. Nothing else in this section changes: the
+  ordering is what makes the value correct, not the declaration.)
 
 Widening `DeclaredParam` follows the path its own docstring prescribes: attribute
 access, so a sixth field stays invisible to consumers that do not ask for it.
@@ -309,7 +315,10 @@ imply a correct product on this pipeline.
 - **A generic `source_transform:` hook on `zonal.py`.** More reusable in principle,
   but it still produces two separate merged CSVs with the same join problem, and adds
   config surface nothing else needs today.
-- **Declaring `hru_aspect` fillable.** Simplest, and reintroduces the defect on
-  gap-filled HRUs.
+- **Letting the KNN fill DETERMINE `hru_aspect`** — i.e. declaring it fillable with no
+  post-fill re-derivation. Simplest, and reintroduces the defect on gap-filled HRUs.
+  Note this is not the same as declaring it in `fill_columns`, which the amendment
+  above does: with the re-derivation in place the interpolated value is overwritten
+  before the file is written.
 - **Keeping flat cells.** Matches the issue as filed and is less code, but bakes
   RichDEM's fabricated 270° into flat-dominated HRUs.

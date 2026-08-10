@@ -35,10 +35,11 @@
 | `src/gfv2_params/zonal_runners/aspect.py` | Create | The three-pass per-batch aspect runner. |
 | `src/gfv2_params/zonal_runners/__init__.py` | Modify (re-exports ~line 76, `__all__`, `BATCH_RUNNERS` ~line 100) | Register `script: aspect`. |
 | `src/gfv2_params/params_index.py` | Modify (`DeclaredParam` line 39, `_record` line 137) | Sixth field: `derived_columns`. |
-| `scripts/merge_and_fill_params.py` | Modify (`resolve_fill_plan` census ~line 177, `run_fill_sweep` ~line 575) | Re-derive derived columns after the KNN fill. |
-| `configs/zonal/zonal_params.yml` | Modify (aspect entry lines 132–165; slope entry `fill_columns` line ~110) | New `script:`, `slope_raster:`, `derived_columns:`, rewritten `prms:` block. |
+| `scripts/merge_and_fill_params.py` | Modify (`run_fill_sweep` ~line 575 only) | Re-derive derived columns after the KNN fill. |
+| `configs/zonal/zonal_params.yml` | Modify (aspect entry lines 132–165; slope entry comment ~line 88) | New `script:`, `slope_raster:`, `derived_columns:`, rewritten `prms:` block. |
 | `slurm_batch/derive_zonal_params.batch` | Modify (line 10) | `--mem=32G` → `--mem=64G`. |
 | `docs/parameter_index.md` | Modify (generated regions + "Known gaps" ~line 281) | Regenerate; rewrite the aspect gap as a resolution. |
+| `CLAUDE.md` | Modify (derived_columns rule, lines 437–443) | Keep the prohibition; replace its stale silent-NaN rationale. |
 | `docs/ARCHITECTURE.md`, `slurm_batch/RUNME.md`, `slurm_batch/HPC_REFERENCE.md` | Modify | `aspect` is no longer a generic `zonal` entry; two rasters; 64G. |
 | `tests/test_aspect_zonal.py` | Create | End-to-end runner tests on synthetic rasters. |
 | `tests/test_merge_params.py` | Modify (after line 143) | Two-argument `derived_columns`. |
@@ -704,9 +705,37 @@ EOF
 
 **Interfaces:**
 - Consumes: `apply_derived_columns` from Task 1; the `derived_columns:` config shape Task 4 declares.
-- Produces: `DeclaredParam` gains a sixth field, `derived_columns: Mapping = MappingProxyType({})`. `resolve_fill_plan(param_df, declared, missing_ids, id_feature, param_name, fabric_col_spec=None, derived_columns=None)` — the new argument is keyword-with-default so existing positional call sites and test fixtures keep working.
+- Produces: `DeclaredParam` gains a sixth field, `derived_columns: Mapping = MappingProxyType({})`. `resolve_fill_plan`'s signature is **unchanged**.
 
-**Why this is not "just declare `hru_aspect` fillable":** KNN averaging neighbours at 350° and 10° gives 180°. That is the defect of issue #201 reappearing on gap-filled HRUs. `hru_aspect` is therefore never interpolated — only its two linear sources are, and it is recomputed from them.
+**Ruling that shaped this task (2026-08-10, from the pre-flight scan).** An earlier
+draft dropped `hru_slope` from `fill_columns` and kept `hru_aspect` out of it, which
+collides with [CLAUDE.md:443](../../../CLAUDE.md) — *"Do not 'fix' it by dropping the
+column from `fill_columns`."* The user ruled that CLAUDE.md governs. So **both derived
+columns stay declared fillable**, and the ordering is what makes them correct:
+
+```
+KNN fill (interpolates hru_slope / hru_aspect along with everything else)
+        ↓
+apply_derived_columns  ← OVERWRITES both from their filled sources
+        ↓
+write_filled_in_place
+```
+
+The interpolated bearing never reaches disk, so the circular-average defect still
+cannot ship — and `resolve_fill_plan`'s raise-on-a-declared-column-the-file-lacks
+survives as the loud, CI-visible tripwire that fires if a `derived_columns:` block is
+ever deleted or a merge never re-run. Guard 2 is data-root-gated and SKIPs in CI, so
+it is not a substitute for that tripwire ([test_params_index_ondisk.py:107](../../../tests/test_params_index_ondisk.py#L107)
+says so explicitly).
+
+**Consequence, deliberate and loud:** every fabric's aspect CSV currently predates
+`hru_aspect`, so the fill sweep will RAISE until that fabric's aspect zonal pass has
+been re-run. That is the documented prerequisite behaviour, not a regression. Task 7
+sequences the re-run ahead of the fill.
+
+**No NaN-census exemption.** A derived column that is declared fillable is already
+skipped by the census's `col in resolved` test, so an exemption would be dead code.
+Do not add one.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -745,8 +774,11 @@ Then add these three tests. The first and third go inside `class TestRunFillSwee
             "hru_aspect": [350.0, 10.0],
         }).to_csv(pf, index=False)
 
+        # hru_aspect IS declared fillable (CLAUDE.md:443) -- so KNN interpolates it
+        # to ~180 and the re-derivation must then OVERWRITE that. If the ordering
+        # were wrong, this test's final assertion is what catches it.
         declared = _declared(
-            "aspect", "nhm_aspect_params.csv", ["mean_sin", "mean_cos"],
+            "aspect", "nhm_aspect_params.csv", ["mean_sin", "mean_cos", "hru_aspect"],
             derived_columns={
                 "hru_aspect": {"from": ["mean_sin", "mean_cos"], "transform": "atan2_deg"}
             },
@@ -788,7 +820,7 @@ Then add these three tests. The first and third go inside `class TestRunFillSwee
         }).to_csv(pf, index=False)
 
         declared = _declared(
-            "slope", "nhm_slope_params.csv", ["mean"],
+            "slope", "nhm_slope_params.csv", ["mean", "hru_slope"],
             derived_columns={"hru_slope": {"from": "mean", "transform": "deg_to_fraction"}},
         )
 
@@ -807,44 +839,30 @@ Then add these three tests. The first and third go inside `class TestRunFillSwee
         )
 ```
 
-Module-level, next to the other `resolve_fill_plan` tests:
+Module-level, next to the other `resolve_fill_plan` tests — the loud tripwire
+CLAUDE.md:443 exists to preserve, stated as a test:
 
 ```python
-def test_derived_column_names_are_exempt_from_the_undeclared_nan_census():
-    """A pre-fill NaN in a derived column is bookkeeping, not an unreported gap.
+def test_a_declared_derived_column_absent_from_the_file_still_raises():
+    """The reason hru_slope/hru_aspect stay in fill_columns (CLAUDE.md:443).
 
-    The census reads the frame as it sits on disk, where hru_aspect is NaN for
-    exactly the HRUs whose means are NaN -- and every one of them is recomputed
-    later in the same sweep. Warning about it would train operators to ignore the
-    warning that exists to catch real gaps.
-
-    The exemption is the DECLARATION's doing, not a blanket silence: the same
-    column with no declaration is still reported.
+    A fabric whose CSV predates the derived column must fail loudly and name the
+    one command that fixes it, rather than silently shipping a merged/ product with
+    a PRMS parameter missing. This is the ONLY CI-visible backstop: Guard 2
+    (test_params_index_ondisk) is data-root-gated and skips in CI.
     """
-    df = pd.DataFrame({
-        "hru_id": [1, 2],
-        "mean_sin": [0.1, np.nan],
-        "mean_cos": [0.9, np.nan],
-        "hru_aspect": [6.3, np.nan],
-    })
-    derived = {"hru_aspect": {"from": ["mean_sin", "mean_cos"], "transform": "atan2_deg"}}
-
-    plan = maf.resolve_fill_plan(
-        df, ["mean_sin", "mean_cos"], [], "hru_id", "aspect", None, derived
-    )
-    assert "hru_aspect" not in plan.undeclared_with_nan
-
-    plan_undeclared = maf.resolve_fill_plan(
-        df, ["mean_sin", "mean_cos"], [], "hru_id", "aspect", None, None
-    )
-    assert plan_undeclared.undeclared_with_nan["hru_aspect"] == 1
+    df = pd.DataFrame({"hru_id": [1, 2], "mean_sin": [0.1, 0.2], "mean_cos": [0.9, 0.8]})
+    with pytest.raises(ValueError, match="not present in"):
+        maf.resolve_fill_plan(
+            df, ["mean_sin", "mean_cos", "hru_aspect"], [], "hru_id", "aspect"
+        )
 ```
 
 - [ ] **Step 2: Run the tests to verify they fail**
 
 Run: `srun -p cpu -A impd --time=00:15:00 --ntasks=1 --cpus-per-task=2 --mem=8G pixi run -e dev --as-is pytest tests/test_merge_and_fill_params.py -q`
 
-Expected: FAIL — `hru_aspect` is NaN on the synthesized row (nothing re-derives it), and `TypeError` on the `derived_columns=` keyword `resolve_fill_plan` does not yet accept.
+Expected: the two `run_fill_sweep` tests FAIL — `hru_aspect` comes back as the KNN interpolation of 350° and 10° (~180°) instead of the re-derived ~0°, and `hru_slope` disagrees with `tan(radians(mean))` on the synthesized row. `_declared` will also `TypeError` on the `derived_columns=` keyword until Step 3 widens `DeclaredParam`. `test_a_declared_derived_column_absent_from_the_file_still_raises` should PASS immediately — it pins behaviour that already exists and must survive this task.
 
 - [ ] **Step 3: Widen `DeclaredParam` in `params_index.py`**
 
@@ -878,59 +896,32 @@ Add the import at the top of the file, next to the existing `gfv2_params` import
 from gfv2_params.zonal_runners.merge import apply_derived_columns
 ```
 
-Extend `resolve_fill_plan`'s signature (line 75):
+`resolve_fill_plan` is **not** modified — see the ruling above. Leave its signature,
+its NaN census and the early-return guard at line 543 exactly as they are.
 
-```python
-def resolve_fill_plan(param_df, declared, missing_ids, id_feature, param_name,
-                      fabric_col_spec=None, derived_columns=None) -> FillPlan:
-```
-
-and in the NaN census loop (line 186), skip derived names:
-
-```python
-    # Derived columns are exempt from the census, unlike fabric columns. The two
-    # differ in reach: apply_fabric_columns only ever writes rows in missing_ids,
-    # so exempting those would suppress the warning for the population it cannot
-    # reach -- whereas a derived column is RECOMPUTED for every row after the fill,
-    # so a pre-fill NaN in one is expected bookkeeping, not an unreported gap.
-    derived_names = set(derived_columns or {})
-    undeclared_with_nan = {}
-    for col in param_df.columns:
-        if col in resolved or col in ID_COLUMNS or col == id_feature or col in derived_names:
-            continue
-```
-
-Add a paragraph to the docstring recording that exemption and its asymmetry with `fabric_columns`.
-
-In `run_fill_sweep` (line 524), pass the declaration through:
-
-```python
-            plan = resolve_fill_plan(
-                param_df, declared.fill_columns, missing_ids, id_feature, name,
-                declared.fabric_columns, declared.derived_columns,
-            )
-```
-
-The early-return guard at line 543 must not skip a param that declares only derived columns:
-
-```python
-            if not plan.fill_columns and not plan.fabric_columns:
-                logger.info("  No fill_columns declared for %s; nothing to fill", name)
-                continue
-```
-
-leave as-is — a param with derived columns but nothing fillable has nothing to re-derive from, since its sources cannot have changed.
-
-Immediately before `write_filled_in_place` (line 576), add:
+The only change is in `run_fill_sweep`. Immediately before `write_filled_in_place`
+(line 576), add:
 
 ```python
             if declared.derived_columns:
-                # AFTER the KNN pass and the fabric copy, so every derived column
-                # is a function of the values actually being written. Filling a
-                # derived column directly would (for hru_aspect) average a
-                # circular quantity arithmetically -- the exact defect of #201 --
-                # and (for hru_slope) let it disagree with its own declared source
-                # on synthesized rows.
+                # AFTER the KNN pass and the fabric copy, so every derived column is
+                # a function of the values actually being written. Both of today's
+                # derived columns are ALSO in fill_columns, so KNN has just written
+                # an interpolated value into each -- this overwrites it, and the
+                # ordering is the whole safety property:
+                #
+                #   hru_aspect is CIRCULAR. Interpolating neighbours at 350 deg and
+                #   10 deg gives 180 deg, due south, which is issue #201 reappearing
+                #   on gap-filled HRUs. hru_slope is monotone so its interpolation
+                #   was defensible, but it was computed independently of `mean` and
+                #   could therefore disagree with its own declared source on a
+                #   synthesized row.
+                #
+                # They stay declared fillable (CLAUDE.md's "do not fix it by dropping
+                # the column from fill_columns") because resolve_fill_plan's
+                # raise-on-a-declared-column-the-file-lacks is the only CI-visible
+                # tripwire for a deleted derived_columns block; Guard 2 is
+                # data-root-gated and skips in CI.
                 complete_df = apply_derived_columns(complete_df, declared.derived_columns)
                 logger.info("  Re-derived %s from filled sources",
                             sorted(declared.derived_columns))
@@ -954,8 +945,13 @@ fill_missing_values_knn / apply_fabric_columns so a derived column is always
 a function of the values actually written.
 
 Required for hru_aspect: KNN-averaging neighbours at 350 deg and 10 deg gives
-180 deg, so interpolating it directly reintroduces issue #201 on exactly the
-gap-filled HRUs nobody inspects. Only the linear sources are interpolated.
+180 deg, so an interpolated bearing reintroduces issue #201 on exactly the
+gap-filled HRUs nobody inspects. The re-derivation overwrites it.
+
+Both derived columns stay declared in fill_columns per CLAUDE.md -- the KNN
+value is overwritten, and the declaration is what keeps resolve_fill_plan's
+raise-on-a-missing-declared-column as the only CI-visible tripwire for a
+deleted derived_columns block (Guard 2 is data-root-gated and skips in CI).
 
 SCOPE EXPANSION: this also changes hru_slope. It was previously KNN-filled
 independently of `mean`, so a synthesized row could carry
@@ -998,22 +994,36 @@ Replace `configs/zonal/zonal_params.yml` lines 132–165 in full:
     slope_raster: "{data_root}/shared/conus/vrt/slope.vrt"
     categorical: false
     merged_file: nhm_aspect_params.csv
-    # `mean` and the eight other raw stats stay in fill_columns: they are the
-    # UNMASKED pass-1 statistics, unchanged from the pre-fix product, and are as
-    # safe to interpolate as elevation's. mean_sin/mean_cos are linear and safe.
-    # hru_aspect is DELIBERATELY ABSENT -- see derived_columns below.
+    # `mean` and the eight other raw stats are the UNMASKED pass-1 statistics,
+    # unchanged from the pre-fix product and as safe to interpolate as elevation's.
+    # mean_sin/mean_cos are linear and safe.
+    #
+    # hru_aspect is declared here even though KNN must NOT be what determines it:
+    # merge_and_fill_params re-derives every derived column from its filled sources
+    # AFTER the KNN pass, so the interpolated bearing is overwritten and never
+    # reaches disk. The declaration is kept for the tripwire, not the fill --
+    # resolve_fill_plan raises on a declared column the file does not have, which
+    # is the only CI-visible signal that a fabric's aspect CSV predates this change
+    # or that the derived_columns block below was deleted. Guard 2 is data-root-
+    # gated and skips in CI, so it is not a substitute. Dropping the column from
+    # fill_columns to express "not interpolated" is explicitly forbidden by
+    # CLAUDE.md's derived_columns/fill_columns rule.
+    #
+    # Consequence, deliberate: a fabric whose aspect CSV predates hru_aspect will
+    # RAISE on the fill sweep until `derive_zonal_params.py` has re-run the aspect
+    # zonal pass and merge for it.
     fill_columns:
       [count, mean, std, min, "25%", "50%", "75%", max, sum,
-       n_aspect_cells, flat_frac, mean_sin, mean_cos]
+       n_aspect_cells, flat_frac, mean_sin, mean_cos, hru_aspect]
     # TM6B9:603: hru_aspect = atan2[mean(sin(aspect)), mean(cos(aspect))], 0-360
     # clockwise from north. The two-argument form is not a convenience: a circular
     # mean is not a function of any single statistic, so unlike hru_slope this
     # cannot be recovered from `mean` after the fact (issue #201).
     #
-    # hru_aspect is NOT in fill_columns. merge_and_fill_params RE-DERIVES every
-    # derived column after the KNN pass, so a gap-filled HRU gets interpolated
-    # mean_sin/mean_cos and a recomputed bearing. KNN on hru_aspect itself would
-    # average 350 deg and 10 deg to 180 deg -- the defect, reappearing.
+    # merge_and_fill_params RE-DERIVES this after the KNN pass, so a gap-filled HRU
+    # gets interpolated mean_sin/mean_cos and a recomputed bearing. That ordering is
+    # load-bearing: KNN on hru_aspect itself averages 350 deg and 10 deg to 180 deg
+    # -- the defect, reappearing on exactly the HRUs nobody inspects.
     derived_columns:
       hru_aspect:
         from: [mean_sin, mean_cos]
@@ -1050,35 +1060,23 @@ Replace `configs/zonal/zonal_params.yml` lines 132–165 in full:
 
 Note the `defects:` block is gone — `mean` is a real statistic, just not the PRMS parameter, so it belongs in `provenance:`.
 
-- [ ] **Step 2: Drop `hru_slope` from the slope entry's `fill_columns`**
+- [ ] **Step 2: Amend the slope entry's comment (its `fill_columns` list does NOT change)**
 
-In the `slope` entry, change:
-
-```yaml
-    fill_columns:
-      [count, mean, std, min, "25%", "50%", "75%", max, sum, hru_slope]
-```
-
-to:
+Leave `fill_columns` exactly as it is — `hru_slope` stays declared, per the ruling in
+Task 3. Only the comment needs updating: the paragraph beginning "hru_slope IS declared
+fillable" currently says interpolating it directly "is exactly as defensible as
+interpolating `mean`", which is no longer what happens. Replace that sentence (keep the
+following `NB:` re-merge-prerequisite paragraph verbatim — it is still true and is now
+the stated reason the declaration is kept) with:
 
 ```yaml
-    fill_columns: [count, mean, std, min, "25%", "50%", "75%", max, sum]
-```
-
-and replace the paragraph of the preceding comment that begins "hru_slope IS declared fillable" with:
-
-```yaml
-    # hru_slope is NOT declared fillable: merge_and_fill_params re-derives every
-    # derived column from its (filled) sources after the KNN pass, so it is a
-    # function of `mean` on every row including synthesized ones. It used to be
-    # KNN-filled independently, which let a filled row carry
-    # hru_slope != tan(radians(mean)) -- a derived column disagreeing with its own
-    # declared source inside one file.
-    #
-    # This also retires the re-merge prerequisite the old note described:
-    # resolve_fill_plan no longer sees hru_slope at all, so a slope CSV merged
-    # before the column existed no longer raises. It still needs
-    # `derive_zonal_params.py --mode merge --param slope` to GET the column.
+    # hru_slope IS declared fillable, but the KNN value is not what ships:
+    # merge_and_fill_params re-derives every derived column from its filled sources
+    # after the KNN pass, so hru_slope is tan(radians(mean)) on every row including
+    # synthesized ones. It was previously interpolated independently of `mean`,
+    # which let a filled row carry hru_slope != tan(radians(mean)) -- a derived
+    # column disagreeing with its own declared source inside one file. The
+    # declaration is kept for the tripwire below, not for the fill.
 ```
 
 - [ ] **Step 3: Run the config guards**
@@ -1100,15 +1098,16 @@ Expected: `yamllint` and `prettier` Passed. (A targeted `--files` run is safe on
 ```bash
 git add configs/zonal/zonal_params.yml
 git commit -m "$(cat <<'EOF'
-feat(config): aspect emits hru_aspect via atan2; slope stops filling hru_slope
+feat(config): aspect emits hru_aspect via atan2(mean_sin, mean_cos)
 
 The aspect entry moves to `script: aspect`, gains `slope_raster:` for the flat
 mask and a two-argument `derived_columns:` producing hru_aspect. `mean` moves
 from `defects:` to `provenance:` -- it is a real statistic, just not the PRMS
 parameter, and it stays as the auditable record of the pre-#201 product.
 
-hru_slope leaves the slope entry's fill_columns for the same reason
-hru_aspect never enters aspect's: both are now re-derived after the KNN pass.
+hru_aspect joins fill_columns and hru_slope stays there: both are re-derived
+after the KNN pass, so the declaration buys the loud missing-column tripwire
+without the interpolated value ever reaching disk.
 
 Refs #201.
 
@@ -1158,12 +1157,35 @@ Replace `docs/parameter_index.md`'s `### hru_aspect is DEFECTIVE — do not use 
 
 Retitle the section `### hru_aspect is a CIRCULAR mean (resolved, #201)`.
 
-- [ ] **Step 4: Update the runbooks and architecture doc**
+- [ ] **Step 4: Amend CLAUDE.md's derived_columns rule**
+
+CLAUDE.md is a project instruction that overrides default behaviour, so it must stay
+true. Its bullet at lines 437–443 (`A derived_columns: output that is also in
+fill_columns makes a re-merge a prerequisite of the next fill sweep`) keeps its
+prohibition — the ruling upheld it — but its *rationale* is now stale: it says the
+alternative is "a silent NaN in a PRMS parameter for exactly the HRUs that were
+missing", which post-fill re-derivation makes false. Rewrite the bullet to:
+
+- keep "Do not 'fix' it by dropping the column from `fill_columns`" as the rule;
+- replace the silent-NaN rationale with the real one — the declaration is the only
+  **CI-visible** tripwire for a deleted `derived_columns:` block or an un-re-merged
+  fabric, because Guard 2 is data-root-gated and SKIPs in CI;
+- record that the KNN value is overwritten by `run_fill_sweep`'s re-derivation, so
+  a derived column is a function of its declared sources on every row;
+- name `hru_aspect` alongside `hru_slope` as the second instance.
+
+Per CLAUDE.md's own AI-assistant-memory-sync rule, check whether
+`.amazonq/rules/workflow.md` needs the same change. This is a deep architectural
+gotcha, which that rule assigns to CLAUDE.md **only** — so the expected outcome is
+no change to `.amazonq/rules/workflow.md`. Confirm rather than assume; if you do
+change it, say so in the commit.
+
+- [ ] **Step 5: Update the runbooks and architecture doc**
 
 - `slurm_batch/RUNME.md` and `slurm_batch/HPC_REFERENCE.md`: wherever Step 4's zonal params are described, note that `aspect` reads two rasters (`aspect.vrt` + `slope.vrt`) and that the array job now requests 64G. Grep for `--mem=32G` and for `aspect` in both files and fix every hit.
 - `docs/ARCHITECTURE.md`: `aspect` is no longer a generic `script: zonal` entry. Grep for `zonal_runners` and for the list of `script:` tags; add `aspect` alongside `zonal`, `soils`, `lulc`, `lulc_prederived`, `ssflux`.
 
-- [ ] **Step 5: Verify nothing else references the old shape**
+- [ ] **Step 6: Verify nothing else references the old shape**
 
 Run:
 
@@ -1173,7 +1195,7 @@ grep -rn "hru_aspect\|nhm_aspect_params" docs/ README.md slurm_batch/ configs/ s
 
 Every hit must either describe the new behaviour or be a historical record explicitly framed as such. Fix any that still assert `mean` IS `hru_aspect`.
 
-- [ ] **Step 6: Lint and commit**
+- [ ] **Step 7: Lint and commit**
 
 ```bash
 pixi run -e dev pre-commit run --files slurm_batch/derive_zonal_params.batch docs/parameter_index.md docs/ARCHITECTURE.md slurm_batch/RUNME.md slurm_batch/HPC_REFERENCE.md
@@ -1303,7 +1325,9 @@ Run the fill sweep for each fabric, then run Guards 2 and 3 against the data roo
 
 **Spec coverage.** Every spec section maps to a task: §Design.1 (runner) → Task 2; §Design.2 (two-arg transform) → Task 1; §Design.3 (post-fill re-derive, including the hru_slope scope expansion) → Task 3 + Task 4 Step 2; §Design.4 (config + declaration) → Task 4; §Design.5 (documentation, incl. the notebook port) → Task 5; §Testing → Tasks 1–3 Step 1 and Task 6; §Rollout → Task 7. The spec's "rejected alternatives" need no task.
 
-**Deviation from the spec, deliberate.** The spec said the `hru_slope` change would land as "its own commit". It cannot: the re-derivation is one mechanism that applies to every param with `derived_columns`, so there is no separable code change. The split achieved instead is Task 3 (the mechanism, whose commit message names the `hru_slope` consequence explicitly) and Task 4 Step 2 (dropping `hru_slope` from `fill_columns`, a config-only commit). The PR-description callout the spec requires is Task 6 Step 3.
+**Deviation from the spec, deliberate.** The spec said the `hru_slope` change would land as "its own commit". It cannot: the re-derivation is one mechanism that applies to every param with `derived_columns`, so there is no separable code change. It lands in Task 3, whose commit message names the `hru_slope` consequence explicitly, and the PR-description callout the spec requires is Task 6 Step 3.
+
+**Ruling applied after the pre-flight scan (2026-08-10).** The plan originally dropped `hru_slope` from `fill_columns` and kept `hru_aspect` out of it. That collides verbatim with [CLAUDE.md:443](../../../CLAUDE.md) — "Do not 'fix' it by dropping the column from `fill_columns`" — and, per [test_params_index_ondisk.py:107](../../../tests/test_params_index_ondisk.py#L107), would have discarded the only CI-visible tripwire for a deleted `derived_columns:` block, since Guard 2 skips in CI. The user ruled CLAUDE.md governs. Both columns are now declared fillable and the re-derivation overwrites the interpolated value, so the safety property and the fix both hold. Tasks 3, 4 and 5 were rewritten before any dispatch; the spec's §Design.3 text ("`hru_aspect` is **not** declared fillable") is superseded on that one point and everything else in it stands.
 
 **Type consistency.** `atan2_deg(sin_mean, cos_mean)` is the same name and argument order in Task 1's implementation, Task 1's tests, Task 2's test imports, and Task 4's config. `run_aspect_batch(config, batch_id, logger)` matches the `BATCH_RUNNERS[tag](param_cfg, args.batch_id, logger)` call in `scripts/derive_zonal_params.py:144`. `DeclaredParam.derived_columns` is the same name in `params_index.py`, `_record`, and both `merge_and_fill_params.py` call sites. The emitted column names — `count, mean, std, min, 25%, 50%, 75%, max, sum, n_aspect_cells, mean_sin, mean_cos, flat_frac` — are identical in Task 2's `_STAT_COLUMNS` plus assignments, Task 2's tests, and Task 4's `fill_columns` and `provenance:` blocks.
 
