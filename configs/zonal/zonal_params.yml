@@ -451,14 +451,23 @@ params:
   - name: ssflux
     script: ssflux
     depends_on: build_weights
+    # Normalisation runs once over the whole merged frame, not per batch --
+    # min/max over an arbitrary SLURM chunk made identical HRUs disagree (#175).
+    reducer: ssflux
+    # `fabric` (one min/max over every HRU) is batch-invariant by construction.
+    # `vpu` reproduces TM 6-B9's per-GF-region wording; it needs the per-HRU
+    # `vpu` attribute and introduces discontinuities at region boundaries.
+    norm_scope: fabric
     source_shapefile: "{data_root}/input/soils_litho/Lithology_exp_Konly_Project.shp"
     merged_slope_file: "{data_root}/{fabric}/params/merged/nhm_slope_params.csv"
     merged_file: nhm_ssflux_params.csv
-    # Observed on-disk header (oregon + gfv2) is k_perm_wtd, mean_slope_fraction,
-    # hru_area, soil2gw_max, ssr2gw_rate, fastcoef_lin, slowcoef_lin, gwflow_coef,
-    # dprst_seep_rate_open, dprst_flow_coef. The first three are litho/slope
-    # INPUTS to the flux normalisation below, not PRMS parameters themselves --
-    # only the 7 derived flux params are declared fillable.
+    # Observed on-disk header (oregon + gfv2) is k_perm_log_wtd, fflux, vpu,
+    # mean_slope_fraction, hru_area, soil2gw_max, ssr2gw_rate, fastcoef_lin,
+    # slowcoef_lin, gwflow_coef, dprst_seep_rate_open, dprst_flow_coef. The
+    # first five are litho/slope/vpu INPUTS to the flux normalisation below,
+    # not PRMS parameters themselves -- only the 7 derived flux params are
+    # declared fillable. fflux and vpu are measured facts (prms.provenance),
+    # deliberately NOT interpolable and so NOT in fill_columns.
     fill_columns:
       - soil2gw_max
       - ssr2gw_rate
@@ -518,12 +527,20 @@ params:
           prms: dprst_flow_coef
           processes: [PRMSRunoff]
       provenance:
-        k_perm_wtd: litho-weighted permeability, flux-normalisation input
+        k_perm_log_wtd:
+          area-weighted mean of log10 permeability (geometric mean, gdptools
+          INTENSIVE form) -- flux-normalisation input, replaces the pre-#175
+          k_perm_wtd which used the EXTENSIVE form and was not an average at all
+        fflux:
+          fraction of HRU area underlain by valid (non-no-data) lithology; -1
+          where there is no overlap at all. Matches the reference
+          implementation's fflux attribute (Viger 2014, doi:10.5066/F7CN71XR).
+          A measured coverage fact, deliberately NOT in fill_columns
+        vpu: "per-HRU VPU, carried so the reducer can honour norm_scope: vpu"
         mean_slope_fraction: tan(radians(slope mean)), flux-normalisation input
         hru_area: fabric geometry.area in m2 -- NOT PRMS hru_area, which is acres
     # Lithology permeability + PRMS flux normalisation (lifted verbatim
     # from configs/zonal/ssflux_param.yml).
-    k_perm_min: -16.48
     # Block mappings, not `{ name: x, min: y }` flow style: yamllint's braces rule
     # wants no spaces inside braces and prettier inserts them, so flow style makes
     # the two hooks fight forever. Values are unchanged.
@@ -548,4 +565,7 @@ params:
         max: 0.2
       - name: dprst_flow_coef
         min: 0.005
-        max: 0.5
+        # 0.1, not 0.5: Driscoll 2020 Table 1 gives the NHM's calibrated range as
+        # 0.0001-0.1 (median 0.048), and pywatershed's default 0.05 sits on that
+        # median. The old 0.5 was 5x the calibrated maximum.
+        max: 0.1

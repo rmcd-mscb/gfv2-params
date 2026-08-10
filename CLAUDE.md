@@ -302,6 +302,22 @@ These are hard-won; violating them silently corrupts outputs.
   any other fabric use `threshold_mode: percentile` in
   `configs/depstor/depstor_rasters.yml` with `twi_raster` pointing at
   `twi_hydrodem.vrt` and run the `twi_reference` shared-raster step first.
+- **`k_perm` is INTENSIVE — aggregate it as an area-weighted mean, never an
+  area-prorated sum.** `ssflux.py` originally used gdptools' *extensive* form
+  (`Σ Vᵢ·aᵢ/Aᵢ`, dividing by the SOURCE polygon area, the column gdptools labels
+  "for extensive variables"), which is correct for population or volume but not
+  for a property of the medium. Per-HRU weight sums spanned 3.6e13× instead of
+  1.0, inflating spread from a physical 5.6 to an artifactual 15.4 orders of
+  magnitude and pinning ~90% of HRUs at the range minimum (#175). Use
+  `normalized_area_weight` (gdptools' `wght`) and renormalise by its per-HRU sum
+  — that also corrects the 1,828 coverage-gap and 98 overlapping-source HRUs.
+  Related traps: `k_perm == 0` is a **no-data flag**, not a measurement, and must
+  be excluded rather than floored to `k_perm_min` (-16.48 is simultaneously the
+  genuine least-permeable lithology class, 26,441 polygons); `k_perm` has only
+  **8 distinct values**, so ~5% of HRUs sitting at the range minimum is real
+  geology, not a defect. Normalisation is a **reduce step** — never per batch;
+  and never fix the per-batch scope before fixing the log-space aggregation, or
+  degeneracy goes from ~90% to 97-100%.
 
 ## Working in this repo
 

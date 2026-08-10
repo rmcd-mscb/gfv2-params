@@ -190,7 +190,7 @@ Two further dangers this index originally flagged are **now fixed**:
 | `lulc_nalcms` | `nhm_lulc_nalcms_params.csv` | `cov_type`, `covden_sum`, `covden_win`, `snow_intcp`, `srain_intcp`, `wrain_intcp` | `retention` |
 | `lulc_nlcd` | `nhm_lulc_nlcd_params.csv` | `cov_type`, `covden_sum`, `covden_win`, `snow_intcp`, `srain_intcp`, `wrain_intcp` | `retention` |
 | `lulc_foresce` | `nhm_lulc_foresce_params.csv` | `cov_type`, `covden_sum`, `covden_win`, `snow_intcp`, `srain_intcp`, `wrain_intcp` | `retention` |
-| `ssflux` | `nhm_ssflux_params.csv` | `dprst_flow_coef`, `dprst_seep_rate_open`, `fastcoef_lin`, `gwflow_coef`, `slowcoef_lin`, `soil2gw_max`, `ssr2gw_rate` | `hru_area`, `k_perm_wtd`, `mean_slope_fraction` |
+| `ssflux` | `nhm_ssflux_params.csv` | `dprst_flow_coef`, `dprst_seep_rate_open`, `fastcoef_lin`, `gwflow_coef`, `slowcoef_lin`, `soil2gw_max`, `ssr2gw_rate` | `fflux`, `hru_area`, `k_perm_log_wtd`, `mean_slope_fraction`, `vpu` |
 <!-- END GENERATED: by-entry -->
 
 **Notes on the table above**

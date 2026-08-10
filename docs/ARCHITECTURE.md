@@ -301,6 +301,28 @@ filled), alongside the existing `merged/_intermediates/` per-fraction/derived
 CSVs. A one-time migration off an existing `filled_`-prefixed product is
 `scripts/migrate_filled_params.py` (dry-run by default, `--apply` required).
 
+#### `reducer` — whole-population statistics computed at merge time
+
+A zonal param entry may also declare a `reducer:` tag, naming a `(df, config,
+logger) -> df` callable dispatched from `MERGE_REDUCERS` in
+`zonal_runners/__init__.py`. Unlike `derived_columns` (a row-local transform),
+a reducer runs once over the **entire concatenated merged frame**, after the
+per-batch concat and before the CSV write, for parameters whose values need a
+statistic computed across the whole population — a min/max, a mean, a
+percentile — rather than something derivable from that row alone.
+
+`ssflux` is the first (and so far only) consumer: its `reducer: ssflux` entry
+resolves to `run_ssflux_reduce`, which min-max-normalises each `L_<param>`
+column from `run_ssflux_batch` onto that parameter's configured
+`flux_params` range and drops the `L_*` columns, replacing them with the
+final PRMS values. This must be a reduce step, not a per-batch one: taking
+min/max over an arbitrary SLURM batch chunk instead of the whole fabric made
+identical HRUs in different batches disagree (#175). The companion
+`norm_scope` key (`fabric`, the default — one min/max over every HRU, batch-
+invariant by construction; or `vpu` — one min/max per VPU, reproducing TM
+6-B9's per-GF-region wording) selects the population a reducer normalises
+over; `ssflux` is again the only consumer today.
+
 ### Common fabrics
 
 - **`gfv2`** — CONUS production fabric (~361k HRUs).
