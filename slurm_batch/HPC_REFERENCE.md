@@ -847,6 +847,11 @@ sbatch --export=ALL,BASE_CONFIG=$BASE_CONFIG,FABRIC=$FABRIC \
 # after weights finish, submit ssflux's array + merge as above with P=ssflux
 ```
 
+Since #175, `ssflux` normalises min/max over the whole fabric in the reduce
+step, so a rerun of any one `--mode zonal` batch changes every HRU's seven
+output values, not just the rerun batch's — partial reruns are all-or-nothing;
+always re-run `--mode merge` for the whole fabric afterward.
+
 **Depstor params** — same two-step unit per fraction, then one ratios job after
 all fractions have merged:
 

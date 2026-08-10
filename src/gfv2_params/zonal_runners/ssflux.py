@@ -169,6 +169,34 @@ def run_ssflux_reduce(df, config: dict, logger):
             "so re-run --mode zonal before merging."
         )
 
+    # A pre-#175 batch CSV left behind by a failed/unrun array task carries no
+    # L_* columns at all, so pd.concat's column union backfills them with NaN
+    # for every row that file contributed -- the `missing` check above passes
+    # because SOME batch has the columns. The exact invariant this frame must
+    # satisfy is: an L_* column is NaN *iff* k_perm_log_wtd is NaN (slope/area
+    # nulls already raise in the map phase; derive_log_params guards area; so
+    # k_perm_log_wtd is the only legitimate source of NaN in an L_* column).
+    # A row with a non-NaN k_perm_log_wtd but a NaN L_* can therefore only
+    # have come from a stale pre-#175 batch file -- raise rather than let it
+    # merge silently and get KNN gap-filled downstream like real no-data.
+    if "k_perm_log_wtd" in df.columns:
+        has_k = df["k_perm_log_wtd"].notna()
+        stale_mask = pd.Series(False, index=df.index)
+        for fp in flux_params:
+            stale_mask |= has_k & df[f"L_{fp['name']}"].isna()
+        n_stale = int(stale_mask.sum())
+        if n_stale > 0:
+            output_dir = config.get("output_dir", "<output_dir>")
+            raise ValueError(
+                f"{n_stale} row(s) have a populated k_perm_log_wtd but NaN in an "
+                "L_* column. This is the signature of a stale pre-#175 batch CSV "
+                f"left in {output_dir}/ssflux/ by a failed or un-rerun --mode zonal "
+                "array task -- pd.concat backfills its missing L_* columns with "
+                "NaN, which would otherwise merge silently and get KNN gap-filled "
+                "like real no-lithology data. Re-run the failed --mode zonal "
+                "batch(es) and re-run --mode merge."
+            )
+
     if scope == "vpu":
         if "vpu" not in df.columns or df["vpu"].isna().all():
             raise ValueError(

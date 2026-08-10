@@ -354,6 +354,12 @@ underlain by valid lithology, i.e. the renormalisation denominator `den`, with
 block and is **not** added to `fill_columns` — it is a measured coverage fact,
 not something to interpolate.
 
+`vpu` is **also added** to the on-disk header, unconditionally, on every
+fabric — carried through the map/reduce split so the reducer can honour
+`norm_scope: vpu` (multi-VPU fabrics read it per-HRU off the batch gpkg;
+single-VPU fabrics synthesise it from the `vpu` scalar in their base_config
+profile). Like `fflux`, it is `provenance:` and not in `fill_columns`.
+
 `fill_columns` is unchanged (the same seven parameters). `fabric_columns`
 `hru_area` handling is unchanged.
 

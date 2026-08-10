@@ -387,6 +387,12 @@ sbatch --export=ALL,BASE_CONFIG=$BASE_CONFIG,FABRIC=$FABRIC slurm_batch/build_zo
 # after weights + slope merge finish, submit ssflux's array + merge with P=ssflux
 ```
 
+Normalisation is now fabric-wide (#175), so re-running any single `ssflux`
+`--mode zonal` batch shifts the global min/max and changes every HRU's seven
+values, not just the rerun batch's. Partial reruns are all-or-nothing: after
+re-running any `ssflux` zonal batch, re-run `--mode merge` for the whole
+fabric before treating the product as current.
+
 **Depstor fractions** — same pair per `F` (any order): `perv_frac`,
 `imperv_frac`, `dprst_frac`, `drains_perv_frac`, `drains_imperv_frac`,
 `onstream_storage_frac`, `drains_to_dprst_frac`, `carea_t8_frac`,

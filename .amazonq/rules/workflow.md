@@ -85,6 +85,13 @@ Configuration (CFG-*), Code Quality (CODE-*), Hygiene (HYG-*), Architecture (ARC
     was read from the YAML) + `tests/test_submit_wrapper_param_lists.py`
   - PR #203 — `prms:` metadata on all 19 declared entries, two guards, generated
     index, `hru_slope` emitted in rise/run, `op_flow_thres` into `merged/`
+- #175 (ssflux normalisation) — the 7 `ssflux` PRMS params were spatially
+  degenerate (~90% pinned at range minimum) because permeability was aggregated
+  as an EXTENSIVE variable. Fixed on `fix/ssflux-normalisation-175`: intensive
+  log10 area-weighted-mean aggregation + a new fabric-wide reduce step for
+  normalisation (map/reduce split via `MERGE_REDUCERS`). See
+  `docs/superpowers/specs/2026-08-10-ssflux-normalisation-design.md` and
+  CLAUDE.md's `k_perm` gotcha for the architectural detail.
 
 ### Up next (priority order)
 - CFG-1 — remove commented opt-in keys from fabric profiles in base_config.yml
@@ -113,6 +120,11 @@ Configuration (CFG-*), Code Quality (CODE-*), Hygiene (HYG-*), Architecture (ARC
   `scripts/derive_depstor_params.py`'s startup-heartbeat import block and 14 yamllint
   `braces` errors in `configs/zonal/zonal_params.yml`'s `flux_params:` block. Check
   new findings against `main` (via `git stash`) before attributing them to your diff.
+- **Run the `--all-files` sweep under `srun`, not on the login node.** The
+  `prettier` hook needs 16-64 GB to lint 17 small YAML files (a broken-tool
+  artifact, not file size) and gets SIGKILLed on the login node / `oom_kill`'d
+  below 64G: `srun -p cpu -A impd --time=00:20:00 --ntasks=1 --cpus-per-task=4
+  --mem=64G pixi run -e dev pre-commit run --all-files`.
 - Do not run pytest on the HPC login node
 - `sbatch slurm_batch/ab_drains_to_dprst.batch [VPU] [FABRIC]` — the #147 FDR
   A/B (production vs fill vs breach) on one VPU; defaults VPU 16 / gfv2_dev.

@@ -50,6 +50,47 @@ def test_hru_with_no_valid_lithology_is_nan_with_sentinel_fflux():
     assert out.loc[out[ID] == 1, "fflux"].iloc[0] == FFLUX_NO_OVERLAP
 
 
+def test_aggregation_is_batch_partition_invariant():
+    """Per-HRU results must be bit-identical regardless of how the source
+    weight rows are partitioned across SLURM batches (the map stage).
+
+    This is the MAP-side half of the #175 batch-invariance acceptance
+    criterion (test_batch_invariance_is_bit_exact in test_ssflux.py covers the
+    reduce side). It rests on a fact asserted nowhere until now: boolean-mask
+    filtering by id_feature (exactly what run_ssflux_batch does --
+    ``weights[weights[id_feature].isin(batch_ids)]``) preserves each HRU's
+    weight rows in their original file order, so groupby('id').sum() sees the
+    identical operand sequence whether run once over the whole frame or once
+    per disjoint batch. Uses non-trivial floats so a change in summation order
+    would show up at the ULP level rather than being masked by symmetry.
+    """
+    rng = np.random.default_rng(42)
+    ids = np.repeat(np.arange(1, 21), 5)  # 20 HRUs x 5 weight rows each
+    rows = pd.DataFrame(
+        {
+            ID: ids,
+            "k_perm": rng.uniform(-16.0, -10.0, len(ids)),
+            "normalized_area_weight": rng.uniform(0.05, 0.3, len(ids)),
+        }
+    )
+    whole = aggregate_k_perm_log(rows, ID).sort_values(ID).reset_index(drop=True)
+
+    # Partition by HRU id into two disjoint batches via boolean mask -- exactly
+    # what two SLURM array tasks reading the same weights CSV do -- aggregate
+    # each separately, and recombine.
+    part_a = rows[rows[ID] <= 10]
+    part_b = rows[rows[ID] > 10]
+    split = (
+        pd.concat(
+            [aggregate_k_perm_log(part_a, ID), aggregate_k_perm_log(part_b, ID)],
+            ignore_index=True,
+        )
+        .sort_values(ID)
+        .reset_index(drop=True)
+    )
+    pd.testing.assert_frame_equal(whole, split, check_exact=True)
+
+
 def test_aggregation_rejects_missing_weight_column():
     w = _weights([(1, -10.0, 0.5)]).rename(columns={"normalized_area_weight": "wght"})
     with pytest.raises(ValueError, match="normalized_area_weight"):
@@ -114,6 +155,20 @@ def test_interpolate_raises_on_degenerate_range():
         interpolate_to_range(np.array([2.0, 2.0, 2.0]), 0.0, 1.0)
 
 
+def test_interpolate_raises_on_transposed_hi_lo():
+    """A transposed min/max in a flux_params config entry must raise, not
+    silently emit an inverted field."""
+    v = np.array([-3.0, -2.0, -1.0])
+    with pytest.raises(ValueError, match="hi"):
+        interpolate_to_range(v, hi=0.1, lo=0.3)
+
+
+def test_interpolate_raises_on_equal_hi_lo():
+    v = np.array([-3.0, -2.0, -1.0])
+    with pytest.raises(ValueError, match="hi"):
+        interpolate_to_range(v, hi=0.2, lo=0.2)
+
+
 def test_extensive_form_is_not_silently_accepted():
     """A frame carrying ONLY the extensive columns must raise, not guess.
 
@@ -149,8 +204,43 @@ def test_weight_coverage_warns_on_gaps_and_overlaps():
     assert any("outside" in m for m in log.warnings)
 
 
-def test_weight_coverage_raises_when_too_many_are_bad():
-    """A wholesale deviation from 1.0 means the wrong weight column."""
+def test_weight_coverage_raises_when_median_is_displaced():
+    """The extensive-form signature is a displaced MEDIAN (0.022 vs 1.0), not
+    a tail count -- gfv2 batches are spatially contiguous, so legitimate
+    coverage gaps cluster and can blow past a tail-fraction threshold on their
+    own (see the clustered-gap test below). Median is what actually
+    distinguishes "wrong column" from "this batch has a gap cluster"."""
     w = _weights([(1, -10.0, 0.02), (2, -11.0, 0.03), (3, -12.0, 0.01)])
     with pytest.raises(ValueError, match="normalized_area_weight"):
         validate_weight_coverage(w, ID, _CapturingLogger())
+
+
+def test_weight_coverage_clustered_gap_batch_warns_not_raises():
+    """A batch that happens to contain a large cluster of legitimate coverage
+    gaps (~32% of HRUs, matching the measured 1,828-in-~5,650 CONUS batch)
+    must WARN, not raise, as long as the median stays near 1.0 -- the old
+    tail-fraction raise fired here and blamed the extensive form, aborting a
+    CONUS array task over a correct, if clustered, renormalised result."""
+    n_gap = 32
+    n_full = 68
+    rows = [(i, -12.0, 0.5) for i in range(1, n_gap + 1)]
+    rows += [(i, -12.0, 1.0) for i in range(n_gap + 1, n_gap + n_full + 1)]
+    w = _weights(rows)
+    log = _CapturingLogger()
+    sums = w.groupby(ID)["normalized_area_weight"].sum()
+    assert sums.median() == pytest.approx(1.0)
+    validate_weight_coverage(w, ID, log, max_bad_fraction=0.05)
+    assert any("outside" in m for m in log.warnings)
+
+
+def test_weight_coverage_median_tol_is_configurable():
+    """The threshold is a keyword, not a hardcoded constant (spec robustness
+    rule 5: 'a configured threshold')."""
+    w = _weights([(1, -10.0, 0.85), (2, -11.0, 0.85), (3, -12.0, 0.85)])
+    log = _CapturingLogger()
+    # default median_tol=0.1 tolerates 0.85 (within 1.0 +/- 0.1 is false --
+    # 0.85 is exactly on the edge at tol 0.15); use an explicit tight/loose
+    # pair to prove the kwarg is actually threaded through.
+    with pytest.raises(ValueError, match="normalized_area_weight"):
+        validate_weight_coverage(w, ID, log, median_tol=0.1)
+    validate_weight_coverage(w, ID, log, median_tol=0.2)

@@ -461,13 +461,17 @@ params:
     source_shapefile: "{data_root}/input/soils_litho/Lithology_exp_Konly_Project.shp"
     merged_slope_file: "{data_root}/{fabric}/params/merged/nhm_slope_params.csv"
     merged_file: nhm_ssflux_params.csv
-    # Observed on-disk header (oregon + gfv2) is k_perm_log_wtd, fflux, vpu,
-    # mean_slope_fraction, hru_area, soil2gw_max, ssr2gw_rate, fastcoef_lin,
-    # slowcoef_lin, gwflow_coef, dprst_seep_rate_open, dprst_flow_coef. The
-    # first five are litho/slope/vpu INPUTS to the flux normalisation below,
-    # not PRMS parameters themselves -- only the 7 derived flux params are
-    # declared fillable. fflux and vpu are measured facts (prms.provenance),
-    # deliberately NOT interpolable and so NOT in fill_columns.
+    # Expected on-disk header (verified against run_ssflux_batch/run_ssflux_reduce;
+    # no fabric has been rebuilt against this yet, so this is the header the
+    # NEXT rebuild will produce, not an observed one) is <id_feature>,
+    # k_perm_log_wtd, fflux, mean_slope_fraction, hru_area, vpu, soil2gw_max,
+    # ssr2gw_rate, fastcoef_lin, slowcoef_lin, gwflow_coef,
+    # dprst_seep_rate_open, dprst_flow_coef. The five columns between
+    # <id_feature> and the 7 derived flux params are litho/slope/vpu INPUTS to
+    # the flux normalisation below, not PRMS parameters themselves -- only the
+    # 7 derived flux params are declared fillable. fflux and vpu are measured
+    # facts (prms.provenance), deliberately NOT interpolable and so NOT in
+    # fill_columns.
     fill_columns:
       - soil2gw_max
       - ssr2gw_rate
@@ -531,11 +535,13 @@ params:
           area-weighted mean of log10 permeability (geometric mean, gdptools
           INTENSIVE form) -- flux-normalisation input, replaces the pre-#175
           k_perm_wtd which used the EXTENSIVE form and was not an average at all
-        fflux:
-          fraction of HRU area underlain by valid (non-no-data) lithology; -1
-          where there is no overlap at all. Matches the reference
-          implementation's fflux attribute (Viger 2014, doi:10.5066/F7CN71XR).
-          A measured coverage fact, deliberately NOT in fill_columns
+        fflux: fraction of HRU area underlain by valid (non-no-data) lithology.
+          Normally 0.0-1.0; -1 where there is no overlap at all (98 HRUs with
+          overlapping source lithology polygons can push it above 1.0, up to
+          ~2.0 -- a real diagnostic of the source layer, deliberately left
+          unclipped rather than hidden). Matches the reference implementation's
+          fflux attribute (Viger 2014, doi:10.5066/F7CN71XR). A measured
+          coverage fact, deliberately NOT in fill_columns
         vpu: "per-HRU VPU, carried so the reducer can honour norm_scope: vpu"
         mean_slope_fraction: tan(radians(slope mean)), flux-normalisation input
         hru_area: fabric geometry.area in m2 -- NOT PRMS hru_area, which is acres

@@ -52,18 +52,28 @@ def validate_weight_coverage(
     weight_col: str = "normalized_area_weight",
     tol: float = 0.01,
     max_bad_fraction: float = 0.05,
+    median_tol: float = 0.1,
 ) -> None:
     """Assert the weights behave like gdptools' intensive ``wght``.
 
     ``wght`` sums to ~1.0 per target for a spatially continuous source layer.
     Real CONUS data is close but not exact: 1,828 HRUs have coverage gaps and 98
     have overlapping source polygons, so a handful outside ``[1-tol, 1+tol]`` is
-    expected and only warned about.
+    only warned about -- and gfv2 batches are spatially contiguous, so those
+    gaps CLUSTER: 1,828 known gap HRUs inside one ~5,650-HRU batch is 32%,
+    comfortably over a tail-fraction threshold like 5%, even though every
+    individual sum is a legitimate renormalised gap, not an extensive-form
+    signature. A tail-COUNT threshold therefore cannot distinguish "the wrong
+    column is being summed" from "this batch happens to contain a coverage-gap
+    cluster" -- see #175 (median 0.022 across the extensive form vs a clustered
+    per-batch tail that is a red herring).
 
-    A *wholesale* deviation means the wrong column is being summed -- the
-    extensive construction that caused #175 gave per-HRU sums spanning 3.6e13x
-    with a median of 0.022. That raises. This is the guard that stops the
-    extensive/intensive confusion from silently returning.
+    The signature that actually distinguishes the extensive form is the
+    **median**: the extensive construction that caused #175 displaced the
+    median itself (0.022 vs 1.0), because it scales with source-polygon size,
+    not target coverage. Raise only when the median strays from 1.0 by more
+    than ``median_tol``; individual out-of-tolerance HRUs (the tail) are only
+    ever warned about, at whatever ``max_bad_fraction`` the caller configures.
     """
     if weight_col not in weights.columns:
         raise ValueError(
@@ -71,18 +81,30 @@ def validate_weight_coverage(
             f"Columns: {sorted(weights.columns)}."
         )
     sums = weights.groupby(id_feature)[weight_col].sum()
+    median = float(sums.median()) if len(sums) else float("nan")
+    if len(sums) and not np.isclose(median, 1.0, rtol=0.0, atol=median_tol):
+        raise ValueError(
+            f"median(sum({weight_col})) = {median:.4f}, more than {median_tol} "
+            "away from 1.0. This is the extensive-form signature: 'wght' sums "
+            "to ~1.0 per target for gdptools' intensive weight, but scales with "
+            f"source-polygon size under the extensive form. '{weight_col}' must "
+            "be gdptools' `wght` -- do not substitute area_weight / "
+            "<source>_area, which is issue #175's root cause."
+        )
+
     bad = ~np.isclose(sums.to_numpy(), 1.0, rtol=0.0, atol=tol)
     bad_fraction = float(bad.mean()) if len(sums) else 0.0
     if bad_fraction > max_bad_fraction:
-        raise ValueError(
-            f"{bad_fraction:.1%} of HRUs have sum({weight_col}) outside "
-            f"1.0 +/- {tol} (median {float(sums.median()):.4f}, "
-            f"min {float(sums.min()):.4g}, max {float(sums.max()):.4g}). "
-            f"'{weight_col}' must be gdptools' `wght`, which sums to ~1 per "
-            "target. A median far from 1 means an EXTENSIVE construction such as "
-            "area_weight / <source>_area is being used -- that is issue #175."
+        logger.warning(
+            "%.1f%% of HRUs have sum(%s) outside 1.0 +/- %s (median %.4f, "
+            "min %.4g, max %.4g) -- median is close to 1.0 so this is not the "
+            "extensive-form signature; likely a clustered batch of legitimate "
+            "lithology coverage gaps/overlaps, which the aggregation "
+            "renormalises by the per-HRU sum.",
+            bad_fraction * 100, weight_col, tol, median,
+            float(sums.min()), float(sums.max()),
         )
-    if bad.any():
+    elif bad.any():
         logger.warning(
             "%d of %d HRUs have sum(%s) outside 1.0 +/- %s (min %.4g, max %.4g) -- "
             "lithology coverage gaps and overlapping source polygons; the "
@@ -205,6 +227,13 @@ def interpolate_to_range(values: np.ndarray, lo: float, hi: float) -> np.ndarray
     excluded from the min/max. ``min``/``max`` are exact and order-independent,
     which is what makes the merged output invariant to batch partitioning.
     """
+    if not hi > lo:
+        raise ValueError(
+            f"Target range is not valid: hi={hi!r} must be strictly greater "
+            f"than lo={lo!r}. A transposed min/max in the flux_params config "
+            "would silently emit an inverted field otherwise."
+        )
+
     v = np.asarray(values, dtype=float)
     finite = np.isfinite(v)
     if not finite.any():

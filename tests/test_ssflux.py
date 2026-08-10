@@ -131,6 +131,34 @@ def test_missing_L_column_raises():
         run_ssflux_reduce(df, _cfg(), _Logger())
 
 
+def test_stale_pre175_batch_raises_on_populated_k_with_nan_L():
+    """A pre-#175 batch CSV left by a failed array task has no L_* columns.
+
+    pd.concat's column union backfills them with NaN for every row that file
+    contributed, which passes the `missing` check (some OTHER batch has the
+    columns) -- but k_perm_log_wtd is populated for those rows since it's an
+    older-schema column both pre- and post-#175. That combination (non-NaN
+    k_perm_log_wtd, NaN L_*) can only come from a stale batch and must raise,
+    not merge silently into a KNN-fillable NaN.
+    """
+    df = _frame(10)
+    df["k_perm_log_wtd"] = -12.0
+    stale_rows = df[ID].isin([3, 7])
+    df.loc[stale_rows, [f"L_{p}" for p in PARAM_NAMES]] = np.nan
+    with pytest.raises(ValueError, match="stale"):
+        run_ssflux_reduce(df, _cfg(), _Logger())
+
+
+def test_legitimate_nan_k_perm_with_nan_L_does_not_raise():
+    """A genuine no-lithology HRU (NaN k_perm_log_wtd, NaN L_*) is fine."""
+    df = _frame(10)
+    df["k_perm_log_wtd"] = -12.0
+    df.loc[df[ID] == 5, "k_perm_log_wtd"] = np.nan
+    df.loc[df[ID] == 5, [f"L_{p}" for p in PARAM_NAMES]] = np.nan
+    out = run_ssflux_reduce(df, _cfg(), _Logger())
+    assert out.loc[out[ID] == 5, "soil2gw_max"].isna().all()
+
+
 def test_csv_round_trip_is_lossless(tmp_path):
     """The map/reduce split writes L_* to CSV and reads them back."""
     df = _frame(30)
