@@ -1257,28 +1257,46 @@ one file edit, no new YAMLs. Two cases:
 
 ### Which products are stale? (audit before rebuilding)
 
+There is no tool for this — a scripted version was attempted under #215 and withdrawn
+(see that issue for why). Run it by hand; the checks are cheap and the judgement is the
+part that matters.
+
+**Three things can make a product stale**, and checking only the first misses real drift:
+
+1. **its builder code changed** — `git log -1 --format=%cd --date=short -- <builder path>`,
+   where the builder is named in the entry's `prms.builder`. Note some entries use a
+   shorthand where the second module is relative to the first's package
+   (`depstor_builders/dprst.py + landmask.py` means `depstor_builders/landmask.py`).
+2. **its source raster changed** — the entry's `source_raster` (also `source_shapefile`,
+   `canopy_raster`, `slope_raster`, `crosswalk_file`: any declared input). For a `.vrt`,
+   check **both** the VRT's own mtime **and** its newest referenced tile: replacing tiles
+   leaves the VRT untouched, and rewriting the VRT changes the compositing — which
+   sources, in what order, with what nodata — without touching a tile. Both happened
+   here in 2026 (#149/#151 rebuilt the tiles; `elevation.vrt` was rewritten later).
+3. **something it consumes is stale** — `ssflux` reads merged `slope`; the depstor chain
+   runs `wbody_connectivity → dprst → routing → drains_*`. A product can be far newer
+   than its input and still have been built from a stale one.
+
+**Date the DERIVATION, not the file.** `merged/<name>.csv` is rewritten in place by the
+gap-fill sweep and by `--mode copy_constants`, so its mtime is the last *write*. The
+per-batch CSVs under `params/<param>/` are what `run_merge` consumed and are not
+rewritten afterwards — but note the depstor ratios' per-batch stage is named after the
+*fraction* (`carea_t8_frac/`, `imperv_frac/`, `drains_perv_frac/`), not the param, and
+`merged/_unfilled/<name>.csv` is a useful second witness where it exists.
+
+**Then settle it by rebuilding.** Timestamps only generate candidates; they cannot tell
+you whether the content actually changed. Re-run the builder — one batch is usually
+enough, though ssflux is fabric-wide and must be all-or-nothing — and diff against the
+product. This is what found every real drift in #201/#215; the timestamp reasoning
+above repeatedly said "current" for products that were not.
+
 ```bash
-pixi run --as-is python scripts/diagnose/audit_product_staleness.py --fabric gfv2
+cp merged/nhm_<name>_params.csv merged/nhm_<name>_params.csv.pre<issue>.bak
 ```
 
-Reports every `merged/` product whose mtime predates **either** the last commit
-touching its builder **or** its `source_raster`. Both axes are needed, and the
-second is the one that is easy to forget: `nhm_aspect_params.csv` was stale on 413
-of 361,471 gfv2 HRUs by up to 89° while its builder and config entry were untouched
-— the aspect rasters had been rebuilt underneath it (#149/#151). A `.vrt` is
-resolved through to its newest referenced tile, because a VRT's own mtime moves
-independently of its data in both directions.
-
-It is a **candidate generator, not a gate** — it always exits 0 and never rebuilds.
-The CODE axis over-selects badly: a comment-only commit touching a builder trips it
-exactly as hard as a rewrite. Triage a candidate by reading what actually changed,
-then settle it by re-running its builder over **one batch** against today's inputs
-and diffing that batch against the on-disk product — minutes of compute, and
-decisive.
-
-**Keep the pre-rebuild copy** (`cp <product>.csv <product>.csv.pre<issue>.bak`).
-Without it, "we rebuilt it" and "it was already correct" are indistinguishable
-afterwards. Tracked as #215.
+**Keep that backup.** Without it, "we rebuilt it" and "it was already correct" are
+indistinguishable afterwards. Three of the #215 rebuilds came back bit-identical, and
+that is a useful result worth recording — not a wasted run.
 
 ### Re-running one param whose upstream is already merged
 
