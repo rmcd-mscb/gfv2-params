@@ -310,6 +310,19 @@ def _read_output(config) -> pd.DataFrame:
     return pd.read_csv(path)
 
 
+def _circular_deg_apart(a, b):
+    """Shortest angular distance between two bearings, in degrees.
+
+    A linear |a - b| is WRONG across the 0/360 seam: 359.99999 and 0.0 are 7e-6
+    degrees apart on the circle and 360 apart on the number line. The rasters are
+    float32, so a circular mean that lands a hair west of north lands at 359.9999x
+    rather than 0.0 -- physically identical, linearly maximal. Asserting the linear
+    form in THIS suite would reproduce issue #201 inside the tests that exist to
+    prove it fixed.
+    """
+    return abs((a - b + 180.0) % 360.0 - 180.0)
+
+
 def test_circular_mean_survives_the_wrap_where_the_arithmetic_mean_does_not(tmp_path):
     """The whole of issue #201, in one HRU.
 
@@ -327,7 +340,7 @@ def test_circular_mean_survives_the_wrap_where_the_arithmetic_mean_does_not(tmp_
     out = _read_output(config)
 
     assert math.isclose(out["mean"][0], 180.0, abs_tol=1e-3)          # the defect
-    assert math.isclose(atan2_deg(out["mean_sin"], out["mean_cos"])[0], 0.0, abs_tol=1e-3)
+    assert _circular_deg_apart(atan2_deg(out["mean_sin"], out["mean_cos"])[0], 0.0) < 1e-3
     assert math.isclose(out["flat_frac"][0], 0.0, abs_tol=1e-9)
 
 
@@ -346,7 +359,7 @@ def test_flat_cells_are_excluded_and_counted(tmp_path):
     run_aspect_batch(config, 0, _LOG)
     out = _read_output(config)
 
-    assert math.isclose(atan2_deg(out["mean_sin"], out["mean_cos"])[0], 90.0, abs_tol=1e-3)
+    assert _circular_deg_apart(atan2_deg(out["mean_sin"], out["mean_cos"])[0], 90.0) < 1e-3
     assert math.isclose(out["flat_frac"][0], 0.5, abs_tol=1e-6)
     assert math.isclose(out["n_aspect_cells"][0], 4.0, abs_tol=1e-6)
     assert math.isclose(out["count"][0], 8.0, abs_tol=1e-6)
