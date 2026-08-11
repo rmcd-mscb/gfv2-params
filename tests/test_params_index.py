@@ -281,6 +281,35 @@ def test_params_for_process_hru_slope_and_hru_aspect_feed_solargeometry_and_atmo
         assert {col for col, _ in hits} == {"hru_slope", "hru_aspect"}
 
 
+def test_the_two_derived_columns_are_still_declared():
+    """Deleting a `derived_columns:` block hands a CIRCULAR quantity to KNN.
+
+    The failure this pins, end to end: someone deletes the `derived_columns:` block
+    from the `aspect` entry as cleanup -- plausible, since `hru_aspect` already sits
+    in `fill_columns` AND in `prms.columns`, so it looks fully declared without it.
+    Nothing else notices. `merged/nhm_aspect_params.csv` already CONTAINS
+    `hru_aspect`, so `resolve_fill_plan`'s raise (the tripwire for a fabric CSV that
+    predates the block) never fires; `declared.derived_columns` is empty, so
+    `run_fill_sweep` skips the post-fill re-derivation; and KNN then DETERMINES
+    `hru_aspect` by averaging bearings across the 0/360 seam -- 350 deg and 10 deg
+    give 180 deg, due south. That is issue #201 reappearing, guaranteed to land on
+    the all-flat HRUs (`flat_frac == 1.0`), which are exactly the gap-filled ones.
+    Exit code 0, no NaN for Guard 3 to see, no log line.
+
+    This test is the CI-visible half of that contract: pure YAML, no data root, so
+    unlike Guard 2 it does not skip. Pinning the exact spec (not just presence) also
+    catches a `from:` narrowed back to a single column, which would make the
+    two-argument circular mean unrecoverable.
+    """
+    declared = {d.name: d for d in pi.load_declared_params()}
+    assert declared["aspect"].derived_columns == {
+        "hru_aspect": {"from": ["mean_sin", "mean_cos"], "transform": "atan2_deg"}
+    }
+    assert declared["slope"].derived_columns == {
+        "hru_slope": {"from": "mean", "transform": "deg_to_fraction"}
+    }
+
+
 def test_generated_index_is_up_to_date():
     """docs/parameter_index.md's generated regions must match the configs.
 
