@@ -264,3 +264,27 @@ def compute_radtrn(
 def deg_to_fraction(slope_deg: float) -> float:
     """Convert slope from degrees to fractional slope (rise/run)."""
     return np.tan(np.deg2rad(slope_deg))
+
+
+def atan2_deg(sin_mean, cos_mean):
+    """Circular mean in degrees clockwise from north, normalised to [0, 360).
+
+    TM 6-B9 §603: ``hru_aspect = atan2[mean(sin(aspect)), mean(cos(aspect))]``.
+    The modulo is load-bearing -- ``np.arctan2`` returns -180..180 and PRMS
+    specifies 0-360, so without it every westerly HRU ships as a negative bearing.
+
+    Vectorised over pandas Series (``apply_derived_columns`` hands it whole
+    columns). NaN in either argument propagates, which is what an HRU with no
+    non-flat cells must produce: the fill sweep supplies interpolated means and
+    ``merge_and_fill_params`` re-derives from those.
+
+    The ``% 360.0`` is applied twice. When the true angle is a hair below the
+    wrap (an HRU whose sin/cos means cancel to within float64's ~1e-13 ULP at
+    this magnitude -- e.g. 350 deg and 10 deg averaging back to due north), the
+    first reduction can round to exactly 360.0 rather than 0.0: 360.0 is an
+    exact multiple of the modulus, so it is indistinguishable from "0 mod 360"
+    to floating point but sits outside the documented [0, 360) contract. A
+    second `% 360.0` is a no-op for every value already in range and collapses
+    that one boundary case to 0.0.
+    """
+    return np.degrees(np.arctan2(sin_mean, cos_mean)) % 360.0 % 360.0

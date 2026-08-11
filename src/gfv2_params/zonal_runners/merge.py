@@ -18,6 +18,7 @@ from gfv2_params import raster_ops
 # other module-level function that happens to share the name.
 _TRANSFORMS = {
     "deg_to_fraction": raster_ops.deg_to_fraction,
+    "atan2_deg": raster_ops.atan2_deg,
 }
 
 
@@ -31,6 +32,10 @@ def apply_derived_columns(df, derived_columns: dict | None):
     The source column is KEPT: it is declared provenance, not a temporary. For
     `slope` that matters, since `mean` (degrees) is what `hru_slope` is derived
     from and what a reader needs to check the derivation.
+
+    `from:` accepts a single column name or a list of them; the transform's arity
+    must match. `hru_slope` reads one column, `hru_aspect` reads two (`mean_sin`,
+    `mean_cos`) because a circular mean is not a function of any single statistic.
     """
     for out_col, spec in (derived_columns or {}).items():
         src, tname = spec["from"], spec["transform"]
@@ -39,14 +44,21 @@ def apply_derived_columns(df, derived_columns: dict | None):
                 f"`{tname}` is not a known transform for derived column '{out_col}'. "
                 f"Known: {sorted(_TRANSFORMS)}."
             )
-        if src not in df.columns:
+        # `from:` is one column name (deg_to_fraction) or a list of them
+        # (atan2_deg needs mean_sin AND mean_cos). Normalised to a list here so
+        # the missing-column check below covers both shapes with one code path --
+        # a list form that skipped validation would address the wrong columns and
+        # return plausible bearings.
+        srcs = [src] if isinstance(src, str) else list(src)
+        missing = [s for s in srcs if s not in df.columns]
+        if missing:
             raise ValueError(
-                f"derived column '{out_col}' reads '{src}', which is not in the merged "
+                f"derived column '{out_col}' reads {missing}, which are not in the merged "
                 f"frame (columns: {sorted(df.columns)})."
             )
-        # The transform vectorises (deg_to_fraction is np.tan(np.deg2rad(x))),
-        # so hand it the Series rather than calling it 361k times per param.
-        df[out_col] = _TRANSFORMS[tname](df[src].astype(float))
+        # The transforms vectorise, so hand them whole Series rather than calling
+        # them 361k times per param.
+        df[out_col] = _TRANSFORMS[tname](*(df[s].astype(float) for s in srcs))
     return df
 
 

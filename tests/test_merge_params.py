@@ -150,6 +150,57 @@ def test_apply_derived_columns_is_a_noop_when_undeclared():
     assert list(apply_derived_columns(df, {}).columns) == ["mean"]
 
 
+def test_atan2_deg_recovers_the_circular_mean_across_the_wrap():
+    """The defect, stated as a test: 350 deg and 10 deg average to 0, not 180.
+
+    Arithmetic mean of [350, 10] is 180 -- due SOUTH for two nearly-north-facing
+    cells. That is issue #201 in two numbers.
+    """
+    sin_mean = pd.Series([(math.sin(math.radians(350)) + math.sin(math.radians(10))) / 2])
+    cos_mean = pd.Series([(math.cos(math.radians(350)) + math.cos(math.radians(10))) / 2])
+    out = apply_derived_columns(
+        pd.DataFrame({"mean_sin": sin_mean, "mean_cos": cos_mean}),
+        {"hru_aspect": {"from": ["mean_sin", "mean_cos"], "transform": "atan2_deg"}},
+    )
+    assert math.isclose(out["hru_aspect"][0], 0.0, abs_tol=1e-9)
+
+
+def test_atan2_deg_normalises_into_zero_to_360():
+    """numpy's arctan2 returns -180..180; PRMS hru_aspect is 0-360 (TM6B9:603)."""
+    # 225 deg (south-west) -> arctan2 gives -135 without the modulo.
+    df = pd.DataFrame({
+        "mean_sin": [math.sin(math.radians(225)), math.sin(math.radians(90))],
+        "mean_cos": [math.cos(math.radians(225)), math.cos(math.radians(90))],
+    })
+    out = apply_derived_columns(
+        df, {"hru_aspect": {"from": ["mean_sin", "mean_cos"], "transform": "atan2_deg"}}
+    )
+    assert math.isclose(out["hru_aspect"][0], 225.0, abs_tol=1e-9)
+    assert math.isclose(out["hru_aspect"][1], 90.0, abs_tol=1e-9)
+    assert (out["hru_aspect"] >= 0).all() and (out["hru_aspect"] < 360).all()
+
+
+def test_atan2_deg_preserves_nan_for_an_hru_with_no_sloped_cells():
+    """An all-flat HRU has NaN means; hru_aspect must stay NaN, not become 0 (north).
+
+    The fill sweep supplies neighbours' means and Task 3 re-derives from those.
+    """
+    df = pd.DataFrame({"mean_sin": [float("nan")], "mean_cos": [float("nan")]})
+    out = apply_derived_columns(
+        df, {"hru_aspect": {"from": ["mean_sin", "mean_cos"], "transform": "atan2_deg"}}
+    )
+    assert math.isnan(out["hru_aspect"][0])
+
+
+def test_apply_derived_columns_rejects_a_missing_column_in_a_list_source():
+    """The list form gets the same eager validation as the string form."""
+    df = pd.DataFrame({"mean_sin": [0.0]})
+    with pytest.raises(ValueError, match="not in the merged"):
+        apply_derived_columns(
+            df, {"x": {"from": ["mean_sin", "absent"], "transform": "atan2_deg"}}
+        )
+
+
 def test_run_merge_emits_the_declared_derived_column(tmp_path):
     """End to end through run_merge: config -> merged CSV with hru_slope."""
     config = _make_config(tmp_path, source_type="slope")
