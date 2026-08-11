@@ -736,7 +736,7 @@ write_filled_in_place
 
 The interpolated bearing never reaches disk, so the circular-average defect still
 cannot ship — and `resolve_fill_plan`'s raise-on-a-declared-column-the-file-lacks
-survives as the loud, CI-visible tripwire that fires if a `derived_columns:` block is
+survives as the loud fill-sweep-time tripwire that fires if a `derived_columns:` block is
 ever deleted or a merge never re-run. Guard 2 is data-root-gated and SKIPs in CI, so
 it is not a substitute for that tripwire ([test_params_index_ondisk.py:107](../../../tests/test_params_index_ondisk.py#L107)
 says so explicitly).
@@ -861,7 +861,7 @@ def test_a_declared_derived_column_absent_from_the_file_still_raises():
 
     A fabric whose CSV predates the derived column must fail loudly and name the
     one command that fixes it, rather than silently shipping a merged/ product with
-    a PRMS parameter missing. This is the ONLY CI-visible backstop: Guard 2
+    a PRMS parameter missing. This is the ONLY loud backstop: Guard 2
     (test_params_index_ondisk) is data-root-gated and skips in CI.
     """
     df = pd.DataFrame({"hru_id": [1, 2], "mean_sin": [0.1, 0.2], "mean_cos": [0.9, 0.8]})
@@ -932,7 +932,7 @@ The only change is in `run_fill_sweep`. Immediately before `write_filled_in_plac
                 #
                 # They stay declared fillable (CLAUDE.md's "do not fix it by dropping
                 # the column from fill_columns") because resolve_fill_plan's
-                # raise-on-a-declared-column-the-file-lacks is the only CI-visible
+                # raise-on-a-declared-column-the-file-lacks is the only loud
                 # tripwire for a deleted derived_columns block; Guard 2 is
                 # data-root-gated and skips in CI.
                 complete_df = apply_derived_columns(complete_df, declared.derived_columns)
@@ -963,7 +963,7 @@ gap-filled HRUs nobody inspects. The re-derivation overwrites it.
 
 Both derived columns stay declared in fill_columns per CLAUDE.md -- the KNN
 value is overwritten, and the declaration is what keeps resolve_fill_plan's
-raise-on-a-missing-declared-column as the only CI-visible tripwire for a
+raise-on-a-missing-declared-column as the only loud tripwire for a
 deleted derived_columns block (Guard 2 is data-root-gated and skips in CI).
 
 SCOPE EXPANSION: this also changes hru_slope. It was previously KNN-filled
@@ -1016,7 +1016,7 @@ Replace `configs/zonal/zonal_params.yml` lines 132–165 in full:
     # AFTER the KNN pass, so the interpolated bearing is overwritten and never
     # reaches disk. The declaration is kept for the tripwire, not the fill --
     # resolve_fill_plan raises on a declared column the file does not have, which
-    # is the only CI-visible signal that a fabric's aspect CSV predates this change
+    # is the only loud signal that a fabric's aspect CSV predates this change
     # or that the derived_columns block below was deleted. Guard 2 is data-root-
     # gated and skips in CI, so it is not a substitute. Dropping the column from
     # fill_columns to express "not interpolated" is explicitly forbidden by
@@ -1181,7 +1181,7 @@ missing", which post-fill re-derivation makes false. Rewrite the bullet to:
 
 - keep "Do not 'fix' it by dropping the column from `fill_columns`" as the rule;
 - replace the silent-NaN rationale with the real one — the declaration is the only
-  **CI-visible** tripwire for a deleted `derived_columns:` block or an un-re-merged
+  **loud** tripwire for a deleted `derived_columns:` block or an un-re-merged
   fabric, because Guard 2 is data-root-gated and SKIPs in CI;
 - record that the KNN value is overwritten by `run_fill_sweep`'s re-derivation, so
   a derived column is a function of its declared sources on every row;
@@ -1340,7 +1340,7 @@ Run the fill sweep for each fabric, then run Guards 2 and 3 against the data roo
 
 **Deviation from the spec, deliberate.** The spec said the `hru_slope` change would land as "its own commit". It cannot: the re-derivation is one mechanism that applies to every param with `derived_columns`, so there is no separable code change. It lands in Task 3, whose commit message names the `hru_slope` consequence explicitly, and the PR-description callout the spec requires is Task 6 Step 3.
 
-**Ruling applied after the pre-flight scan (2026-08-10).** The plan originally dropped `hru_slope` from `fill_columns` and kept `hru_aspect` out of it. That collides verbatim with [CLAUDE.md:443](../../../CLAUDE.md) — "Do not 'fix' it by dropping the column from `fill_columns`" — and, per [test_params_index_ondisk.py:107](../../../tests/test_params_index_ondisk.py#L107), would have discarded the only CI-visible tripwire for a deleted `derived_columns:` block, since Guard 2 skips in CI. The user ruled CLAUDE.md governs. Both columns are now declared fillable and the re-derivation overwrites the interpolated value, so the safety property and the fix both hold. Tasks 3, 4 and 5 were rewritten before any dispatch; the spec's §Design.3 text ("`hru_aspect` is **not** declared fillable") is superseded on that one point and everything else in it stands.
+**Ruling applied after the pre-flight scan (2026-08-10).** The plan originally dropped `hru_slope` from `fill_columns` and kept `hru_aspect` out of it. That collides verbatim with [CLAUDE.md:443](../../../CLAUDE.md) — "Do not 'fix' it by dropping the column from `fill_columns`" — and, per [test_params_index_ondisk.py:107](../../../tests/test_params_index_ondisk.py#L107), would have discarded the only loud tripwire for a deleted `derived_columns:` block, since Guard 2 skips in CI. The user ruled CLAUDE.md governs. Both columns are now declared fillable and the re-derivation overwrites the interpolated value, so the safety property and the fix both hold. Tasks 3, 4 and 5 were rewritten before any dispatch; the spec's §Design.3 text ("`hru_aspect` is **not** declared fillable") is superseded on that one point and everything else in it stands.
 
 **Type consistency.** `atan2_deg(sin_mean, cos_mean)` is the same name and argument order in Task 1's implementation, Task 1's tests, Task 2's test imports, and Task 4's config. `run_aspect_batch(config, batch_id, logger)` matches the `BATCH_RUNNERS[tag](param_cfg, args.batch_id, logger)` call in `scripts/derive_zonal_params.py:144`. `DeclaredParam.derived_columns` is the same name in `params_index.py`, `_record`, and both `merge_and_fill_params.py` call sites. The emitted column names — `count, mean, std, min, 25%, 50%, 75%, max, sum, n_aspect_cells, mean_sin, mean_cos, flat_frac` — are identical in Task 2's `_STAT_COLUMNS` plus assignments, Task 2's tests, and Task 4's `fill_columns` and `provenance:` blocks.
 
