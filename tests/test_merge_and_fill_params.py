@@ -354,6 +354,11 @@ def test_a_declared_derived_column_absent_from_the_file_still_raises():
     sweep against a real merged CSV. It is the only backstop for this failure mode
     that is not itself data-root-gated into skipping: Guard 2
     (test_params_index_ondisk) is data-root-gated and skips in CI.
+
+    Scope, precisely: a CSV that PREDATES the block. The mirror-image failure -- the
+    block DELETED while the column stays declared and on disk -- cannot reach this
+    raise at all, and is pinned separately by
+    tests/test_params_index.py::test_the_two_derived_columns_are_still_declared.
     """
     df = pd.DataFrame({"hru_id": [1, 2], "mean_sin": [0.1, 0.2], "mean_cos": [0.9, 0.8]})
     with pytest.raises(ValueError, match="not present in"):
@@ -836,6 +841,44 @@ class TestRunFillSweep:
         # KNN over the two bearings would have produced.
         filled = float(out.loc[out["hru_id"] == 2, "hru_aspect"].iloc[0])
         assert min(filled, 360.0 - filled) < 1.0
+
+    def test_the_unfilled_copy_is_not_mutated_on_the_no_gap_path(self, tmp_path):
+        """`_unfilled/` must be the TRUE pre-fill frame, not a re-derived one.
+
+        On the no-gap path there is nothing to fill, so `fill_missing_values_knn`
+        returns its argument unchanged and `apply_fabric_columns` is skipped --
+        `complete_df` IS `param_df`. `apply_derived_columns` assigns into the frame
+        it is handed, so without a copy the re-derivation lands in the very frame
+        `write_filled_in_place` preserves as the pre-fill record, destroying it
+        irreversibly on a filesystem with no version control.
+
+        Detectable only when the on-disk derived value DISAGREES with its source,
+        which is exactly the state re-derivation exists to correct: the stale 0.5
+        below must survive into `_unfilled/` while `merged/` gets tan(radians(45)).
+        """
+        import logging
+
+        pf = tmp_path / "nhm_slope_params.csv"
+        pd.DataFrame({
+            "hru_id": [1, 2, 3],           # no gap: expected_max=3, all present
+            "mean": [45.0, 45.0, 45.0],
+            "hru_slope": [0.5, 0.5, 0.5],  # stale -- disagrees with tan(45 deg) == 1
+        }).to_csv(pf, index=False)
+
+        declared = _declared(
+            "slope", "nhm_slope_params.csv", ["mean", "hru_slope"],
+            derived_columns={"hru_slope": {"from": "mean", "transform": "deg_to_fraction"}},
+        )
+
+        failed = maf.run_fill_sweep(
+            [(declared, pf)], self._merged_gdf(), expected_max=3, id_feature="hru_id",
+            k_neighbors=1, logger=logging.getLogger("test_unfilled_not_mutated"),
+        )
+        assert failed == []
+
+        np.testing.assert_allclose(pd.read_csv(pf)["hru_slope"].to_numpy(), 1.0, rtol=1e-9)
+        preserved = pd.read_csv(pf.parent / maf.UNFILLED_DIRNAME / pf.name)
+        np.testing.assert_allclose(preserved["hru_slope"].to_numpy(), 0.5, rtol=1e-12)
 
     def test_hru_slope_is_rederived_so_it_agrees_with_its_source(self, tmp_path):
         """SCOPE EXPANSION beyond #201, deliberate: see the spec.
