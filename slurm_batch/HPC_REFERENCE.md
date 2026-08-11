@@ -1280,6 +1280,29 @@ decisive.
 Without it, "we rebuilt it" and "it was already correct" are indistinguishable
 afterwards. Tracked as #215.
 
+### Re-running one param whose upstream is already merged
+
+`submit_zonal_params.sh` chains `ssflux` on `slope`'s merge job when both are in the
+same submission. When `slope` is **not** in the run, the wrapper now accepts a merged
+`nhm_slope_params.csv` that is already on disk, provided no per-batch CSV under
+`params/slope/` is newer than it:
+
+```bash
+ZONAL_PARAMS="ssflux" ./slurm_batch/submit_zonal_params.sh "$BATCHES" gfv2
+#   slope: using merged CSV already on disk (not in this run)
+```
+
+It still refuses, loudly, when the merged file is **missing** or **stale** (older than
+its own per-batch inputs) — the two cases where the downstream param would silently read
+the wrong thing. A stale merge names the fix:
+
+```bash
+pixi run --as-is python scripts/derive_zonal_params.py --mode merge --param slope --fabric gfv2
+```
+
+Note ssflux's normalisation is fabric-wide, so an ssflux re-run is **all-or-nothing**
+per fabric — submit every batch, never a subset.
+
 ### Single-batch rerun
 
 To rerun a single failed batch within an array job:

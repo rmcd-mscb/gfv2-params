@@ -36,6 +36,9 @@ FABRIC="${2:-gfv2}"
 BASE_CONFIG="${3:-configs/base_config.yml}"
 MAX_CONCURRENT="${4:-${SUBMIT_JOBS_MAX_CONCURRENT:-4}}"
 MANIFEST="$FABRIC_DIR/manifest.yml"
+# {data_root}/{fabric} -- the batches dir is documented as {fabric}/batches/, and
+# dirname strips any trailing slash. Used by the Step B on-disk prereq check.
+FABRIC_ROOT="$(dirname "$FABRIC_DIR")"
 
 if [ ! -f "$MANIFEST" ]; then
     echo "Error: manifest not found: $MANIFEST"
@@ -129,15 +132,48 @@ for PARAM in "${PARAMS[@]}"; do
     fi
 
     # Step B: upstream-merge prereq (e.g., ssflux needs merged slope).
+    #
+    # Two ways the prereq can be satisfied, and BOTH are legitimate:
+    #   1. $UP is in THIS submission -> chain on its merge job (the common case);
+    #   2. $UP is not in this run, but its merged CSV is already on disk and is
+    #      not older than the per-batch CSVs it was built from.
+    #
+    # Case 2 used to be rejected outright, which meant that re-running ssflux
+    # alone after a completed slope rebuild required re-running all 64 slope
+    # batches purely to re-satisfy a job-ordering check. The guard's job is to
+    # stop $PARAM reading a MISSING or STALE merge, not to insist the merge
+    # happen inside this particular invocation.
     if [ -n "${NEEDS_MERGE_OF[$PARAM]:-}" ]; then
         UP="${NEEDS_MERGE_OF[$PARAM]}"
         UP_MERGE_ID="${MERGE_JOB_BY_PARAM[$UP]:-}"
-        if [ -z "$UP_MERGE_ID" ]; then
-            echo "ERROR: $PARAM needs merged $UP but no merge job submitted for $UP yet." >&2
-            echo "       Ensure $UP appears before $PARAM in PARAMS." >&2
-            exit 1
+        if [ -n "$UP_MERGE_ID" ]; then
+            EXTRA_DEPS+=("afterok:$UP_MERGE_ID")
+        else
+            UP_MERGED="$FABRIC_ROOT/params/merged/nhm_${UP}_params.csv"
+            UP_BATCH_DIR="$FABRIC_ROOT/params/$UP"
+            if [ ! -f "$UP_MERGED" ]; then
+                echo "ERROR: $PARAM needs merged $UP, which is not in this run and" >&2
+                echo "       does not exist on disk: $UP_MERGED" >&2
+                echo "       Either add $UP before $PARAM in PARAMS/ZONAL_PARAMS, or" >&2
+                echo "       build it first." >&2
+                exit 1
+            fi
+            # A per-batch CSV newer than the merged file means the merge predates
+            # the zonal pass that produced its inputs -- $PARAM would read a stale
+            # merge, silently. Cheaper and more honest than comparing timestamps
+            # by hand: ask find whether any input is newer than the output.
+            if [ -d "$UP_BATCH_DIR" ] && \
+               [ -n "$(find "$UP_BATCH_DIR" -maxdepth 1 -name '*.csv' -newer "$UP_MERGED" -print -quit 2>/dev/null)" ]; then
+                echo "ERROR: $PARAM needs merged $UP, which is STALE: at least one" >&2
+                echo "       per-batch CSV in $UP_BATCH_DIR is newer than" >&2
+                echo "       $UP_MERGED" >&2
+                echo "       Re-merge it first:" >&2
+                echo "         pixi run --as-is python scripts/derive_zonal_params.py \\" >&2
+                echo "           --mode merge --param $UP --fabric $FABRIC" >&2
+                exit 1
+            fi
+            echo "  $UP: using merged CSV already on disk (not in this run)"
         fi
-        EXTRA_DEPS+=("afterok:$UP_MERGE_ID")
     fi
 
     # Combine deps into a single --dependency arg (or empty).
