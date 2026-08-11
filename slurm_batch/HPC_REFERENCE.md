@@ -1255,6 +1255,31 @@ one file edit, no new YAMLs. Two cases:
 
 ## Partial reruns & recovery
 
+### Which products are stale? (audit before rebuilding)
+
+```bash
+pixi run --as-is python scripts/diagnose/audit_product_staleness.py --fabric gfv2
+```
+
+Reports every `merged/` product whose mtime predates **either** the last commit
+touching its builder **or** its `source_raster`. Both axes are needed, and the
+second is the one that is easy to forget: `nhm_aspect_params.csv` was stale on 413
+of 361,471 gfv2 HRUs by up to 89° while its builder and config entry were untouched
+— the aspect rasters had been rebuilt underneath it (#149/#151). A `.vrt` is
+resolved through to its newest referenced tile, because a VRT's own mtime moves
+independently of its data in both directions.
+
+It is a **candidate generator, not a gate** — it always exits 0 and never rebuilds.
+The CODE axis over-selects badly: a comment-only commit touching a builder trips it
+exactly as hard as a rewrite. Triage a candidate by reading what actually changed,
+then settle it by re-running its builder over **one batch** against today's inputs
+and diffing that batch against the on-disk product — minutes of compute, and
+decisive.
+
+**Keep the pre-rebuild copy** (`cp <product>.csv <product>.csv.pre<issue>.bak`).
+Without it, "we rebuilt it" and "it was already correct" are indistinguishable
+afterwards. Tracked as #215.
+
 ### Single-batch rerun
 
 To rerun a single failed batch within an array job:
