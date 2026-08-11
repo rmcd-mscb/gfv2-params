@@ -168,15 +168,7 @@ def run_aspect_batch(config: dict, batch_id: int, logger) -> None:
     # `slope == 0` is False where slope is NaN, so nodata never counts as flat.
     flat = slope_da == FLAT_SLOPE
     sloped_aspect = aspect_da.where(~flat)
-    # Cast to float64 before the trig ops: the CONUS aspect/slope tiles are
-    # float32 (~7 significant digits), and sin/cos of a value near the 0/360
-    # wrap can leave a ~1e-7 per-cell residual -- large enough that an exactly
-    # symmetric HRU's mean_sin lands a hair on the negative side of zero rather
-    # than at literal 0.0, wrapping through atan2_deg's `% 360` to ~359.99999
-    # instead of ~0.00001 (both the same bearing, but math.isclose(..., 0.0)
-    # cannot tell that). float64 keeps the residual within the ~1e-13 ULP noise
-    # atan2_deg's double modulo is built to absorb.
-    radians = np.deg2rad(sloped_aspect.astype("float64"))
+    radians = np.deg2rad(sloped_aspect)
     # Arithmetic on a DataArray keeps coords but the .rio accessor needs the CRS
     # restated before UserTiffData reads it back off the array.
     sin_da = np.sin(radians).rio.write_crs(aspect_da.rio.crs)
