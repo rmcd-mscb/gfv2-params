@@ -13,8 +13,10 @@ from scripts.diagnose.audit_product_staleness import (
     _source_date,
     builder_paths,
     classify,
+    consumes_map,
     derivation_date,
     parse_vrt_sources,
+    propagate_upstream,
 )
 
 D = dt.date
@@ -215,3 +217,74 @@ class TestDerivationDate:
         d = tmp_path / "empty"
         d.mkdir()
         assert derivation_date(d, D(2026, 7, 15)) == D(2026, 7, 15)
+
+
+class TestConsumesMap:
+    """Dependencies are DERIVED from the config keys builders actually read, so they
+    cannot drift from the truth the way a second hand-maintained declaration would."""
+
+    ENTRIES = [
+        {"name": "slope", "merged_file": "nhm_slope_params.csv"},
+        {"name": "ssflux", "merged_file": "nhm_ssflux_params.csv",
+         "merged_slope_file": "{data_root}/{fabric}/params/merged/nhm_slope_params.csv"},
+        {"name": "elevation", "merged_file": "nhm_elevation_params.csv"},
+    ]
+
+    def test_finds_the_real_ssflux_slope_edge(self):
+        assert consumes_map(self.ENTRIES) == {"ssflux": {"slope"}}
+
+    def test_a_params_own_merged_file_is_not_a_self_dependency(self):
+        entries = [{"name": "x", "merged_file": "nhm_x_params.csv",
+                    "other": "/some/path/nhm_x_params.csv"}]
+        assert consumes_map(entries) == {}
+
+    def test_unrelated_paths_are_ignored(self):
+        entries = [{"name": "a", "merged_file": "nhm_a_params.csv",
+                    "source_raster": "/data/shared/conus/vrt/elevation.vrt"}]
+        assert consumes_map(entries) == {}
+
+
+class TestPropagateUpstream:
+    def _row(self, name, product, flags=None):
+        return {"param": name, "product": product, "builder": None,
+                "source": None, "flags": list(flags or [])}
+
+    def test_consumer_inherits_a_stale_dependency_even_when_far_newer(self):
+        """The ssflux case, and the reason an 'is my input newer than me?' test alone
+        is not enough: ssflux (2026-08-10) IS newer than slope (2026-05-29), yet it was
+        built from a slope product that predates the 2026-07-01 slope.vrt rebuild."""
+        rows = [self._row("slope", D(2026, 5, 29), ["SOURCE newer"]),
+                self._row("ssflux", D(2026, 8, 10))]
+        out = {r["param"]: r["flags"] for r in propagate_upstream(rows, {"ssflux": {"slope"}})}
+        assert out["ssflux"] == ["UPSTREAM slope stale"]
+
+    def test_consumer_flagged_when_its_dependency_is_newer_than_it(self):
+        rows = [self._row("slope", D(2026, 8, 10)), self._row("ssflux", D(2026, 5, 1))]
+        out = {r["param"]: r["flags"] for r in propagate_upstream(rows, {"ssflux": {"slope"}})}
+        assert out["ssflux"] == ["UPSTREAM slope newer"]
+
+    def test_clean_dependency_leaves_the_consumer_alone(self):
+        rows = [self._row("slope", D(2026, 5, 1)), self._row("ssflux", D(2026, 8, 10))]
+        out = {r["param"]: r["flags"] for r in propagate_upstream(rows, {"ssflux": {"slope"}})}
+        assert out["ssflux"] == []
+
+    def test_staleness_propagates_along_a_chain(self):
+        """a stale -> b inherits -> c inherits from b."""
+        rows = [self._row("a", D(2026, 5, 1), ["SOURCE newer"]),
+                self._row("b", D(2026, 8, 1)), self._row("c", D(2026, 8, 2))]
+        out = {r["param"]: r["flags"] for r in
+               propagate_upstream(rows, {"b": {"a"}, "c": {"b"}})}
+        assert out["b"] == ["UPSTREAM a stale"]
+        assert out["c"] == ["UPSTREAM b stale"]
+
+    def test_a_cycle_terminates(self):
+        """A cyclic config must not hang the audit; the loop is bounded by row count."""
+        rows = [self._row("a", D(2026, 5, 1), ["CODE newer"]), self._row("b", D(2026, 5, 2))]
+        out = propagate_upstream(rows, {"a": {"b"}, "b": {"a"}})
+        assert all(isinstance(r["flags"], list) for r in out)
+
+    def test_a_missing_dependency_row_is_skipped(self):
+        """A param declared in config but not built for this fabric has no row."""
+        rows = [self._row("ssflux", D(2026, 8, 10))]
+        out = propagate_upstream(rows, {"ssflux": {"slope"}})
+        assert out[0]["flags"] == []

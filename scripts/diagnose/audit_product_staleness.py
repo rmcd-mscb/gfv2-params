@@ -28,6 +28,13 @@ anything filled since it was built. The audit uses the per-batch CSVs under
 `{output_dir}/{param}/` instead -- see `derivation_date`, and the oregon lulc case
 that made it necessary.
 
+THIRD AXIS: CASCADES. A product is also stale when something it CONSUMES is stale,
+even if the product itself is far newer -- `ssflux` was derived 2026-08-10 from a
+`slope` product whose own derivation was 2026-05-29. The dependency is derived from
+the config (`ssflux.merged_slope_file` names slope's merged_file), not separately
+declared, so it cannot drift from what the builder reads. Raster-DAG cascades
+(the depstor chain) are NOT covered -- see #217.
+
 WHAT THIS IS NOT. Both axes are mtime/commit-date heuristics that OVER-SELECT, and
 axis 1 over-selects badly: a comment-only docstring commit touching a builder trips it
 just as hard as a rewrite. In the run that motivated this script, 3 of 6 axis-1 flags
@@ -124,6 +131,75 @@ def derivation_date(per_batch_dir: Path, merged_date):
         return merged_date
     dates = [d for d in (_mdate(f) for f in per_batch_dir.glob("*.csv")) if d]
     return max(dates) if dates else merged_date
+
+
+def consumes_map(entries: list[dict]) -> dict[str, set[str]]:
+    """param -> the params whose `merged_file` it references in its own config entry.
+
+    DERIVED, not declared. `ssflux` names `merged_slope_file:
+    {data_root}/{fabric}/params/merged/nhm_slope_params.csv`, so the dependency is
+    already stated in the key the builder actually reads. A hand-maintained
+    `consumes:` block would be a second declaration of the same fact, free to drift
+    from the first -- and the drift would be silent, which is the failure mode this
+    whole tool exists to catch.
+
+    Only ZONAL cross-param file references are visible here. The depstor cascade
+    (`wbody_connectivity -> dprst -> routing -> drains_*`) is a RASTER DAG in
+    depstor_rasters.yml, not a merged-CSV reference, and is out of scope -- see #217.
+    """
+    by_file = {e["merged_file"]: e["name"] for e in entries if e.get("merged_file")}
+    out: dict[str, set[str]] = {}
+    for e in entries:
+        deps = set()
+        for key, val in e.items():
+            if key == "merged_file" or not isinstance(val, str):
+                continue
+            dep = by_file.get(Path(val).name)
+            if dep and dep != e["name"]:
+                deps.add(dep)
+        if deps:
+            out[e["name"]] = deps
+    return out
+
+
+def propagate_upstream(rows: list[dict], consumes: dict[str, set[str]]) -> list[dict]:
+    """Add an UPSTREAM flag to any product whose dependency is stale or newer than it.
+
+    Two distinct conditions, and BOTH are needed:
+
+      * the dependency is itself a candidate -- the consumer inherits its staleness
+        even though the consumer may be far newer. This is the ssflux case: ssflux
+        was derived 2026-08-10 from a slope product whose own derivation was
+        2026-05-29 and predates the 2026-07-01 slope.vrt rebuild. A "is my input
+        newer than me?" test alone reports ssflux current, because it is.
+      * the dependency is NEWER than the consumer -- the consumer read an older
+        version of it.
+
+    Propagated to a fixed point so a chain of any length converges; the loop is
+    bounded by the row count, so a cyclic config cannot hang it.
+    """
+    by_name = {r["param"]: r for r in rows}
+    for _ in range(len(rows)):
+        changed = False
+        for name, deps in consumes.items():
+            row = by_name.get(name)
+            if row is None:
+                continue
+            for dep in deps:
+                drow = by_name.get(dep)
+                if drow is None:
+                    continue
+                inherits = bool(drow["flags"])
+                newer = drow["product"] > row["product"]
+                if (inherits or newer) and not any(
+                    f.startswith(f"UPSTREAM {dep}") for f in row["flags"]
+                ):
+                    why = "stale" if inherits else "newer"
+                    row["flags"].append(f"UPSTREAM {dep} {why}")
+                    changed = True
+        if not changed:
+            break
+    return rows
 
 
 def classify(product, builder, source) -> list[str]:
@@ -225,7 +301,7 @@ def audit(fabric: str) -> list[dict]:
         })
     for r in rows:
         r["flags"] = classify(r["product"], r["builder"], r["source"])
-    return rows
+    return propagate_upstream(rows, consumes_map(zc.get("params", [])))
 
 
 def main() -> int:
