@@ -84,10 +84,14 @@ params:
     categorical: false
     merged_file: nhm_slope_params.csv
     # Same value-column set as elevation (observed on-disk; same zonal script),
-    # plus the derived hru_slope below. hru_slope IS declared fillable: without
-    # it, an HRU absent from the merged CSV would get `mean` KNN-filled but land
-    # NaN in the PRMS parameter itself. It is a monotone transform of `mean`, so
-    # interpolating it directly is exactly as defensible as interpolating `mean`.
+    # plus the derived hru_slope below.
+    # hru_slope IS declared fillable, but the KNN value is not what ships:
+    # merge_and_fill_params re-derives every derived column from its filled sources
+    # after the KNN pass, so hru_slope is tan(radians(mean)) on every row including
+    # synthesized ones. It was previously interpolated independently of `mean`,
+    # which let a filled row carry hru_slope != tan(radians(mean)) -- a derived
+    # column disagreeing with its own declared source inside one file. The
+    # declaration is kept for the tripwire below, not for the fill.
     #
     # NB: this makes a re-merge a PREREQUISITE of the next fill sweep on any
     # fabric -- resolve_fill_plan raises on a declared column the file does not
@@ -131,30 +135,85 @@ params:
         sum: within-HRU sum
 
   - name: aspect
-    script: zonal
+    script: aspect
     source_raster: "{data_root}/shared/conus/vrt/aspect.vrt"
+    # Read ONLY to build the flat mask. RichDEM does not flag flat cells -- it
+    # assigns them 270 deg (due west), 2.8% of a VPU 01 window and 99% coincident
+    # with slope == 0. ArcGIS, which TM6B9:603 cites, writes -1 instead. Both VRTs
+    # derive from the same per-VPU NEDSnapshot DEM, so the clips co-register by
+    # construction; the runner asserts it anyway because a half-cell offset would
+    # mask the wrong cells and every downstream number would still look plausible.
+    slope_raster: "{data_root}/shared/conus/vrt/slope.vrt"
     categorical: false
     merged_file: nhm_aspect_params.csv
-    # Same value-column set as elevation (observed on-disk; same zonal script).
-    fill_columns: [count, mean, std, min, "25%", "50%", "75%", max, sum]
+    # `mean` and the eight other raw stats are the UNMASKED pass-1 statistics,
+    # unchanged from the pre-fix product and as safe to interpolate as elevation's.
+    # mean_sin/mean_cos are linear and safe.
+    #
+    # hru_aspect is declared here even though KNN must NOT be what determines it:
+    # merge_and_fill_params re-derives every derived column from its filled sources
+    # AFTER the KNN pass, so the interpolated bearing is overwritten and never
+    # reaches disk. The declaration is kept for the tripwire, not the fill --
+    # resolve_fill_plan raises on a declared column the file does not have, which
+    # is the only CI-visible signal that a fabric's aspect CSV predates this change
+    # or that the derived_columns block below was deleted. Guard 2 is data-root-
+    # gated and skips in CI, so it is not a substitute. Dropping the column from
+    # fill_columns to express "not interpolated" is explicitly forbidden by
+    # CLAUDE.md's derived_columns/fill_columns rule.
+    #
+    # Consequence, deliberate: a fabric whose aspect CSV predates hru_aspect will
+    # RAISE on the fill sweep until `derive_zonal_params.py` has re-run the aspect
+    # zonal pass and merge for it.
+    fill_columns:
+      [
+        count,
+        mean,
+        std,
+        min,
+        "25%",
+        "50%",
+        "75%",
+        max,
+        sum,
+        n_aspect_cells,
+        flat_frac,
+        mean_sin,
+        mean_cos,
+        hru_aspect,
+      ]
+    # TM6B9:603: hru_aspect = atan2[mean(sin(aspect)), mean(cos(aspect))], 0-360
+    # clockwise from north. The two-argument form is not a convenience: a circular
+    # mean is not a function of any single statistic, so unlike hru_slope this
+    # cannot be recovered from `mean` after the fact (issue #201).
+    #
+    # merge_and_fill_params RE-DERIVES this after the KNN pass, so a gap-filled HRU
+    # gets interpolated mean_sin/mean_cos and a recomputed bearing. That ordering is
+    # load-bearing: KNN on hru_aspect itself averages 350 deg and 10 deg to 180 deg
+    # -- the defect, reappearing on exactly the HRUs nobody inspects.
+    derived_columns:
+      hru_aspect:
+        from: [mean_sin, mean_cos]
+        transform: atan2_deg
     prms:
-      builder: zonal_runners/zonal.py
-      columns: {}
-      # DEFECTIVE, not merely renamed. `mean` is an ARITHMETIC mean of a CIRCULAR
-      # variable; TM6B9:603 requires atan2(mean(sin), mean(cos)). Measured across
-      # all 361,471 gfv2 HRUs the median is 179.4 deg (due south), IQR 151.7-207.5
-      # -- that central tendency is the artifact, not the terrain. Unlike slope
-      # above there is no recovery: a circular mean cannot be reconstructed from
-      # an arithmetic one. Fixing it needs sin/cos rasters and a second zonal
-      # pass. Tracked as issue #201.
-      defects:
-        mean:
+      builder: zonal_runners/aspect.py + zonal_runners/merge.py (derived_columns)
+      columns:
+        hru_aspect:
           prms: hru_aspect
           processes: [PRMSSolarGeometry, PRMSAtmosphere]
-          reason: arithmetic mean of a circular variable; TM6B9:603 requires atan2(mean(sin), mean(cos))
-          recovery: none -- not reconstructable from what is on disk
-          issue: 201
       provenance:
+        mean: >-
+          arithmetic mean of a CIRCULAR variable -- retained as the auditable record of
+          the pre-#201 product, NOT hru_aspect. Median 179.4 deg across gfv2's 361,471
+          HRUs, IQR 151.7-207.5: that central tendency is the artifact, not the terrain.
+        mean_sin: coverage-weighted mean of sin(aspect) over non-flat cells
+        mean_cos: coverage-weighted mean of cos(aspect) over non-flat cells
+        n_aspect_cells: >-
+          coverage-weighted non-flat cell count -- the population hru_aspect is
+          derived from
+        flat_frac: >-
+          area fraction of the HRU with slope == 0, which RichDEM reports as 270 deg
+          and which has no down slope direction; 1.0 means hru_aspect is
+          neighbour-interpolated rather than measured
         count: exactextract cell count
         std: within-HRU standard deviation
         min: within-HRU minimum

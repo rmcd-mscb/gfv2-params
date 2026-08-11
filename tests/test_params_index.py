@@ -235,15 +235,29 @@ def test_prms_runoff_has_the_expected_parameter_count():
 
 
 def test_params_for_process_never_returns_a_defective_column():
-    """aspect's `mean` names PRMSSolarGeometry/PRMSAtmosphere in prms.defects.
+    """`params_for_process` must never surface a column declared `defects`.
 
-    Returning it here would hand a caller a broken column under a correct-looking
-    parameter name -- the exact failure the defects/columns split exists to prevent.
+    Returning one would hand a caller a broken column under a correct-looking
+    parameter name -- the exact failure the defects/columns split exists to
+    prevent. Generic over the live declarations rather than hardcoding aspect,
+    which was the motivating example (arithmetic mean of a circular variable,
+    TM6B9:603) until hru_aspect started shipping a real circular mean and `mean`
+    moved from `defects` to `provenance` (issue #201) -- the guard must keep
+    working for the next defect, not just document this one.
     """
+    declared = pi.load_declared_params()
+    for d in declared:
+        for col, spec in (d.prms.get("defects") or {}).items():
+            for process in spec.get("processes") or []:
+                assert (col, d) not in pi.params_for_process(process, declared), (
+                    d.name, col, process
+                )
+
+    # aspect's hru_aspect (issue #201, now a real circular mean) and slope's
+    # hru_slope are the only two columns feeding these processes today.
     for process in ("PRMSSolarGeometry", "PRMSAtmosphere"):
-        hits = pi.params_for_process(process)
-        assert all(d.name != "aspect" for _, d in hits), process
-        assert {col for col, _ in hits} == {"hru_slope"}
+        hits = pi.params_for_process(process, declared)
+        assert {col for col, _ in hits} == {"hru_slope", "hru_aspect"}
 
 
 def test_generated_index_is_up_to_date():
