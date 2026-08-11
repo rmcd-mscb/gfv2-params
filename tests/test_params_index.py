@@ -239,22 +239,43 @@ def test_params_for_process_never_returns_a_defective_column():
 
     Returning one would hand a caller a broken column under a correct-looking
     parameter name -- the exact failure the defects/columns split exists to
-    prevent. Generic over the live declarations rather than hardcoding aspect,
-    which was the motivating example (arithmetic mean of a circular variable,
-    TM6B9:603) until hru_aspect started shipping a real circular mean and `mean`
-    moved from `defects` to `provenance` (issue #201) -- the guard must keep
-    working for the next defect, not just document this one.
+    prevent (`params_for_process`'s own docstring: "Reads prms.columns ONLY --
+    never prms.defects").
+
+    A SYNTHETIC fixture, not the live config. After the aspect fix (issue #201)
+    there are zero non-empty `defects:` blocks left anywhere in `configs/` --
+    aspect's `mean` was the only one. A version of this test that iterates live
+    declarations therefore has nothing to check and cannot fail no matter how
+    `params_for_process` is implemented: verified by mutation, merging
+    `{**columns, **defects}` inside `params_for_process` left a config-driven
+    version of this test green. The fixture below carries both a `columns` and a
+    `defects` entry on the SAME process so the assertion proves discrimination
+    between the two buckets, not merely an empty result.
+    """
+    declared = [
+        pi.DeclaredParam(
+            "synthetic",
+            "nhm_x.csv",
+            [],
+            {},
+            {
+                "columns": {"good": {"prms": "hru_good", "processes": ["PRMSAtmosphere"]}},
+                "defects": {"bad": {"prms": "hru_bad", "processes": ["PRMSAtmosphere"]}},
+            },
+        )
+    ]
+    hits = pi.params_for_process("PRMSAtmosphere", declared)
+    assert {col for col, _ in hits} == {"good"}
+
+
+def test_params_for_process_hru_slope_and_hru_aspect_feed_solargeometry_and_atmosphere():
+    """Concrete regression check against the real config (not a fixture).
+
+    aspect's hru_aspect (issue #201, now a real circular mean) and slope's
+    hru_slope are the only two columns feeding PRMSSolarGeometry/PRMSAtmosphere
+    today -- both are legitimate `prms.columns` entries; neither is `defects`.
     """
     declared = pi.load_declared_params()
-    for d in declared:
-        for col, spec in (d.prms.get("defects") or {}).items():
-            for process in spec.get("processes") or []:
-                assert (col, d) not in pi.params_for_process(process, declared), (
-                    d.name, col, process
-                )
-
-    # aspect's hru_aspect (issue #201, now a real circular mean) and slope's
-    # hru_slope are the only two columns feeding these processes today.
     for process in ("PRMSSolarGeometry", "PRMSAtmosphere"):
         hits = pi.params_for_process(process, declared)
         assert {col for col, _ in hits} == {"hru_slope", "hru_aspect"}
