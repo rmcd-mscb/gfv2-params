@@ -73,11 +73,39 @@ def _run(batches, params, tmp_path):
 
 class TestUpstreamMergePrereq:
     def test_upstream_in_the_same_run_chains_on_its_merge_job(self, tmp_path):
-        """The common path, unchanged: slope before ssflux chains afterok."""
+        """The common path, unchanged: slope before ssflux chains afterok.
+
+        Asserting only `"merge afterok" in stdout` would be worthless -- the script
+        prints that line for EVERY param unconditionally, so it stays green even if
+        Step B is deleted outright. What distinguishes case 1 from case 2 is that the
+        on-disk branch is NOT taken.
+        """
         _, batches = _fabric(tmp_path)
         r = _run(batches, "slope ssflux", tmp_path)
         assert r.returncode == 0, r.stderr
         assert "merge afterok" in r.stdout
+        assert "using merged CSV already on disk" not in r.stdout
+
+    def test_upstream_present_but_ordered_after_is_rejected(self, tmp_path):
+        """The third case, and the one that can corrupt a whole product.
+
+        `MERGE_JOB_BY_PARAM` is filled as the loop walks PARAMS, so an empty entry
+        means EITHER "not in this run" OR "in this run, not reached yet". Treating
+        the second as the first submits ssflux with no dependency while a slope
+        rebuild runs concurrently; ssflux reads merged slope at ZONAL time and its
+        normalisation is fabric-wide, so the entire product is wrong.
+
+        A current on-disk merge is deliberately present here: the point is that the
+        wrapper must refuse ANYWAY, because the file it would use is about to be
+        replaced by the slope job in this very submission.
+        """
+        _, batches = _fabric(tmp_path)
+        r = _run(batches, "ssflux slope", tmp_path)
+        assert r.returncode != 0
+        assert "AFTER" in r.stderr
+        assert "Reorder" in r.stderr
+        # The false reassurance the regression printed must be gone.
+        assert "not in this run" not in r.stdout
 
     def test_upstream_already_merged_on_disk_is_accepted(self, tmp_path):
         """The case that used to be rejected. ssflux alone, with a current merged

@@ -133,21 +133,39 @@ for PARAM in "${PARAMS[@]}"; do
 
     # Step B: upstream-merge prereq (e.g., ssflux needs merged slope).
     #
-    # Two ways the prereq can be satisfied, and BOTH are legitimate:
-    #   1. $UP is in THIS submission -> chain on its merge job (the common case);
-    #   2. $UP is not in this run, but its merged CSV is already on disk and is
-    #      not older than the per-batch CSVs it was built from.
+    # THREE cases, only two of which are legitimate. MERGE_JOB_BY_PARAM is
+    # populated as the loop goes, so an empty entry means EITHER "$UP is not in
+    # this run" OR "$UP is in this run but has not been reached yet" -- and the
+    # second is a race, not a green light:
     #
-    # Case 2 used to be rejected outright, which meant that re-running ssflux
-    # alone after a completed slope rebuild required re-running all 64 slope
-    # batches purely to re-satisfy a job-ordering check. The guard's job is to
-    # stop $PARAM reading a MISSING or STALE merge, not to insist the merge
-    # happen inside this particular invocation.
+    #   1. $UP already submitted earlier in THIS loop -> chain on its merge job;
+    #   2. $UP absent from this run entirely -> use the merged CSV on disk, if it
+    #      exists and is not older than the per-batch CSVs it was built from;
+    #   3. $UP present in this run but LATER in the list -> hard error.
+    #
+    # Case 2 used to be rejected outright, which meant re-running ssflux alone
+    # after a completed slope rebuild required re-running all 64 slope batches
+    # purely to re-satisfy a job-ordering check. The guard's job is to stop
+    # $PARAM reading a MISSING or STALE merge, not to insist the merge happen
+    # inside this particular invocation.
+    #
+    # Case 3 must NOT fall through to case 2. `ZONAL_PARAMS="ssflux slope"` would
+    # otherwise submit ssflux against the on-disk slope with no dependency while
+    # a slope rebuild runs concurrently -- ssflux reads merged slope at ZONAL
+    # time, and its normalisation is fabric-wide, so the whole product is wrong,
+    # not one batch. The pre-existing hard error covered this; it is restored.
     if [ -n "${NEEDS_MERGE_OF[$PARAM]:-}" ]; then
         UP="${NEEDS_MERGE_OF[$PARAM]}"
         UP_MERGE_ID="${MERGE_JOB_BY_PARAM[$UP]:-}"
         if [ -n "$UP_MERGE_ID" ]; then
             EXTRA_DEPS+=("afterok:$UP_MERGE_ID")
+        elif printf '%s\n' "${PARAMS[@]}" | grep -qxF -- "$UP"; then
+            echo "ERROR: $PARAM needs merged $UP, and $UP IS in this run but comes" >&2
+            echo "       AFTER $PARAM, so its merge job does not exist yet." >&2
+            echo "       Reorder so $UP precedes $PARAM in PARAMS/ZONAL_PARAMS." >&2
+            echo "       (Falling back to the on-disk merge here would submit" >&2
+            echo "        $PARAM against a $UP that is being rebuilt concurrently.)" >&2
+            exit 1
         else
             UP_MERGED="$FABRIC_ROOT/params/merged/nhm_${UP}_params.csv"
             UP_BATCH_DIR="$FABRIC_ROOT/params/$UP"
