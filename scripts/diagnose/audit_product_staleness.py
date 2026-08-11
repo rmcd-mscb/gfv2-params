@@ -14,8 +14,13 @@ touched. What changed was the input -- every aspect source tile was rebuilt on
 would have classified that product verified-current.
 
 The same check then found `nhm_elevation_params.csv` (2026-05-29) predating
-`elevation.vrt`, and a single-batch diff confirmed drift on ~99.9% of HRUs in both
-border and interior batches (median ~0.1 m, max 2.7 m).
+`elevation.vrt`. The full rebuild confirmed it on every fabric -- gfv2 99.9% of HRUs
+(median 0.14 m, max 22.6 m), oregon 99.9% (median 0.46 m), tjc 99.8%.
+
+Note what oregon proves: its product was built 2026-07-25, AFTER every elevation tile
+(<= 2026-07-01), and it was still drifted. A VRT rewrite alone moved it. `_source_date`
+therefore takes the LATER of a VRT's own mtime and its newest tile -- see its docstring
+for why taking only the tiles was a false-negative bug.
 
 WHAT THIS IS NOT. Both axes are mtime/commit-date heuristics that OVER-SELECT, and
 axis 1 over-selects badly: a comment-only docstring commit touching a builder trips it
@@ -72,10 +77,9 @@ def builder_paths(builder_field: str | None) -> list[str]:
 def parse_vrt_sources(xml_text: str, base: Path) -> list[Path]:
     """Every file a VRT references, resolved against the VRT's own directory.
 
-    A VRT is an XML POINTER, so its own mtime is not evidence about its data in either
-    direction: rewriting the XML bumps it without the pixels changing, and replacing the
-    tiles underneath leaves it untouched. Resolving through to the referenced files is
-    the only way to date what a VRT actually serves.
+    Needed because replacing the tiles under a VRT leaves the VRT's own mtime
+    untouched, so the XML alone under-reports. See `_source_date` for why the
+    converse also holds and both dates are taken.
     """
     try:
         root = ET.fromstring(xml_text)
@@ -123,15 +127,43 @@ def _last_commit_date(path: str) -> _dt.date | None:
 
 
 def _source_date(source_raster: str | None) -> _dt.date | None:
+    """Newest date among a raster's inputs. For a VRT: the LATER of its own mtime
+    and its newest referenced tile.
+
+    Both terms are load-bearing, in opposite directions:
+
+      * tiles alone under-report -- a VRT's mtime does not move when the tiles
+        beneath it are replaced;
+      * the VRT alone under-reports -- rewriting the XML does not touch the tiles.
+
+    Taking the max was NOT the original design. This function first resolved to the
+    tiles only, on the reasoning that a VRT is "just a pointer" whose mtime moves
+    independently of its data. That reasoning is true and the conclusion drawn from
+    it was wrong: a VRT also defines the COMPOSITING -- which sources, in what order,
+    with what nodata and band mapping -- so a rewrite can change served pixels with
+    every tile byte-identical.
+
+    Measured, on the run that motivated this fix: oregon's `nhm_elevation_params.csv`
+    was built 2026-07-25, later than every `elevation.vrt` tile (<= 2026-07-01), so
+    the tiles-only form reported it CURRENT. Rebuilding it moved 99.9% of HRUs
+    (median 0.46 m, max 8.9 m). The only input that had changed was the VRT itself,
+    rewritten 2026-08-05.
+
+    The asymmetry decides it: taking the max costs a false positive when a VRT is
+    rewritten inertly, and a false positive is triaged away in minutes. Missing it
+    lets drift ship silently, which is the failure this whole tool exists to prevent.
+    """
     if not source_raster:
         return None
     p = Path(source_raster)
     if not p.exists():
         return None
+    own = _mdate(p)
     if p.suffix != ".vrt":
-        return _mdate(p)
+        return own
     dates = [d for d in (_mdate(s) for s in parse_vrt_sources(p.read_text(), p.parent)) if d]
-    return max(dates) if dates else _mdate(p)
+    dates.append(own)
+    return max(d for d in dates if d)
 
 
 def audit(fabric: str) -> list[dict]:

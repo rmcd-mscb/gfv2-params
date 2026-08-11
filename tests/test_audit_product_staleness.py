@@ -10,6 +10,7 @@ import datetime as dt
 from pathlib import Path
 
 from scripts.diagnose.audit_product_staleness import (
+    _source_date,
     builder_paths,
     classify,
     parse_vrt_sources,
@@ -108,3 +109,62 @@ class TestParseVrtSources:
     def test_malformed_xml_returns_empty_rather_than_raising(self):
         """An unreadable VRT must not abort the audit of every other param."""
         assert parse_vrt_sources("not xml at all <<<", Path("/v")) == []
+
+
+class TestSourceDate:
+    """A VRT's date must be the LATER of its own mtime and its newest tile.
+
+    Taking only the tiles was a real false negative, not a hypothetical one: oregon's
+    `nhm_elevation_params.csv` (2026-07-25) postdated every `elevation.vrt` tile
+    (<= 2026-07-01) and the tiles-only form called it current -- but rebuilding moved
+    99.9% of its HRUs. `elevation.vrt` had been rewritten 2026-08-05, and a VRT defines
+    the compositing (sources, order, nodata, band mapping), so a rewrite changes served
+    pixels with every tile byte-identical.
+    """
+
+    def _vrt(self, tmp_path, tile_names=("a.tif",)):
+        for n in tile_names:
+            (tmp_path / n).write_bytes(b"tile")
+        srcs = "".join(
+            f'<SimpleSource><SourceFilename relativeToVRT="1">{n}</SourceFilename>'
+            f"</SimpleSource>" for n in tile_names
+        )
+        v = tmp_path / "x.vrt"
+        v.write_text(f'<VRTDataset><VRTRasterBand band="1">{srcs}</VRTRasterBand></VRTDataset>')
+        return v
+
+    def _touch(self, path, day):
+        import os
+        ts = dt.datetime(2026, 8, day).timestamp()
+        os.utime(path, (ts, ts))
+
+    def test_vrt_newer_than_its_tiles_wins(self, tmp_path):
+        """The oregon-elevation case. Tiles old, VRT rewritten later -> the VRT date."""
+        v = self._vrt(tmp_path)
+        self._touch(tmp_path / "a.tif", 1)
+        self._touch(v, 5)
+        assert _source_date(str(v)) == D(2026, 8, 5)
+
+    def test_tile_newer_than_its_vrt_wins(self, tmp_path):
+        """The converse: tiles replaced under a VRT leave its own mtime untouched."""
+        v = self._vrt(tmp_path)
+        self._touch(v, 1)
+        self._touch(tmp_path / "a.tif", 9)
+        assert _source_date(str(v)) == D(2026, 8, 9)
+
+    def test_newest_of_several_tiles_wins(self, tmp_path):
+        v = self._vrt(tmp_path, ("a.tif", "b.tif", "c.tif"))
+        self._touch(v, 1)
+        for n, day in (("a.tif", 2), ("b.tif", 7), ("c.tif", 3)):
+            self._touch(tmp_path / n, day)
+        assert _source_date(str(v)) == D(2026, 8, 7)
+
+    def test_plain_raster_uses_its_own_mtime(self, tmp_path):
+        tif = tmp_path / "plain.tif"
+        tif.write_bytes(b"x")
+        self._touch(tif, 4)
+        assert _source_date(str(tif)) == D(2026, 8, 4)
+
+    def test_missing_and_none_are_not_dates(self, tmp_path):
+        assert _source_date(None) is None
+        assert _source_date(str(tmp_path / "nope.vrt")) is None
