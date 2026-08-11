@@ -118,11 +118,14 @@ baseline available for validating the fix.
 the passes already return — no indicator raster, no fourth pass. It is the diagnostic
 that makes an all-flat HRU visible instead of silently defaulting.
 
-**The clip is buffered.** gdptools buffers the target bounds by a cell before
-subsetting (`_get_shp_bounds_w_buffer`); the runner does the same, because an exact
-bbox clip drops the partially-covered edge cells exactextract weights for
-boundary-touching HRUs. gdptools' own subset then runs against an already-clipped
-array and is a near no-op.
+**The clip is buffered by TWO cells.** gdptools buffers the target bounds by
+`2 * max(res)` before subsetting (`_get_shp_bounds_w_buffer`, gdptools/utils.py:718),
+and the runner matches it — because an exact bbox clip drops the partially-covered
+edge cells exactextract weights for boundary-touching HRUs. Two is therefore the exact
+minimum, not a margin: tightening it to one would silently clip cells gdptools then
+asks for, biasing every batch-seam HRU. Matching it also makes gdptools' own subset a
+no-op against the already-clipped array, which is what keeps pass 1 byte-comparable
+with the generic runner at CONUS scale rather than only on a small fixture.
 
 **Co-registration is asserted, not assumed.** Both VRTs derive from the same per-VPU
 DEM, so `clip_box` on identical bounds yields identical grids. The runner checks shape
@@ -142,14 +145,25 @@ littering the batch dir with files `run_merge` would then concat.
 `{data_root}`/`{fabric}` placeholder mechanism as `source_raster`.
 
 **Memory.** `slurm_batch/derive_zonal_params.batch` goes `--mem=32G` → `--mem=64G`.
-Peak is ~13 GB of arrays on the worst batch plus exactextract's working set. There is
-no per-param memory override in `submit_zonal_params.sh` and this design does not add
-one — the bump is harmless for the other zonal params on ~515 GB nodes.
+Measured, not estimated: the naive form holds seven arrays at 25 B/cell = 19.9 GB on
+the largest gfv2 batch (0.797e9 cells), of which 13 B/cell is dead once `sin_da` and
+`cos_da` exist. The runner releases `slope_da`, `flat`, `sloped_aspect` and `radians`
+at that point, halving peak to ~12 B/cell (~9.6 GB) plus exactextract's working set.
+(The 13 GB figure this paragraph originally carried was an estimate and was wrong in
+both directions — too low for the naive form, too high for the shipped one.) The
+arrays stay float32 throughout: a float64 trig cast was tried and reverted, since the
+sources are float32 on disk and the difference on a realistic HRU is 7.5e-9 degrees.
+There is no per-param memory override in `submit_zonal_params.sh` and this design does
+not add one — the bump is harmless for the other zonal params on ~515 GB nodes.
 
 ### 2. Two-argument derived columns
 
-`raster_ops.atan2_deg(sin_mean, cos_mean)` returns
-`degrees(arctan2(s, c)) % 360`, vectorised over Series.
+`raster_ops.atan2_deg(sin_mean, cos_mean)` returns `degrees(arctan2(s, c))`
+normalised into `[0, 360)`, vectorised over Series. The normalisation applies `% 360.0`
+TWICE, which is not redundant: for a circular mean landing just west of north the first
+modulo returns exactly `360.0` (the true value sits within half a ULP of it), violating
+the half-open range the tests assert. Sweeping the 179 symmetric angle pairs mirrored
+about north, 44 of them (25%) hit that case — common, not contrived.
 `zonal_runners/merge.py:apply_derived_columns` accepts `from:` as either a plain
 column name (today's shape, unchanged) or a list, dispatching to a transform of that
 arity. The `_TRANSFORMS` whitelist gains `atan2_deg`.
@@ -275,8 +289,21 @@ the name `aspect`, so `tests/test_submit_wrapper_param_lists.py` stays satisfied
   rather than 270°.
 - **Pass 1 is unmasked.** The nine legacy columns match what `run_zonal_batch` would
   produce on the same input, flats included.
+- **The flat mask is `slope == 0`, not `aspect == 270`.** The same fixture also asserts
+  `n_aspect_cells`, `flat_frac` and the bearing, on a grid where the two masks
+  disagree. Without those three assertions every test in the file passes against the
+  forbidden `aspect == 270` implementation, because on a naive fixture the two masks
+  coincide. On real data they do not: 100% of `slope == 0` cells read 270°, but only
+  74% of 270° cells are flat — the rest is genuine west-facing terrain.
+- **Multiple HRUs per batch.** Three HRUs at non-monotonic ids, one all-flat, each
+  asserted on its own bearing and `flat_frac`. Note what this does and does not prove:
+  it pins per-HRU value-to-id correctness, but it cannot discriminate an index-aligned
+  merge from a positional one, because `UserTiffData.__init__` sorts the target GDF by
+  id on every pass, so all three frames come back in the same order regardless.
 - **Grid mismatch raises.** A deliberately offset slope raster raises rather than
-  masking against the wrong cells.
+  masking against the wrong cells. This guards more than its docstring claims:
+  `DataArray.where` aligns by coord label with an inner join, so a sub-cell coord
+  perturbation would silently collapse the result to zero-size rather than misalign.
 - **No stray CSVs.** Only the one canonical per-batch file appears in the output dir.
 
 Extensions to existing tests:
@@ -284,8 +311,9 @@ Extensions to existing tests:
 - `tests/test_merge_params.py`: two-argument `derived_columns`; a list `from:` naming a
   missing column still raises; single-argument form unchanged.
 - `tests/test_merge_and_fill_params.py`: derived columns are re-derived after the KNN
-  fill; a filled row's `hru_aspect` equals `atan2` of its filled sources; derived names
-  do not appear in `undeclared_with_nan`.
+  fill; a filled row's `hru_aspect` equals `atan2` of its filled sources and lands near
+  north rather than the ~180° a KNN over the two bearings would give; a declared column
+  the file lacks still raises (the tripwire the `fill_columns` ruling preserves).
 - `tests/test_params_index.py` (Guard 1) covers the rewritten `prms:` block.
 
 Guards 2 and 3 (`test_params_index_ondisk.py`, `test_merged_products_ondisk.py`) are
