@@ -206,19 +206,29 @@ development phases. They are not tests, not documentation, and not production
 code. They add noise to code search and create a false impression that they
 may be needed.
 
-**⚠️ Superseded in part — do NOT delete wholesale.** `notebooks/_archive/` is
-currently the ONLY written record of the known aspect-circularity simplification
-(the arithmetic-vs-circular mean of `hru_aspect`). That note is what lets
+**The aspect-circularity blocker is now resolved.** `notebooks/_archive/` used to be
+the ONLY written record of the known aspect-circularity simplification (the
+arithmetic-vs-circular mean of `hru_aspect`) — the note that let
 [#201](https://github.com/rmcd-mscb/gfv2-params/issues/201) be framed as a
-*measured limitation* rather than an oversight, and both `CLAUDE.md` and
-`docs/superpowers/specs/2026-08-04-prms-parameter-index-design.md` now depend on
-the tree surviving. PR #205 excluded it from linting on the same basis.
+*measured limitation* rather than an oversight. That note, including its "role
+in the model" line (the one thing in `check_params.ipynb` not already recorded
+elsewhere), has now been ported into `docs/parameter_index.md`'s
+[Known gaps](parameter_index.md#hru_aspect-is-a-circular-mean-resolved-201)
+section, and #201 itself is fixed — `hru_aspect` is a real circular mean,
+`atan2(mean_sin, mean_cos)`, computed by `zonal_runners/aspect.py`. Neither
+`CLAUDE.md` nor
+`docs/superpowers/specs/2026-08-04-prms-parameter-index-design.md` depend on
+the archive tree surviving for this reason any more. PR #205 excluded the
+tree from linting on the superseded basis; that exclusion can be revisited
+alongside the rest of this issue.
 
-**Proposed fix (revised):**
-Port the aspect-circularity note into `docs/` FIRST — it belongs beside the
-`hru_aspect` entry in `docs/parameter_index.md`'s Known gaps. Only then consider
-pruning the rest of the directory. Git history is not a sufficient home for a
-caveat that a reader needs to find without knowing it exists.
+**Proposed fix:**
+Step 1 (port the aspect-circularity note into `docs/`) is **done** — see
+`docs/parameter_index.md`'s Known gaps section. This specific objection to
+wholesale deletion no longer applies. What remains is the original question:
+re-evaluate the other ~20 notebooks in `notebooks/_archive/` on their own
+merits — does any other one record a similarly undocumented, load-bearing
+caveat? — before archiving or deleting the tree.
 
 ---
 

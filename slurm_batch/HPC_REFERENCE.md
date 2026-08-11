@@ -827,6 +827,14 @@ THROTTLE=4
 | 4 | soils | | 9 | lulc_foresce |
 | 5 | soil_moist_max | | 10 | ssflux *(special — see below)* |
 
+`aspect` reads two source rasters (`aspect.vrt` + `slope.vrt`, the latter only
+to build the flat-cell mask) through its own `script: aspect` runner, not the
+generic `zonal` script the other continuous params (`elevation`, `slope`) use.
+`slurm_batch/derive_zonal_params.batch` — the one array-job script all ten
+zonal params share — requests `--mem=64G` (bumped from `32G`) to cover
+`aspect`'s working set; the bump applies to the whole array job regardless of
+`PARAM`, so it is harmless headroom for the other nine.
+
 ```bash
 P=elevation                              # repeat for each parameter in the table
 AID=$(sbatch --parsable --array=0-$((N-1))%$THROTTLE \
