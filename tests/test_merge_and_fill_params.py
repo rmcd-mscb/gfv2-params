@@ -345,11 +345,14 @@ def test_declared_column_absent_from_frame_raises():
 
 
 def test_a_declared_derived_column_absent_from_the_file_still_raises():
-    """The reason hru_slope/hru_aspect stay in fill_columns (CLAUDE.md:443).
+    """The reason hru_slope/hru_aspect stay in fill_columns (CLAUDE.md:437).
 
     A fabric whose CSV predates the derived column must fail loudly and name the
     one command that fixes it, rather than silently shipping a merged/ product with
-    a PRMS parameter missing. This is the ONLY CI-visible backstop: Guard 2
+    a PRMS parameter missing. This raise is LOUD and OPERATOR-VISIBLE at fill-sweep
+    time against a real data root -- not CI-visible, since CI never runs the fill
+    sweep against a real merged CSV. It is the only backstop for this failure mode
+    that is not itself data-root-gated into skipping: Guard 2
     (test_params_index_ondisk) is data-root-gated and skips in CI.
     """
     df = pd.DataFrame({"hru_id": [1, 2], "mean_sin": [0.1, 0.2], "mean_cos": [0.9, 0.8]})
@@ -796,7 +799,7 @@ class TestRunFillSweep:
             "hru_aspect": [350.0, 10.0],
         }).to_csv(pf, index=False)
 
-        # hru_aspect IS declared fillable (CLAUDE.md:443) -- so KNN interpolates it
+        # hru_aspect IS declared fillable (CLAUDE.md:437) -- so KNN interpolates it
         # to ~180 and the re-derivation must then OVERWRITE that. If the ordering
         # were wrong, this test's final assertion is what catches it.
         declared = _declared(

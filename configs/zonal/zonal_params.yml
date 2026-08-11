@@ -97,8 +97,14 @@ params:
     # fabric -- resolve_fill_plan raises on a declared column the file does not
     # have, so a slope CSV merged before this change must be re-merged with
     # `derive_zonal_params.py --mode merge --param slope` first. That failure is
-    # loud and one command to fix; the alternative (silent NaN hru_slope for
-    # exactly the HRUs that were missing) is not.
+    # loud and one command to fix. The rationale is not a silent-NaN risk --
+    # run_fill_sweep re-derives hru_slope from `mean` after the KNN pass
+    # regardless of this declaration, so a missing one would not actually
+    # produce a NaN. It is that the raise is the only LOUD, OPERATOR-VISIBLE
+    # tripwire, at fill-sweep time against a real data root, for a fabric CSV
+    # that predates this derived_columns: block -- not CI-visible, since
+    # Guard 2 (tests/test_params_index_ondisk.py) is data-root-gated and skips
+    # in CI. See CLAUDE.md's derived_columns/fill_columns gotcha.
     fill_columns:
       [count, mean, std, min, "25%", "50%", "75%", max, sum, hru_slope]
     # PRMS hru_slope is a decimal fraction rise/run (TM6B9:536); slope.vrt is

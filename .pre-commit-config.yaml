@@ -9,10 +9,16 @@
 #     its 17 ruff findings (bare excepts, ArcPy globals ruff cannot see) are
 #     properties of the original, not defects to fix. The FILE STAYS -- this only
 #     stops linting it.
-#   notebooks/_archive/  -- exploratory notebooks kept deliberately. CLAUDE.md and
-#     the parameter-index spec both depend on this tree surviving: it holds the
-#     only written record of the known aspect-circularity simplification, which is
-#     why issue #201 can be framed as a measured limitation rather than an oversight.
+#   notebooks/_archive/  -- exploratory notebooks kept deliberately (the
+#     archive-or-delete decision is still open, docs/repo_review_issues.md
+#     CODE-4). It used to be the only written record of the known
+#     aspect-circularity simplification that let issue #201 be framed as a
+#     measured limitation rather than an oversight -- that note has since been
+#     ported to docs/parameter_index.md's Known gaps section, so this tree is
+#     no longer its only copy. The exclusion stands for the same reason
+#     docs/0b_TB_depr_stor.py above is excluded: unmaintained exploratory
+#     scripts, not maintained source -- reformatting them buys nothing and a
+#     linting pass is not the place to decide CODE-4.
 #
 # Scope this list tightly. Everything else -- src/, scripts/, tests/, and the live
 # notebooks/ scripts -- IS linted, and adding to this list is how that erodes.

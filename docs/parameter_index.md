@@ -5,9 +5,13 @@ process that consumes it, the config entry that declares it, and the builder tha
 it.
 
 Process membership is from `pywatershed.<Process>.get_parameters()` (pywatershed 2.0.4, the
-`reference` pixi env), not inference. Column lists are observed on-disk headers from `gfv2/params/merged/`, except
-`lulc_nlcd` and `lulc_foresce`, which have never been built and are derived from the
-shared `script: lulc` builder.
+`reference` pixi env), not inference. Column lists are observed on-disk headers from
+`gfv2/params/merged/`, with two classes of exception: `lulc_nlcd` and `lulc_foresce`, which have
+never been built and are derived from the shared `script: lulc` builder; and `aspect`, whose
+on-disk CSV predates the `script: aspect` runner and so does not yet carry
+`hru_aspect`/`mean_sin`/`mean_cos`/`n_aspect_cells`/`flat_frac` — those five are the DECLARED
+shape, not (yet) an observed header (see
+[Known gaps](#hru_aspect-is-a-circular-mean-resolved-201)).
 
 **19 config entries** are declared, of which **17** are built for gfv2 — `lulc_nlcd` and
 `lulc_foresce` have never been built on any fabric (see
@@ -60,13 +64,13 @@ as degrees under the name `mean` (see [Known gaps](#hru_slope-was-degrees-on-dis
 | --- | --- | --- | --- | --- |
 | `carea_max` | `nhm_carea_max_params.csv` | `carea_max` | `depstor_params.yml:172` | `depstor_builders/carea_map.py` |
 | `dprst_depth_avg` | `nhm_dprst_depth_avg_params.csv` | `dprst_depth_avg` | `depstor_params.yml:107` | `depstor_builders/dprst_depth.py + dprst_depth/aggregate.py` |
-| `dprst_flow_coef` | `nhm_ssflux_params.csv` | `dprst_flow_coef` | `zonal_params.yml:512` | `zonal_runners/ssflux.py` |
+| `dprst_flow_coef` | `nhm_ssflux_params.csv` | `dprst_flow_coef` | `zonal_params.yml:518` | `zonal_runners/ssflux.py` |
 | `dprst_frac` | `nhm_dprst_frac_params.csv` | `dprst_frac` | `depstor_params.yml:224` | `depstor_builders/dprst.py + landmask.py` |
-| `dprst_seep_rate_open` | `nhm_ssflux_params.csv` | `dprst_seep_rate_open` | `zonal_params.yml:512` | `zonal_runners/ssflux.py` |
+| `dprst_seep_rate_open` | `nhm_ssflux_params.csv` | `dprst_seep_rate_open` | `zonal_params.yml:518` | `zonal_runners/ssflux.py` |
 | `hru_percent_imperv` | `nhm_hru_percent_imperv_params.csv` | `hru_percent_imperv` | `depstor_params.yml:202` | `depstor_builders/imperv.py + landmask.py` |
 | `op_flow_thres` | `nhm_op_flow_thres_params.csv` | `op_flow_thres` | `depstor_params.yml:252` | `depstor_builders/dprst_depth.py` |
 | `smidx_coef` | `nhm_smidx_coef_params.csv` | `smidx_coef` | `depstor_params.yml:186` | `depstor_builders/carea_map.py` |
-| `soil_moist_max` | `nhm_soil_moist_max_params.csv` | `soil_moist_max` | `zonal_params.yml:248` | `zonal_runners/soils.py` |
+| `soil_moist_max` | `nhm_soil_moist_max_params.csv` | `soil_moist_max` | `zonal_params.yml:254` | `zonal_runners/soils.py` |
 | `sro_to_dprst_imperv` | `nhm_sro_to_dprst_imperv_params.csv` | `sro_to_dprst_imperv` | `depstor_params.yml:158` | `depstor_builders/same_hru_drains.py + imperv.py` |
 | `sro_to_dprst_perv` | `nhm_sro_to_dprst_perv_params.csv` | `sro_to_dprst_perv` | `depstor_params.yml:144` | `depstor_builders/same_hru_drains.py + perv.py` |
 
@@ -74,25 +78,25 @@ as degrees under the name `mean` (see [Known gaps](#hru_slope-was-degrees-on-dis
 
 | PRMS parameter | Emitted file | Column | Config entry | Builder |
 | --- | --- | --- | --- | --- |
-| `cov_type` | `nhm_lulc_nhm_v11_params.csv` · `nhm_lulc_nalcms_params.csv` · `nhm_lulc_nlcd_params.csv` · `nhm_lulc_foresce_params.csv` | `cov_type` | `zonal_params.yml:270` · `zonal_params.yml:338` · `zonal_params.yml:392` · `zonal_params.yml:450` | `zonal_runners/lulc_prederived.py` · `zonal_runners/lulc.py` · `zonal_runners/lulc.py` · `zonal_runners/lulc.py` |
+| `cov_type` | `nhm_lulc_nhm_v11_params.csv` · `nhm_lulc_nalcms_params.csv` · `nhm_lulc_nlcd_params.csv` · `nhm_lulc_foresce_params.csv` | `cov_type` | `zonal_params.yml:276` · `zonal_params.yml:344` · `zonal_params.yml:398` · `zonal_params.yml:456` | `zonal_runners/lulc_prederived.py` · `zonal_runners/lulc.py` · `zonal_runners/lulc.py` · `zonal_runners/lulc.py` |
 | `dprst_frac` | `nhm_dprst_frac_params.csv` | `dprst_frac` | `depstor_params.yml:224` | `depstor_builders/dprst.py + landmask.py` |
-| `fastcoef_lin` | `nhm_ssflux_params.csv` | `fastcoef_lin` | `zonal_params.yml:512` | `zonal_runners/ssflux.py` |
+| `fastcoef_lin` | `nhm_ssflux_params.csv` | `fastcoef_lin` | `zonal_params.yml:518` | `zonal_runners/ssflux.py` |
 | `hru_percent_imperv` | `nhm_hru_percent_imperv_params.csv` | `hru_percent_imperv` | `depstor_params.yml:202` | `depstor_builders/imperv.py + landmask.py` |
-| `slowcoef_lin` | `nhm_ssflux_params.csv` | `slowcoef_lin` | `zonal_params.yml:512` | `zonal_runners/ssflux.py` |
-| `soil2gw_max` | `nhm_ssflux_params.csv` | `soil2gw_max` | `zonal_params.yml:512` | `zonal_runners/ssflux.py` |
-| `soil_moist_max` | `nhm_soil_moist_max_params.csv` | `soil_moist_max` | `zonal_params.yml:248` | `zonal_runners/soils.py` |
-| `soil_type` ⚠️ | `nhm_soils_params.csv` | `soils` | `zonal_params.yml:230` | `zonal_runners/soils.py` |
-| `ssr2gw_rate` | `nhm_ssflux_params.csv` | `ssr2gw_rate` | `zonal_params.yml:512` | `zonal_runners/ssflux.py` |
+| `slowcoef_lin` | `nhm_ssflux_params.csv` | `slowcoef_lin` | `zonal_params.yml:518` | `zonal_runners/ssflux.py` |
+| `soil2gw_max` | `nhm_ssflux_params.csv` | `soil2gw_max` | `zonal_params.yml:518` | `zonal_runners/ssflux.py` |
+| `soil_moist_max` | `nhm_soil_moist_max_params.csv` | `soil_moist_max` | `zonal_params.yml:254` | `zonal_runners/soils.py` |
+| `soil_type` ⚠️ | `nhm_soils_params.csv` | `soils` | `zonal_params.yml:236` | `zonal_runners/soils.py` |
+| `ssr2gw_rate` | `nhm_ssflux_params.csv` | `ssr2gw_rate` | `zonal_params.yml:518` | `zonal_runners/ssflux.py` |
 
 ### PRMSSnow — 7 parameters
 
 | PRMS parameter | Emitted file | Column | Config entry | Builder |
 | --- | --- | --- | --- | --- |
-| `cov_type` | `nhm_lulc_nhm_v11_params.csv` · `nhm_lulc_nalcms_params.csv` · `nhm_lulc_nlcd_params.csv` · `nhm_lulc_foresce_params.csv` | `cov_type` | `zonal_params.yml:270` · `zonal_params.yml:338` · `zonal_params.yml:392` · `zonal_params.yml:450` | `zonal_runners/lulc_prederived.py` · `zonal_runners/lulc.py` · `zonal_runners/lulc.py` · `zonal_runners/lulc.py` |
-| `covden_sum` | `nhm_lulc_nhm_v11_params.csv` · `nhm_lulc_nalcms_params.csv` · `nhm_lulc_nlcd_params.csv` · `nhm_lulc_foresce_params.csv` | `covden_sum` | `zonal_params.yml:270` · `zonal_params.yml:338` · `zonal_params.yml:392` · `zonal_params.yml:450` | `zonal_runners/lulc_prederived.py` · `zonal_runners/lulc.py` · `zonal_runners/lulc.py` · `zonal_runners/lulc.py` |
-| `covden_win` | `nhm_lulc_nhm_v11_params.csv` · `nhm_lulc_nalcms_params.csv` · `nhm_lulc_nlcd_params.csv` · `nhm_lulc_foresce_params.csv` | `covden_win` | `zonal_params.yml:270` · `zonal_params.yml:338` · `zonal_params.yml:392` · `zonal_params.yml:450` | `zonal_runners/lulc_prederived.py` · `zonal_runners/lulc.py` · `zonal_runners/lulc.py` · `zonal_runners/lulc.py` |
+| `cov_type` | `nhm_lulc_nhm_v11_params.csv` · `nhm_lulc_nalcms_params.csv` · `nhm_lulc_nlcd_params.csv` · `nhm_lulc_foresce_params.csv` | `cov_type` | `zonal_params.yml:276` · `zonal_params.yml:344` · `zonal_params.yml:398` · `zonal_params.yml:456` | `zonal_runners/lulc_prederived.py` · `zonal_runners/lulc.py` · `zonal_runners/lulc.py` · `zonal_runners/lulc.py` |
+| `covden_sum` | `nhm_lulc_nhm_v11_params.csv` · `nhm_lulc_nalcms_params.csv` · `nhm_lulc_nlcd_params.csv` · `nhm_lulc_foresce_params.csv` | `covden_sum` | `zonal_params.yml:276` · `zonal_params.yml:344` · `zonal_params.yml:398` · `zonal_params.yml:456` | `zonal_runners/lulc_prederived.py` · `zonal_runners/lulc.py` · `zonal_runners/lulc.py` · `zonal_runners/lulc.py` |
+| `covden_win` | `nhm_lulc_nhm_v11_params.csv` · `nhm_lulc_nalcms_params.csv` · `nhm_lulc_nlcd_params.csv` · `nhm_lulc_foresce_params.csv` | `covden_win` | `zonal_params.yml:276` · `zonal_params.yml:344` · `zonal_params.yml:398` · `zonal_params.yml:456` | `zonal_runners/lulc_prederived.py` · `zonal_runners/lulc.py` · `zonal_runners/lulc.py` · `zonal_runners/lulc.py` |
 | `hru_deplcrv` | `nhm_snarea_curve_params.csv` | `hru_deplcrv` | `snarea_library.yml` | `snarea/library.py` |
-| `rad_trncf` ⚠️ | `nhm_lulc_nhm_v11_params.csv` | `retention` \| `rad_trncf` | `zonal_params.yml:270` | `zonal_runners/lulc_prederived.py` |
+| `rad_trncf` ⚠️ | `nhm_lulc_nhm_v11_params.csv` | `retention` \| `rad_trncf` | `zonal_params.yml:276` | `zonal_runners/lulc_prederived.py` |
 | `snarea_curve` | `nhm_snarea_curve_params.csv` | `snarea_curve_0` … `snarea_curve_10` | `snarea_library.yml` | `snarea/library.py` |
 | `snarea_thresh` | `nhm_snarea_curve_params.csv` | `snarea_thresh` | `snarea_library.yml` | `snarea/library.py` |
 
@@ -100,18 +104,18 @@ as degrees under the name `mean` (see [Known gaps](#hru_slope-was-degrees-on-dis
 
 | PRMS parameter | Emitted file | Column | Config entry | Builder |
 | --- | --- | --- | --- | --- |
-| `cov_type` | `nhm_lulc_nhm_v11_params.csv` · `nhm_lulc_nalcms_params.csv` · `nhm_lulc_nlcd_params.csv` · `nhm_lulc_foresce_params.csv` | `cov_type` | `zonal_params.yml:270` · `zonal_params.yml:338` · `zonal_params.yml:392` · `zonal_params.yml:450` | `zonal_runners/lulc_prederived.py` · `zonal_runners/lulc.py` · `zonal_runners/lulc.py` · `zonal_runners/lulc.py` |
-| `covden_sum` | `nhm_lulc_nhm_v11_params.csv` · `nhm_lulc_nalcms_params.csv` · `nhm_lulc_nlcd_params.csv` · `nhm_lulc_foresce_params.csv` | `covden_sum` | `zonal_params.yml:270` · `zonal_params.yml:338` · `zonal_params.yml:392` · `zonal_params.yml:450` | `zonal_runners/lulc_prederived.py` · `zonal_runners/lulc.py` · `zonal_runners/lulc.py` · `zonal_runners/lulc.py` |
-| `covden_win` | `nhm_lulc_nhm_v11_params.csv` · `nhm_lulc_nalcms_params.csv` · `nhm_lulc_nlcd_params.csv` · `nhm_lulc_foresce_params.csv` | `covden_win` | `zonal_params.yml:270` · `zonal_params.yml:338` · `zonal_params.yml:392` · `zonal_params.yml:450` | `zonal_runners/lulc_prederived.py` · `zonal_runners/lulc.py` · `zonal_runners/lulc.py` · `zonal_runners/lulc.py` |
-| `snow_intcp` | `nhm_lulc_nhm_v11_params.csv` · `nhm_lulc_nalcms_params.csv` · `nhm_lulc_nlcd_params.csv` · `nhm_lulc_foresce_params.csv` | `snow_intcp` | `zonal_params.yml:270` · `zonal_params.yml:338` · `zonal_params.yml:392` · `zonal_params.yml:450` | `zonal_runners/lulc_prederived.py` · `zonal_runners/lulc.py` · `zonal_runners/lulc.py` · `zonal_runners/lulc.py` |
-| `srain_intcp` | `nhm_lulc_nhm_v11_params.csv` · `nhm_lulc_nalcms_params.csv` · `nhm_lulc_nlcd_params.csv` · `nhm_lulc_foresce_params.csv` | `srain_intcp` | `zonal_params.yml:270` · `zonal_params.yml:338` · `zonal_params.yml:392` · `zonal_params.yml:450` | `zonal_runners/lulc_prederived.py` · `zonal_runners/lulc.py` · `zonal_runners/lulc.py` · `zonal_runners/lulc.py` |
-| `wrain_intcp` | `nhm_lulc_nhm_v11_params.csv` · `nhm_lulc_nalcms_params.csv` · `nhm_lulc_nlcd_params.csv` · `nhm_lulc_foresce_params.csv` | `wrain_intcp` | `zonal_params.yml:270` · `zonal_params.yml:338` · `zonal_params.yml:392` · `zonal_params.yml:450` | `zonal_runners/lulc_prederived.py` · `zonal_runners/lulc.py` · `zonal_runners/lulc.py` · `zonal_runners/lulc.py` |
+| `cov_type` | `nhm_lulc_nhm_v11_params.csv` · `nhm_lulc_nalcms_params.csv` · `nhm_lulc_nlcd_params.csv` · `nhm_lulc_foresce_params.csv` | `cov_type` | `zonal_params.yml:276` · `zonal_params.yml:344` · `zonal_params.yml:398` · `zonal_params.yml:456` | `zonal_runners/lulc_prederived.py` · `zonal_runners/lulc.py` · `zonal_runners/lulc.py` · `zonal_runners/lulc.py` |
+| `covden_sum` | `nhm_lulc_nhm_v11_params.csv` · `nhm_lulc_nalcms_params.csv` · `nhm_lulc_nlcd_params.csv` · `nhm_lulc_foresce_params.csv` | `covden_sum` | `zonal_params.yml:276` · `zonal_params.yml:344` · `zonal_params.yml:398` · `zonal_params.yml:456` | `zonal_runners/lulc_prederived.py` · `zonal_runners/lulc.py` · `zonal_runners/lulc.py` · `zonal_runners/lulc.py` |
+| `covden_win` | `nhm_lulc_nhm_v11_params.csv` · `nhm_lulc_nalcms_params.csv` · `nhm_lulc_nlcd_params.csv` · `nhm_lulc_foresce_params.csv` | `covden_win` | `zonal_params.yml:276` · `zonal_params.yml:344` · `zonal_params.yml:398` · `zonal_params.yml:456` | `zonal_runners/lulc_prederived.py` · `zonal_runners/lulc.py` · `zonal_runners/lulc.py` · `zonal_runners/lulc.py` |
+| `snow_intcp` | `nhm_lulc_nhm_v11_params.csv` · `nhm_lulc_nalcms_params.csv` · `nhm_lulc_nlcd_params.csv` · `nhm_lulc_foresce_params.csv` | `snow_intcp` | `zonal_params.yml:276` · `zonal_params.yml:344` · `zonal_params.yml:398` · `zonal_params.yml:456` | `zonal_runners/lulc_prederived.py` · `zonal_runners/lulc.py` · `zonal_runners/lulc.py` · `zonal_runners/lulc.py` |
+| `srain_intcp` | `nhm_lulc_nhm_v11_params.csv` · `nhm_lulc_nalcms_params.csv` · `nhm_lulc_nlcd_params.csv` · `nhm_lulc_foresce_params.csv` | `srain_intcp` | `zonal_params.yml:276` · `zonal_params.yml:344` · `zonal_params.yml:398` · `zonal_params.yml:456` | `zonal_runners/lulc_prederived.py` · `zonal_runners/lulc.py` · `zonal_runners/lulc.py` · `zonal_runners/lulc.py` |
+| `wrain_intcp` | `nhm_lulc_nhm_v11_params.csv` · `nhm_lulc_nalcms_params.csv` · `nhm_lulc_nlcd_params.csv` · `nhm_lulc_foresce_params.csv` | `wrain_intcp` | `zonal_params.yml:276` · `zonal_params.yml:344` · `zonal_params.yml:398` · `zonal_params.yml:456` | `zonal_runners/lulc_prederived.py` · `zonal_runners/lulc.py` · `zonal_runners/lulc.py` · `zonal_runners/lulc.py` |
 
 ### PRMSAtmosphere — 2 parameters
 
 | PRMS parameter | Emitted file | Column | Config entry | Builder |
 | --- | --- | --- | --- | --- |
-| `hru_aspect` | `nhm_aspect_params.csv` | `hru_aspect` | `zonal_params.yml:137` | `zonal_runners/aspect.py + zonal_runners/merge.py (derived_columns)` |
+| `hru_aspect` | `nhm_aspect_params.csv` | `hru_aspect` | `zonal_params.yml:143` | `zonal_runners/aspect.py + zonal_runners/merge.py (derived_columns)` |
 | `hru_slope` | `nhm_slope_params.csv` | `hru_slope` | `zonal_params.yml:81` | `zonal_runners/zonal.py + zonal_runners/merge.py (derived_columns)` |
 
 ### PRMSEt — 2 parameters
@@ -125,14 +129,14 @@ as degrees under the name `mean` (see [Known gaps](#hru_slope-was-degrees-on-dis
 
 | PRMS parameter | Emitted file | Column | Config entry | Builder |
 | --- | --- | --- | --- | --- |
-| `hru_aspect` | `nhm_aspect_params.csv` | `hru_aspect` | `zonal_params.yml:137` | `zonal_runners/aspect.py + zonal_runners/merge.py (derived_columns)` |
+| `hru_aspect` | `nhm_aspect_params.csv` | `hru_aspect` | `zonal_params.yml:143` | `zonal_runners/aspect.py + zonal_runners/merge.py (derived_columns)` |
 | `hru_slope` | `nhm_slope_params.csv` | `hru_slope` | `zonal_params.yml:81` | `zonal_runners/zonal.py + zonal_runners/merge.py (derived_columns)` |
 
 ### PRMSGroundwater — 1 parameter
 
 | PRMS parameter | Emitted file | Column | Config entry | Builder |
 | --- | --- | --- | --- | --- |
-| `gwflow_coef` | `nhm_ssflux_params.csv` | `gwflow_coef` | `zonal_params.yml:512` | `zonal_runners/ssflux.py` |
+| `gwflow_coef` | `nhm_ssflux_params.csv` | `gwflow_coef` | `zonal_params.yml:518` | `zonal_runners/ssflux.py` |
 
 ### Not consumed by any pywatershed process — 1 parameter
 
@@ -271,8 +275,13 @@ python scripts/derive_zonal_params.py --config configs/zonal/zonal_params.yml \
 
 `hru_slope` is declared in `fill_columns`, so a slope CSV merged before this change will make
 the next fill sweep **raise** until it is re-merged. That failure is loud and one command to
-fix; the alternative — a silent NaN `hru_slope` for exactly the HRUs that were missing — is
-not. (Run on gfv2 2026-08-05; oregon and tjc still need it.)
+fix. The rationale is not a silent-NaN risk — `run_fill_sweep` re-derives `hru_slope` from
+`mean` after the KNN pass regardless of this declaration, so a missing one would not actually
+produce a NaN. It is that the raise is the only LOUD, OPERATOR-VISIBLE tripwire, at fill-sweep
+time against a real data root, for a fabric CSV that predates this `derived_columns:` block —
+not a CI-visible one, since Guard 2 (`tests/test_params_index_ondisk.py`) is data-root-gated
+and SKIPS in CI. See CLAUDE.md's `derived_columns:`/`fill_columns:` gotcha. (Run on gfv2
+2026-08-05; oregon and tjc still need it.)
 
 Known approximation: `tan(mean θ) ≠ mean(tan θ)`, and `tan` is convex, so the conversion
 systematically underestimates. Estimated (second-order Taylor from the on-disk `mean`/`std` —
@@ -282,17 +291,27 @@ none exists, and `ssflux` has carried the same approximation since it was writte
 
 ### hru_aspect is a CIRCULAR mean (resolved, #201)
 
-**Resolved.** `nhm_aspect_params.csv:hru_aspect` is now
-`atan2(mean(sin(aspect)), mean(cos(aspect)))` per
+**Resolved in the code and config; pending rollout on real data.** `hru_aspect` is now
+declared as `atan2(mean(sin(aspect)), mean(cos(aspect)))` per
 [TM6B9:603](NHM_description_Regan_2018_TM6B9.md), computed as `atan2(mean_sin, mean_cos)` by a
 dedicated `zonal_runners/aspect.py` (`script: aspect` in `zonal_params.yml`, replacing the
 generic `zonal` script the entry used to run) and applied by `zonal_runners/merge.py`'s
 `derived_columns:` at merge time — then **re-applied again after the KNN fill sweep**, so a
 gap-filled HRU gets interpolated `mean_sin`/`mean_cos` and a recomputed bearing rather than an
 interpolated `hru_aspect` (KNN averaging neighbours at 350° and 10° gives 180°, due south —
-this defect reappearing on exactly the HRUs nobody inspects). `mean`, the old arithmetic mean,
-is **retained**, unchanged, as `prms.provenance`, not deleted — it is the auditable record of
-the pre-#201 product. Do not feed it to PRMS as `hru_aspect`.
+this defect reappearing on exactly the HRUs nobody inspects).
+
+**No fabric has this on disk yet.** gfv2's `nhm_aspect_params.csv` was last written May 29,
+before `script: aspect` existed, and its header today is still `count, mean, std, min, 25%,
+50%, 75%, max, sum` — no `hru_aspect`, `mean_sin`, `mean_cos`, `n_aspect_cells` or `flat_frac`.
+A CONUS re-zonal (`--mode zonal --param aspect`) + re-merge is the rollout step this still
+needs, the same way `hru_slope` needed one (run on gfv2 2026-08-05, above); oregon and tjc need
+it too, and neither has run yet either. Until that rollout, opening the real CSV will not show
+`hru_aspect` no matter what this page says.
+
+`mean`, the old arithmetic mean, will stay on disk after the rebuild too — **retained**, not
+deleted, as `prms.provenance`, the auditable record of the pre-#201 product. Do not feed it to
+PRMS as `hru_aspect`, before or after the rebuild.
 
 **Role in the model**, ported from `notebooks/_archive/check_params.ipynb` — the only place it
 was recorded before this page: *"Controls direct-beam solar radiation incident on each HRU;
