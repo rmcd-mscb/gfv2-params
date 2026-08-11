@@ -202,11 +202,17 @@ def params_for_process(
     entries would report 5 non-runoff parameters as feeding runoff.
 
     Reads `prms.columns` ONLY -- never `prms.defects`. A defective column is one
-    that is supposed to be the PRMS parameter and currently is not (aspect's `mean`
-    is an arithmetic mean of a circular variable), so returning it here would hand a
-    caller a broken column under a correct-looking name. The index generator reads
-    `defects` separately and renders it as a DEFECTIVE row, which is the opposite of
-    silently including it.
+    that is supposed to be the PRMS parameter and currently is not; returning it
+    here would hand a caller a broken column under a correct-looking name. The index
+    generator reads `defects` separately and renders it as a DEFECTIVE row, which is
+    the opposite of silently including it.
+
+    No entry declares a `defects:` block today -- aspect's `mean` (an arithmetic
+    mean of a circular variable) was the last one and the #201 fix retired it. The
+    bucket and this exclusion stay because the mechanism is what the split is for,
+    not because a current instance needs it; `test_params_for_process_never_returns_a_
+    defective_column` proves the discrimination on a synthetic fixture for exactly
+    that reason.
     """
     out: list[tuple[str, DeclaredParam]] = []
     for d in declared if declared is not None else load_declared_params():

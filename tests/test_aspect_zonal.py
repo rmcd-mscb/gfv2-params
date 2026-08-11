@@ -147,18 +147,23 @@ def test_an_all_flat_hru_reports_nan_means_not_west(tmp_path):
 
 
 def test_multiple_hrus_align_by_id_not_row_order(tmp_path):
-    """Three HRUs, non-monotonic ids, one all-flat -- exercises index alignment.
+    """Three HRUs, non-monotonic ids, one all-flat -- each HRU's stats are ITS OWN.
 
-    Every other test in this file has exactly one HRU, so `out["mean_sin"] =
-    sin_stats["mean"]` (etc., in `run_aspect_batch`) can't distinguish a real
-    join-by-id from a coincidental match at row 0. With ids out of insertion
-    order (7, 2, 9) and a mixed NaN/non-NaN frame -- the shape CONUS actually
-    produces, some HRUs all-flat and most not, never all-or-nothing the way
-    the single-HRU tests above are -- a positional bug would silently swap two
-    HRUs' stats instead of failing to produce output. (Confirmed empirically:
-    the written CSV's row order for ids (7, 2, 9) comes back as (2, 7, 9), so a
-    test that indexed by row position here would not even be self-consistent,
-    let alone catch a misalignment.)
+    What this proves: every value in the output row for id N was computed over
+    HRU N's cells. Every other test in this file has exactly one HRU, so it cannot
+    tell a per-HRU statistic from a whole-raster one; here HRU 7 faces east, HRU 9
+    faces north and HRU 2 is all flat, so each of the three columns has to land on
+    the right id. Ids are supplied out of insertion order (7, 2, 9) and the written
+    CSV comes back ordered (2, 7, 9), so the assertions select by id -- a
+    row-position lookup here would not even be self-consistent.
+
+    What it CANNOT prove, despite the shape suggesting otherwise: that
+    `out["mean_sin"] = sin_stats["mean"]` (etc., in `run_aspect_batch`) joins by id
+    rather than by position. `UserTiffData.__init__` sorts the target GDF by
+    `target_id` on every pass, so all three frames come back in the same id order
+    and index-aligned and positional assignment are byte-identical. Discriminating
+    between them would need a fixture where the passes disagree on row order, which
+    that sort makes unreachable.
     """
     # Three 2-row bands stacked into one 6-row raster; each band is one HRU's
     # whole footprint, assigned out of row order.

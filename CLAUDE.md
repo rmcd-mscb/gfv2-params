@@ -447,10 +447,16 @@ Repo-specific rules — uphold these when writing or reviewing code here:
   independently-interpolated one. The declaration's job is the raise itself:
   `resolve_fill_plan`'s raise is the only LOUD, OPERATOR-VISIBLE tripwire — at
   fill-sweep time, against a real merged CSV on a data root — for a fabric CSV that
-  predates a `derived_columns:` block or for a block since deleted from the config.
-  It is not a CI-visible tripwire: Guard 2 (`tests/test_params_index_ondisk.py`) is
-  data-root-gated and SKIPS in CI, so this raise is the only backstop for that
-  failure mode that is not itself gated into skipping.
+  predates a `derived_columns:` block. It is not a CI-visible tripwire: Guard 2
+  (`tests/test_params_index_ondisk.py`) is data-root-gated and SKIPS in CI, so this
+  raise is the only backstop for THAT failure mode that is not itself gated into
+  skipping. It does **not** cover the block being DELETED from the config — the
+  column is still declared fillable and still on disk, so nothing raises, the
+  re-derivation is silently skipped, and KNN becomes what *determines* a circular
+  quantity (issue #201 reappearing on exactly the gap-filled HRUs). That second case
+  is pinned in CI by
+  `tests/test_params_index.py::test_the_two_derived_columns_are_still_declared`,
+  which is pure YAML and does not skip.
 - **Paths and fabric inputs come from the profile, never hardcoded.** Read them
   with `require_config_key(...)` against the active fabric profile in
   `configs/base_config.yml`; use the `{data_root}`/`{fabric}`/`{vpu}`

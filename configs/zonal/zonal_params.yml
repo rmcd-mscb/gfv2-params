@@ -162,12 +162,19 @@ params:
     # reaches disk. The declaration is kept for the tripwire, not the fill --
     # resolve_fill_plan raises on a declared column the file does not have, which
     # is the only loud signal, at fill-sweep time, that a fabric's aspect CSV
-    # predates this change or that the derived_columns block below was deleted.
-    # Guard 2 is data-root-gated and skips in CI, so it is not a substitute. That
-    # raise is operator-visible, not CI-visible -- CI never runs the fill sweep
-    # against a real merged CSV on a data root. Dropping the column from
-    # fill_columns to express "not interpolated" is explicitly forbidden by
-    # CLAUDE.md's derived_columns/fill_columns rule.
+    # predates this change. Guard 2 is data-root-gated and skips in CI, so it is
+    # not a substitute. That raise is operator-visible, not CI-visible -- CI never
+    # runs the fill sweep against a real merged CSV on a data root.
+    #
+    # It does NOT cover the derived_columns: block below being DELETED. hru_aspect
+    # would still be in this fill_columns list and still on disk, so nothing
+    # raises, the re-derivation is simply skipped, and KNN becomes what DETERMINES
+    # a circular quantity. That case is pinned in CI by
+    # tests/test_params_index.py::test_the_two_derived_columns_are_still_declared,
+    # which is pure YAML and does not skip.
+    #
+    # Dropping the column from fill_columns to express "not interpolated" is
+    # explicitly forbidden by CLAUDE.md's derived_columns/fill_columns rule.
     #
     # Consequence, deliberate: a fabric whose aspect CSV predates hru_aspect will
     # RAISE on the fill sweep until `derive_zonal_params.py` has re-run the aspect
@@ -219,9 +226,11 @@ params:
           coverage-weighted non-flat cell count -- the population hru_aspect is
           derived from
         flat_frac: >-
-          area fraction of the HRU with slope == 0, which RichDEM reports as 270 deg
-          and which has no down slope direction; 1.0 means hru_aspect is
-          neighbour-interpolated rather than measured
+          coverage-weighted area share of the HRU with slope == 0, which RichDEM
+          reports as 270 deg and which has no down slope direction. 1 -
+          n_aspect_cells / count, so the denominator is the COVERED area, not the
+          HRU's full area -- they differ for an HRU partly outside the VRT. 1.0
+          means hru_aspect is neighbour-interpolated rather than measured
         count: exactextract cell count
         std: within-HRU standard deviation
         min: within-HRU minimum

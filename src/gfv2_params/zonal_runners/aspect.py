@@ -39,8 +39,6 @@ import numpy as np
 import rioxarray
 from gdptools import UserTiffData, ZonalGen
 
-from ..config import require_config_key
-
 # RichDEM does not flag flat cells: rd.TerrainAttribute(dem, attrib="aspect")
 # assigns them 270.0 (due west). Measured against the co-registered slope tile on
 # a 3000x3000 window per VPU -- VPU 01: 2.79% of cells are slope == 0 and 99.05%
@@ -70,12 +68,17 @@ _BOUNDS_BUFFER_CELLS = 2
 
 
 def _buffered_bounds(gdf, da):
-    """Batch bounds in the raster's CRS, grown by `_BOUNDS_BUFFER_CELLS`."""
+    """Batch bounds in the raster's CRS, grown by `_BOUNDS_BUFFER_CELLS`.
+
+    Both axes are padded by the LARGER of the two resolutions, matching gdptools'
+    `bbox.buffer(2 * max(...))` exactly rather than padding each axis by its own
+    resolution. The two agree on square pixels (today's VRTs are 30x30 m) and
+    would not on anisotropic ones, where the per-axis form would under-pad the
+    short axis relative to what gdptools itself requests.
+    """
     minx, miny, maxx, maxy = gdf.total_bounds
-    res_x, res_y = (abs(v) for v in da.rio.resolution())
-    pad_x = _BOUNDS_BUFFER_CELLS * res_x
-    pad_y = _BOUNDS_BUFFER_CELLS * res_y
-    return (minx - pad_x, miny - pad_y, maxx + pad_x, maxy + pad_y)
+    pad = _BOUNDS_BUFFER_CELLS * max(abs(v) for v in da.rio.resolution())
+    return (minx - pad, miny - pad, maxx + pad, maxy + pad)
 
 
 def _assert_co_registered(aspect_da, slope_da, aspect_name: str, slope_name: str) -> None:
@@ -85,13 +88,25 @@ def _assert_co_registered(aspect_da, slope_da, aspect_name: str, slope_name: str
     this holds by construction today. It is checked anyway because the failure is
     silent: a half-cell offset would exclude the neighbours of the flat cells and
     keep the flats, and every downstream number would still look plausible.
+
+    The CRS is part of the check, not decoration. Shape and transform are bare
+    numbers with no datum attached, so two rasters in DIFFERENT projections can
+    match on both -- and the caller computes the clip bounds in the ASPECT CRS
+    only, reusing them verbatim to `clip_box` the slope raster. Two different CRSs
+    would then mask a different patch of ground, which is exactly the silent
+    wrong-cells failure this function exists to prevent.
     """
-    if aspect_da.shape != slope_da.shape or aspect_da.rio.transform() != slope_da.rio.transform():
+    if (
+        aspect_da.shape != slope_da.shape
+        or aspect_da.rio.transform() != slope_da.rio.transform()
+        or aspect_da.rio.crs != slope_da.rio.crs
+    ):
         raise ValueError(
             f"aspect and slope clips are not co-registered: {aspect_name} is "
-            f"{aspect_da.shape} at {aspect_da.rio.transform()}, {slope_name} is "
-            f"{slope_da.shape} at {slope_da.rio.transform()}. Both must come from "
-            f"the same DEM lattice."
+            f"{aspect_da.shape} at {aspect_da.rio.transform()} in CRS "
+            f"{aspect_da.rio.crs}, {slope_name} is {slope_da.shape} at "
+            f"{slope_da.rio.transform()} in CRS {slope_da.rio.crs}. Both must come "
+            f"from the same DEM lattice."
         )
 
 
@@ -139,7 +154,20 @@ def run_aspect_batch(config: dict, batch_id: int, logger) -> None:
     fabric = config["fabric"]
 
     aspect_path = Path(config["source_raster"])
-    slope_path = Path(require_config_key(config, "slope_raster", "run_aspect_batch"))
+    # A plain config read, like every other runner's param-entry keys (lulc.py's
+    # crosswalk_file/canopy_raster, soils.py's source_raster). NOT
+    # `require_config_key`: that helper's message says "Expected from fabric profile
+    # '<fabric>' in configs/base_config.yml", and `slope_raster` lives in the aspect
+    # entry of configs/zonal/zonal_params.yml -- an operator who dropped the key
+    # would be sent to the wrong file to put it back.
+    if "slope_raster" not in config:
+        raise KeyError(
+            "Required key 'slope_raster' missing from merged config for "
+            "run_aspect_batch. It is a param-entry key: add it to the `aspect` entry "
+            "in configs/zonal/zonal_params.yml (it names the slope VRT read ONLY to "
+            "build the flat mask)."
+        )
+    slope_path = Path(config["slope_raster"])
     batch_gpkg = Path(config["batch_dir"]) / f"batch_{batch_id:04d}.gpkg"
     output_dir = Path(config["output_dir"]) / source_type
     output_dir.mkdir(parents=True, exist_ok=True)

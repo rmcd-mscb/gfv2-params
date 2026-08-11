@@ -313,9 +313,16 @@ file does not have. That is deliberate, but the rationale is not a silent-NaN
 risk (the KNN-then-re-derive step above already prevents that): the raise is
 the only LOUD, OPERATOR-VISIBLE tripwire — at fill-sweep time, against a real
 merged CSV on a data root — for a fabric CSV that predates a
-`derived_columns:` block or for a block since deleted from the config. It is
-not a CI-visible tripwire: Guard 2 (`tests/test_params_index_ondisk.py`) is
-data-root-gated and SKIPS in CI. See CLAUDE.md's `derived_columns:`/
+`derived_columns:` block. It is not a CI-visible tripwire: Guard 2
+(`tests/test_params_index_ondisk.py`) is data-root-gated and SKIPS in CI.
+
+It does **not** cover the opposite case, a `derived_columns:` block DELETED
+from the config: the column stays declared fillable and stays on disk, so
+nothing raises, `run_fill_sweep` skips the re-derivation, and KNN becomes what
+*determines* `hru_aspect` — averaging bearings across the 0/360 seam again.
+That case is pinned in CI by
+`tests/test_params_index.py::test_the_two_derived_columns_are_still_declared`,
+which is pure YAML and does not skip. See CLAUDE.md's `derived_columns:`/
 `fill_columns:` gotcha.
 
 `merged/<name>.csv` is the single canonical, always-gap-filled per-HRU file
