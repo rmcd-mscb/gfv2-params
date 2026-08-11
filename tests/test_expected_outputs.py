@@ -54,7 +54,7 @@ def test_config_steps_and_step_order_agree():
 
     NB this assertion is correct for depstor and would be WRONG for shared_rasters,
     whose config deliberately omits the opt-in `compute_dem_derivatives` and
-    `compute_breached_fdr` steps (docs/ARCHITECTURE.md:299-305).
+    `compute_breached_fdr` steps (docs/ARCHITECTURE.md:743-746).
     """
     config = yaml.safe_load(CONFIG_PATH.read_text())
     configured = {s["name"] for s in config["steps"]}

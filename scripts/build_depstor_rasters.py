@@ -232,7 +232,7 @@ def main():
     # Do NOT copy this guard to scripts/build_shared_rasters.py. That orchestrator's
     # matching `if n in step_index` IS load-bearing: `compute_dem_derivatives` and
     # `compute_breached_fdr` are opt-in steps deliberately absent from
-    # shared_rasters.yml (docs/ARCHITECTURE.md:299-305), so a strict guard there would
+    # shared_rasters.yml (docs/ARCHITECTURE.md:743-746), so a strict guard there would
     # break the normal path.
     missing = set(STEP_ORDER) - set(step_index)
     if missing:
