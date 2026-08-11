@@ -205,7 +205,7 @@ by `_record` from the config entry. `run_fill_sweep` re-applies it after
   `prms.columns` and Guard 1 still passes. `hru_slope` stays declared for the same reason.
   ([Amended 2026-08-10](../plans/2026-08-10-hru-aspect-circular-mean.md): this
   section originally said `hru_aspect` would not be declared fillable and that
-  `hru_slope` would be removed from it. That collides with CLAUDE.md:443 and would
+  `hru_slope` would be removed from it. That collides with CLAUDE.md:437 and would
   have discarded the tripwire — Guard 2, the fallback, is data-root-gated and SKIPs
   in CI. The user ruled CLAUDE.md governs. Nothing else in this section changes: the
   ordering is what makes the value correct, not the declaration.)
