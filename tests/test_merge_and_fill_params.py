@@ -22,7 +22,7 @@ fill_missing_values_knn = _mod.fill_missing_values_knn
 maf = _mod
 
 
-def _declared(name, merged_file, fill_columns, fabric_columns=None):
+def _declared(name, merged_file, fill_columns, fabric_columns=None, derived_columns=None):
     """Build a real DeclaredParam for a run_fill_sweep target.
 
     A helper rather than an inline literal so the fixtures go through the SAME
@@ -31,7 +31,10 @@ def _declared(name, merged_file, fill_columns, fabric_columns=None):
     green -- test and implementation wrong in the same direction, agreeing with
     each other. See issue #204.
     """
-    return maf.DeclaredParam(name, merged_file, fill_columns, fabric_columns or {})
+    return maf.DeclaredParam(
+        name, merged_file, fill_columns, fabric_columns or {},
+        derived_columns=derived_columns or {},
+    )
 
 
 class TestFindMissingIds:
@@ -338,6 +341,21 @@ def test_declared_column_absent_from_frame_raises():
         maf.resolve_fill_plan(
             _frame(), declared=["hru_deplcrv", "typo_column"], missing_ids=set(),
             id_feature="hru_id", param_name="snarea_curve",
+        )
+
+
+def test_a_declared_derived_column_absent_from_the_file_still_raises():
+    """The reason hru_slope/hru_aspect stay in fill_columns (CLAUDE.md:443).
+
+    A fabric whose CSV predates the derived column must fail loudly and name the
+    one command that fixes it, rather than silently shipping a merged/ product with
+    a PRMS parameter missing. This is the ONLY CI-visible backstop: Guard 2
+    (test_params_index_ondisk) is data-root-gated and skips in CI.
+    """
+    df = pd.DataFrame({"hru_id": [1, 2], "mean_sin": [0.1, 0.2], "mean_cos": [0.9, 0.8]})
+    with pytest.raises(ValueError, match="not present in"):
+        maf.resolve_fill_plan(
+            df, ["mean_sin", "mean_cos", "hru_aspect"], [], "hru_id", "aspect"
         )
 
 
@@ -758,6 +776,98 @@ class TestRunFillSweep:
             id_feature="hru_id", k_neighbors=1, logger=logger,
         )
         assert failed == []
+
+    def test_derived_columns_are_rederived_after_the_knn_fill(self, tmp_path):
+        """hru_aspect must equal atan2 of the FILLED means, not an interpolated bearing.
+
+        HRU 2 is absent, so KNN synthesizes its mean_sin/mean_cos from HRUs 1 and 3
+        -- which face 350 deg and 10 deg. Both are essentially north. KNN-filling
+        hru_aspect directly would average the two BEARINGS to 180 deg, due south:
+        issue #201 reappearing on exactly the HRUs nobody inspects.
+        """
+        import logging
+        import math
+
+        pf = tmp_path / "nhm_aspect_params.csv"
+        pd.DataFrame({
+            "hru_id": [1, 3],
+            "mean_sin": [math.sin(math.radians(350)), math.sin(math.radians(10))],
+            "mean_cos": [math.cos(math.radians(350)), math.cos(math.radians(10))],
+            "hru_aspect": [350.0, 10.0],
+        }).to_csv(pf, index=False)
+
+        # hru_aspect IS declared fillable (CLAUDE.md:443) -- so KNN interpolates it
+        # to ~180 and the re-derivation must then OVERWRITE that. If the ordering
+        # were wrong, this test's final assertion is what catches it.
+        declared = _declared(
+            "aspect", "nhm_aspect_params.csv", ["mean_sin", "mean_cos", "hru_aspect"],
+            derived_columns={
+                "hru_aspect": {"from": ["mean_sin", "mean_cos"], "transform": "atan2_deg"}
+            },
+        )
+
+        failed = maf.run_fill_sweep(
+            [(declared, pf)], self._merged_gdf(), expected_max=3, id_feature="hru_id",
+            k_neighbors=2, logger=logging.getLogger("test_rederive_aspect"),
+        )
+        assert failed == []
+
+        out = pd.read_csv(pf).sort_values("hru_id").reset_index(drop=True)
+        assert out["hru_id"].tolist() == [1, 2, 3]
+        assert out["hru_aspect"].notna().all()
+        # Every row, not just the synthesized one: the derived column is a function
+        # of its declared sources by construction.
+        #
+        # `% 360.0` applied TWICE, mirroring raster_ops.atan2_deg itself (its
+        # docstring uses this exact 350/10 pair as the worked example): HRU 2's
+        # KNN-averaged mean_sin is not exactly 0.0 but a ~-2.78e-17 float64
+        # remainder (sin(350deg) and sin(10deg) are not bit-exact negations), so
+        # the pre-mod angle is a hair below the wrap and one `% 360.0` rounds to
+        # exactly 360.0 rather than 0.0 -- outside atan2_deg's documented [0, 360)
+        # contract. A single mod here would make this oracle diverge from the
+        # function under test on precisely the boundary case it exists to fix.
+        expected = np.degrees(np.arctan2(out["mean_sin"], out["mean_cos"])) % 360.0 % 360.0
+        np.testing.assert_allclose(out["hru_aspect"].to_numpy(), expected.to_numpy(),
+                                   atol=1e-9)
+        # And the synthesized HRU faces north (0 or 360), NOT the 180 an arithmetic
+        # KNN over the two bearings would have produced.
+        filled = float(out.loc[out["hru_id"] == 2, "hru_aspect"].iloc[0])
+        assert min(filled, 360.0 - filled) < 1.0
+
+    def test_hru_slope_is_rederived_so_it_agrees_with_its_source(self, tmp_path):
+        """SCOPE EXPANSION beyond #201, deliberate: see the spec.
+
+        hru_slope was KNN-filled independently of `mean`, so a synthesized row could
+        carry hru_slope != tan(radians(mean)) -- a derived column disagreeing with
+        its own declared source inside one file.
+        """
+        import logging
+
+        pf = tmp_path / "nhm_slope_params.csv"
+        pd.DataFrame({
+            "hru_id": [1, 3],
+            "mean": [4.4252, 45.0],
+            "hru_slope": [0.07738825, 1.0],
+        }).to_csv(pf, index=False)
+
+        declared = _declared(
+            "slope", "nhm_slope_params.csv", ["mean", "hru_slope"],
+            derived_columns={"hru_slope": {"from": "mean", "transform": "deg_to_fraction"}},
+        )
+
+        failed = maf.run_fill_sweep(
+            [(declared, pf)], self._merged_gdf(), expected_max=3, id_feature="hru_id",
+            k_neighbors=2, logger=logging.getLogger("test_rederive_slope"),
+        )
+        assert failed == []
+
+        out = pd.read_csv(pf)
+        assert out["hru_slope"].notna().all()
+        np.testing.assert_allclose(
+            out["hru_slope"].to_numpy(),
+            np.tan(np.radians(out["mean"].to_numpy())),
+            rtol=1e-9,
+        )
 
 
 # ---------------------------------------------------------------------------

@@ -40,10 +40,10 @@ class DeclaredParam(NamedTuple):
     """One config entry's contract: what file, what may be filled, what PRMS calls it.
 
     A NamedTuple rather than a bare tuple because this record has now been widened
-    THREE times (`fill_columns`, then `fabric_columns`, then `prms`) and each
-    widening has to reach several consumption sites. The `fabric_columns` widening
-    missed one of them -- `warn_undeclared_merged_files`, whose
-    `for _, merged_file, _ in ...` then raised `ValueError: too many values to
+    FOUR times (`fill_columns`, then `fabric_columns`, then `prms`, then
+    `derived_columns`) and each widening has to reach several consumption sites.
+    The `fabric_columns` widening missed one of them -- `warn_undeclared_merged_files`,
+    whose `for _, merged_file, _ in ...` then raised `ValueError: too many values to
     unpack` in all-params mode, the DEFAULT and the only mode
     `slurm_batch/merge_and_fill_params.batch` runs. It aborted `main()` outside
     `run_fill_sweep`'s per-param guard, so nothing was filled at all, while the test
@@ -89,6 +89,15 @@ class DeclaredParam(NamedTuple):
     # constructions in the tests are unaffected. A `None` sentinel was rejected:
     # it would force None-handling into all nine `d.prms.get(...)` call sites.
     prms: Mapping = MappingProxyType({})
+    # Sixth field. Same MappingProxyType-not-{} reasoning as `prms` above: a
+    # NamedTuple default is one object shared by every instance.
+    #
+    # Read by merge_and_fill_params' fill sweep, which RE-DERIVES these columns
+    # after the KNN pass instead of interpolating them. That is not a nicety for
+    # hru_aspect -- it is required: KNN-averaging neighbours at 350 deg and 10 deg
+    # gives 180 deg, which is issue #201 reappearing on gap-filled HRUs. The
+    # linear sources (mean_sin, mean_cos) are what get interpolated.
+    derived_columns: Mapping = MappingProxyType({})
 
 
 def _load_yaml_doc(path: Path) -> dict:
@@ -141,6 +150,7 @@ def iter_declared_params(
             fill_columns=list(entry.get("fill_columns") or []),
             fabric_columns=dict(entry.get("fabric_columns") or {}),
             prms=dict(entry.get("prms") or {}),
+            derived_columns=dict(entry.get("derived_columns") or {}),
         )
 
     declared: list[DeclaredParam] = []

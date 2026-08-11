@@ -32,6 +32,7 @@ from gfv2_params.params_index import (  # noqa: F401  (DeclaredParam re-exported
     iter_declared_params,
     load_declared_params,
 )
+from gfv2_params.zonal_runners.merge import apply_derived_columns
 
 
 def find_missing_ids(param_file, expected_max, id_feature, logger):
@@ -571,6 +572,29 @@ def run_fill_sweep(targets, merged_gdf, expected_max, id_feature, k_neighbors, l
                                 f"the fabric. Refusing to write a canonical parameter file "
                                 f"with an unfilled gap."
                             )
+
+            if declared.derived_columns:
+                # AFTER the KNN pass and the fabric copy, so every derived column is
+                # a function of the values actually being written. Both of today's
+                # derived columns are ALSO in fill_columns, so KNN has just written
+                # an interpolated value into each -- this overwrites it, and the
+                # ordering is the whole safety property:
+                #
+                #   hru_aspect is CIRCULAR. Interpolating neighbours at 350 deg and
+                #   10 deg gives 180 deg, due south, which is issue #201 reappearing
+                #   on gap-filled HRUs. hru_slope is monotone so its interpolation
+                #   was defensible, but it was computed independently of `mean` and
+                #   could therefore disagree with its own declared source on a
+                #   synthesized row.
+                #
+                # They stay declared fillable (CLAUDE.md's "do not fix it by dropping
+                # the column from fill_columns") because resolve_fill_plan's
+                # raise-on-a-declared-column-the-file-lacks is the only CI-visible
+                # tripwire for a deleted derived_columns block; Guard 2 is
+                # data-root-gated and skips in CI.
+                complete_df = apply_derived_columns(complete_df, declared.derived_columns)
+                logger.info("  Re-derived %s from filled sources",
+                            sorted(declared.derived_columns))
 
             write_filled_in_place(complete_df, param_file, param_df, dtypes, logger=logger)
 
