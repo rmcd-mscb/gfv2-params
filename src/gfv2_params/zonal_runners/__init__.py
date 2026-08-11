@@ -71,6 +71,7 @@ osr.UseExceptions()
 # Public re-exports. External callers (scripts/derive_zonal_params.py,
 # tests/test_merge_params.py) import these names from gfv2_params.zonal_runners
 # directly.
+from .aspect import run_aspect_batch
 from .lulc import run_lulc_batch
 from .lulc_prederived import run_lulc_prederived_batch
 from .merge import run_merge
@@ -82,6 +83,7 @@ from .zonal import run_zonal_batch
 __all__ = [
     "BATCH_RUNNERS",
     "MERGE_REDUCERS",
+    "run_aspect_batch",
     "run_build_weights",
     "run_lulc_batch",
     "run_lulc_prederived_batch",
@@ -100,6 +102,7 @@ __all__ = [
 # and (c) adding an entry below — keep them in sync.
 BATCH_RUNNERS = {
     "zonal": run_zonal_batch,
+    "aspect": run_aspect_batch,
     "soils": run_soils_batch,
     "lulc": run_lulc_batch,
     "lulc_prederived": run_lulc_prederived_batch,

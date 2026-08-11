@@ -435,12 +435,28 @@ Repo-specific rules — uphold these when writing or reviewing code here:
   filled *and* not PRMS parameters, `op_flow_thres` is a PRMS parameter that was not
   filled. Do not collapse the two.
 - **A `derived_columns:` output that is also in `fill_columns` makes a re-merge a
-  prerequisite of the next fill sweep.** `slope`'s `hru_slope` is the case:
-  `resolve_fill_plan` raises on a declared column the file does not have, so any
-  fabric whose CSV predates the declaration needs
-  `derive_zonal_params.py --mode merge --param slope` first. That is deliberate —
-  the alternative is a silent NaN in a PRMS parameter for exactly the HRUs that were
-  missing. Do not "fix" it by dropping the column from `fill_columns`.
+  prerequisite of the next fill sweep.** `slope`'s `hru_slope` and `aspect`'s
+  `hru_aspect` are the two instances: `resolve_fill_plan` raises on a declared column
+  the file does not have, so any fabric whose CSV predates the declaration needs a
+  re-merge (`derive_zonal_params.py --mode merge --param <slope|aspect>`) first. Do
+  not "fix" it by dropping the column from `fill_columns` — the rationale is not a
+  silent-NaN risk. `run_fill_sweep` RE-DERIVES both columns from their declared
+  sources (`mean` for `hru_slope`; `mean_sin`/`mean_cos` for `hru_aspect`) AFTER the
+  KNN pass, overwriting whatever KNN wrote, so the shipped value is always a function
+  of its (possibly interpolated) sources on every row, never an
+  independently-interpolated one. The declaration's job is the raise itself:
+  `resolve_fill_plan`'s raise is the only LOUD, OPERATOR-VISIBLE tripwire — at
+  fill-sweep time, against a real merged CSV on a data root — for a fabric CSV that
+  predates a `derived_columns:` block. It is not a CI-visible tripwire: Guard 2
+  (`tests/test_params_index_ondisk.py`) is data-root-gated and SKIPS in CI, so this
+  raise is the only backstop for THAT failure mode that is not itself gated into
+  skipping. It does **not** cover the block being DELETED from the config — the
+  column is still declared fillable and still on disk, so nothing raises, the
+  re-derivation is silently skipped, and KNN becomes what *determines* a circular
+  quantity (issue #201 reappearing on exactly the gap-filled HRUs). That second case
+  is pinned in CI by
+  `tests/test_params_index.py::test_the_two_derived_columns_are_still_declared`,
+  which is pure YAML and does not skip.
 - **Paths and fabric inputs come from the profile, never hardcoded.** Read them
   with `require_config_key(...)` against the active fabric profile in
   `configs/base_config.yml`; use the `{data_root}`/`{fabric}`/`{vpu}`

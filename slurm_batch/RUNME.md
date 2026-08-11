@@ -369,6 +369,14 @@ prereq, see below).
 > while the other eight merge normally. Skip them with
 > `export ZONAL_PARAMS="elevation slope aspect soils soil_moist_max lulc_nhm_v11 lulc_nalcms ssflux"`.
 
+> **Note:** `aspect` reads two source rasters (`aspect.vrt` + `slope.vrt`, the
+> latter only to build the flat-cell mask) through its own `script: aspect`
+> runner, not the generic `zonal` script the other continuous params use.
+> `slurm_batch/derive_zonal_params.batch` — the one array-job script every
+> zonal param shares — requests `--mem=64G` (bumped from `32G`) to cover
+> `aspect`'s working set; the bump applies to the whole array job, so it is
+> harmless headroom for the other nine parameters.
+
 ```bash
 P=elevation     # change P and re-run for each parameter above, in order
 AID=$(sbatch --parsable --array=0-$((N-1))%$THROTTLE \

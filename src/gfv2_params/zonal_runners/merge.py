@@ -18,6 +18,7 @@ from gfv2_params import raster_ops
 # other module-level function that happens to share the name.
 _TRANSFORMS = {
     "deg_to_fraction": raster_ops.deg_to_fraction,
+    "atan2_deg": raster_ops.atan2_deg,
 }
 
 
@@ -31,6 +32,10 @@ def apply_derived_columns(df, derived_columns: dict | None):
     The source column is KEPT: it is declared provenance, not a temporary. For
     `slope` that matters, since `mean` (degrees) is what `hru_slope` is derived
     from and what a reader needs to check the derivation.
+
+    `from:` accepts a single column name or a list of them; the transform's arity
+    must match. `hru_slope` reads one column, `hru_aspect` reads two (`mean_sin`,
+    `mean_cos`) because a circular mean is not a function of any single statistic.
     """
     for out_col, spec in (derived_columns or {}).items():
         src, tname = spec["from"], spec["transform"]
@@ -39,15 +44,59 @@ def apply_derived_columns(df, derived_columns: dict | None):
                 f"`{tname}` is not a known transform for derived column '{out_col}'. "
                 f"Known: {sorted(_TRANSFORMS)}."
             )
-        if src not in df.columns:
+        # `from:` is one column name (deg_to_fraction) or a list of them
+        # (atan2_deg needs mean_sin AND mean_cos). Normalised to a list here so
+        # the missing-column check below covers both shapes with one code path --
+        # a list form that skipped validation would address the wrong columns and
+        # return plausible bearings.
+        srcs = [src] if isinstance(src, str) else list(src)
+        missing = [s for s in srcs if s not in df.columns]
+        if missing:
             raise ValueError(
-                f"derived column '{out_col}' reads '{src}', which is not in the merged "
+                f"derived column '{out_col}' reads {missing}, which are not in the merged "
                 f"frame (columns: {sorted(df.columns)})."
             )
-        # The transform vectorises (deg_to_fraction is np.tan(np.deg2rad(x))),
-        # so hand it the Series rather than calling it 361k times per param.
-        df[out_col] = _TRANSFORMS[tname](df[src].astype(float))
+        # The transforms vectorise, so hand them whole Series rather than calling
+        # them 361k times per param.
+        df[out_col] = _TRANSFORMS[tname](*(df[s].astype(float) for s in srcs))
     return df
+
+
+def _schema_mismatch_message(schemas: dict, source_type: str) -> str:
+    """Name the odd-one-out batches and the columns they differ by.
+
+    Reports the MINORITY groups against the largest one rather than dumping all
+    64 filenames: on the failure this exists to catch, the majority is what the
+    current code writes and the handful named is the set to re-run.
+    """
+    groups = sorted(schemas.items(), key=lambda kv: len(kv[1]), reverse=True)
+    majority_cols, majority_files = groups[0]
+    n_files = sum(len(v) for v in schemas.values())
+    lines = [
+        f"Per-batch CSVs for '{source_type}' do not all have the same columns: "
+        f"{len(schemas)} distinct schemas across {n_files} files. pandas.concat "
+        f"would UNION them and pad the difference with NaN, so the odd batches' "
+        f"HRUs would silently reach the merged product with an empty cell in every "
+        f"column they lack -- which the KNN fill sweep then interpolates from "
+        f"neighbours, shipping guessed values at exit 0.",
+        f"  {len(majority_files)} file(s) carry the majority schema "
+        f"({len(majority_cols)} columns).",
+    ]
+    for cols, names in groups[1:]:
+        shown = ", ".join(names[:5])
+        if len(names) > 5:
+            shown += f", ... (+{len(names) - 5} more)"
+        lines.append(
+            f"  {len(names)} file(s) differ by {sorted(majority_cols ^ cols)}: {shown}"
+        )
+    lines.append(
+        "This normally means a SUBSET of batches predates a schema change -- a "
+        "partially-failed zonal array leaves the previous run's CSVs in place. "
+        "Re-run the zonal pass for the files named above "
+        f"(`derive_zonal_params.py --mode zonal --param {source_type} --batch_id <N>`) "
+        "and merge again."
+    )
+    return "\n".join(lines)
 
 
 def run_merge(config: dict, logger, *, reducer=None) -> None:
@@ -98,13 +147,30 @@ def run_merge(config: dict, logger, *, reducer=None) -> None:
 
     logger.info("Found %d batch files for %s", len(files), source_type)
 
+    # Every batch must carry the SAME columns, and `id_feature` alone is not that
+    # check. `pd.concat` unions differing column sets and pads the gap with NaN, so
+    # a PARTIAL re-run merges silently: 61 of 64 array tasks land the new schema, 3
+    # fail (a PROJ-firewall storm once killed 11 of 64 snarea batches) and leave the
+    # previous run's CSVs on disk. Those batches' HRUs then reach `merged/` with NaN
+    # in every new column -- `resolve_fill_plan` checks column PRESENCE only, the fit
+    # set is non-empty so KNN interpolates them from neighbours, and any derived
+    # column is re-derived from the interpolated sources into a plausible-looking
+    # value. Guard 2 sees the header; Guard 3 sees no NaN; the operator sees exit 0.
+    # The ALL-stale case fails loudly on its own (the merged frame simply lacks the
+    # column); it is precisely the partial case that is silent, and a partial case is
+    # what a 64-task array produces when it goes wrong. Applies to every param.
     dfs = []
+    schemas: dict[frozenset, list[str]] = {}
     for f in files:
         logger.debug("Reading: %s", f)
         df = pd.read_csv(f, dtype=read_dtypes) if read_dtypes else pd.read_csv(f)
         if id_feature not in df.columns:
             raise ValueError(f"'{id_feature}' column not found in file: {f}")
+        schemas.setdefault(frozenset(df.columns), []).append(f.name)
         dfs.append(df)
+
+    if len(schemas) > 1:
+        raise ValueError(_schema_mismatch_message(schemas, source_type))
 
     merged_df = pd.concat(dfs, ignore_index=True)
     merged_df = merged_df.sort_values(id_feature).reset_index(drop=True)

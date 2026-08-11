@@ -7,15 +7,23 @@
 #SBATCH --time=04:00:00
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=2
-#SBATCH --mem=32G
+# 64G, not 32G: the `aspect` runner clips aspect+slope to the batch window and
+# derives sin/cos from them -- seven float32/bool arrays live at once, 25 B/cell,
+# ~19.9 GB on gfv2's largest measured batch bbox (0.797e9 cells, round 0.80e9).
+# It then releases the four dead intermediates (slope, flat mask, masked aspect,
+# radians) once sin/cos exist, halving the live set to ~12 B/cell (~9.6 GB)
+# before the three exactextract passes, plus exactextract's own working set.
+# There is no per-param memory override in submit_zonal_params.sh and this does
+# not add one; the bump is harmless for the other params on ~515 GB nodes.
+#SBATCH --mem=64G
 #
 # Array task: zonal-stats one Part 2 param over one HRU batch.
 # Submitted by slurm_batch/submit_zonal_params.sh; the wrapper exports
 # PARAM (e.g. elevation, slope, soils, lulc_nhm_v11, ssflux, ...) and FABRIC.
 #
 # The orchestrator dispatches on the param's `script:` tag in
-# configs/zonal/zonal_params.yml (zonal / soils / lulc / ssflux) -> the matching
-# gfv2_params.zonal_runners.run_*_batch function.
+# configs/zonal/zonal_params.yml (zonal / aspect / soils / lulc / lulc_prederived /
+# ssflux) -> the matching gfv2_params.zonal_runners.run_*_batch function.
 #
 # Time bumped to 4h to cover ssflux + LULC param types (which do more work
 # per batch than elev/slope/aspect). Lighter params finish well under this.

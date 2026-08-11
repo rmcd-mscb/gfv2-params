@@ -97,7 +97,7 @@ contract:
 
 - [`src/gfv2_params/shared_rasters/__init__.py`](../src/gfv2_params/shared_rasters/__init__.py) — Part 1 builders (10 modules)
 - [`src/gfv2_params/depstor_builders/__init__.py`](../src/gfv2_params/depstor_builders/__init__.py) — Part 2a raster builders (15 modules)
-- [`src/gfv2_params/zonal_runners/__init__.py`](../src/gfv2_params/zonal_runners/__init__.py) — Part 2b param runners (6 modules)
+- [`src/gfv2_params/zonal_runners/__init__.py`](../src/gfv2_params/zonal_runners/__init__.py) — Part 2b param runners (7 modules)
 - [`src/gfv2_params/aggregate/`](../src/gfv2_params/aggregate/) — Part 2c
   Stage 1: a source-agnostic gridded-**time-series** → HRU aggregation
   harness — the time-series counterpart to `zonal_runners` (which handles
@@ -259,34 +259,71 @@ does not touch.
 #### `derived_columns` — PRMS quantities computed at merge time
 
 A zonal param entry may also declare `derived_columns`, which adds a column to
-the merged frame by transforming one that is already there:
+the merged frame by transforming one or more columns that are already there:
 
 ```yaml
 derived_columns:
   hru_slope: { from: mean, transform: deg_to_fraction }
+  hru_aspect: { from: [mean_sin, mean_cos], transform: atan2_deg }
 ```
 
 `transform` names a function in a **whitelist** in
 `zonal_runners/merge.py` (`_TRANSFORMS`), not `getattr(gfv2_params.raster_ops,
 name)`: a typo must raise, not silently resolve to some other module-level
-function. `apply_derived_columns` runs in `run_merge`, after the per-batch
-concat and before the CSV write, so **adding one needs no zonal re-run** — only
-`--mode merge --param <name>`. The source column is kept, not consumed: it is
-declared `prms.provenance`, and a reader needs it to check the derivation.
+function. `from:` is one column name or a list of them, and the transform's
+arity must match — `deg_to_fraction` is one-argument, `atan2_deg` is two,
+because a circular mean is not a function of any single statistic.
+`apply_derived_columns` runs in `run_merge`, after the per-batch concat and
+before the CSV write, so **adding one needs no zonal re-run** — only
+`--mode merge --param <name>`. The source column(s) are kept, not consumed:
+they are declared `prms.provenance`, and a reader needs them to check the
+derivation.
 
-Today only `slope` declares one. `slope.vrt` is
+Two params declare one today. `slope.vrt` is
 `rd.TerrainAttribute(dem, "slope_degrees")`, so `mean` is degrees while PRMS
 `hru_slope` is a decimal fraction rise/run (~57× for small angles); rather than
 ship a footgun, the pipeline emits the PRMS quantity directly, reusing the same
-`raster_ops.deg_to_fraction` that `ssflux.py:63` already applies. See
-[Parameter index](parameter_index.md).
+`raster_ops.deg_to_fraction` that `ssflux.py:63` already applies. `aspect` is
+the two-argument case: PRMS `hru_aspect` is
+`atan2(mean(sin(aspect)), mean(cos(aspect)))`
+([TM6B9:603](NHM_description_Regan_2018_TM6B9.md)), a **circular** mean that is
+not recoverable from an arithmetic one after the fact — unlike `hru_slope`,
+this could not be fixed by a merge-time transform of the old `mean` column
+alone, so `zonal_runners/aspect.py` runs two additional exactextract passes
+(over `sin(aspect)`/`cos(aspect)`) to produce the `mean_sin`/`mean_cos`
+sources `atan2_deg` needs, via a dedicated `script: aspect` rather than the
+generic `script: zonal`. See [Parameter index](parameter_index.md).
+
+`run_fill_sweep` (`scripts/merge_and_fill_params.py`) **re-applies
+`derived_columns` a second time, after its own KNN pass**, so a gap-filled
+HRU's derived column is always a function of its (possibly interpolated)
+sources — never a value KNN interpolated directly. This is not a nicety for
+`hru_aspect`: KNN averaging two circular neighbours (350°, 10°) gives 180°,
+due south — the defect `atan2_deg` exists to fix, reappearing on exactly the
+gap-filled HRUs nobody inspects. `hru_slope`'s interpolation was monotone and
+therefore defensible, but it was computed independently of `mean` before this
+re-application existed and could disagree with its own declared source on a
+synthesized row; both derived columns now go through the same re-derive step.
 
 Note the ordering constraint with `fill_columns`: a derived column that is also
-declared fillable (as `hru_slope` is) makes a **re-merge a prerequisite of the
-next fill sweep** on any fabric whose CSV predates the declaration —
-`resolve_fill_plan` raises on a declared column the file does not have. That is
-deliberate: the alternative is a silent NaN in a PRMS parameter for exactly the
-HRUs that were missing.
+declared fillable (as both `hru_slope` and `hru_aspect` are) makes a
+**re-merge a prerequisite of the next fill sweep** on any fabric whose CSV
+predates the declaration — `resolve_fill_plan` raises on a declared column the
+file does not have. That is deliberate, but the rationale is not a silent-NaN
+risk (the KNN-then-re-derive step above already prevents that): the raise is
+the only LOUD, OPERATOR-VISIBLE tripwire — at fill-sweep time, against a real
+merged CSV on a data root — for a fabric CSV that predates a
+`derived_columns:` block. It is not a CI-visible tripwire: Guard 2
+(`tests/test_params_index_ondisk.py`) is data-root-gated and SKIPS in CI.
+
+It does **not** cover the opposite case, a `derived_columns:` block DELETED
+from the config: the column stays declared fillable and stays on disk, so
+nothing raises, `run_fill_sweep` skips the re-derivation, and KNN becomes what
+*determines* `hru_aspect` — averaging bearings across the 0/360 seam again.
+That case is pinned in CI by
+`tests/test_params_index.py::test_the_two_derived_columns_are_still_declared`,
+which is pure YAML and does not skip. See CLAUDE.md's `derived_columns:`/
+`fill_columns:` gotcha.
 
 `merged/<name>.csv` is the single canonical, always-gap-filled per-HRU file
 for every param that declares `fill_columns` — **consumers read

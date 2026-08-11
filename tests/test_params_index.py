@@ -235,15 +235,79 @@ def test_prms_runoff_has_the_expected_parameter_count():
 
 
 def test_params_for_process_never_returns_a_defective_column():
-    """aspect's `mean` names PRMSSolarGeometry/PRMSAtmosphere in prms.defects.
+    """`params_for_process` must never surface a column declared `defects`.
 
-    Returning it here would hand a caller a broken column under a correct-looking
-    parameter name -- the exact failure the defects/columns split exists to prevent.
+    Returning one would hand a caller a broken column under a correct-looking
+    parameter name -- the exact failure the defects/columns split exists to
+    prevent (`params_for_process`'s own docstring: "Reads prms.columns ONLY --
+    never prms.defects").
+
+    A SYNTHETIC fixture, not the live config. After the aspect fix (issue #201)
+    there are zero non-empty `defects:` blocks left anywhere in `configs/` --
+    aspect's `mean` was the only one. A version of this test that iterates live
+    declarations therefore has nothing to check and cannot fail no matter how
+    `params_for_process` is implemented: verified by mutation, merging
+    `{**columns, **defects}` inside `params_for_process` left a config-driven
+    version of this test green. The fixture below carries both a `columns` and a
+    `defects` entry on the SAME process so the assertion proves discrimination
+    between the two buckets, not merely an empty result.
     """
+    declared = [
+        pi.DeclaredParam(
+            "synthetic",
+            "nhm_x.csv",
+            [],
+            {},
+            {
+                "columns": {"good": {"prms": "hru_good", "processes": ["PRMSAtmosphere"]}},
+                "defects": {"bad": {"prms": "hru_bad", "processes": ["PRMSAtmosphere"]}},
+            },
+        )
+    ]
+    hits = pi.params_for_process("PRMSAtmosphere", declared)
+    assert {col for col, _ in hits} == {"good"}
+
+
+def test_params_for_process_hru_slope_and_hru_aspect_feed_solargeometry_and_atmosphere():
+    """Concrete regression check against the real config (not a fixture).
+
+    aspect's hru_aspect (issue #201, now a real circular mean) and slope's
+    hru_slope are the only two columns feeding PRMSSolarGeometry/PRMSAtmosphere
+    today -- both are legitimate `prms.columns` entries; neither is `defects`.
+    """
+    declared = pi.load_declared_params()
     for process in ("PRMSSolarGeometry", "PRMSAtmosphere"):
-        hits = pi.params_for_process(process)
-        assert all(d.name != "aspect" for _, d in hits), process
-        assert {col for col, _ in hits} == {"hru_slope"}
+        hits = pi.params_for_process(process, declared)
+        assert {col for col, _ in hits} == {"hru_slope", "hru_aspect"}
+
+
+def test_the_two_derived_columns_are_still_declared():
+    """Deleting a `derived_columns:` block hands a CIRCULAR quantity to KNN.
+
+    The failure this pins, end to end: someone deletes the `derived_columns:` block
+    from the `aspect` entry as cleanup -- plausible, since `hru_aspect` already sits
+    in `fill_columns` AND in `prms.columns`, so it looks fully declared without it.
+    Nothing else notices. `merged/nhm_aspect_params.csv` already CONTAINS
+    `hru_aspect`, so `resolve_fill_plan`'s raise (the tripwire for a fabric CSV that
+    predates the block) never fires; `declared.derived_columns` is empty, so
+    `run_fill_sweep` skips the post-fill re-derivation; and KNN then DETERMINES
+    `hru_aspect` by averaging bearings across the 0/360 seam -- 350 deg and 10 deg
+    give 180 deg, due south. That is issue #201 reappearing, guaranteed to land on
+    the all-flat HRUs (`flat_frac == 1.0`), which are exactly the gap-filled ones.
+    Exit code 0, no NaN for Guard 3 to see, no log line.
+
+    This test is the CI-visible half of that contract: pure YAML, no data root, so
+    unlike Guard 2 it does not skip. Pinning the exact spec (not just presence) also
+    catches a `from:` narrowed back to a single column, which would make the
+    two-argument circular mean unrecoverable.
+    """
+    declared = {d.name: d for d in pi.load_declared_params()}
+    assert declared["aspect"].derived_columns == {
+        "hru_aspect": {"from": ["mean_sin", "mean_cos"], "transform": "atan2_deg"}
+    }
+    assert declared["slope"].derived_columns == {
+        "hru_slope": {"from": "mean", "transform": "deg_to_fraction"}
+    }
 
 
 def test_generated_index_is_up_to_date():

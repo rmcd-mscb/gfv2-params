@@ -1,7 +1,9 @@
 """Per-batch continuous-zonal stats from a single CONUS raster.
 
-Used for ``elevation``, ``slope``, ``aspect``, and any other ``script: zonal``
-entry in ``configs/zonal/zonal_params.yml``.
+Used for ``elevation``, ``slope``, and any other ``script: zonal`` entry in
+``configs/zonal/zonal_params.yml``. NOT ``aspect``: that entry is ``script:
+aspect`` and runs ``zonal_runners/aspect.py``, because ``hru_aspect`` is a
+circular mean and needs the slope raster as a flat mask (issue #201).
 """
 
 from __future__ import annotations
@@ -16,7 +18,7 @@ from gdptools import UserTiffData, ZonalGen
 def run_zonal_batch(config: dict, batch_id: int, logger) -> None:
     """One HRU batch of continuous-zonal stats from a single raster.
 
-    Drives the elevation/slope/aspect param types. Originally extracted from the now-retired scripts/create_zonal_params.py
+    Drives the elevation/slope param types (aspect has its own runner). Originally extracted from the now-retired scripts/create_zonal_params.py
     (see PR #85). Uses the gdptools NEW API
     (source_var/source_ds/source_crs/target_gdf/target_id).
     """

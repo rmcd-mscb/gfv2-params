@@ -511,7 +511,7 @@ def depstor_raster_inventory(cfg) -> list[RasterEntry]:
 _PARAM_ENTRIES = [
     ParamEntry(name="elevation", csv_name="nhm_elevation_params.csv", column="mean", kind="continuous", units="m", cmap="terrain"),
     ParamEntry(name="slope", csv_name="nhm_slope_params.csv", column="mean", kind="continuous", units="degrees", cmap="YlOrRd"),
-    ParamEntry(name="aspect", csv_name="nhm_aspect_params.csv", column="mean", kind="continuous", units="degrees", cmap="twilight"),
+    ParamEntry(name="aspect", csv_name="nhm_aspect_params.csv", column="hru_aspect", kind="continuous", units="degrees", cmap="twilight"),
     ParamEntry(name="soils", csv_name="nhm_soils_params.csv", column="soils", kind="categorical"),
     ParamEntry(name="soil_moist_max", csv_name="nhm_soil_moist_max_params.csv", column="soil_moist_max", kind="continuous", units="cm", cmap="Blues"),
     ParamEntry(name="cov_type", csv_name="nhm_lulc_nhm_v11_params.csv", column="cov_type", kind="categorical"),

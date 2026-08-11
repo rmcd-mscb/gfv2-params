@@ -32,6 +32,7 @@ from gfv2_params.params_index import (  # noqa: F401  (DeclaredParam re-exported
     iter_declared_params,
     load_declared_params,
 )
+from gfv2_params.zonal_runners.merge import apply_derived_columns
 
 
 def find_missing_ids(param_file, expected_max, id_feature, logger):
@@ -536,11 +537,16 @@ def run_fill_sweep(targets, merged_gdf, expected_max, id_feature, k_neighbors, l
 
             validate_fabric_sources(plan.fabric_columns, merged_gdf, name)
 
-            # `fabric_columns` counts as work: a param declaring ONLY fabric columns
-            # must not be short-circuited here (this guard tested `fill_columns` alone
-            # and made `apply_fabric_columns` below unreachable for such a param).
-            if not plan.fill_columns and not plan.fabric_columns:
-                logger.info("  No fill_columns declared for %s; nothing to fill", name)
+            # Every mechanism below counts as work, not just `fill_columns`. This
+            # guard originally tested `fill_columns` alone, which made
+            # `apply_fabric_columns` unreachable for a param declaring ONLY fabric
+            # columns; `derived_columns` is the SAME omission a third time, so it is
+            # listed here too. A param declaring only derived columns is latent today
+            # (both of today's derived columns are also fillable) but would otherwise
+            # skip its re-derivation silently -- and for `hru_aspect` that means KNN,
+            # or a stale on-disk value, deciding a circular quantity.
+            if not plan.fill_columns and not plan.fabric_columns and not declared.derived_columns:
+                logger.info("  Nothing declared to fill or derive for %s; skipping", name)
                 continue
 
             # Capture dtypes on the pristine pre-fill frame; fill_missing_values_knn
@@ -571,6 +577,50 @@ def run_fill_sweep(targets, merged_gdf, expected_max, id_feature, k_neighbors, l
                                 f"the fabric. Refusing to write a canonical parameter file "
                                 f"with an unfilled gap."
                             )
+
+            if declared.derived_columns:
+                # AFTER the KNN pass and the fabric copy, so every derived column is
+                # a function of the values actually being written. Both of today's
+                # derived columns are ALSO in fill_columns, so KNN has just written
+                # an interpolated value into each -- this overwrites it, and the
+                # ordering is the whole safety property:
+                #
+                #   hru_aspect is CIRCULAR. Interpolating neighbours at 350 deg and
+                #   10 deg gives 180 deg, due south, which is issue #201 reappearing
+                #   on gap-filled HRUs. hru_slope is monotone so its interpolation
+                #   was defensible, but it was computed independently of `mean` and
+                #   could therefore disagree with its own declared source on a
+                #   synthesized row.
+                #
+                # They stay declared fillable (CLAUDE.md's "do not fix it by dropping
+                # the column from fill_columns") because resolve_fill_plan's
+                # raise-on-a-declared-column-the-file-lacks is the only loud tripwire,
+                # at fill-sweep time, for a fabric CSV that PREDATES a derived_columns
+                # block -- operator-visible, not CI-visible, since CI never runs the
+                # fill sweep against a real merged CSV on a data root, and Guard 2 is
+                # data-root-gated and skips in CI too.
+                #
+                # It does NOT catch a DELETED block: the column stays declared and
+                # stays on disk, so nothing raises and this whole `if` is skipped,
+                # leaving KNN to determine hru_aspect. That case is pinned in CI by
+                # tests/test_params_index.py::
+                # test_the_two_derived_columns_are_still_declared.
+                #
+                # `.copy()` is load-bearing, not defensive: `apply_derived_columns`
+                # assigns into the frame it is handed, and on the NO-GAP path
+                # `complete_df` IS `param_df` -- `fill_missing_values_knn` returns its
+                # argument unchanged when there is nothing to fill, and
+                # `apply_fabric_columns` (which copies) is skipped. Without the copy,
+                # the derived column is written into the frame `write_filled_in_place`
+                # then preserves as the PRE-FILL copy at `merged/_unfilled/`, whose
+                # whole contract is being the true raw version -- destroyed
+                # irreversibly, on a shared filesystem with no version control. Live,
+                # not hypothetical: `merged/nhm_slope_params.csv` has 361,471 rows,
+                # zero NaN and no `_unfilled/` copy yet, so the next sweep takes
+                # exactly this path.
+                complete_df = apply_derived_columns(complete_df.copy(), declared.derived_columns)
+                logger.info("  Re-derived %s from filled sources",
+                            sorted(declared.derived_columns))
 
             write_filled_in_place(complete_df, param_file, param_df, dtypes, logger=logger)
 
