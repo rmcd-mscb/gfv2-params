@@ -146,7 +146,7 @@ BATCH_RUNNERS = {
 
 ### Hop 5 — The actual compute
 
-[`src/gfv2_params/zonal_runners/zonal.py:16-72`](../src/gfv2_params/zonal_runners/zonal.py#L16-L72)
+[`src/gfv2_params/zonal_runners/zonal.py:18-74`](../src/gfv2_params/zonal_runners/zonal.py#L18-L74)
 is the per-batch work — read the HRU batch gpkg, open the source raster,
 hand both to `gdptools.ZonalGen`, write one CSV:
 

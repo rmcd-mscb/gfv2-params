@@ -197,12 +197,22 @@ by `_record` from the config entry. `run_fill_sweep` re-applies it after
   therefore always exactly `atan2` of the two columns sitting next to it in the same
   file. **It is still declared in `fill_columns`** — the KNN value is overwritten by
   the re-derivation, and the declaration is what keeps `resolve_fill_plan`'s
-  raise-on-a-declared-column-the-file-lacks as the only loud tripwire for a
-  deleted `derived_columns:` block. **It fires at fill-sweep time, not in CI** —
-  `resolve_fill_plan` runs against a real merged CSV on a data root, which CI never
-  executes. Verified during review: if the `derived_columns:` block were deleted,
-  nothing in CI would fail, because `hru_aspect` stays in both `fill_columns` and
-  `prms.columns` and Guard 1 still passes. `hru_slope` stays declared for the same reason.
+  raise-on-a-declared-column-the-file-lacks as a loud tripwire for a fabric whose
+  CSV **predates** the `derived_columns:` block. **It fires at fill-sweep time, not
+  in CI** — `resolve_fill_plan` runs against a real merged CSV on a data root, which
+  CI never executes.
+
+  **Amended after the final review.** This paragraph originally claimed the same raise
+  also covered a `derived_columns:` block *deleted from the config*, and that nothing
+  in CI could catch that. Both halves were wrong. `resolve_fill_plan` raises only when
+  a declared column is absent from the FRAME — with the block deleted, `hru_aspect`
+  stays in `fill_columns` and stays on disk, so the raise never fires and
+  `run_fill_sweep` silently skips the re-derivation, handing a circular quantity to
+  KNN. That hole is now closed by `test_the_two_derived_columns_are_still_declared`
+  (`tests/test_params_index.py`), which pins both blocks and IS data-root-free, so it
+  runs in CI. The dangerous ordering is specifically deleted-block-without-re-merge:
+  a `--mode merge` after the deletion drops the column from the CSV and the raise
+  fires normally. `hru_slope` stays declared for the same reason.
   ([Amended 2026-08-10](../plans/2026-08-10-hru-aspect-circular-mean.md): this
   section originally said `hru_aspect` would not be declared fillable and that
   `hru_slope` would be removed from it. That collides with CLAUDE.md:437 and would
