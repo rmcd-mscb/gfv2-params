@@ -1314,7 +1314,7 @@ cp <data_root>/gfv2/params/merged/nhm_aspect_params.csv \
 cd slurm_batch && ZONAL_PARAMS="aspect" FABRIC=gfv2 ./submit_zonal_params.sh
 ```
 
-66 array tasks at 64G plus the chained merge.
+64 array tasks at 64G plus the chained merge.
 
 - [ ] **Step 4: Compare CONUS old vs new**
 

@@ -79,7 +79,7 @@ CSVs, which `derived_columns` cannot join without a new cross-param mechanism.
 It is unnecessary. gdptools already subsets the source raster to the batch's bounding
 box before exactextract sees it (`UserTiffData.prep_agg_data` →
 `_get_shp_bounds_w_buffer` → `.sel()`), and batches are KD-tree spatially compact
-(`batching.py`). Measured over gfv2's 66 batch gpkgs, the bounding boxes are:
+(`batching.py`). Measured over gfv2's 64 batch gpkgs, the bounding boxes are:
 
 | | cells | float32 |
 | --- | --- | --- |
@@ -298,7 +298,7 @@ rollout, never inferred from a green badge.
    151.7°–207.5° IQR opening out toward roughly uniform, and `flat_frac` being small
    and spatially sensible. Compare against the retained `mean` column on the same file.
 2. **gfv2** in place, after backing up
-   `gfv2/params/merged/nhm_aspect_params.csv`. 66 array tasks + chained merge.
+   `gfv2/params/merged/nhm_aspect_params.csv`. 64 array tasks + chained merge.
    The user chose direct-to-gfv2 over a `gfv2_dev` staging pass: the file being
    replaced is already declared defective, and oregon is a sufficient proof.
 3. **tjc** (2 batches).
