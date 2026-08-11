@@ -46,7 +46,8 @@ def _write_batch_gpkg(path: Path, id_feature="nat_hru_id", hru_ids=(1,), boxes=N
     gdf.to_file(path, layer="nhru", driver="GPKG")
 
 
-def _make_config(tmp_path, aspect_arr, slope_arr, slope_transform=_TRANSFORM):
+def _make_config(tmp_path, aspect_arr, slope_arr, slope_transform=_TRANSFORM,
+                  hru_ids=(1,), boxes=None):
     batch_dir = tmp_path / "batches"
     batch_dir.mkdir()
     output_dir = tmp_path / "params"
@@ -54,7 +55,7 @@ def _make_config(tmp_path, aspect_arr, slope_arr, slope_transform=_TRANSFORM):
 
     _write_raster(tmp_path / "aspect.tif", aspect_arr)
     _write_raster(tmp_path / "slope.tif", slope_arr, transform=slope_transform)
-    _write_batch_gpkg(batch_dir / "batch_0000.gpkg")
+    _write_batch_gpkg(batch_dir / "batch_0000.gpkg", hru_ids=hru_ids, boxes=boxes)
 
     return {
         "source_type": "aspect",
@@ -145,11 +146,71 @@ def test_an_all_flat_hru_reports_nan_means_not_west(tmp_path):
     assert math.isclose(out["flat_frac"][0], 1.0, abs_tol=1e-9)
 
 
+def test_multiple_hrus_align_by_id_not_row_order(tmp_path):
+    """Three HRUs, non-monotonic ids, one all-flat -- exercises index alignment.
+
+    Every other test in this file has exactly one HRU, so `out["mean_sin"] =
+    sin_stats["mean"]` (etc., in `run_aspect_batch`) can't distinguish a real
+    join-by-id from a coincidental match at row 0. With ids out of insertion
+    order (7, 2, 9) and a mixed NaN/non-NaN frame -- the shape CONUS actually
+    produces, some HRUs all-flat and most not, never all-or-nothing the way
+    the single-HRU tests above are -- a positional bug would silently swap two
+    HRUs' stats instead of failing to produce output. (Confirmed empirically:
+    the written CSV's row order for ids (7, 2, 9) comes back as (2, 7, 9), so a
+    test that indexed by row position here would not even be self-consistent,
+    let alone catch a misalignment.)
+    """
+    # Three 2-row bands stacked into one 6-row raster; each band is one HRU's
+    # whole footprint, assigned out of row order.
+    aspect = np.array([[90.0, 90.0, 90.0, 90.0],      # HRU 7: due east, sloped
+                       [90.0, 90.0, 90.0, 90.0],
+                       [270.0, 270.0, 270.0, 270.0],   # HRU 2: flat (value is moot)
+                       [270.0, 270.0, 270.0, 270.0],
+                       [0.0, 0.0, 0.0, 0.0],           # HRU 9: due north, sloped
+                       [0.0, 0.0, 0.0, 0.0]])
+    slope = np.array([[5.0, 5.0, 5.0, 5.0],
+                      [5.0, 5.0, 5.0, 5.0],
+                      [0.0, 0.0, 0.0, 0.0],
+                      [0.0, 0.0, 0.0, 0.0],
+                      [5.0, 5.0, 5.0, 5.0],
+                      [5.0, 5.0, 5.0, 5.0]])
+    boxes = [
+        box(_ORIGIN_X, _ORIGIN_Y - 2 * _CELL, _ORIGIN_X + 4 * _CELL, _ORIGIN_Y),              # rows 0-1
+        box(_ORIGIN_X, _ORIGIN_Y - 4 * _CELL, _ORIGIN_X + 4 * _CELL, _ORIGIN_Y - 2 * _CELL),  # rows 2-3
+        box(_ORIGIN_X, _ORIGIN_Y - 6 * _CELL, _ORIGIN_X + 4 * _CELL, _ORIGIN_Y - 4 * _CELL),  # rows 4-5
+    ]
+    config = _make_config(tmp_path, aspect, slope, hru_ids=(7, 2, 9), boxes=boxes)
+
+    run_aspect_batch(config, 0, _LOG)
+    out = _read_output(config)
+
+    row7 = out[out["nat_hru_id"] == 7].iloc[0]
+    row2 = out[out["nat_hru_id"] == 2].iloc[0]
+    row9 = out[out["nat_hru_id"] == 9].iloc[0]
+
+    assert _circular_deg_apart(atan2_deg(row7["mean_sin"], row7["mean_cos"]), 90.0) < 1e-3
+    assert math.isclose(row7["flat_frac"], 0.0, abs_tol=1e-9)
+
+    assert math.isnan(row2["mean_sin"])
+    assert math.isnan(row2["mean_cos"])
+    assert math.isclose(row2["flat_frac"], 1.0, abs_tol=1e-9)
+
+    assert _circular_deg_apart(atan2_deg(row9["mean_sin"], row9["mean_cos"]), 0.0) < 1e-3
+    assert math.isclose(row9["flat_frac"], 0.0, abs_tol=1e-9)
+
+
 def test_legacy_columns_match_the_generic_zonal_runner(tmp_path):
     """Pass 1 must reproduce `run_zonal_batch` exactly, flats included.
 
     If it did not, the retained `mean` column would be a NEW statistic wearing
     the old name and the old-vs-new comparison at rollout would be meaningless.
+
+    This fixture is also the only one in the file that discriminates the
+    CORRECT flat mask (`slope == 0`) from the forbidden one (`aspect == 270`):
+    none of its eight aspect values is 270, so a mask of `aspect == 270` would
+    flag zero cells as flat rather than the two real ones (200 deg at row 0 col
+    2, 110 deg at row 1 col 1). The pass-1 columns above are unmasked and can't
+    tell the two masks apart -- these three lines can, so they must be here.
     """
     from gfv2_params.zonal_runners.zonal import run_zonal_batch
 
@@ -171,6 +232,15 @@ def test_legacy_columns_match_the_generic_zonal_runner(tmp_path):
 
     for col in ["count", "mean", "std", "min", "25%", "50%", "75%", "max", "sum"]:
         assert math.isclose(ours[col][0], ref[col][0], rel_tol=1e-9, abs_tol=1e-9), col
+
+    # Two cells are flat by slope (200 deg, 110 deg); zero are 270 deg. A mask
+    # of `aspect == 270` would leave n_aspect_cells=8, flat_frac=0.0, and a
+    # bearing of ~357.4 -- all three numbers below would be wrong under it.
+    assert math.isclose(ours["n_aspect_cells"][0], 6.0, abs_tol=1e-9)
+    assert math.isclose(ours["flat_frac"][0], 0.25, abs_tol=1e-9)
+    assert _circular_deg_apart(
+        atan2_deg(ours["mean_sin"], ours["mean_cos"])[0], 342.7
+    ) < 1e-2
 
 
 def test_misaligned_slope_raster_raises(tmp_path):

@@ -60,10 +60,12 @@ FLAT_SLOPE = 0.0
 # record of the pre-fix product rather than a new statistic wearing the old name.
 _STAT_COLUMNS = ["count", "mean", "std", "min", "25%", "50%", "75%", "max", "sum"]
 
-# Cells of slop added to the batch bounds before clipping. gdptools buffers by a
-# cell before its own subset (`_get_shp_bounds_w_buffer`); an exact-bbox clip
-# would drop the partially-covered edge cells exactextract weights for
-# boundary-touching HRUs, biasing every HRU on a batch seam.
+# Cells of slop added to the batch bounds before clipping. gdptools' own subset
+# buffers by `2 * max(res)` (`_get_shp_bounds_w_buffer`, gdptools/utils.py:718)
+# -- so 2 is the exact minimum, not a margin. Tightening it to 1 would silently
+# clip the edge cells gdptools itself requests for boundary-touching HRUs,
+# biasing every HRU on a batch seam -- the precise failure this constant exists
+# to prevent.
 _BOUNDS_BUFFER_CELLS = 2
 
 
@@ -169,10 +171,22 @@ def run_aspect_batch(config: dict, batch_id: int, logger) -> None:
     flat = slope_da == FLAT_SLOPE
     sloped_aspect = aspect_da.where(~flat)
     radians = np.deg2rad(sloped_aspect)
-    # Arithmetic on a DataArray keeps coords but the .rio accessor needs the CRS
-    # restated before UserTiffData reads it back off the array.
+    # `spatial_ref` (and therefore `.rio.crs`) survives `.where` and these numpy
+    # ufuncs unchanged -- measured directly, so write_crs isn't repairing a lost
+    # CRS. Kept anyway to assert the requirement UserTiffData actually depends on
+    # (`source_ds.rio.crs` resolving to a real CRS) explicitly at the point of
+    # use, rather than relying on an rioxarray propagation behaviour we don't
+    # want this module's correctness to depend on staying that way.
     sin_da = np.sin(radians).rio.write_crs(aspect_da.rio.crs)
     cos_da = np.cos(radians).rio.write_crs(aspect_da.rio.crs)
+    # Per-cell budget while all seven names above are live: aspect_da + slope_da
+    # + sloped_aspect + radians + sin_da + cos_da at 4 B (float32) each, plus
+    # flat at 1 B (bool) = 25 B/cell. Only aspect_da (pass 1, below), sin_da and
+    # cos_da are needed past this point -- slope_da/flat/sloped_aspect/radians
+    # are dead the moment sin_da/cos_da exist. On gfv2's largest measured batch
+    # (0.797e9 cells) that is 19.9 GB of arrays, 10.4 GB of it dead weight this
+    # drop avoids carrying through all three exactextract passes below.
+    del slope_da, flat, sloped_aspect, radians
 
     raw = _zonal_means(aspect_da, nhru_gdf, id_feature, source_type, output_dir)
     sin_stats = _zonal_means(sin_da, nhru_gdf, id_feature, f"{source_type}_sin", output_dir)
