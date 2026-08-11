@@ -589,9 +589,11 @@ def run_fill_sweep(targets, merged_gdf, expected_max, id_feature, k_neighbors, l
                 #
                 # They stay declared fillable (CLAUDE.md's "do not fix it by dropping
                 # the column from fill_columns") because resolve_fill_plan's
-                # raise-on-a-declared-column-the-file-lacks is the only CI-visible
-                # tripwire for a deleted derived_columns block; Guard 2 is
-                # data-root-gated and skips in CI.
+                # raise-on-a-declared-column-the-file-lacks is the only loud tripwire,
+                # at fill-sweep time, for a deleted derived_columns block -- operator-
+                # visible, not CI-visible, since CI never runs the fill sweep against a
+                # real merged CSV on a data root. Guard 2 is data-root-gated and skips
+                # in CI too.
                 complete_df = apply_derived_columns(complete_df, declared.derived_columns)
                 logger.info("  Re-derived %s from filled sources",
                             sorted(declared.derived_columns))

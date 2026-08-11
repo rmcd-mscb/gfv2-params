@@ -155,9 +155,11 @@ params:
     # AFTER the KNN pass, so the interpolated bearing is overwritten and never
     # reaches disk. The declaration is kept for the tripwire, not the fill --
     # resolve_fill_plan raises on a declared column the file does not have, which
-    # is the only CI-visible signal that a fabric's aspect CSV predates this change
-    # or that the derived_columns block below was deleted. Guard 2 is data-root-
-    # gated and skips in CI, so it is not a substitute. Dropping the column from
+    # is the only loud signal, at fill-sweep time, that a fabric's aspect CSV
+    # predates this change or that the derived_columns block below was deleted.
+    # Guard 2 is data-root-gated and skips in CI, so it is not a substitute. That
+    # raise is operator-visible, not CI-visible -- CI never runs the fill sweep
+    # against a real merged CSV on a data root. Dropping the column from
     # fill_columns to express "not interpolated" is explicitly forbidden by
     # CLAUDE.md's derived_columns/fill_columns rule.
     #
