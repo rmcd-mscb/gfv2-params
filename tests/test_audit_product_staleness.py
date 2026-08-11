@@ -13,6 +13,7 @@ from scripts.diagnose.audit_product_staleness import (
     _source_date,
     builder_paths,
     classify,
+    derivation_date,
     parse_vrt_sources,
 )
 
@@ -168,3 +169,49 @@ class TestSourceDate:
     def test_missing_and_none_are_not_dates(self, tmp_path):
         assert _source_date(None) is None
         assert _source_date(str(tmp_path / "nope.vrt")) is None
+
+
+class TestDerivationDate:
+    """The merged file's mtime is the last WRITE; a gap-fill bumps it in place.
+
+    oregon's `nhm_lulc_nhm_v11_params.csv` read 2026-07-25 -- after the #135/#136 lulc
+    rewrite (2026-06-08) -- so the audit called it current. Its per-batch CSVs are dated
+    2026-05-20 and the product still carried the pre-rewrite `retention` column. The
+    2026-07-25 stamp was a fill sweep, and the real derivation predated the builder by
+    nearly three weeks.
+    """
+
+    def _touch(self, path, month, day):
+        import os
+        ts = dt.datetime(2026, month, day).timestamp()
+        os.utime(path, (ts, ts))
+
+    def test_per_batch_csvs_win_over_a_fill_bumped_merged_mtime(self, tmp_path):
+        """The oregon lulc case, by name."""
+        d = tmp_path / "lulc_nhm_v11"
+        d.mkdir()
+        for n in ("b0.csv", "b1.csv"):
+            f = d / n
+            f.write_text("x")
+            self._touch(f, 5, 20)
+        assert derivation_date(d, D(2026, 7, 25)) == D(2026, 5, 20)
+
+    def test_newest_per_batch_file_wins(self, tmp_path):
+        """A partial re-run leaves a mix; the newest is what run_merge consumed last."""
+        d = tmp_path / "p"
+        d.mkdir()
+        for n, day in (("b0.csv", 20), ("b1.csv", 29), ("b2.csv", 22)):
+            f = d / n
+            f.write_text("x")
+            self._touch(f, 5, day)
+        assert derivation_date(d, D(2026, 7, 25)) == D(2026, 5, 29)
+
+    def test_falls_back_to_merged_when_there_is_no_per_batch_stage(self, tmp_path):
+        """depstor constants and snarea have no per-batch directory; the merged mtime
+        is then the best available and must not be discarded."""
+        assert derivation_date(tmp_path / "absent", D(2026, 7, 15)) == D(2026, 7, 15)
+
+    def test_falls_back_when_the_directory_is_empty(self, tmp_path):
+        d = tmp_path / "empty"
+        d.mkdir()
+        assert derivation_date(d, D(2026, 7, 15)) == D(2026, 7, 15)

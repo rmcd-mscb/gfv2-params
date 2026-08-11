@@ -22,6 +22,12 @@ Note what oregon proves: its product was built 2026-07-25, AFTER every elevation
 therefore takes the LATER of a VRT's own mtime and its newest tile -- see its docstring
 for why taking only the tiles was a false-negative bug.
 
+DATES ARE DERIVATION DATES, NOT FILE MTIMES. `merged/<name>.csv` is rewritten in
+place by the gap-fill sweep, so its mtime is the last WRITE and is too recent for
+anything filled since it was built. The audit uses the per-batch CSVs under
+`{output_dir}/{param}/` instead -- see `derivation_date`, and the oregon lulc case
+that made it necessary.
+
 WHAT THIS IS NOT. Both axes are mtime/commit-date heuristics that OVER-SELECT, and
 axis 1 over-selects badly: a comment-only docstring commit touching a builder trips it
 just as hard as a rewrite. In the run that motivated this script, 3 of 6 axis-1 flags
@@ -92,6 +98,32 @@ def parse_vrt_sources(xml_text: str, base: Path) -> list[Path]:
         # relativeToVRT="1" means relative to the VRT's directory, not the CWD.
         out.append(base / el.text if el.get("relativeToVRT") == "1" else Path(el.text))
     return out
+
+
+def derivation_date(per_batch_dir: Path, merged_date):
+    """When the product was DERIVED, not when it was last written.
+
+    `merge_and_fill_params.write_filled_in_place` rewrites `merged/<name>.csv` IN
+    PLACE, so a gap-fill bumps the product's mtime without re-running the builder.
+    Using the merged file's mtime therefore reports a too-recent date for anything
+    that has been filled since it was built -- a false negative, in the direction
+    that lets drift ship.
+
+    Measured, on the run that motivated this: oregon's `nhm_lulc_nhm_v11_params.csv`
+    read 2026-07-25, comfortably after the #135/#136 lulc rewrite (2026-06-08), so
+    the audit called it CURRENT. Its per-batch CSVs are dated 2026-05-20 and it still
+    carries the pre-rewrite `retention` column -- the 2026-07-25 stamp was a fill
+    sweep. The derivation predates the builder by nearly three weeks.
+
+    The per-batch CSVs under `{output_dir}/{param}/` are what `run_merge` actually
+    consumed, and nothing rewrites them after the fact, so their newest mtime is the
+    honest derivation date. Params with no per-batch stage (depstor constants, snarea)
+    fall back to the merged mtime, which is the best available.
+    """
+    if not per_batch_dir.is_dir():
+        return merged_date
+    dates = [d for d in (_mdate(f) for f in per_batch_dir.glob("*.csv")) if d]
+    return max(dates) if dates else merged_date
 
 
 def classify(product, builder, source) -> list[str]:
@@ -178,6 +210,9 @@ def audit(fabric: str) -> list[dict]:
         pdate = _mdate(product)
         if pdate is None:
             continue  # not built for this fabric; #215 scopes those out
+        # The merged file's mtime is the last WRITE, which a fill sweep bumps.
+        # Prefer the per-batch CSVs, which are what run_merge consumed.
+        pdate = derivation_date(Path(data_root) / fabric / "params" / d.name, pdate)
         bdates = [x for x in (_last_commit_date(b) for b in builder_paths(d.prms.get("builder"))) if x]
         src = sources.get(d.name)
         if src:
