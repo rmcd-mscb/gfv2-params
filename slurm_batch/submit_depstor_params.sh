@@ -29,8 +29,28 @@
 
 set -euo pipefail
 
+# --- shared workflow-wrapper contract (see slurm_batch/submit_fabric_rerun.sh) ---------
+# Leading `--after <jobid>`, a final `TERMINAL_JOB_ID=<id>`, and a hard error on an
+# unrecognised leading flag rather than absorbing it as a positional.
+AFTER_JOB=""
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --after)
+            if [ -z "${2:-}" ]; then
+                echo "ERROR: --after requires a job id" >&2
+                exit 1
+            fi
+            AFTER_JOB="$2"; shift 2 ;;
+        --) shift; break ;;
+        -*) echo "ERROR: unknown option '$1'" >&2
+            echo "       This wrapper takes: [--after <jobid>] <batches_dir> [fabric] [base_config] [max_concurrent]" >&2
+            exit 1 ;;
+        *) break ;;
+    esac
+done
+
 if [ $# -lt 1 ]; then
-    echo "Usage: $0 <batches_dir> [fabric] [base_config] [max_concurrent]"
+    echo "Usage: $0 [--after <jobid>] <batches_dir> [fabric] [base_config] [max_concurrent]"
     echo "  batches_dir:    path to {fabric}/batches/ (contains manifest.yml)"
     echo "  fabric:         optional fabric name (default: gfv2)"
     echo "  base_config:    optional path to base_config.yml (default: configs/base_config.yml)"
@@ -87,10 +107,23 @@ MERGE_JOB_IDS=()
 for FRACTION in "${FRACTIONS[@]}"; do
     echo "--- $FRACTION ---"
 
+    # Inbound dependency from --after, applied to EVERY fraction's array: each is an
+    # independent submission, so chaining only the first would let the rest start against
+    # depstor rasters the previous stage has not finished writing.
+    DEP_ARG=""
+    [ -n "$AFTER_JOB" ] && DEP_ARG="--dependency=afterok:$AFTER_JOB"
+
+    # shellcheck disable=SC2086  # $DEP_ARG is deliberately unquoted: it is either empty
+    # or a whole `--dependency=...` argument, and quoting it would pass an EMPTY string
+    # to sbatch when there is no inbound dependency.
     ARRAY_JOB_ID=$(sbatch --array="$ARRAY_SPEC" \
+                         $DEP_ARG \
                          --export=ALL,BASE_CONFIG="$BASE_CONFIG",FABRIC="$FABRIC",FRACTION="$FRACTION" \
                          slurm_batch/create_depstor_zonal.batch | awk '{print $NF}')
-    echo "  zonal  array: $ARRAY_JOB_ID"
+    # Echo the inbound dependency, matching submit_zonal_params.sh. Without it the
+    # submission looks unchained in the log even when it is not, which is exactly the
+    # ambiguity an operator reads a chained re-run's output to resolve.
+    echo "  zonal  array: $ARRAY_JOB_ID${DEP_ARG:+ ($DEP_ARG)}"
 
     MERGE_JOB_ID=$(sbatch --dependency=afterok:"$ARRAY_JOB_ID" \
                          --export=ALL,BASE_CONFIG="$BASE_CONFIG",FABRIC="$FABRIC",FRACTION="$FRACTION" \
@@ -113,3 +146,7 @@ CONSTANTS_JOB_ID=$(sbatch --dependency=afterok:"$RATIOS_JOB_ID" \
 echo "  constants afterok:$RATIOS_JOB_ID -> $CONSTANTS_JOB_ID"
 
 echo "Done. Final copy_constants job ID: $CONSTANTS_JOB_ID"
+# Machine-readable terminal job for slurm_batch/submit_fabric_rerun.sh. A single id is
+# correct here: unlike submit_zonal_params.sh this wrapper CONVERGES -- ratios waits on
+# every fraction merge, and copy_constants waits on ratios.
+echo "TERMINAL_JOB_ID=$CONSTANTS_JOB_ID"

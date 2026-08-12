@@ -915,6 +915,27 @@ submits `build_zonal_weights.batch` first and chains the ssflux array on its
 `afterok` (and on the merged slope CSV). `submit_depstor_params.sh` chains the
 single ratios job on every fraction's merge.
 
+### The workflow-wrapper contract
+
+All four workflow wrappers — `submit_zonal_params.sh`, `submit_depstor_params.sh`,
+`submit_snarea_pipeline.sh`, `submit_dprst_depth.sh` — share one contract so a driver
+(`submit_fabric_rerun.sh`) can chain whole workflows without a babysitting process:
+
+- **`--after <jobid>`**, given *before* the positional arguments, makes every submission
+  that would otherwise have no dependency wait on `<jobid>`. "Every" is load-bearing:
+  `submit_zonal_params.sh` submits an independent array per param, so chaining only the
+  first would let the rest start against inputs the previous stage had not finished
+  writing.
+- **`TERMINAL_JOB_ID=<id>`** is printed as the final line, in addition to the existing
+  human-readable `Done. …` line. It names the run's whole completion frontier, so it may
+  be **colon-joined** (`afterok:a:b:c` is SLURM's own "after all of these" syntax).
+  `submit_zonal_params.sh` fans out and reports every param's merge job; the other three
+  converge on a single job and report one id.
+- An **unrecognised leading flag is a hard error**, not a positional. Without that, a flag
+  a wrapper does not accept would be silently absorbed as its `batches_dir` or `fabric`.
+
+`--after` is backward-compatible: omit it and the wrappers behave exactly as before.
+
 Env knobs (both wrappers):
 
 - `FABRIC=gfv2_vpu01` — non-default fabric (or pass as the 2nd positional arg)

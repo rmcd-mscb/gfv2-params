@@ -616,6 +616,19 @@ def main():
     parser.add_argument("--fraction", default=None, help="Fraction name (required for zonal/merge)")
     parser.add_argument("--mean", default=None, help="Mean-aggregation name (required for mean_zonal/mean_finalize)")
     parser.add_argument("--batch_id", type=int, default=None, help="Batch ID (zonal/mean_zonal modes only)")
+    # Accepted so that --force means one thing across every orchestrator and a driver can
+    # pass it to all of them uniformly. It is genuinely a no-op HERE: no mode in this
+    # script skips existing outputs -- every exists() check in it guards an *input* and
+    # raises. Documented as a no-op rather than left silent, because an operator who
+    # passes --force and sees no complaint reasonably concludes a rebuild was forced.
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help=(
+            "Rebuild outputs even if they already exist. No-op here: this orchestrator "
+            "always rebuilds. Accepted so --force means the same thing everywhere."
+        ),
+    )
     args = parser.parse_args()
 
     if args.mode in {"zonal", "merge"} and not args.fraction:

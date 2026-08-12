@@ -83,9 +83,22 @@ shells around the same builders. The four stages:
 | Part 2c snow-depletion curve build | `scripts/derive_snarea_curve.py` | `configs/snarea/snarea_curve.yml` | `src/gfv2_params/snarea/` |
 | Part 2c snow-depletion curve library | `scripts/derive_snarea_library.py` | `configs/snarea/snarea_library.yml` | `src/gfv2_params/snarea/library.py` |
 
-Orchestrators support `--step <name>` (one step), `--from <name>` (resume),
-and `--force` (rebuild outputs that already exist). The zonal orchestrator
-also supports `--mode zonal|merge|build_weights` for per-batch debugging.
+The raster orchestrators (`build_shared_rasters`, `build_depstor_rasters`)
+support `--step <name>` (one step), `--from <name>` (resume), and `--force`
+(rebuild outputs that already exist).
+
+`--force` means the same thing on **every** orchestrator — rebuild regardless
+of what exists — so a driver can pass it uniformly. On the two parameter
+orchestrators (`derive_zonal_params`, `derive_depstor_params`) it is an
+accepted **no-op**, because neither ever skips an existing output: every
+`exists()` check in them guards an *input* and raises. Their help text says so
+rather than staying silent, since an operator who passes `--force` without
+complaint reasonably concludes a rebuild was forced.
+
+The zonal orchestrator also supports `--mode zonal|merge|build_weights` for
+per-batch debugging, and `--force-weights` — the one genuinely skippable
+output in the parameter pass is the CONUS lithology weight matrix, which is
+what the old, narrower `--force` used to rebuild.
 
 SLURM submission wrappers (`slurm_batch/submit_*.sh`) chain array jobs →
 merges → ratios via `afterok` dependencies.

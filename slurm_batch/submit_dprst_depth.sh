@@ -56,8 +56,28 @@
 
 set -euo pipefail
 
+# --- shared workflow-wrapper contract (see slurm_batch/submit_fabric_rerun.sh) ---------
+# Leading `--after <jobid>`, a final `TERMINAL_JOB_ID=<id>`, and a hard error on an
+# unrecognised leading flag rather than absorbing it as a positional.
+AFTER_JOB=""
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --after)
+            if [ -z "${2:-}" ]; then
+                echo "ERROR: --after requires a job id" >&2
+                exit 1
+            fi
+            AFTER_JOB="$2"; shift 2 ;;
+        --) shift; break ;;
+        -*) echo "ERROR: unknown option '$1'" >&2
+            echo "       This wrapper takes: [--after <jobid>] <batches_dir> [fabric] [base_config] [n_tile_batches] [hru_max_concurrent]" >&2
+            exit 1 ;;
+        *) break ;;
+    esac
+done
+
 if [ $# -lt 1 ]; then
-    echo "Usage: $0 <batches_dir> [fabric] [base_config] [n_tile_batches] [hru_max_concurrent]"
+    echo "Usage: $0 [--after <jobid>] <batches_dir> [fabric] [base_config] [n_tile_batches] [hru_max_concurrent]"
     echo "  batches_dir:         path to {fabric}/batches/ (HRU batch manifest; drives stage 4a's mean_zonal array)"
     echo "  fabric:              optional fabric name (default: gfv2)"
     echo "  base_config:         optional path to base_config.yml (default: configs/base_config.yml)"
@@ -107,7 +127,13 @@ echo "  stage 1-2: $N_TILE_BATCHES tile batches (uncapped concurrency -- see siz
 echo "  stage 4a : $N_HRU_BATCHES HRU batches ($HRU_THROTTLE_NOTE)"
 
 echo "--- stage 1: plan (tile work-list) ---"
+# Stage 1 is this wrapper's ONLY independent submission -- stages 2..4b each chain
+# afterok on their predecessor, so the inbound --after reaches them transitively.
+PLAN_DEP=""
+[ -n "$AFTER_JOB" ] && PLAN_DEP="--dependency=afterok:$AFTER_JOB"
+# shellcheck disable=SC2086  # deliberately unquoted: empty, or a whole --dependency=... arg.
 PLAN_JOB_ID=$(sbatch \
+    $PLAN_DEP \
     --export=ALL,BASE_CONFIG="$BASE_CONFIG",FABRIC="$FABRIC",N_TILE_BATCHES="$N_TILE_BATCHES" \
     slurm_batch/plan_dprst_depth_batches.batch | awk '{print $NF}')
 echo "  plan: $PLAN_JOB_ID"
@@ -151,3 +177,6 @@ MEAN_FINALIZE_JOB_ID=$(sbatch --dependency=afterok:"$MEAN_ARRAY_JOB_ID" \
 echo "  mean_finalize: $MEAN_FINALIZE_JOB_ID"
 
 echo "Done. Final job ID: $MEAN_FINALIZE_JOB_ID (writes {output_dir}/merged/nhm_dprst_depth_avg_params.csv)"
+# Machine-readable terminal job for slurm_batch/submit_fabric_rerun.sh. A single id is
+# correct: stages 1-4b are one strictly linear afterok chain ending here.
+echo "TERMINAL_JOB_ID=$MEAN_FINALIZE_JOB_ID"

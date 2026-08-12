@@ -33,7 +33,10 @@ cd "$SLURM_SUBMIT_DIR"
 BASE_CONFIG=${BASE_CONFIG:-configs/base_config.yml}
 FABRIC=${FABRIC:-gfv2}
 
-FORCE_FLAG=${FORCE:+--force}
+# --force-weights, not --force: this batch's FORCE=1 has always meant "overwrite the
+# weight CSV", which is now its own flag. Plain --force is a documented no-op on this
+# orchestrator, so leaving it here would silently stop honouring FORCE=1.
+FORCE_FLAG=${FORCE:+--force-weights}
 
 pixi run --as-is python scripts/derive_zonal_params.py \
     --config configs/zonal/zonal_params.yml \

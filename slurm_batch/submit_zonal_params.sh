@@ -22,8 +22,34 @@
 
 set -euo pipefail
 
+# --- shared workflow-wrapper contract (see slurm_batch/submit_fabric_rerun.sh) ---------
+# All four submit_*.sh wrappers accept a leading `--after <jobid>` and print a final
+# `TERMINAL_JOB_ID=<id>`, which is what lets a driver chain whole workflows without a
+# babysitting process.
+#
+# An unrecognised leading flag is a hard ERROR, not a positional. Without that, a driver
+# passing a flag this wrapper does not take would have it silently absorbed as
+# batches_dir -- the quiet-degradation shape that has already cost this repo two
+# withdrawn attempts at exactly this problem.
+AFTER_JOB=""
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --after)
+            if [ -z "${2:-}" ]; then
+                echo "ERROR: --after requires a job id" >&2
+                exit 1
+            fi
+            AFTER_JOB="$2"; shift 2 ;;
+        --) shift; break ;;
+        -*) echo "ERROR: unknown option '$1'" >&2
+            echo "       This wrapper takes: [--after <jobid>] <batches_dir> [fabric] [base_config] [max_concurrent]" >&2
+            exit 1 ;;
+        *) break ;;
+    esac
+done
+
 if [ $# -lt 1 ]; then
-    echo "Usage: $0 <batches_dir> [fabric] [base_config] [max_concurrent]"
+    echo "Usage: $0 [--after <jobid>] <batches_dir> [fabric] [base_config] [max_concurrent]"
     echo "  batches_dir:    path to {fabric}/batches/ (contains manifest.yml)"
     echo "  fabric:         optional fabric name (default: gfv2)"
     echo "  base_config:    optional path to base_config.yml (default: configs/base_config.yml)"
@@ -115,10 +141,25 @@ for PARAM in "${PARAMS[@]}"; do
 
     EXTRA_DEPS=()
 
+    # Step 0: inbound dependency from --after, if a driver supplied one.
+    # Applied to EVERY param, not just the first: each param submits its own independent
+    # array, so chaining only the first would let params 2..N start immediately and read
+    # upstream inputs the previous stage has not finished writing.
+    if [ -n "$AFTER_JOB" ]; then
+        EXTRA_DEPS+=("afterok:$AFTER_JOB")
+    fi
+
     # Step A: build_weights prereq (one-shot per submit run).
     if [ -n "${NEEDS_WEIGHTS[$PARAM]:-}" ]; then
         if [ -z "$WEIGHTS_JOB_ID" ]; then
+            # The weights job is itself an independent submission, so it needs the
+            # inbound dependency too -- it is not covered by the array's EXTRA_DEPS.
+            WEIGHTS_DEP=""
+            [ -n "$AFTER_JOB" ] && WEIGHTS_DEP="--dependency=afterok:$AFTER_JOB"
+            # shellcheck disable=SC2086  # deliberately unquoted: empty or a whole
+            # --dependency=... argument (see Step C's note).
             WEIGHTS_JOB_ID=$(sbatch \
+                $WEIGHTS_DEP \
                 --export=ALL,BASE_CONFIG="$BASE_CONFIG",FABRIC="$FABRIC" \
                 slurm_batch/build_zonal_weights.batch | awk '{print $NF}')
             echo "  weights: $WEIGHTS_JOB_ID"
@@ -167,3 +208,15 @@ for PARAM in "${PARAMS[@]}"; do
 done
 
 echo "Done. Submitted ${#PARAMS[@]} params; last merge job ID: ${MERGE_JOB_ID}"
+
+# Machine-readable terminal job(s) for slurm_batch/submit_fabric_rerun.sh. An addition to
+# the human-readable line above, not a replacement.
+#
+# This wrapper FANS OUT: every param gets its own independent array + merge, and they
+# finish in no particular order. So the terminal is ALL the merge jobs, colon-joined --
+# `afterok:a:b:c` is SLURM's own syntax for "after all of these". Reporting only the
+# last-submitted merge (the `MERGE_JOB_ID` on the line above) would let the next stage
+# start while sibling params were still writing their CSVs, with every job still
+# reporting COMPLETED.
+TERMINAL_IDS=$(IFS=:; echo "${MERGE_JOB_BY_PARAM[*]}")
+echo "TERMINAL_JOB_ID=${TERMINAL_IDS}"
