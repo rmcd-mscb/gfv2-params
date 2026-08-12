@@ -44,8 +44,33 @@
 
 set -euo pipefail
 
+# --- shared workflow-wrapper contract (see slurm_batch/submit_fabric_rerun.sh) ---------
+# Leading `--after <jobid>` and a final `TERMINAL_JOB_ID=<id>`.
+#
+# Parsed BEFORE the positionals, which is what distinguishes it from this wrapper's
+# trailing `[extra sbatch opts...]`: anything after the fabric/base_config is forwarded
+# verbatim to every sbatch, so a `--after` there would be handed to SLURM as an unknown
+# option instead of being consumed here. An unrecognised LEADING flag is a hard error
+# rather than a positional.
+AFTER_JOB=""
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --after)
+            if [ -z "${2:-}" ]; then
+                echo "ERROR: --after requires a job id" >&2
+                exit 1
+            fi
+            AFTER_JOB="$2"; shift 2 ;;
+        --) shift; break ;;
+        -*) echo "ERROR: unknown option '$1'" >&2
+            echo "       This wrapper takes: [--after <jobid>] <fabric> [base_config] [extra sbatch opts...]" >&2
+            exit 1 ;;
+        *) break ;;
+    esac
+done
+
 if [ $# -lt 1 ]; then
-    echo "Usage: $0 <fabric> [base_config] [extra sbatch opts...]"
+    echo "Usage: $0 [--after <jobid>] <fabric> [base_config] [extra sbatch opts...]"
     echo "  fabric:      fabric name (e.g. oregon, gfv2)"
     echo "  base_config: optional path to base_config.yml (default: configs/base_config.yml)"
     exit 1
@@ -131,7 +156,12 @@ if [ -n "${CLEAR_BATCHES:-}" ] && [ -z "${DRYRUN:-}" ]; then
 fi
 
 echo "--- Stage 1: aggregate (array) ---"
-AID=$(submit --array="$ARRAY_SPEC" --export="$EXPORT" -- slurm_batch/derive_snodas_aggregate.batch)
+# Stage 1 is this wrapper's ONLY independent submission -- merge/coverage/derive/library
+# each chain afterok on their predecessor, so the inbound --after reaches them
+# transitively.
+AFTER_ARGS=()
+[ -n "$AFTER_JOB" ] && AFTER_ARGS=(--dependency=afterok:"$AFTER_JOB")
+AID=$(submit --array="$ARRAY_SPEC" "${AFTER_ARGS[@]}" --export="$EXPORT" -- slurm_batch/derive_snodas_aggregate.batch)
 echo "  aggregate array: $AID"
 
 echo "--- merge ---"
@@ -153,4 +183,7 @@ echo "  library afterok:$S2 -> $S3"
 
 echo ""
 echo "Done. Chain: $AID (agg) -> $MID (merge) -> $CID (coverage) -> $S2 (derive) -> $S3 (library)"
+# Machine-readable terminal job for slurm_batch/submit_fabric_rerun.sh. A single id is
+# correct: the five stages above are one strictly linear afterok chain ending at $S3.
+echo "TERMINAL_JOB_ID=$S3"
 echo "Monitor: squeue -u \$USER   |   sacct -j $AID,$MID,$CID,$S2,$S3"
