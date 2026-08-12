@@ -120,7 +120,10 @@ for FRACTION in "${FRACTIONS[@]}"; do
                          $DEP_ARG \
                          --export=ALL,BASE_CONFIG="$BASE_CONFIG",FABRIC="$FABRIC",FRACTION="$FRACTION" \
                          slurm_batch/create_depstor_zonal.batch | awk '{print $NF}')
-    echo "  zonal  array: $ARRAY_JOB_ID"
+    # Echo the inbound dependency, matching submit_zonal_params.sh. Without it the
+    # submission looks unchained in the log even when it is not, which is exactly the
+    # ambiguity an operator reads a chained re-run's output to resolve.
+    echo "  zonal  array: $ARRAY_JOB_ID${DEP_ARG:+ ($DEP_ARG)}"
 
     MERGE_JOB_ID=$(sbatch --dependency=afterok:"$ARRAY_JOB_ID" \
                          --export=ALL,BASE_CONFIG="$BASE_CONFIG",FABRIC="$FABRIC",FRACTION="$FRACTION" \

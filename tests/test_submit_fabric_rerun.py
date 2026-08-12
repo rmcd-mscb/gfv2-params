@@ -50,13 +50,15 @@ def _tree(tmp_path):
     return batches, base_config
 
 
-def _run(args, tmp_path, manifest=None, path_prefix=None):
+def _run(args, tmp_path, manifest=None, path_prefix=None, env_extra=None):
     env = dict(os.environ)
     env.pop("SUBMIT_JOBS_MAX_CONCURRENT", None)
+    env.pop("ZONAL_PARAMS", None)
     if manifest is not None:
         env["FABRIC_RERUN_MANIFEST"] = str(manifest)
     if path_prefix is not None:
         env["PATH"] = f"{path_prefix}{os.pathsep}{env['PATH']}"
+    env.update(env_extra or {})
     return subprocess.run(
         ["bash", str(DRIVER), *args],
         cwd=REPO,
@@ -192,6 +194,56 @@ class TestFrom:
 
 
 class TestEnvironment:
+    def test_environment_reaches_the_stage_commands(self, tmp_path):
+        """Per-fabric knobs are env vars, and the driver must not swallow them.
+
+        ZONAL_PARAMS is the concrete case and it is not cosmetic. submit_zonal_params.sh
+        runs all 10 params by default; on a data root where a source is unstaged (neither
+        lulc_nlcd nor lulc_foresce is staged here) that param's array fails, its merge
+        fails, and because depstor_params waits on EVERY merge the whole remaining chain
+        is cancelled. Observed for real on the first tjc run. The remedy is to export the
+        subset -- which only works if the environment survives the driver.
+        """
+        batches, cfg = _tree(tmp_path)
+        stubdir = tmp_path / "stubs"
+        stubdir.mkdir(exist_ok=True)
+        log = tmp_path / "env.log"
+        stub = stubdir / "echoenv.sh"
+        stub.write_text(
+            "#!/usr/bin/env bash\n"
+            f'echo "ZONAL_PARAMS=${{ZONAL_PARAMS:-unset}}" >> "{log}"\n'
+            'echo "TERMINAL_JOB_ID=1"\n'
+        )
+        stub.chmod(0o755)
+        manifest = tmp_path / "envtest.yml"
+        manifest.write_text(
+            yaml.safe_dump(
+                {
+                    "stages": [
+                        {
+                            "name": "only",
+                            "command": f"{stub} {{fabric}}",
+                            "kind": "wrapper",
+                            "scope": "fabric",
+                            "accepts_force": False,
+                            "consumes": ["x"],
+                            "produces": "y",
+                            "resources": "z",
+                        }
+                    ]
+                }
+            )
+        )
+        r = _run(
+            [str(batches), "tjc", str(cfg)],
+            tmp_path,
+            manifest=manifest,
+            env_extra={"ZONAL_PARAMS": "elevation slope"},
+        )
+        assert r.returncode == 0, r.stderr
+        assert log.read_text().strip() == "ZONAL_PARAMS=elevation slope"
+
+
     def test_does_not_depend_on_a_bare_python3_having_pyyaml(self, tmp_path):
         """The driver must parse its manifest with the pixi env's python, not `python3`.
 

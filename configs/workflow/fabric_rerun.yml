@@ -79,6 +79,14 @@ stages:
       Fans out: an independent array + merge per param, so its terminal is ALL the
       merge jobs, colon-joined. Independent of depstor_rasters -- ordered after it only
       because the chain is linear.
+      RUNS ALL 10 PARAMS BY DEFAULT, which fails on any fabric whose sources are not
+      staged -- and because depstor_params waits on every merge, one unstaged param
+      cancels the WHOLE remaining chain. Set ZONAL_PARAMS to the subset this data root
+      can actually build; the driver passes the environment through. Neither lulc_nlcd
+      nor lulc_foresce is staged in this data root, so every fabric here needs:
+      ZONAL_PARAMS="elevation slope aspect soils soil_moist_max lulc_nhm_v11
+      lulc_nalcms ssflux" (keep slope before ssflux -- ssflux reads the merged slope
+      CSV at zonal time).
 
   - name: depstor_params
     command: ./slurm_batch/submit_depstor_params.sh {batches} {fabric} {base_config}
