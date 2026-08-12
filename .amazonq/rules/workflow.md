@@ -136,6 +136,15 @@ Configuration (CFG-*), Code Quality (CODE-*), Hygiene (HYG-*), Architecture (ARC
   `docs/parameter_index.md` from the `prms:` blocks in `configs/`. `--check` exits 1
   if stale, and `tests/test_params_index.py::test_generated_index_is_up_to_date`
   enforces it, so a config edit without a regenerate fails CI (added PR #203)
+- `./slurm_batch/submit_fabric_rerun.sh [--dry-run] [--from STAGE] [--force] <batches> <fabric>`
+  — re-runs the COMPLETE workflow for one fabric, chaining each stage on the previous
+  stage's terminal job. Stage list is `configs/workflow/fabric_rerun.yml`. Skips
+  `scope: shared` stages. Always `--dry-run` first
+- `python scripts/build_workflow_doc.py` — regenerates the marked workflow section in
+  `slurm_batch/RUNME.md` from `configs/workflow/fabric_rerun.yml`, so the individual
+  stage commands documented there ARE the strings the driver runs. `--check` exits 1 if
+  stale and `tests/test_build_workflow_doc.py` enforces it, so a manifest edit without a
+  regenerate fails CI
 - `scripts/derive_depstor_params.py --mode copy_constants` — copies every
   `constants:` entry into `merged/`. Chained `afterok` by
   `submit_depstor_params.sh`; do not un-chain it (added PR #203)

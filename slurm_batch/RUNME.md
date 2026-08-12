@@ -116,6 +116,170 @@ Outputs land in `{data_root}/gfv2/params/merged/` (parameter CSVs) and
 
 ---
 
+## Complete re-run for one fabric
+
+Use this when a fabric's products need to be brought up to date wholesale — after a
+code change to any builder, after the shared rasters are rebuilt, or whenever you are
+not certain a product was derived from current inputs.
+
+**Re-run the whole fabric rather than reasoning about which products are stale.** Two
+tools that tried to answer "which products are out of date?" were built and withdrawn
+(#215, #218); both inferred a semantic fact from file mtimes across a pipeline of
+special cases, and every special case degraded to silence rather than to "unknown". A
+complete re-run removes the question.
+
+It assumes the fabric's **geometry is unchanged** and starts from the existing
+`{fabric}/batches/`. Changing the fabric itself is Step 2 below, and invalidates
+everything downstream.
+
+Everything in the block below is generated from
+[`configs/workflow/fabric_rerun.yml`](../configs/workflow/fabric_rerun.yml), which is
+also what `slurm_batch/submit_fabric_rerun.sh` executes — so the individual commands
+here are the strings the driver runs and cannot drift from them. Edit the manifest,
+then run `python scripts/build_workflow_doc.py`; CI fails if this section is stale.
+
+<!-- BEGIN GENERATED: workflow -->
+### One command
+
+```bash
+BATCHES="$(pixi run data-root)/<fabric>/batches"
+
+# ALWAYS dry-run first: prints the exact submission sequence, submits nothing,
+# and is safe on the login node.
+./slurm_batch/submit_fabric_rerun.sh --dry-run "$BATCHES" <fabric>
+
+# Then, for real. --force is applied only to the stages that accept it.
+./slurm_batch/submit_fabric_rerun.sh --force "$BATCHES" <fabric>
+```
+
+Each stage chains on the previous stage's terminal SLURM job, so the whole
+sequence runs unattended. A failed stage leaves its dependents in
+`DependencyNeverSatisfied` and SLURM cancels them — the chain stops rather than
+running a stage against incomplete inputs. Fix the cause, then resume:
+
+```bash
+./slurm_batch/submit_fabric_rerun.sh --from zonal_params "$BATCHES" <fabric>
+```
+
+Valid `--from` stages: `depstor_rasters`, `zonal_params`, `depstor_params`, `dprst_depth`, `snarea`, `fill`.
+
+> `--force` is not decoration. It reaches only the stages whose builders skip
+> existing outputs; every other stage always rebuilds. Which stages those are is
+> marked below, and is verified against the real scripts by
+> `tests/test_fabric_rerun_manifest.py`.
+
+### The stages, individually
+
+Run any of these on its own — they are the same strings the driver submits. Placeholders `{batches}`, `{fabric}` and `{base_config}` are substituted by the driver; substitute them yourself when running by hand.
+
+#### shared_rasters — shared, **skipped by the one-command re-run**
+
+> **Not part of a fabric re-run.** Run it deliberately, on its own, and then re-run *every* fabric.
+
+```bash
+sbatch slurm_batch/build_shared_rasters.batch
+```
+
+| | |
+|---|---|
+| Consumes | staged CONUS source rasters |
+| Produces | shared/ (per-VPU tiles + CONUS VRTs), read by EVERY fabric |
+| Resources | 12h / 96G / 16 cpu |
+| `--force` | **applies here** |
+
+> NOT run by a fabric re-run, because it writes shared/, which every fabric reads. Rebuilding it obliges a re-run of EVERY fabric: the 2026-06-30/07-01 rebuild silently staled every fabric's elevation and aspect products, which is what issue #215 was ultimately about. Run it deliberately, then re-run each fabric.
+
+#### depstor_rasters
+
+```bash
+sbatch --export=ALL,BASE_CONFIG={base_config},FABRIC={fabric} slurm_batch/build_depstor_rasters.batch
+```
+
+| | |
+|---|---|
+| Consumes | shared rasters, fabric batches |
+| Produces | {fabric}/depstor_rasters/ (waterbody, dprst, routing, carea_map, ...) |
+| Resources | 18h / 384G / 8 cpu |
+| `--force` | **applies here** |
+
+> The ONLY stage where --force does anything: its builders skip existing outputs, and every other stage always rebuilds. So a complete re-run needs --force in exactly one place. Without it a re-run silently keeps the previous cascade.
+
+#### zonal_params
+
+```bash
+./slurm_batch/submit_zonal_params.sh {batches} {fabric} {base_config}
+```
+
+| | |
+|---|---|
+| Consumes | shared rasters, fabric batches |
+| Produces | {fabric}/params/merged/nhm_<param>_params.csv (10 params) |
+| Resources | array per param; 4h / 64G / 2 cpu per task, then a merge each |
+| `--force` | no effect (always rebuilds) |
+
+> Fans out: an independent array + merge per param, so its terminal is ALL the merge jobs, colon-joined. Independent of depstor_rasters -- ordered after it only because the chain is linear.
+
+#### depstor_params
+
+```bash
+./slurm_batch/submit_depstor_params.sh {batches} {fabric} {base_config}
+```
+
+| | |
+|---|---|
+| Consumes | {fabric}/depstor_rasters/ |
+| Produces | {fabric}/params/merged/ (6 PRMS ratios; counts in _intermediates/) |
+| Resources | chained: array per fraction -> merge each -> ratios -> copy_constants |
+| `--force` | no effect (always rebuilds) |
+
+#### dprst_depth
+
+```bash
+./slurm_batch/submit_dprst_depth.sh {batches} {fabric} {base_config}
+```
+
+| | |
+|---|---|
+| Consumes | {fabric}/depstor_rasters/dprst_binary.tif, 3DEP elevation, WESM |
+| Produces | {fabric}/params/merged/nhm_dprst_depth_avg_params.csv |
+| Resources | chained: plan -> tile array -> build -> HRU array -> mean_finalize |
+| `--force` | no effect (always rebuilds) |
+
+> Already passes --force to its own build stage internally, which is required, not optional: without it the builder's exists-skip path returns in 0s and the HRU aggregation runs against the PREVIOUS run's depth raster, every job reporting COMPLETED. Observed on the oregon 2026-07-25 rebuild.
+
+#### snarea
+
+```bash
+./slurm_batch/submit_snarea_pipeline.sh {fabric} {base_config}
+```
+
+| | |
+|---|---|
+| Consumes | SNODAS daily SWE, fabric batches |
+| Produces | {fabric}/params/merged/nhm_snarea_curve_params.csv |
+| Resources | chained: aggregate array -> merge -> coverage -> derive -> library |
+| `--force` | no effect (always rebuilds) |
+
+> Reads only SNODAS, so it is independent of both the depstor and zonal chains -- but it WRITES into {fabric}/params/merged/, which `fill` then reads. That is why the design's proposed `gate: false` was dropped: snarea is independent of what runs BEFORE it, not of what runs after.
+
+#### fill
+
+```bash
+sbatch --export=ALL,BASE_CONFIG={base_config},FABRIC={fabric} slurm_batch/merge_and_fill_params.batch
+```
+
+| | |
+|---|---|
+| Consumes | {fabric}/params/merged/*.csv (every stage above) |
+| Produces | {fabric}/params/merged/*.csv gap-filled IN PLACE (pre-fill copy in _unfilled/) |
+| Resources | 2h / 64G / 8 cpu |
+| `--force` | no effect (always rebuilds) |
+
+> Must be last. It rewrites merged/*.csv in place, so a stage scheduled after it leaves its product unfilled -- and because the rewrite is in-place, the filename does not reveal it. merged/<name>.csv IS the gap-filled product (PR #189).
+<!-- END GENERATED: workflow -->
+
+---
+
 ## Run it (CONUS gfv2)
 
 ### 0 · Initialize + stage inputs
