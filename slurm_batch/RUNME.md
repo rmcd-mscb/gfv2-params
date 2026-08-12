@@ -168,6 +168,37 @@ Valid `--from` stages: `depstor_rasters`, `zonal_params`, `depstor_params`, `dpr
 > marked below, and is verified against the real scripts by
 > `tests/test_fabric_rerun_manifest.py`.
 
+#### Two environment knobs you will usually need
+
+The driver passes the environment through to every stage.
+
+**`ZONAL_PARAMS`** — `submit_zonal_params.sh` runs all 10 params by default, and
+any whose source is unstaged will fail. Because `depstor_params` waits on *every*
+zonal merge, one unstaged param cancels the whole remaining chain. Neither
+`lulc_nlcd` nor `lulc_foresce` is staged in this data root, so every fabric here
+needs:
+
+```bash
+export ZONAL_PARAMS="elevation slope aspect soils soil_moist_max lulc_nhm_v11 lulc_nalcms ssflux"
+```
+
+Keep `slope` before `ssflux` — ssflux reads the merged slope CSV at zonal time.
+
+**`SBATCH_MEM_PER_NODE` / `SBATCH_TIMELIMIT`** — the batch scripts are sized for
+CONUS. `build_depstor_rasters.batch` asks for 384G/18h, which is right for `gfv2`
+and absurd for `tjc`'s 1,584 HRUs; on a busy cluster the scheduler will put a
+small-fabric re-run a day out purely on the size of the request. SLURM's own
+environment variables override a script's `#SBATCH` directives:
+
+```bash
+SBATCH_MEM_PER_NODE=64G SBATCH_TIMELIMIT=02:00:00 \
+  ./slurm_batch/submit_fabric_rerun.sh --force "$BATCHES" tjc
+```
+
+> These apply to **every** job in the chain. Use them only when every stage
+> genuinely fits — true for a small fabric, false for `gfv2`, where the CONUS
+> defaults are the right numbers and this would OOM the depstor clump ops.
+
 ### The stages, individually
 
 Run any of these on its own — they are the same strings the driver submits. Placeholders `{batches}`, `{fabric}` and `{base_config}` are substituted by the driver; substitute them yourself when running by hand.

@@ -39,6 +39,20 @@
 #   produces      outputs, for the runbook
 #   resources     copied from the batch file's own #SBATCH lines, or the chain shape
 #   note          optional prose rendered with the stage
+#
+# RESOURCES ARE SIZED FOR CONUS, WHICH MAKES A SMALL FABRIC QUEUE FOR A DAY.
+# build_depstor_rasters.batch asks for 384G/18h -- correct for gfv2's full-grid clump
+# ops, absurd for tjc's 1,584 HRUs, and on a busy cluster the scheduler put a tjc re-run
+# 24+ hours out purely on the size of the request. SLURM's own environment variables
+# override a script's #SBATCH directives, and the driver passes the environment through
+# to every stage, so right-size the whole chain in one place:
+#
+#   SBATCH_MEM_PER_NODE=64G SBATCH_TIMELIMIT=02:00:00 \
+#     ./slurm_batch/submit_fabric_rerun.sh --force "$BATCHES" tjc
+#
+# They apply to EVERY job in the chain, so use them only when every stage genuinely fits
+# -- true for a small fabric, false for gfv2, where the CONUS defaults are the right
+# numbers and this would OOM the depstor clump ops.
 stages:
   - name: shared_rasters
     command: sbatch slurm_batch/build_shared_rasters.batch
