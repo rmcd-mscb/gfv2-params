@@ -138,6 +138,26 @@ class TestDryRun:
                 f"{name}: accepts_force={expected} but planned command was:\n  {cmd}"
             )
 
+    def test_force_lands_after_the_batch_script_so_it_reaches_the_orchestrator(self, tmp_path):
+        """On a `kind: sbatch` stage --force must come AFTER the .batch path.
+
+        build_depstor_rasters.batch forwards "$@" to the orchestrator, so the flag reaches
+        python only from that position. Before the path, sbatch itself would reject it.
+        Membership in the command string does not distinguish the two.
+        """
+        batches, cfg = _tree(tmp_path)
+        r = _run(["--dry-run", "--force", str(batches), "tjc", str(cfg)], tmp_path)
+        assert r.returncode == 0, r.stderr
+        for name, cmd in _planned_commands(r.stdout).items():
+            if "--force" not in cmd:
+                continue
+            batch = [t for t in cmd.split() if t.endswith(".batch")]
+            if not batch:
+                continue
+            assert cmd.index("--force") > cmd.index(batch[0]), (
+                f"{name}: --force precedes the batch script, so sbatch would eat it:\n  {cmd}"
+            )
+
     def test_without_force_no_stage_gets_it(self, tmp_path):
         batches, cfg = _tree(tmp_path)
         r = _run(["--dry-run", str(batches), "tjc", str(cfg)], tmp_path)
@@ -315,6 +335,18 @@ class TestUsage:
         assert r.returncode != 0, "a nonexistent base_config was accepted"
         assert "nope.yml" in r.stdout + r.stderr
 
+    def test_a_batches_dir_without_a_manifest_is_rejected(self, tmp_path):
+        """The driver's second existence guard, previously untested unlike the --from and
+        unknown-flag paths. A re-run starts from the EXISTING batches; an empty or wrong
+        directory means the fabric was never prepared, and every stage would fail one by
+        one instead of the driver saying so once, up front."""
+        empty = tmp_path / "not-batches"
+        empty.mkdir()
+        _batches, cfg = _tree(tmp_path)
+        r = _run(["--dry-run", str(empty), "tjc", str(cfg)], tmp_path)
+        assert r.returncode != 0
+        assert "manifest.yml" in r.stderr
+
     def test_an_extra_positional_is_rejected(self, tmp_path):
         """A 4th positional is silently dropped, so a mistyped invocation runs with
         arguments the operator did not intend and cannot see were ignored."""
@@ -437,6 +469,89 @@ def _log_entries(log):
         name, rest = line.split(" AFTER=", 1)
         entries.append((name, rest.split(" ARGS=")[0]))
     return entries
+
+
+class TestDriverRobustness:
+    """Ways the driver could mis-handle a stage without saying so."""
+
+    def test_a_stage_that_reads_stdin_does_not_truncate_the_chain(self, tmp_path):
+        """The stage loop is fed by a here-string, which `eval` would otherwise inherit.
+
+        A stage command that reads stdin then consumes the REMAINING stage list, so the
+        chain stops after it and the driver exits 0 having silently skipped every later
+        stage -- the exact failure this driver exists to prevent. None of today's four
+        wrappers drains stdin, so this is latent, but the blast radius is the whole
+        design goal and the fix is one redirection.
+        """
+        manifest, log = _synthetic(tmp_path, n=3)
+        stages = yaml.safe_load(manifest.read_text())["stages"]
+        greedy = tmp_path / "stubs" / "greedy.sh"
+        greedy.write_text(
+            "#!/usr/bin/env bash\nset -euo pipefail\ncat > /dev/null\n"
+            f'echo "stage0 AFTER=none ARGS=$*" >> "{log}"\necho "TERMINAL_JOB_ID=900"\n'
+        )
+        greedy.chmod(0o755)
+        stages[0]["command"] = f"{greedy} {{fabric}}"
+        manifest.write_text(yaml.safe_dump({"stages": stages}))
+
+        batches, cfg = _tree(tmp_path)
+        r = _run([str(batches), "tjc", str(cfg)], tmp_path, manifest=manifest)
+        assert r.returncode == 0, r.stderr
+        ran = [name for name, _ in _log_entries(log)]
+        assert ran == ["stage0", "stage1", "stage2"], (
+            f"a stdin-reading stage swallowed the rest of the chain; ran {ran}"
+        )
+
+    def test_a_single_token_command_is_not_duplicated(self, tmp_path):
+        """`HEAD=${CMD%% *}` and `REST=${CMD#* }` both expand to the whole string when the
+        command has no space, so the dependency insertion appends the command to itself:
+        `cmd --after 1 cmd`. Silent corruption rather than an error, and one manifest edit
+        away -- the manifest is explicitly designed to be extended."""
+        manifest, _log = _synthetic(tmp_path, n=2)
+        stages = yaml.safe_load(manifest.read_text())["stages"]
+        solo = tmp_path / "stubs" / "solo.sh"
+        solo.write_text('#!/usr/bin/env bash\necho "TERMINAL_JOB_ID=902"\n')
+        solo.chmod(0o755)
+        stages[1]["command"] = str(solo)  # no arguments at all
+        manifest.write_text(yaml.safe_dump({"stages": stages}))
+
+        batches, cfg = _tree(tmp_path)
+        r = _run(["--dry-run", str(batches), "tjc", str(cfg)], tmp_path, manifest=manifest)
+        assert r.returncode == 0, r.stderr
+        planned = _planned_commands(r.stdout)["stage1"]
+        assert planned.count(str(solo)) == 1, f"command duplicated into its own argv:\n  {planned}"
+
+    def test_a_non_numeric_terminal_job_id_is_rejected(self, tmp_path):
+        """A job id is checked for emptiness but never for being a job id.
+
+        submit_snarea_pipeline.sh prints the literal `DRYRUN` as a stand-in when DRYRUN is
+        in the environment -- which the driver passes through -- so a stray export makes a
+        stage submit nothing, report success, and hand `afterok:DRYRUN` to the next stage.
+        That fails at the NEXT stage, naming the wrong one; and a terminal stage would end
+        the chain in outright silent success.
+        """
+        manifest, _log = _synthetic(tmp_path, n=2, terminal_ids=["901", "DRYRUN"])
+        batches, cfg = _tree(tmp_path)
+        r = _run([str(batches), "tjc", str(cfg)], tmp_path, manifest=manifest)
+        assert r.returncode != 0, f"a non-numeric job id was chained on:\n{r.stdout}"
+        assert "DRYRUN" in r.stderr
+
+    def test_an_unresolved_placeholder_is_rejected(self, tmp_path):
+        """The driver substitutes exactly three placeholders and validated none.
+
+        Anything else survives into the submitted command as a literal brace --
+        `VPU={vpu}` reaches sbatch verbatim, exit 0. derive_zonal_params._resolve_nested
+        raises on this same condition; the manifest reader should too. The manifest's own
+        schema test covers the checked-in file, not the FABRIC_RERUN_MANIFEST override.
+        """
+        manifest, _log = _synthetic(tmp_path, n=1)
+        stages = yaml.safe_load(manifest.read_text())["stages"]
+        stages[0]["command"] += " VPU={vpu}"
+        manifest.write_text(yaml.safe_dump({"stages": stages}))
+        batches, cfg = _tree(tmp_path)
+        r = _run(["--dry-run", str(batches), "tjc", str(cfg)], tmp_path, manifest=manifest)
+        assert r.returncode != 0, "an unresolved {vpu} was submitted verbatim"
+        assert "vpu" in r.stderr
 
 
 class TestChaining:

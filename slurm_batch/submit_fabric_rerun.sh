@@ -32,9 +32,8 @@ usage() {
     echo "  --dry-run     print the plan; submit nothing"
     echo "  --from STAGE  resume at STAGE instead of the first (the resumed stage starts"
     echo "                with no inbound dependency -- its predecessors are assumed done)"
-    echo "  --force       append --force to the stages that accept it (see the manifest's"
-    echo "                accepts_force; today only depstor_rasters, the one stage whose"
-    echo "                builders skip existing outputs)"
+    echo "  --force       append --force to the stages whose accepts_force is true in"
+    echo "                the manifest (which stages those are is printed by --dry-run)"
     echo "  batches_dir   path to {fabric}/batches/ (contains manifest.yml)"
     echo "  fabric        fabric name, e.g. tjc / oregon / gfv2"
     echo "  base_config   optional path to base_config.yml (default: configs/base_config.yml)"
@@ -117,7 +116,9 @@ fi
 # to discover it. --as-is is the repo-wide rule for pixi under SLURM; here it also keeps
 # startup at ~0.4 s by skipping the lock check.
 STAGES=$(pixi run --as-is python - "$MANIFEST" "$BATCHES" "$FABRIC" "$BASE_CONFIG" <<'PY'
+import re
 import sys
+
 import yaml
 
 manifest, batches, fabric, base_config = sys.argv[1:5]
@@ -135,6 +136,15 @@ for s in yaml.safe_load(open(manifest))["stages"]:
     cmd = (s["command"].replace("{batches}", batches)
                        .replace("{fabric}", fabric)
                        .replace("{base_config}", base_config))
+    # The driver substitutes exactly three placeholders. Anything else would survive into
+    # the submitted command as a literal brace -- `VPU={vpu}` reaching sbatch verbatim,
+    # exit 0. derive_zonal_params._resolve_nested raises on the same condition.
+    left = sorted(set(re.findall(r"\{(\w+)\}", cmd)))
+    if left:
+        sys.exit(
+            f"ERROR: stage {s['name']!r} has unresolved placeholder(s) {left};"
+            " the driver substitutes only {batches}, {fabric} and {base_config}"
+        )
     print(f"{s['name']}\t{s['kind']}\t{int(bool(s['accepts_force']))}\t{cmd}")
 PY
 )
@@ -184,14 +194,19 @@ while IFS=$'\t' read -r NAME KIND ACCEPTS_FORCE CMD; do
     # whole rather than split.
     FULL_CMD="$CMD"
     if [ -n "$PREV_JOB" ]; then
-        if [ "$KIND" = "wrapper" ]; then
-            HEAD="${CMD%% *}"
-            REST="${CMD#* }"
-            FULL_CMD="$HEAD --after $PREV_JOB $REST"
+        HEAD="${CMD%% *}"
+        # A command with no arguments contains no space, and ${CMD%% *} and ${CMD#* } then
+        # BOTH expand to the whole string -- which would append the command to its own
+        # argv (`cmd --after 1 cmd`). Silent corruption, not an error.
+        if [ "$HEAD" = "$CMD" ]; then
+            REST=""
         else
-            HEAD="${CMD%% *}"
             REST="${CMD#* }"
-            FULL_CMD="$HEAD --dependency=afterok:$PREV_JOB $REST"
+        fi
+        if [ "$KIND" = "wrapper" ]; then
+            FULL_CMD="$HEAD --after $PREV_JOB${REST:+ $REST}"
+        else
+            FULL_CMD="$HEAD --dependency=afterok:$PREV_JOB${REST:+ $REST}"
         fi
     fi
     # --force only where the manifest says the command accepts it. The submit wrappers
@@ -206,10 +221,19 @@ while IFS=$'\t' read -r NAME KIND ACCEPTS_FORCE CMD; do
     if [ "$DRY_RUN" -eq 1 ]; then
         JOB="<$NAME>"
     else
-        if ! OUT=$(eval "$FULL_CMD" 2>&1); then
+        # </dev/null: the enclosing `while read` is fed by a here-string, and without
+        # this the stage command inherits it. A command that reads stdin would consume
+        # the REMAINING stage list, so the chain would stop after it -- exit 0, every
+        # later stage silently skipped. None of today's wrappers drains stdin; this
+        # keeps it that way by construction rather than by luck.
+        if ! OUT=$(eval "$FULL_CMD" 2>&1 </dev/null); then
             echo "$OUT" >&2
             echo "ERROR: stage '$NAME' failed to submit; the rest of the chain was NOT" >&2
             echo "       submitted. Fix the cause and resume with --from $NAME." >&2
+            echo "       NOTE: a wrapper that fans out may already have queued some of" >&2
+            echo "       its own jobs before failing. Check 'squeue -u \$USER' and" >&2
+            echo "       scancel them first -- resuming on top would run two arrays" >&2
+            echo "       writing the same per-batch outputs." >&2
             exit 1
         fi
         echo "$OUT"
@@ -231,6 +255,21 @@ while IFS=$'\t' read -r NAME KIND ACCEPTS_FORCE CMD; do
                 exit 1
             fi
         fi
+        # Emptiness was checked above; this checks it is actually a job id. SLURM ids are
+        # digits, optionally colon-joined for a fan-out. A wrapper can report something
+        # else without failing -- submit_snarea_pipeline.sh prints the literal DRYRUN when
+        # DRYRUN is in the environment, which the driver passes through -- and the chain
+        # would then be built on a dependency SLURM cannot satisfy, blamed on the WRONG
+        # stage one step later.
+        case "$JOB" in
+            *[!0-9:]*)
+                echo "ERROR: stage '$NAME' reported '$JOB' as its job id, which is not a" >&2
+                echo "       SLURM job id (digits, or digits colon-joined for a fan-out)." >&2
+                echo "       A stray DRYRUN=1 in the environment does exactly this: the" >&2
+                echo "       stage submits nothing and still reports success." >&2
+                exit 1
+                ;;
+        esac
     fi
 
     CHAIN="$CHAIN $NAME=$JOB"
