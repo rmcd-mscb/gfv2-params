@@ -200,3 +200,110 @@ def test_snarea_precedes_fill(stages):
     """
     names = [s["name"] for s in stages]
     assert names.index("snarea") < names.index("fill")
+
+
+def test_recommended_zonal_params_are_real_params():
+    """`recommended_zonal_params` is rendered straight into the runbook as an export a
+    scientist copies, so a typo there is a chain that dies at zonal_params and takes every
+    later stage with it via DependencyNeverSatisfied. Checked against the wrapper's own
+    PARAMS array -- the authoritative list -- not against a second copy."""
+    manifest = yaml.safe_load(MANIFEST.read_text())
+    recommended = manifest["recommended_zonal_params"].split()
+    assert recommended, "recommended_zonal_params is empty"
+
+    wrapper = (REPO / "slurm_batch" / "submit_zonal_params.sh").read_text()
+    block = wrapper.split("PARAMS=(", 1)[1].split(")", 1)[0]
+    known = {ln.split("#")[0].strip() for ln in block.splitlines() if ln.split("#")[0].strip()}
+    assert known, "could not parse the PARAMS array out of submit_zonal_params.sh"
+
+    unknown = [p for p in recommended if p not in known]
+    assert not unknown, f"recommended_zonal_params names params the wrapper cannot run: {unknown}"
+
+    assert recommended.index("slope") < recommended.index("ssflux"), (
+        "slope must precede ssflux -- ssflux reads the merged slope CSV at zonal time"
+    )
+
+
+def test_stage_order_satisfies_the_real_data_dependencies(stages):
+    """Ordering was pinned only at the endpoints (shared first, fill last, snarea < fill).
+
+    Because the chain is strictly linear and each stage waits on the previous one, a
+    reordering edit produces a chain that runs correctly AS A CHAIN while computing
+    parameters from the previous run's rasters -- silent, everything COMPLETED. These are
+    the pairs the manifest's own prose asserts; pin them.
+
+    depstor_params -> dprst_depth is subtle and currently holds only by accident:
+    submit_depstor_params.sh chains copy_depstor_constants.batch, which reads
+    op_flow_thres_params.csv and by its own header needs dprst_depth to have completed.
+    It works because dprst_depth is ALSO an in-process step of depstor_rasters. Removing
+    it from configs/depstor/depstor_rasters.yml -- a plausible optimisation, since the
+    tiled wrapper stage recomputes it -- would break depstor_params, so that coupling is
+    recorded here rather than left to be rediscovered.
+    """
+    names = [s["name"] for s in stages]
+    for earlier, later in (
+        ("depstor_rasters", "depstor_params"),
+        ("depstor_rasters", "dprst_depth"),
+        ("zonal_params", "fill"),
+        ("depstor_params", "fill"),
+        ("dprst_depth", "fill"),
+    ):
+        assert names.index(earlier) < names.index(later), (
+            f"{earlier} must be ordered before {later}: {later} reads what it writes"
+        )
+
+
+def test_resources_match_the_batch_files_they_name(stages):
+    """`resources` is copied from each batch file's #SBATCH lines, declared as such, and
+    verified nowhere -- three lines after `accepts_force` earns "not asserted here on
+    faith". A --mem bump in any batch file silently falsifies the runbook."""
+    for s in stages:
+        batch = next(
+            (t for t in s["command"].split() if t.endswith(".batch")),
+            None,
+        )
+        if batch is None:
+            continue  # wrapper stages describe a chain shape, not one #SBATCH block
+        text = (REPO / batch).read_text()
+        for directive, label in (("--mem=", "mem"), ("--time=", "time")):
+            for line in text.splitlines():
+                if line.startswith("#SBATCH") and directive in line:
+                    value = line.split(directive, 1)[1].split()[0]
+                    break
+            else:
+                continue
+            # "18h / 384G / 8 cpu" vs "--time=18:00:00" / "--mem=384G"
+            needle = value.split(":")[0].lstrip("0") or "0" if label == "time" else value
+            assert needle in s["resources"], (
+                f"{s['name']}: {batch} declares {directive}{value}, which does not appear "
+                f"in resources {s['resources']!r}"
+            )
+
+
+def test_no_wrapper_stage_accepts_force(stages):
+    """`accepts_force: true` is only safe on a `kind: sbatch` stage, and nothing enforced it.
+
+    The driver appends --force at the END of the command, and the wrappers parse only
+    LEADING flags -- so on a wrapper it lands in a positional slot: max_concurrent for
+    submit_zonal_params (giving ARRAY_SPEC="0-N%--force"), n_tile_batches for
+    submit_dprst_depth, and an extra sbatch opt forwarded to every job for snarea. None of
+    those is an error the operator would recognise. Marking a wrapper accepts_force is
+    therefore a latent mis-submission, not a loud one.
+    """
+    for s in stages:
+        if s["kind"] == "wrapper":
+            assert not s["accepts_force"], (
+                f"{s['name']}: kind=wrapper with accepts_force=true. The driver appends "
+                f"--force after the positionals, where this wrapper reads it as one."
+            )
+
+
+def test_every_command_names_a_file_that_exists_including_absolute_paths(stages):
+    """The existing check inspects only tokens prefixed slurm_batch/ or scripts/, so a
+    command written as `bash foo.sh`, or with an absolute path, goes unchecked."""
+    for s in stages:
+        for token in s["command"].split():
+            if not token.endswith((".sh", ".batch", ".py")):
+                continue
+            path = Path(token) if token.startswith("/") else REPO / token.lstrip("./")
+            assert path.exists(), f"{s['name']}: command names missing file {token}"

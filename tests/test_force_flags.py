@@ -35,6 +35,9 @@ ORCHESTRATORS = [
 ]
 
 
+# Per PROCESS, not per session: under `pytest -n` each worker pays one subprocess
+# per script. Still bounded, and still well clear of the import-storm rule that
+# motivates it (CLAUDE.md: no unbounded concurrent geo imports on the head node).
 @lru_cache(maxsize=None)
 def _help_text(name: str) -> str:
     """``<script> --help`` output. Cached: one subprocess per script per test session."""
