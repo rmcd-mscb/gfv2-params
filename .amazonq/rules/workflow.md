@@ -92,6 +92,13 @@ Configuration (CFG-*), Code Quality (CODE-*), Hygiene (HYG-*), Architecture (ARC
   normalisation (map/reduce split via `MERGE_REDUCERS`). See
   `docs/superpowers/specs/2026-08-10-ssflux-normalisation-design.md` and
   CLAUDE.md's `k_perm` gotcha for the architectural detail.
+- #215 / #218 (product staleness) — WITHDRAWN, deliberately. Two tools that tried to
+  DETECT which products were out of date were built and then withdrawn: both inferred a
+  semantic fact from mtimes and git dates across per-batch stages, in-place fill rewrites,
+  VRT indirection and cross-param reads, and every special case degraded to silence rather
+  than to "unknown". Superseded by PR #219's complete per-fabric re-run
+  (`slurm_batch/submit_fabric_rerun.sh` + `configs/workflow/fabric_rerun.yml`), which
+  dissolves the question instead of answering it. Do not rebuild a staleness detector.
 
 ### Up next (priority order)
 - CFG-1 — remove commented opt-in keys from fabric profiles in base_config.yml
@@ -136,6 +143,15 @@ Configuration (CFG-*), Code Quality (CODE-*), Hygiene (HYG-*), Architecture (ARC
   `docs/parameter_index.md` from the `prms:` blocks in `configs/`. `--check` exits 1
   if stale, and `tests/test_params_index.py::test_generated_index_is_up_to_date`
   enforces it, so a config edit without a regenerate fails CI (added PR #203)
+- `./slurm_batch/submit_fabric_rerun.sh [--dry-run] [--from STAGE] [--force] <batches> <fabric>`
+  — re-runs the COMPLETE workflow for one fabric, chaining each stage on the previous
+  stage's terminal job. Stage list is `configs/workflow/fabric_rerun.yml`. Skips
+  `scope: shared` stages. Always `--dry-run` first
+- `python scripts/build_workflow_doc.py` — regenerates the marked workflow section in
+  `slurm_batch/RUNME.md` from `configs/workflow/fabric_rerun.yml`, so the individual
+  stage commands documented there ARE the strings the driver runs. `--check` exits 1 if
+  stale and `tests/test_build_workflow_doc.py` enforces it, so a manifest edit without a
+  regenerate fails CI
 - `scripts/derive_depstor_params.py --mode copy_constants` — copies every
   `constants:` entry into `merged/`. Chained `afterok` by
   `submit_depstor_params.sh`; do not un-chain it (added PR #203)

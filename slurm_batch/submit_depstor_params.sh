@@ -29,8 +29,28 @@
 
 set -euo pipefail
 
+# --- shared workflow-wrapper contract (see slurm_batch/submit_fabric_rerun.sh) ---------
+# Leading `--after <jobid>`, a final `TERMINAL_JOB_ID=<id>`, and a hard error on an
+# unrecognised leading flag rather than absorbing it as a positional.
+AFTER_JOB=""
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --after)
+            if [ -z "${2:-}" ]; then
+                echo "ERROR: --after requires a job id" >&2
+                exit 1
+            fi
+            AFTER_JOB="$2"; shift 2 ;;
+        --) shift; break ;;
+        -*) echo "ERROR: unknown option '$1'" >&2
+            echo "       This wrapper takes: [--after <jobid>] <batches_dir> [fabric] [base_config] [max_concurrent]" >&2
+            exit 1 ;;
+        *) break ;;
+    esac
+done
+
 if [ $# -lt 1 ]; then
-    echo "Usage: $0 <batches_dir> [fabric] [base_config] [max_concurrent]"
+    echo "Usage: $0 [--after <jobid>] <batches_dir> [fabric] [base_config] [max_concurrent]"
     echo "  batches_dir:    path to {fabric}/batches/ (contains manifest.yml)"
     echo "  fabric:         optional fabric name (default: gfv2)"
     echo "  base_config:    optional path to base_config.yml (default: configs/base_config.yml)"
@@ -51,8 +71,18 @@ if [ ! -f "$MANIFEST" ]; then
 fi
 
 N_BATCHES=$(grep '^n_batches:' "$MANIFEST" | awk '{print $2}')
-if [ -z "$N_BATCHES" ] || [ "$N_BATCHES" -le 0 ] 2>/dev/null; then
-    echo "Error: could not parse n_batches from $MANIFEST (got: '$N_BATCHES')"
+# A non-numeric value must not pass. `[ "$X" -le 0 ] 2>/dev/null` looks like a guard but
+# is not: bash reports "integer expression expected", `[` returns 2, the redirect hides the
+# message and `if` reads 2 as false -- so exactly the value the guard exists to catch slips
+# through. Match on the characters instead.
+case "$N_BATCHES" in
+    ''|*[!0-9]*)
+        echo "Error: n_batches in $MANIFEST is not a positive integer (got: '$N_BATCHES')" >&2
+        exit 1
+        ;;
+esac
+if [ "$N_BATCHES" -le 0 ]; then
+    echo "Error: n_batches in $MANIFEST must be positive (got: '$N_BATCHES')" >&2
     exit 1
 fi
 LAST_IDX=$((N_BATCHES - 1))
@@ -87,14 +117,28 @@ MERGE_JOB_IDS=()
 for FRACTION in "${FRACTIONS[@]}"; do
     echo "--- $FRACTION ---"
 
+    # Inbound dependency from --after, applied to EVERY fraction's array: each is an
+    # independent submission, so chaining only the first would let the rest start against
+    # depstor rasters the previous stage has not finished writing.
+    DEP_ARG=""
+    [ -n "$AFTER_JOB" ] && DEP_ARG="--dependency=afterok:$AFTER_JOB"
+
+    # $DEP_ARG is deliberately unquoted: it is either empty
+    # or a whole `--dependency=...` argument, and quoting it would pass an EMPTY string
+    # to sbatch when there is no inbound dependency.
+    # shellcheck disable=SC2086
     ARRAY_JOB_ID=$(sbatch --array="$ARRAY_SPEC" \
+                         $DEP_ARG \
                          --export=ALL,BASE_CONFIG="$BASE_CONFIG",FABRIC="$FABRIC",FRACTION="$FRACTION" \
-                         slurm_batch/create_depstor_zonal.batch | awk '{print $NF}')
-    echo "  zonal  array: $ARRAY_JOB_ID"
+                         slurm_batch/create_depstor_zonal.batch | sed -n 's/^Submitted batch job \([0-9][0-9]*\).*/\1/p')
+    # Echo the inbound dependency, matching submit_zonal_params.sh. Without it the
+    # submission looks unchained in the log even when it is not, which is exactly the
+    # ambiguity an operator reads a chained re-run's output to resolve.
+    echo "  zonal  array: $ARRAY_JOB_ID${DEP_ARG:+ ($DEP_ARG)}"
 
     MERGE_JOB_ID=$(sbatch --dependency=afterok:"$ARRAY_JOB_ID" \
                          --export=ALL,BASE_CONFIG="$BASE_CONFIG",FABRIC="$FABRIC",FRACTION="$FRACTION" \
-                         slurm_batch/merge_depstor_fraction.batch | awk '{print $NF}')
+                         slurm_batch/merge_depstor_fraction.batch | sed -n 's/^Submitted batch job \([0-9][0-9]*\).*/\1/p')
     echo "  merge afterok:$ARRAY_JOB_ID -> $MERGE_JOB_ID"
     MERGE_JOB_IDS+=("$MERGE_JOB_ID")
 done
@@ -103,13 +147,17 @@ DEPENDS=$(IFS=:; echo "${MERGE_JOB_IDS[*]}")
 echo "Submitting ratios job (afterok:$DEPENDS)"
 RATIOS_JOB_ID=$(sbatch --dependency=afterok:"$DEPENDS" \
                      --export=ALL,BASE_CONFIG="$BASE_CONFIG",FABRIC="$FABRIC" \
-                     slurm_batch/derive_depstor_ratios.batch | awk '{print $NF}')
+                     slurm_batch/derive_depstor_ratios.batch | sed -n 's/^Submitted batch job \([0-9][0-9]*\).*/\1/p')
 echo "  ratios afterok:$DEPENDS -> $RATIOS_JOB_ID"
 
 echo "Submitting copy_constants job (afterok:$RATIOS_JOB_ID)"
 CONSTANTS_JOB_ID=$(sbatch --dependency=afterok:"$RATIOS_JOB_ID" \
                      --export=ALL,BASE_CONFIG="$BASE_CONFIG",FABRIC="$FABRIC" \
-                     slurm_batch/copy_depstor_constants.batch | awk '{print $NF}')
+                     slurm_batch/copy_depstor_constants.batch | sed -n 's/^Submitted batch job \([0-9][0-9]*\).*/\1/p')
 echo "  constants afterok:$RATIOS_JOB_ID -> $CONSTANTS_JOB_ID"
 
 echo "Done. Final copy_constants job ID: $CONSTANTS_JOB_ID"
+# Machine-readable terminal job for slurm_batch/submit_fabric_rerun.sh. A single id is
+# correct here: unlike submit_zonal_params.sh this wrapper CONVERGES -- ratios waits on
+# every fraction merge, and copy_constants waits on ratios.
+echo "TERMINAL_JOB_ID=$CONSTANTS_JOB_ID"

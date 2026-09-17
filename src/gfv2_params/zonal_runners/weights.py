@@ -36,7 +36,15 @@ def run_build_weights(config: dict, logger, force: bool = False) -> None:
     weight_file = weight_dir / f"lith_weights_{fabric}.csv"
 
     if weight_file.exists() and not force:
-        logger.info("Weight file already exists: %s (use --force to overwrite)", weight_file)
+        # --force-weights, NOT --force: plain --force is a documented no-op on this
+        # orchestrator, so naming it here would send an operator who just hit this skip
+        # to a flag that changes nothing -- they would re-run, see exit 0, and still have
+        # the stale matrix.
+        logger.info(
+            "Weight file already exists: %s (use --force-weights, or FORCE=1 via "
+            "build_zonal_weights.batch, to overwrite)",
+            weight_file,
+        )
         return
 
     if not hru_gpkg.exists():

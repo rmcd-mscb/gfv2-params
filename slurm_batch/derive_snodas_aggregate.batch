@@ -26,7 +26,7 @@
 #   sbatch --array=0-$((N-1)) --export=ALL,FABRIC=oregon slurm_batch/derive_snodas_aggregate.batch
 # Optional year subset: append `--years 2010 2011` to the command below.
 
-cd "$SLURM_SUBMIT_DIR"
+cd "$SLURM_SUBMIT_DIR" || exit 1
 BASE_CONFIG=${BASE_CONFIG:-configs/base_config.yml}
 FABRIC=${FABRIC:-oregon}
 

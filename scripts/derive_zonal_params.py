@@ -189,7 +189,7 @@ def run_build_weights_mode(args, logger) -> None:
     entry = weights_consumers[0]
     param_cfg = _build_param_cfg(config, entry)
     logger.info("=== build_weights: param=%s ===", entry["name"])
-    run_build_weights(param_cfg, logger, force=args.force)
+    run_build_weights(param_cfg, logger, force=args.force_weights)
 
 
 def main():
@@ -200,7 +200,24 @@ def main():
     parser.add_argument("--mode", required=True, choices=["zonal", "merge", "build_weights"])
     parser.add_argument("--param", default=None, help="Param name (required for zonal/merge)")
     parser.add_argument("--batch_id", type=int, default=None, help="Batch ID (zonal mode only)")
-    parser.add_argument("--force", action="store_true", help="build_weights only: overwrite existing weight file")
+    # Two different questions, so two flags. The old `--force` only ever rebuilt the
+    # lithology weight matrix (run_build_weights skips an existing one), which is not what
+    # "force" means in the other orchestrators -- an operator reasonably reads it as
+    # "rebuild the parameter".
+    parser.add_argument(
+        "--force-weights",
+        action="store_true",
+        help="build_weights mode only: overwrite the existing CONUS weight file",
+    )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help=(
+            "Rebuild outputs even if they already exist. No-op here: the zonal pass "
+            "always rebuilds its per-batch CSVs. Accepted so --force means the same "
+            "thing everywhere; use --force-weights for the weight matrix."
+        ),
+    )
     args = parser.parse_args()
 
     if args.mode in {"zonal", "merge"} and not args.param:

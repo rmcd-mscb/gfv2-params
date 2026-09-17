@@ -16,5 +16,5 @@
 # per-VPU vector spatial join (no CONUS-grid array), so it is far lighter than
 # the depstor raster build; 48G is generous headroom for the largest VPU.
 
-cd "$SLURM_SUBMIT_DIR"
+cd "$SLURM_SUBMIT_DIR" || exit 1
 pixi run --as-is python -m gfv2_params.download.nhd_flowthrough

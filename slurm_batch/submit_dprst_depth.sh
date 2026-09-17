@@ -56,8 +56,28 @@
 
 set -euo pipefail
 
+# --- shared workflow-wrapper contract (see slurm_batch/submit_fabric_rerun.sh) ---------
+# Leading `--after <jobid>`, a final `TERMINAL_JOB_ID=<id>`, and a hard error on an
+# unrecognised leading flag rather than absorbing it as a positional.
+AFTER_JOB=""
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --after)
+            if [ -z "${2:-}" ]; then
+                echo "ERROR: --after requires a job id" >&2
+                exit 1
+            fi
+            AFTER_JOB="$2"; shift 2 ;;
+        --) shift; break ;;
+        -*) echo "ERROR: unknown option '$1'" >&2
+            echo "       This wrapper takes: [--after <jobid>] <batches_dir> [fabric] [base_config] [n_tile_batches] [hru_max_concurrent]" >&2
+            exit 1 ;;
+        *) break ;;
+    esac
+done
+
 if [ $# -lt 1 ]; then
-    echo "Usage: $0 <batches_dir> [fabric] [base_config] [n_tile_batches] [hru_max_concurrent]"
+    echo "Usage: $0 [--after <jobid>] <batches_dir> [fabric] [base_config] [n_tile_batches] [hru_max_concurrent]"
     echo "  batches_dir:         path to {fabric}/batches/ (HRU batch manifest; drives stage 4a's mean_zonal array)"
     echo "  fabric:              optional fabric name (default: gfv2)"
     echo "  base_config:         optional path to base_config.yml (default: configs/base_config.yml)"
@@ -80,12 +100,28 @@ if [ ! -f "$MANIFEST" ]; then
 fi
 
 N_HRU_BATCHES=$(grep '^n_batches:' "$MANIFEST" | awk '{print $2}')
-if [ -z "$N_HRU_BATCHES" ] || [ "$N_HRU_BATCHES" -le 0 ] 2>/dev/null; then
-    echo "Error: could not parse n_batches from $MANIFEST (got: '$N_HRU_BATCHES')"
+# A non-numeric value must not pass. `[ "$X" -le 0 ] 2>/dev/null` looks like a guard but
+# is not: bash reports "integer expression expected", `[` returns 2, the redirect hides the
+# message and `if` reads 2 as false -- so exactly the value the guard exists to catch slips
+# through. Match on the characters instead.
+case "$N_HRU_BATCHES" in
+    ''|*[!0-9]*)
+        echo "Error: n_batches in $MANIFEST is not a positive integer (got: '$N_HRU_BATCHES')" >&2
+        exit 1
+        ;;
+esac
+if [ "$N_HRU_BATCHES" -le 0 ]; then
+    echo "Error: n_batches in $MANIFEST must be positive (got: '$N_HRU_BATCHES')" >&2
     exit 1
 fi
-if [ "$N_TILE_BATCHES" -le 0 ] 2>/dev/null; then
-    echo "Error: n_tile_batches must be positive (got: '$N_TILE_BATCHES')"
+case "$N_TILE_BATCHES" in
+    ''|*[!0-9]*)
+        echo "Error: n_tile_batches is not a positive integer (got: '$N_TILE_BATCHES')" >&2
+        exit 1
+        ;;
+esac
+if [ "$N_TILE_BATCHES" -le 0 ]; then
+    echo "Error: n_tile_batches must be positive (got: '$N_TILE_BATCHES')" >&2
     exit 1
 fi
 LAST_HRU_IDX=$((N_HRU_BATCHES - 1))
@@ -107,16 +143,22 @@ echo "  stage 1-2: $N_TILE_BATCHES tile batches (uncapped concurrency -- see siz
 echo "  stage 4a : $N_HRU_BATCHES HRU batches ($HRU_THROTTLE_NOTE)"
 
 echo "--- stage 1: plan (tile work-list) ---"
+# Stage 1 is this wrapper's ONLY independent submission -- stages 2..4b each chain
+# afterok on their predecessor, so the inbound --after reaches them transitively.
+PLAN_DEP=""
+[ -n "$AFTER_JOB" ] && PLAN_DEP="--dependency=afterok:$AFTER_JOB"
+# shellcheck disable=SC2086  # deliberately unquoted: empty, or a whole --dependency=... arg.
 PLAN_JOB_ID=$(sbatch \
+    $PLAN_DEP \
     --export=ALL,BASE_CONFIG="$BASE_CONFIG",FABRIC="$FABRIC",N_TILE_BATCHES="$N_TILE_BATCHES" \
-    slurm_batch/plan_dprst_depth_batches.batch | awk '{print $NF}')
+    slurm_batch/plan_dprst_depth_batches.batch | sed -n 's/^Submitted batch job \([0-9][0-9]*\).*/\1/p')
 echo "  plan: $PLAN_JOB_ID"
 
 echo "--- stage 2: tile-batch compute array (afterok:$PLAN_JOB_ID) ---"
 ARRAY_JOB_ID=$(sbatch --array="0-$LAST_TILE_IDX" \
     --dependency=afterok:"$PLAN_JOB_ID" \
     --export=ALL,BASE_CONFIG="$BASE_CONFIG",FABRIC="$FABRIC" \
-    slurm_batch/run_dprst_depth_batch.batch | awk '{print $NF}')
+    slurm_batch/run_dprst_depth_batch.batch | sed -n 's/^Submitted batch job \([0-9][0-9]*\).*/\1/p')
 echo "  array: $ARRAY_JOB_ID"
 
 echo "--- stage 3: fill+burn+op_flow_thres (afterok:$ARRAY_JOB_ID) ---"
@@ -134,20 +176,23 @@ echo "--- stage 3: fill+burn+op_flow_thres (afterok:$ARRAY_JOB_ID) ---"
 BUILD_JOB_ID=$(sbatch --dependency=afterok:"$ARRAY_JOB_ID" \
     --mem=64G --time=02:00:00 \
     --export=ALL,BASE_CONFIG="$BASE_CONFIG",FABRIC="$FABRIC" \
-    slurm_batch/build_depstor_rasters.batch --step dprst_depth --force | awk '{print $NF}')
+    slurm_batch/build_depstor_rasters.batch --step dprst_depth --force | sed -n 's/^Submitted batch job \([0-9][0-9]*\).*/\1/p')
 echo "  build: $BUILD_JOB_ID"
 
 echo "--- stage 4a: mean_zonal array (afterok:$BUILD_JOB_ID) ---"
 MEAN_ARRAY_JOB_ID=$(sbatch --array="$HRU_ARRAY_SPEC" \
     --dependency=afterok:"$BUILD_JOB_ID" \
     --export=ALL,BASE_CONFIG="$BASE_CONFIG",FABRIC="$FABRIC" \
-    slurm_batch/mean_zonal_dprst_depth.batch | awk '{print $NF}')
+    slurm_batch/mean_zonal_dprst_depth.batch | sed -n 's/^Submitted batch job \([0-9][0-9]*\).*/\1/p')
 echo "  mean_zonal array: $MEAN_ARRAY_JOB_ID"
 
 echo "--- stage 4b: mean_finalize (afterok:$MEAN_ARRAY_JOB_ID) ---"
 MEAN_FINALIZE_JOB_ID=$(sbatch --dependency=afterok:"$MEAN_ARRAY_JOB_ID" \
     --export=ALL,BASE_CONFIG="$BASE_CONFIG",FABRIC="$FABRIC" \
-    slurm_batch/mean_finalize_dprst_depth.batch | awk '{print $NF}')
+    slurm_batch/mean_finalize_dprst_depth.batch | sed -n 's/^Submitted batch job \([0-9][0-9]*\).*/\1/p')
 echo "  mean_finalize: $MEAN_FINALIZE_JOB_ID"
 
 echo "Done. Final job ID: $MEAN_FINALIZE_JOB_ID (writes {output_dir}/merged/nhm_dprst_depth_avg_params.csv)"
+# Machine-readable terminal job for slurm_batch/submit_fabric_rerun.sh. A single id is
+# correct: stages 1-4b are one strictly linear afterok chain ending here.
+echo "TERMINAL_JOB_ID=$MEAN_FINALIZE_JOB_ID"

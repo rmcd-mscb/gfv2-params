@@ -77,6 +77,9 @@ sbatch slurm_batch/build_depstor_rasters.batch
 ```bash
 
 # 4 · Generate parameters (submits and chains all jobs automatically)
+# ZONAL_PARAMS: lulc_nlcd and lulc_foresce have no staged CONUS source on this data
+# root, and an unstaged param fails its array -- see Step 4's note below.
+export ZONAL_PARAMS="elevation slope aspect soils soil_moist_max lulc_nhm_v11 lulc_nalcms ssflux"
 slurm_batch/submit_zonal_params.sh   "$BATCHES" gfv2 configs/base_config.yml
 slurm_batch/submit_depstor_params.sh "$BATCHES" gfv2 configs/base_config.yml
 ```
@@ -113,6 +116,220 @@ Outputs land in `{data_root}/gfv2/params/merged/` (parameter CSVs) and
 8. **Step 7** — Render results figures headlessly.
 9. **Step 8** — (optional, fabric-independent) Derive snow depletion curves
    (SNODAS → `snarea_curve` curve library, 3 stages).
+
+---
+
+## Complete re-run for one fabric
+
+Use this when a fabric's products need to be brought up to date wholesale — after a
+code change to any builder, after the shared rasters are rebuilt, or whenever you are
+not certain a product was derived from current inputs.
+
+**Re-run the whole fabric rather than reasoning about which products are stale.** Two
+tools that tried to answer "which products are out of date?" were built and withdrawn
+(#215, #218); both inferred a semantic fact from file mtimes across a pipeline of
+special cases, and every special case degraded to silence rather than to "unknown". A
+complete re-run removes the question.
+
+It assumes the fabric's **geometry is unchanged** and starts from the existing
+`{fabric}/batches/`. Changing the fabric itself is Step 2 below, and invalidates
+everything downstream.
+
+Everything in the block below is generated from
+[`configs/workflow/fabric_rerun.yml`](../configs/workflow/fabric_rerun.yml), which is
+also what `slurm_batch/submit_fabric_rerun.sh` executes — so the individual commands
+here are the strings the driver runs and cannot drift from them. Edit the manifest,
+then run `python scripts/build_workflow_doc.py`; CI fails if this section is stale.
+
+<!-- BEGIN GENERATED: workflow -->
+*Generated from [`configs/workflow/fabric_rerun.yml`](../configs/workflow/fabric_rerun.yml) by `scripts/build_workflow_doc.py`. Edits below are overwritten — edit the manifest instead.*
+
+### One command
+
+```bash
+BATCHES="$(pixi run data-root)/<fabric>/batches"
+
+# Required on this data root -- see ZONAL_PARAMS below. One unstaged param
+# cancels the whole remaining chain.
+export ZONAL_PARAMS="elevation slope aspect soils soil_moist_max lulc_nhm_v11 lulc_nalcms ssflux"
+
+# ALWAYS dry-run first: prints the exact submission sequence, submits nothing,
+# and is safe on the login node. Flags go BEFORE the positionals; a trailing
+# --dry-run is rejected rather than read as the base_config argument.
+./slurm_batch/submit_fabric_rerun.sh --dry-run "$BATCHES" <fabric>
+
+# Then, for real. --force is applied only to the stages that accept it.
+./slurm_batch/submit_fabric_rerun.sh --force "$BATCHES" <fabric>
+```
+
+Each stage chains on the previous stage's terminal SLURM job, so the whole
+sequence runs unattended. A failed stage leaves its dependents in
+`DependencyNeverSatisfied` and SLURM cancels them — the chain stops rather than
+running a stage against incomplete inputs. Fix the cause, then resume:
+
+```bash
+./slurm_batch/submit_fabric_rerun.sh --from zonal_params "$BATCHES" <fabric>
+```
+
+Valid `--from` stages: `depstor_rasters`, `zonal_params`, `depstor_params`, `dprst_depth`, `snarea`, `fill`.
+
+> `--force` is not decoration. It reaches only the stages whose builders skip
+> existing outputs; every other stage always rebuilds. Which stages those are is
+> marked below, and is verified against the real scripts by
+> `tests/test_fabric_rerun_manifest.py`.
+
+#### Two environment knobs you will usually need
+
+The driver passes the environment through to every stage.
+
+**`ZONAL_PARAMS`** — `submit_zonal_params.sh` runs all 10 params by default, and
+any whose source is unstaged will fail. Because `depstor_params` waits on *every*
+zonal merge, one unstaged param cancels the whole remaining chain. Set it to the
+subset your data root can actually build — `recommended_zonal_params` in the
+manifest records the subset that works here (`lulc_nlcd` and `lulc_foresce` are
+the two normally left out, their CONUS sources being unstaged):
+
+```bash
+export ZONAL_PARAMS="elevation slope aspect soils soil_moist_max lulc_nhm_v11 lulc_nalcms ssflux"
+```
+
+Keep `slope` before `ssflux` — ssflux reads the merged slope CSV at zonal time.
+
+**`SBATCH_MEM_PER_NODE` / `SBATCH_TIMELIMIT`** — the batch scripts are sized for
+CONUS. `build_depstor_rasters.batch` asks for 384G/18h, which is right for `gfv2`
+and absurd for `tjc`'s 1,584 HRUs; on a busy cluster the scheduler will put a
+small-fabric re-run a day out purely on the size of the request. SLURM's own
+environment variables override a script's `#SBATCH` directives:
+
+```bash
+SBATCH_MEM_PER_NODE=64G SBATCH_TIMELIMIT=02:00:00 \
+  ./slurm_batch/submit_fabric_rerun.sh --force "$BATCHES" tjc
+```
+
+> They reach every job that does **not** set `--mem`/`--time` on its own
+> `sbatch` line — a command-line option beats the environment variable. Two
+> stages do: `submit_snarea_pipeline.sh`'s Stage 2 (`STAGE2_MEM` defaults to
+> **384G** for every fabric but `oregon`; override with `STAGE2_MEM` /
+> `STAGE2_TIME`) and `submit_dprst_depth.sh`'s build job (fixed at 64G/2h,
+> already small-fabric sized). Use them only when every stage genuinely fits —
+> true for a small fabric, false for `gfv2`, where the CONUS defaults are the
+> right numbers and this would OOM the depstor clump ops.
+
+### The stages, individually
+
+Run any of these on its own — they are the same strings the driver submits. Placeholders `{batches}`, `{fabric}` and `{base_config}` are substituted by the driver; substitute them yourself when running by hand.
+
+#### shared_rasters — shared, **skipped by the one-command re-run**
+
+> **Not part of a fabric re-run.** Run it deliberately, on its own, and then re-run *every* fabric.
+
+```bash
+sbatch slurm_batch/build_shared_rasters.batch
+```
+
+| | |
+|---|---|
+| Consumes | staged CONUS source rasters |
+| Produces | shared/ (per-VPU tiles + CONUS VRTs), read by EVERY fabric |
+| Resources | 12h / 96G / 16 cpu |
+| `--force` | **applies here** |
+
+> NOT run by a fabric re-run, because it writes shared/, which every fabric reads. Rebuilding it obliges a re-run of EVERY fabric: the 2026-06-30/07-01 rebuild silently staled every fabric's elevation and aspect products, which is what issue #215 was ultimately about. Run it deliberately, then re-run each fabric.
+
+#### depstor_rasters
+
+```bash
+sbatch --export=ALL,BASE_CONFIG={base_config},FABRIC={fabric} slurm_batch/build_depstor_rasters.batch
+```
+
+| | |
+|---|---|
+| Consumes | shared rasters, fabric batches |
+| Produces | {fabric}/depstor_rasters/ (waterbody, dprst, routing, carea_map, ...) |
+| Resources | 18h / 384G / 8 cpu |
+| `--force` | **applies here** |
+
+> The only FABRIC-SCOPE stage that takes --force, and the only one whose builders skip existing outputs wholesale. So a complete re-run needs --force here, and without it silently keeps the previous cascade. (shared_rasters also accepts it, but the driver never runs that stage. The one other skippable artefact in the workflow is the zonal lithology weight matrix -- see the zonal_params note.)
+
+#### zonal_params
+
+```bash
+./slurm_batch/submit_zonal_params.sh {batches} {fabric} {base_config}
+```
+
+| | |
+|---|---|
+| Consumes | shared rasters, fabric batches |
+| Produces | {fabric}/params/merged/nhm_<param>_params.csv (10 params) |
+| Resources | array per param; 4h / 64G / 2 cpu per task, then a merge each |
+| `--force` | not accepted (the driver does not pass it) |
+
+> Fans out: an independent array + merge per param, so its terminal is ALL the merge jobs, colon-joined. Independent of depstor_rasters -- ordered after it only because the chain is linear.
+>
+> RUNS ALL 10 PARAMS BY DEFAULT, which fails on any fabric whose sources are not staged -- and because depstor_params waits on every merge, one unstaged param cancels the WHOLE remaining chain. Set ZONAL_PARAMS to the subset this data root can actually build (see `recommended_zonal_params` at the top of this file); the driver passes the environment through.
+>
+> accepts_force is false because the per-batch and merge products always rebuild -- but ONE artefact here is exists-skipped and --force does not reach it: the CONUS lithology weight matrix (zonal_runners/weights.py). It is rebuilt only by FORCE=1, which build_zonal_weights.batch turns into --force-weights. After restaging lithology, or changing the weight derivation, export FORCE=1 -- otherwise ssflux is rebuilt on the old matrix and every job still reports COMPLETED (cf. #175).
+
+#### depstor_params
+
+```bash
+./slurm_batch/submit_depstor_params.sh {batches} {fabric} {base_config}
+```
+
+| | |
+|---|---|
+| Consumes | {fabric}/depstor_rasters/ |
+| Produces | {fabric}/params/merged/ (6 PRMS ratios; counts in _intermediates/) |
+| Resources | chained: array per fraction -> merge each -> ratios -> copy_constants |
+| `--force` | not accepted (the driver does not pass it) |
+
+#### dprst_depth
+
+```bash
+./slurm_batch/submit_dprst_depth.sh {batches} {fabric} {base_config}
+```
+
+| | |
+|---|---|
+| Consumes | {fabric}/depstor_rasters/dprst_binary.tif, 3DEP elevation, WESM |
+| Produces | {fabric}/params/merged/nhm_dprst_depth_avg_params.csv |
+| Resources | chained: plan -> tile array -> build -> HRU array -> mean_finalize |
+| `--force` | not accepted (the driver does not pass it) |
+
+> Already passes --force to its own build stage internally, which is required, not optional: without it the builder's exists-skip path returns in 0s and the HRU aggregation runs against the PREVIOUS run's depth raster, every job reporting COMPLETED. Observed on the oregon 2026-07-25 rebuild.
+
+#### snarea
+
+```bash
+./slurm_batch/submit_snarea_pipeline.sh {fabric} {base_config}
+```
+
+| | |
+|---|---|
+| Consumes | SNODAS daily SWE, fabric batches |
+| Produces | {fabric}/params/merged/nhm_snarea_curve_params.csv |
+| Resources | chained: aggregate array -> merge -> coverage -> derive -> library |
+| `--force` | not accepted (the driver does not pass it) |
+
+> Reads only SNODAS, so it is independent of both the depstor and zonal chains -- but it WRITES into {fabric}/params/merged/, which `fill` then reads. That is why the design's proposed `gate: false` was dropped: snarea is independent of what runs BEFORE it, not of what runs after.
+
+#### fill
+
+```bash
+sbatch --export=ALL,BASE_CONFIG={base_config},FABRIC={fabric} slurm_batch/merge_and_fill_params.batch
+```
+
+| | |
+|---|---|
+| Consumes | {fabric}/params/merged/*.csv (every stage above) |
+| Produces | {fabric}/params/merged/*.csv gap-filled IN PLACE (pre-fill copy in _unfilled/) |
+| Resources | 2h / 64G / 8 cpu |
+| `--force` | not accepted (the driver does not pass it) |
+
+> Must be last. It rewrites merged/*.csv in place, so a stage scheduled after it leaves its product unfilled -- and because the rewrite is in-place, the filename does not reveal it. merged/<name>.csv IS the gap-filled product (PR #189).
+
+*(end of generated section — hand-written prose resumes below)*
+<!-- END GENERATED: workflow -->
 
 ---
 

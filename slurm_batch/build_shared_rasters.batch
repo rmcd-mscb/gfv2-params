@@ -34,7 +34,7 @@
 
 set -euo pipefail
 
-cd "$SLURM_SUBMIT_DIR"
+cd "$SLURM_SUBMIT_DIR" || exit 1
 
 FORCE=${FORCE:+--force}
 VPUS_OVERRIDE=${VPUS:+--vpus $VPUS}

@@ -23,7 +23,7 @@
 # Stage 7 for why the order matters.
 #   FABRIC=oregon sbatch slurm_batch/merge_and_fill_params.batch
 # --mem/--time are starting points; right-size from `sacct -j <id> -o MaxRSS`.
-cd "$SLURM_SUBMIT_DIR"
+cd "$SLURM_SUBMIT_DIR" || exit 1
 BASE_CONFIG=${BASE_CONFIG:-configs/base_config.yml}
 FABRIC=${FABRIC:-gfv2}
 

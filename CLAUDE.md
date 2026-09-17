@@ -84,8 +84,10 @@ Part 2 split, the **orchestrator + builder + unified-config pattern** for the
 per-key required-field table), and how to add a new pipeline step.
 
 `slurm_batch/RUNME.md` is the step-by-step runbook (the CONUS-gfv2 happy path) — it opens
-with a **Quick Start for Scientists** section (condensed copy-paste commands), then the full
-per-step reference. Optional steps are marked with `> **Optional:**` blockquotes; Step 4
+with a **Quick Start for Scientists** section (condensed copy-paste commands), then a
+**Complete re-run for one fabric** section GENERATED from `configs/workflow/fabric_rerun.yml`
+(do not hand-edit between its markers — `python scripts/build_workflow_doc.py` overwrites
+them and CI fails on drift), then the full per-step reference. Optional steps are marked with `> **Optional:**` blockquotes; Step 4
 leads with the wholesale `submit_zonal_params.sh` / `submit_depstor_params.sh` wrappers
 (manual per-param commands are in a collapsed `<details>` block).
 `slurm_batch/HPC_REFERENCE.md` holds the per-stage detail, alternate paths, and recovery;
@@ -413,6 +415,37 @@ Repo-specific rules — uphold these when writing or reviewing code here:
   its result by SLURM job id, never infer it from a green badge. After editing any
   `prms:` block run `python scripts/build_parameter_index.py`; CI fails if the
   generated tables in `docs/parameter_index.md` are stale.
+- **Bringing a fabric up to date is a COMPLETE re-run, not a staleness audit.**
+  `./slurm_batch/submit_fabric_rerun.sh [--dry-run] [--from STAGE] [--force] <batches>
+  <fabric>` walks `configs/workflow/fabric_rerun.yml` and chains every stage on the
+  previous stage's terminal SLURM job. Two tools that instead tried to *detect* which
+  products were stale were built and withdrawn (#215, #218): both inferred a semantic
+  fact from mtimes and git dates across per-batch stages, in-place fill rewrites, VRT
+  indirection and cross-param reads, and **every special case degraded to silence
+  rather than to "unknown"**. Do not rebuild that. The manifest is the single source of
+  truth for both the driver and the runbook — `python scripts/build_workflow_doc.py`
+  regenerates the marked section of `slurm_batch/RUNME.md` from it, so the individual
+  stage commands a scientist copies ARE the strings the driver runs, and CI fails if
+  they drift. Adding a workflow costs one manifest entry, because granularity is one
+  entry per submit wrapper and each wrapper already chains its own internals. Three
+  things are load-bearing and easy to get wrong: the driver **skips `scope: shared`**
+  (`build_shared_rasters` writes `shared/`, which every fabric reads — rebuilding it
+  obliges a re-run of *every* fabric, which is exactly how the 2026-06-30/07-01 rebuild
+  silently staled every fabric's elevation and aspect products); **`--force` reaches only stages
+  whose `accepts_force` is true** — today just `depstor_rasters`, the only fabric-scope
+  stage whose builders skip existing outputs (`shared_rasters` accepts it too, but the
+  driver never runs it). The driver appends `--force` **after** the positionals, so a
+  wrapper would absorb it as `max_concurrent`/`n_tile_batches` — or, for snarea, forward
+  it to every `sbatch` — rather than rejecting it: the wrappers' unknown-flag guard
+  covers *leading* flags, i.e. `--after`, not this. Do not expect a loud abort to catch
+  a mis-set `accepts_force`. Note also that `--force` is NOT a complete "rebuild
+  everything": the CONUS lithology weight matrix is exists-skipped and rebuilt only by
+  `FORCE=1` → `--force-weights`, so a re-run after restaging lithology needs that too or
+  ssflux is rebuilt on the old matrix, COMPLETED throughout. And **`TERMINAL_JOB_ID` may be
+  colon-joined** because `submit_zonal_params.sh` fans out, so it names every merge job
+  rather than the last-submitted one — truncating it to the first id would start the
+  next stage while sibling params were still writing, with every job reporting
+  COMPLETED.
 - **`merged/<name>.csv` IS the gap-filled product — Guard 3 enforces it on disk.**
   PR #189 retired the `filled_` prefix: `merged/<name>.csv` is the single canonical,
   always-gap-filled per-HRU file, with the pre-fill copy preserved at

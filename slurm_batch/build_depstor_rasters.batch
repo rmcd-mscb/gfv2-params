@@ -26,7 +26,7 @@
 #
 #   sbatch slurm_batch/build_depstor_rasters.batch --from routing --force
 
-cd "$SLURM_SUBMIT_DIR"
+cd "$SLURM_SUBMIT_DIR" || exit 1
 BASE_CONFIG=${BASE_CONFIG:-configs/base_config.yml}
 FABRIC=${FABRIC:-gfv2}
 
