@@ -77,6 +77,9 @@ sbatch slurm_batch/build_depstor_rasters.batch
 ```bash
 
 # 4 · Generate parameters (submits and chains all jobs automatically)
+# ZONAL_PARAMS: lulc_nlcd and lulc_foresce have no staged CONUS source on this data
+# root, and an unstaged param fails its array -- see Step 4's note below.
+export ZONAL_PARAMS="elevation slope aspect soils soil_moist_max lulc_nhm_v11 lulc_nalcms ssflux"
 slurm_batch/submit_zonal_params.sh   "$BATCHES" gfv2 configs/base_config.yml
 slurm_batch/submit_depstor_params.sh "$BATCHES" gfv2 configs/base_config.yml
 ```
@@ -139,6 +142,8 @@ here are the strings the driver runs and cannot drift from them. Edit the manife
 then run `python scripts/build_workflow_doc.py`; CI fails if this section is stale.
 
 <!-- BEGIN GENERATED: workflow -->
+*Generated from [`configs/workflow/fabric_rerun.yml`](../configs/workflow/fabric_rerun.yml) by `scripts/build_workflow_doc.py`. Edits below are overwritten — edit the manifest instead.*
+
 ### One command
 
 ```bash
@@ -179,9 +184,10 @@ The driver passes the environment through to every stage.
 
 **`ZONAL_PARAMS`** — `submit_zonal_params.sh` runs all 10 params by default, and
 any whose source is unstaged will fail. Because `depstor_params` waits on *every*
-zonal merge, one unstaged param cancels the whole remaining chain. Neither
-`lulc_nlcd` nor `lulc_foresce` is staged in this data root, so every fabric here
-needs:
+zonal merge, one unstaged param cancels the whole remaining chain. Set it to the
+subset your data root can actually build — `recommended_zonal_params` in the
+manifest records the subset that works here (`lulc_nlcd` and `lulc_foresce` are
+the two normally left out, their CONUS sources being unstaged):
 
 ```bash
 export ZONAL_PARAMS="elevation slope aspect soils soil_moist_max lulc_nhm_v11 lulc_nalcms ssflux"
@@ -258,7 +264,11 @@ sbatch --export=ALL,BASE_CONFIG={base_config},FABRIC={fabric} slurm_batch/build_
 | Resources | array per param; 4h / 64G / 2 cpu per task, then a merge each |
 | `--force` | not accepted (the driver does not pass it) |
 
-> Fans out: an independent array + merge per param, so its terminal is ALL the merge jobs, colon-joined. Independent of depstor_rasters -- ordered after it only because the chain is linear. RUNS ALL 10 PARAMS BY DEFAULT, which fails on any fabric whose sources are not staged -- and because depstor_params waits on every merge, one unstaged param cancels the WHOLE remaining chain. Set ZONAL_PARAMS to the subset this data root can actually build; the driver passes the environment through. Neither lulc_nlcd nor lulc_foresce is staged in this data root, so every fabric here needs: ZONAL_PARAMS="elevation slope aspect soils soil_moist_max lulc_nhm_v11 lulc_nalcms ssflux" (keep slope before ssflux -- ssflux reads the merged slope CSV at zonal time). accepts_force is false because the per-batch and merge products always rebuild -- but ONE artefact here is exists-skipped and --force does not reach it: the CONUS lithology weight matrix (zonal_runners/weights.py). It is rebuilt only by FORCE=1, which build_zonal_weights.batch turns into --force-weights. After restaging lithology, or changing the weight derivation, export FORCE=1 -- otherwise ssflux is rebuilt on the old matrix and every job still reports COMPLETED (cf. #175).
+> Fans out: an independent array + merge per param, so its terminal is ALL the merge jobs, colon-joined. Independent of depstor_rasters -- ordered after it only because the chain is linear.
+>
+> RUNS ALL 10 PARAMS BY DEFAULT, which fails on any fabric whose sources are not staged -- and because depstor_params waits on every merge, one unstaged param cancels the WHOLE remaining chain. Set ZONAL_PARAMS to the subset this data root can actually build (see `recommended_zonal_params` at the top of this file); the driver passes the environment through.
+>
+> accepts_force is false because the per-batch and merge products always rebuild -- but ONE artefact here is exists-skipped and --force does not reach it: the CONUS lithology weight matrix (zonal_runners/weights.py). It is rebuilt only by FORCE=1, which build_zonal_weights.batch turns into --force-weights. After restaging lithology, or changing the weight derivation, export FORCE=1 -- otherwise ssflux is rebuilt on the old matrix and every job still reports COMPLETED (cf. #175).
 
 #### depstor_params
 
@@ -317,6 +327,8 @@ sbatch --export=ALL,BASE_CONFIG={base_config},FABRIC={fabric} slurm_batch/merge_
 | `--force` | not accepted (the driver does not pass it) |
 
 > Must be last. It rewrites merged/*.csv in place, so a stage scheduled after it leaves its product unfilled -- and because the rewrite is in-place, the filename does not reveal it. merged/<name>.csv IS the gap-filled product (PR #189).
+
+*(end of generated section — hand-written prose resumes below)*
 <!-- END GENERATED: workflow -->
 
 ---

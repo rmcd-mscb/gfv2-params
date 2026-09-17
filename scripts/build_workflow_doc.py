@@ -35,8 +35,12 @@ RUNME_PATH = _REPO_ROOT / "slurm_batch" / "RUNME.md"
 REGION = "workflow"
 
 
+def load_manifest(manifest_path: Path = MANIFEST_PATH) -> dict:
+    return yaml.safe_load(manifest_path.read_text())
+
+
 def load_stages(manifest_path: Path = MANIFEST_PATH) -> list[dict]:
-    return yaml.safe_load(manifest_path.read_text())["stages"]
+    return load_manifest(manifest_path)["stages"]
 
 
 def _as_list(value) -> list[str]:
@@ -44,9 +48,16 @@ def _as_list(value) -> list[str]:
     return list(value) if isinstance(value, list) else [str(value)]
 
 
-def render_one_command(stages: list[dict]) -> str:
+def render_one_command(stages: list[dict], zonal_params: str = "") -> str:
     """The one-command path, plus the resume and force recipes an operator needs."""
     fabric_names = [s["name"] for s in stages if s["scope"] == "fabric"]
+    if not fabric_names:
+        # --check is the CI gate; an IndexError traceback is a confusing way for a gate
+        # to fail, and a manifest with nothing to run is a real (if unlikely) edit.
+        raise SystemExit(
+            "The manifest declares no fabric-scope stage, so there is no re-run to "
+            "document. Every stage is `scope: shared`?"
+        )
     return "\n".join(
         [
             "### One command",
@@ -56,7 +67,7 @@ def render_one_command(stages: list[dict]) -> str:
             "",
             "# Required on this data root -- see ZONAL_PARAMS below. One unstaged param",
             "# cancels the whole remaining chain.",
-            'export ZONAL_PARAMS="elevation slope aspect soils soil_moist_max lulc_nhm_v11 lulc_nalcms ssflux"',
+            f'export ZONAL_PARAMS="{zonal_params}"',
             "",
             "# ALWAYS dry-run first: prints the exact submission sequence, submits nothing,",
             "# and is safe on the login node. Flags go BEFORE the positionals; a trailing",
@@ -89,12 +100,13 @@ def render_one_command(stages: list[dict]) -> str:
             "",
             "**`ZONAL_PARAMS`** — `submit_zonal_params.sh` runs all 10 params by default, and",
             "any whose source is unstaged will fail. Because `depstor_params` waits on *every*",
-            "zonal merge, one unstaged param cancels the whole remaining chain. Neither",
-            "`lulc_nlcd` nor `lulc_foresce` is staged in this data root, so every fabric here",
-            "needs:",
+            "zonal merge, one unstaged param cancels the whole remaining chain. Set it to the",
+            "subset your data root can actually build — `recommended_zonal_params` in the",
+            "manifest records the subset that works here (`lulc_nlcd` and `lulc_foresce` are",
+            "the two normally left out, their CONUS sources being unstaged):",
             "",
             "```bash",
-            'export ZONAL_PARAMS="elevation slope aspect soils soil_moist_max lulc_nhm_v11 lulc_nalcms ssflux"',
+            f'export ZONAL_PARAMS="{zonal_params}"',
             "```",
             "",
             "Keep `slope` before `ssflux` — ssflux reads the merged slope CSV at zonal time.",
@@ -167,14 +179,39 @@ def render_stage(stage: dict) -> str:
 
     if stage.get("note"):
         out.append("")
-        note = " ".join(stage["note"].split())
-        out.append(f"> {note}")
+        # Paragraph breaks survive. Collapsing the whole note to one line turned the most
+        # operationally important warning in the document into a ~600-character
+        # single-line blockquote -- the least readable thing in it.
+        # Split on ANY run of newlines: in a YAML folded scalar (`>-`, which every note
+        # uses) a blank source line yields a SINGLE "\n", not two.
+        paragraphs = [" ".join(p.split()) for p in re.split(r"\n+", stage["note"]) if p.strip()]
+        for i, para in enumerate(paragraphs):
+            if i:
+                out.append(">")
+            out.append(f"> {para}")
 
     return "\n".join(out)
 
 
-def render(stages: list[dict]) -> str:
-    parts = [render_one_command(stages), "", "### The stages, individually", ""]
+# Visible to a reader of the RENDERED page, unlike the HTML-comment markers. It must be
+# emitted from inside render(), or the next run wipes it.
+_GENERATED_BANNER = (
+    "*Generated from [`configs/workflow/fabric_rerun.yml`](../configs/workflow/"
+    "fabric_rerun.yml) by `scripts/build_workflow_doc.py`. Edits below are overwritten — "
+    "edit the manifest instead.*"
+)
+_GENERATED_FOOTER = "*(end of generated section — hand-written prose resumes below)*"
+
+
+def render(stages: list[dict], zonal_params: str = "") -> str:
+    parts = [
+        _GENERATED_BANNER,
+        "",
+        render_one_command(stages, zonal_params),
+        "",
+        "### The stages, individually",
+        "",
+    ]
     parts.append(
         "Run any of these on its own — they are the same strings the driver submits. "
         "Placeholders `{batches}`, `{fabric}` and `{base_config}` are substituted by the "
@@ -184,6 +221,7 @@ def render(stages: list[dict]) -> str:
     for stage in stages:
         parts.append(render_stage(stage))
         parts.append("")
+    parts.append(_GENERATED_FOOTER)
     return "\n".join(parts).rstrip()
 
 
@@ -210,9 +248,12 @@ def _display_path(path: Path) -> str:
 
 
 def build(check: bool = False, path: Path = RUNME_PATH) -> int:
-    stages = load_stages()
+    manifest = load_manifest()
+    stages = manifest["stages"]
     text = path.read_text()
-    new = _replace_region(text, REGION, render(stages))
+    new = _replace_region(
+        text, REGION, render(stages, manifest.get("recommended_zonal_params", ""))
+    )
 
     if new == text:
         print(f"{_display_path(path)} workflow section is up to date.")
