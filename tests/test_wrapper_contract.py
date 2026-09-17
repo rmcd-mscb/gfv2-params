@@ -273,6 +273,29 @@ class TestAfterFlag:
             seen.add(job_id)
 
     @pytest.mark.parametrize("script", WRAPPERS)
+    def test_every_dependency_is_afterok(self, script, tmp_path):
+        """The dependency TYPE, which the graph assertions above deliberately discard.
+
+        ``dependencies()`` keeps only the job ids, so every chaining assertion in this
+        file passes identically for ``afterany`` -- and a one-word edit to any wrapper
+        would turn the whole workflow into "run the next stage whether or not the
+        previous one succeeded". A failed zonal array would no longer cancel the fill;
+        the fill would run against a half-written merged/ and report COMPLETED. The
+        driver side already pins the literal string, so this is the wrapper-side half.
+        """
+        args, env = _invocation(script, tmp_path, lead=("--after", "777"))
+        run = _run(script, args, tmp_path, env)
+        assert run.returncode == 0, run.stderr
+        dependent = [argv for _, argv in run.submissions if "--dependency=" in argv]
+        assert dependent, f"{script}: no submission carried a --dependency"
+        for argv in dependent:
+            spec = re.search(r"--dependency=(\S+)", argv).group(1)
+            assert spec.startswith("afterok:"), (
+                f"{script}: dependency is {spec!r}, not afterok. Only afterok cancels a "
+                f"dependent when its predecessor fails.\n  argv: {argv}"
+            )
+
+    @pytest.mark.parametrize("script", WRAPPERS)
     def test_no_after_means_no_invented_dependency(self, script, tmp_path):
         """Absent ``--after``, the wrapper's first submission must stay free-standing."""
         args, env = _invocation(script, tmp_path)

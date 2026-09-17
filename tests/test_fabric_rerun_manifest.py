@@ -95,6 +95,27 @@ def test_placeholders_are_from_the_known_set(stages):
             assert ph in PLACEHOLDERS, f"{s['name']}: unknown placeholder {{{ph}}} in command"
 
 
+def test_every_fabric_stage_names_the_fabric_and_the_config(stages):
+    """A fabric-scope command MUST carry {fabric} and {base_config}.
+
+    Every consumer defaults to gfv2 when the value is absent -- `FABRIC=${FABRIC:-gfv2}`
+    in build_depstor_rasters.batch and merge_and_fill_params.batch, `FABRIC="${2:-gfv2}"`
+    in all three submit wrappers. So dropping the placeholder from one entry does not
+    fail: it silently retargets that stage at the CONUS production fabric, rebuilding
+    gfv2's depstor rasters (384G/18h) or gap-filling gfv2's merged CSVs while reporting
+    success for the fabric the operator named. The driver's dry-run tests cannot catch it
+    -- they assert the fabric appears in the output, which the OTHER stages satisfy.
+    """
+    for s in stages:
+        if s["scope"] != "fabric":
+            continue
+        for ph in ("{fabric}", "{base_config}"):
+            assert ph in s["command"], (
+                f"{s['name']}: fabric-scope command omits {ph}, so it would fall back to "
+                f"the gfv2 default:\n  {s['command']}"
+            )
+
+
 def test_wrapper_kind_matches_a_real_submit_wrapper(stages):
     """``kind: wrapper`` asserts the command honours the contract from
     tests/test_wrapper_contract.py. Check the command really is one of those wrappers."""
