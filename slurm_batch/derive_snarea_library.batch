@@ -13,7 +13,7 @@
 # CSV. Pure tabular — cheap. Re-runnable at any ndepl_cv without a daily reload.
 #   FABRIC=gfv2 sbatch slurm_batch/derive_snarea_library.batch
 
-cd "$SLURM_SUBMIT_DIR"
+cd "$SLURM_SUBMIT_DIR" || exit 1
 BASE_CONFIG=${BASE_CONFIG:-configs/base_config.yml}
 FABRIC=${FABRIC:-oregon}
 

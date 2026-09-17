@@ -9,7 +9,7 @@
 #SBATCH --cpus-per-task=1       # cp -p is single-threaded
 #SBATCH --mem=8G                # generous; cp uses negligible user-space RAM
 
-cd "$SLURM_SUBMIT_DIR"
+cd "$SLURM_SUBMIT_DIR" || exit 1
 
 # Optional override of the source path (default is the impd-group mirror baked
 # into stage_twi.sh):

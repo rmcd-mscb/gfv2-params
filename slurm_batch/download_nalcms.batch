@@ -9,5 +9,5 @@
 #SBATCH --cpus-per-task=1
 #SBATCH --mem=4G
 
-cd "$SLURM_SUBMIT_DIR"
+cd "$SLURM_SUBMIT_DIR" || exit 1
 pixi run --as-is python -m gfv2_params.download.nalcms_lulc

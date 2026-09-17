@@ -15,7 +15,7 @@
 # the script already forces MPLBACKEND=Agg.
 #   FABRIC=oregon sbatch slurm_batch/render_figures.batch
 # --mem/--time are starting points; right-size from `sacct -j <id> -o MaxRSS`.
-cd "$SLURM_SUBMIT_DIR"
+cd "$SLURM_SUBMIT_DIR" || exit 1
 FABRIC=${FABRIC:-gfv2}
 
 pixi run --as-is -e notebooks python scripts/render_figures.py \

@@ -100,12 +100,28 @@ if [ ! -f "$MANIFEST" ]; then
 fi
 
 N_HRU_BATCHES=$(grep '^n_batches:' "$MANIFEST" | awk '{print $2}')
-if [ -z "$N_HRU_BATCHES" ] || [ "$N_HRU_BATCHES" -le 0 ] 2>/dev/null; then
-    echo "Error: could not parse n_batches from $MANIFEST (got: '$N_HRU_BATCHES')"
+# A non-numeric value must not pass. `[ "$X" -le 0 ] 2>/dev/null` looks like a guard but
+# is not: bash reports "integer expression expected", `[` returns 2, the redirect hides the
+# message and `if` reads 2 as false -- so exactly the value the guard exists to catch slips
+# through. Match on the characters instead.
+case "$N_HRU_BATCHES" in
+    ''|*[!0-9]*)
+        echo "Error: n_batches in $MANIFEST is not a positive integer (got: '$N_HRU_BATCHES')" >&2
+        exit 1
+        ;;
+esac
+if [ "$N_HRU_BATCHES" -le 0 ]; then
+    echo "Error: n_batches in $MANIFEST must be positive (got: '$N_HRU_BATCHES')" >&2
     exit 1
 fi
-if [ "$N_TILE_BATCHES" -le 0 ] 2>/dev/null; then
-    echo "Error: n_tile_batches must be positive (got: '$N_TILE_BATCHES')"
+case "$N_TILE_BATCHES" in
+    ''|*[!0-9]*)
+        echo "Error: n_tile_batches is not a positive integer (got: '$N_TILE_BATCHES')" >&2
+        exit 1
+        ;;
+esac
+if [ "$N_TILE_BATCHES" -le 0 ]; then
+    echo "Error: n_tile_batches must be positive (got: '$N_TILE_BATCHES')" >&2
     exit 1
 fi
 LAST_HRU_IDX=$((N_HRU_BATCHES - 1))
@@ -135,14 +151,14 @@ PLAN_DEP=""
 PLAN_JOB_ID=$(sbatch \
     $PLAN_DEP \
     --export=ALL,BASE_CONFIG="$BASE_CONFIG",FABRIC="$FABRIC",N_TILE_BATCHES="$N_TILE_BATCHES" \
-    slurm_batch/plan_dprst_depth_batches.batch | awk '{print $NF}')
+    slurm_batch/plan_dprst_depth_batches.batch | sed -n 's/^Submitted batch job \([0-9][0-9]*\).*/\1/p')
 echo "  plan: $PLAN_JOB_ID"
 
 echo "--- stage 2: tile-batch compute array (afterok:$PLAN_JOB_ID) ---"
 ARRAY_JOB_ID=$(sbatch --array="0-$LAST_TILE_IDX" \
     --dependency=afterok:"$PLAN_JOB_ID" \
     --export=ALL,BASE_CONFIG="$BASE_CONFIG",FABRIC="$FABRIC" \
-    slurm_batch/run_dprst_depth_batch.batch | awk '{print $NF}')
+    slurm_batch/run_dprst_depth_batch.batch | sed -n 's/^Submitted batch job \([0-9][0-9]*\).*/\1/p')
 echo "  array: $ARRAY_JOB_ID"
 
 echo "--- stage 3: fill+burn+op_flow_thres (afterok:$ARRAY_JOB_ID) ---"
@@ -160,20 +176,20 @@ echo "--- stage 3: fill+burn+op_flow_thres (afterok:$ARRAY_JOB_ID) ---"
 BUILD_JOB_ID=$(sbatch --dependency=afterok:"$ARRAY_JOB_ID" \
     --mem=64G --time=02:00:00 \
     --export=ALL,BASE_CONFIG="$BASE_CONFIG",FABRIC="$FABRIC" \
-    slurm_batch/build_depstor_rasters.batch --step dprst_depth --force | awk '{print $NF}')
+    slurm_batch/build_depstor_rasters.batch --step dprst_depth --force | sed -n 's/^Submitted batch job \([0-9][0-9]*\).*/\1/p')
 echo "  build: $BUILD_JOB_ID"
 
 echo "--- stage 4a: mean_zonal array (afterok:$BUILD_JOB_ID) ---"
 MEAN_ARRAY_JOB_ID=$(sbatch --array="$HRU_ARRAY_SPEC" \
     --dependency=afterok:"$BUILD_JOB_ID" \
     --export=ALL,BASE_CONFIG="$BASE_CONFIG",FABRIC="$FABRIC" \
-    slurm_batch/mean_zonal_dprst_depth.batch | awk '{print $NF}')
+    slurm_batch/mean_zonal_dprst_depth.batch | sed -n 's/^Submitted batch job \([0-9][0-9]*\).*/\1/p')
 echo "  mean_zonal array: $MEAN_ARRAY_JOB_ID"
 
 echo "--- stage 4b: mean_finalize (afterok:$MEAN_ARRAY_JOB_ID) ---"
 MEAN_FINALIZE_JOB_ID=$(sbatch --dependency=afterok:"$MEAN_ARRAY_JOB_ID" \
     --export=ALL,BASE_CONFIG="$BASE_CONFIG",FABRIC="$FABRIC" \
-    slurm_batch/mean_finalize_dprst_depth.batch | awk '{print $NF}')
+    slurm_batch/mean_finalize_dprst_depth.batch | sed -n 's/^Submitted batch job \([0-9][0-9]*\).*/\1/p')
 echo "  mean_finalize: $MEAN_FINALIZE_JOB_ID"
 
 echo "Done. Final job ID: $MEAN_FINALIZE_JOB_ID (writes {output_dir}/merged/nhm_dprst_depth_avg_params.csv)"

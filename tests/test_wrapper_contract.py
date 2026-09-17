@@ -2,7 +2,9 @@
 
   * they accept leading ``--after <jobid>`` and apply it to every submission that would
     otherwise have no dependency;
-  * they print a final machine-readable ``TERMINAL_JOB_ID=<id>``;
+  * they print a machine-readable ``TERMINAL_JOB_ID=<id>`` on a line of its own,
+    exactly once (not necessarily LAST -- submit_snarea_pipeline.sh prints a
+    Monitor: hint after it, which is why the driver greps rather than tailing);
   * they reject an unknown leading flag instead of swallowing it as a positional.
 
 These RUN the wrappers against a fake ``sbatch`` on PATH that returns DISTINCT,
@@ -43,7 +45,7 @@ WRAPPERS = [
 pytestmark = pytest.mark.skipif(shutil.which("bash") is None, reason="bash not available")
 
 
-def _fake_sbatch(tmp_path):
+def _fake_sbatch(tmp_path, fail_on=None):
     """A fake ``sbatch``: distinct incrementing ids, plus an argv log so chaining is assertable.
 
     Honours ``--parsable`` (bare id) vs the default ("Submitted batch job N"), because
@@ -57,9 +59,22 @@ def _fake_sbatch(tmp_path):
     counter.write_text("1000")
     log = tmp_path / "sbatch.log"
     fake = bindir / "sbatch"
+    # fail_on=k makes the k-th submission fail, the way a full queue or a rejected
+    # --array does. Without it no wrapper's submission-failure path is exercised at all.
+    fail_clause = ""
+    if fail_on is not None:
+        fail_clause = (
+            f'seq=$(cat "{counter}.seq" 2>/dev/null || echo 0); seq=$((seq+1));\n'
+            f'echo "$seq" > "{counter}.seq"\n'
+            f'if [ "$seq" = "{fail_on}" ]; then\n'
+            '  echo "sbatch: error: Batch job submission failed" >&2\n'
+            "  exit 1\n"
+            "fi\n"
+        )
     fake.write_text(
         "#!/usr/bin/env bash\n"
-        f'n=$(cat "{counter}"); n=$((n+1)); echo "$n" > "{counter}"\n'
+        + fail_clause
+        + f'n=$(cat "{counter}"); n=$((n+1)); echo "$n" > "{counter}"\n'
         f'echo "$n ARGV: $*" >> "{log}"\n'
         'for a in "$@"; do\n'
         '  if [ "$a" = "--parsable" ]; then echo "$n"; exit 0; fi\n'
@@ -139,8 +154,8 @@ class _Run:
         return submitted - waited_on - set(external)
 
 
-def _run(script, args, tmp_path, env_extra=None):
-    bindir, log = _fake_sbatch(tmp_path)
+def _run(script, args, tmp_path, env_extra=None, fail_on=None):
+    bindir, log = _fake_sbatch(tmp_path, fail_on=fail_on)
     env = dict(os.environ)
     env["PATH"] = f"{bindir}{os.pathsep}{env['PATH']}"
     # Do not inherit the developer's shell settings into an assertion about defaults.
@@ -296,6 +311,52 @@ class TestAfterFlag:
             )
 
     @pytest.mark.parametrize("script", WRAPPERS)
+    def test_a_colon_joined_after_is_accepted(self, script, tmp_path):
+        """The CONSUMER end of the colon-join contract.
+
+        The producer end (submit_zonal_params emitting several ids) and the forwarder end
+        (the driver passing them through whole) are both pinned. Nothing checked that a
+        wrapper RECEIVING `--after 921:922:923` handles it -- and that is the one edge in
+        the real chain that carries a colon-joined id, zonal -> depstor. Anyone adding a
+        plausible-looking `[[ $2 =~ ^[0-9]+$ ]]` validation to the shared --after block
+        would break exactly that handoff and nothing would notice.
+        """
+        args, env = _invocation(script, tmp_path, lead=("--after", "921:922:923"))
+        run = _run(script, args, tmp_path, env)
+        assert run.returncode == 0, run.stderr
+        assert run.submissions, "wrapper submitted nothing"
+        first_argv = run.submissions[0][1]
+        assert "afterok:921:922:923" in first_argv, (
+            f"{script}: a colon-joined --after was not forwarded whole:\n  {first_argv}"
+        )
+
+    @pytest.mark.parametrize("script", WRAPPERS)
+    def test_a_failed_submission_aborts_without_reporting_a_terminal(self, script, tmp_path):
+        """The fake sbatch never failed, so no wrapper's failure path was covered.
+
+        All four rely on `set -euo pipefail` plus `X=$(sbatch ... | awk ...)` to abort. A
+        future `|| true`, a dropped `pipefail`, or a refactor into a helper that swallows
+        status would yield an EMPTY job id, a malformed `--dependency=afterok:` on the
+        next submission, and -- critically -- the wrapper still reaching its final
+        `echo TERMINAL_JOB_ID=`. The driver would then chain the whole remaining workflow
+        on garbage, with exit 0 everywhere.
+        """
+        args, env = _invocation(script, tmp_path)
+        run = _run(script, args, tmp_path, env, fail_on=1)
+        # Vacuity guard: the wrapper must actually have REACHED sbatch. Without this the
+        # test passes on any wrapper that exits non-zero for an unrelated reason -- bad
+        # arguments, a missing manifest -- having never exercised the failure path.
+        assert (tmp_path / "counter.seq").exists(), (
+            f"{script}: never invoked sbatch, so the failure path was not exercised"
+        )
+        assert run.returncode != 0, (
+            f"{script}: a rejected sbatch did not fail the wrapper:\n{run.stdout}"
+        )
+        assert "TERMINAL_JOB_ID=" not in run.stdout, (
+            f"{script}: reported a terminal job id after a failed submission:\n{run.stdout}"
+        )
+
+    @pytest.mark.parametrize("script", WRAPPERS)
     def test_no_after_means_no_invented_dependency(self, script, tmp_path):
         """Absent ``--after``, the wrapper's first submission must stay free-standing."""
         args, env = _invocation(script, tmp_path)
@@ -356,3 +417,29 @@ class TestFakeSbatch:
         ids = [job_id for job_id, _ in run.submissions]
         assert len(ids) > 1, "need >1 submission to prove ids differ"
         assert len(set(ids)) == len(ids), f"fake sbatch reused a job id: {ids}"
+
+
+class TestBatchCountGuard:
+    """`n_batches` comes out of a grep + awk, so it can be anything the file contains."""
+
+    @pytest.mark.parametrize("script", WRAPPERS)
+    def test_a_non_numeric_batch_count_is_rejected_by_name(self, script, tmp_path):
+        """`[ "$N" -le 0 ] 2>/dev/null` does not do what it looks like.
+
+        Bash reports "integer expression expected" and `[` returns 2, which the 2>/dev/null
+        hides and `if` reads as false -- so a non-numeric value PASSES the guard that
+        exists to catch it. Execution continues until something else trips over it, and
+        the operator gets an error that names neither n_batches nor the manifest.
+        """
+        # _invocation builds the tree itself, so corrupt the manifest AFTER it, not
+        # before -- otherwise it is rewritten with the default and this tests nothing.
+        args, env = _invocation(script, tmp_path)
+        manifest = tmp_path / "dr" / "gfv2" / "batches" / "manifest.yml"
+        manifest.write_text("n_batches: not-a-number\n")
+        run = _run(script, args, tmp_path, env)
+        assert run.returncode != 0, f"{script}: a non-numeric n_batches was accepted"
+        combined = run.stdout + run.stderr
+        assert "n_batches" in combined, (
+            f"{script}: failed, but the message does not name n_batches, so an operator "
+            f"cannot tell what is wrong:\n{combined}"
+        )

@@ -84,7 +84,9 @@ fi
 EXTRA_OPTS=("$@")   # forwarded to every sbatch
 
 # Resolve data_root the same grep-parse way the batches/manifest is parsed.
-DATA_ROOT=$(grep '^data_root:' "$BASE_CONFIG" | awk '{print $2}')
+# head -1 and quote-stripping: a duplicated or quoted `data_root:` key would otherwise
+# yield a wrong-but-NONEMPTY value, which the -z check below cannot catch.
+DATA_ROOT=$(grep '^data_root:' "$BASE_CONFIG" | head -1 | awk '{print $2}' | tr -d "\"'")
 if [ -z "$DATA_ROOT" ]; then
     echo "Error: could not parse data_root from $BASE_CONFIG"
     exit 1
@@ -97,8 +99,18 @@ if [ ! -f "$MANIFEST" ]; then
 fi
 
 N_BATCHES=$(grep '^n_batches:' "$MANIFEST" | awk '{print $2}')
-if [ -z "$N_BATCHES" ] || [ "$N_BATCHES" -le 0 ] 2>/dev/null; then
-    echo "Error: could not parse n_batches from $MANIFEST (got: '$N_BATCHES')"
+# A non-numeric value must not pass. `[ "$X" -le 0 ] 2>/dev/null` looks like a guard but
+# is not: bash reports "integer expression expected", `[` returns 2, the redirect hides the
+# message and `if` reads 2 as false -- so exactly the value the guard exists to catch slips
+# through. Match on the characters instead.
+case "$N_BATCHES" in
+    ''|*[!0-9]*)
+        echo "Error: n_batches in $MANIFEST is not a positive integer (got: '$N_BATCHES')" >&2
+        exit 1
+        ;;
+esac
+if [ "$N_BATCHES" -le 0 ]; then
+    echo "Error: n_batches in $MANIFEST must be positive (got: '$N_BATCHES')" >&2
     exit 1
 fi
 LAST_IDX=$((N_BATCHES - 1))

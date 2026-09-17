@@ -29,7 +29,7 @@
 # forwarded to python via "$@" (e.g. pass --keep_intermediates to retain
 # fdr_aligned.tif for inspection).
 
-cd "$SLURM_SUBMIT_DIR"
+cd "$SLURM_SUBMIT_DIR" || exit 1
 BASE_CONFIG=${BASE_CONFIG:-configs/base_config.yml}
 
 pixi run --as-is python scripts/build_depstor_rasters.py \

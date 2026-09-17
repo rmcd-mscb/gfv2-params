@@ -70,8 +70,18 @@ if [ ! -f "$MANIFEST" ]; then
 fi
 
 N_BATCHES=$(grep '^n_batches:' "$MANIFEST" | awk '{print $2}')
-if [ -z "$N_BATCHES" ] || [ "$N_BATCHES" -le 0 ] 2>/dev/null; then
-    echo "Error: could not parse n_batches from $MANIFEST (got: '$N_BATCHES')"
+# A non-numeric value must not pass. `[ "$X" -le 0 ] 2>/dev/null` looks like a guard but
+# is not: bash reports "integer expression expected", `[` returns 2, the redirect hides the
+# message and `if` reads 2 as false -- so exactly the value the guard exists to catch slips
+# through. Match on the characters instead.
+case "$N_BATCHES" in
+    ''|*[!0-9]*)
+        echo "Error: n_batches in $MANIFEST is not a positive integer (got: '$N_BATCHES')" >&2
+        exit 1
+        ;;
+esac
+if [ "$N_BATCHES" -le 0 ]; then
+    echo "Error: n_batches in $MANIFEST must be positive (got: '$N_BATCHES')" >&2
     exit 1
 fi
 LAST_IDX=$((N_BATCHES - 1))
@@ -156,12 +166,13 @@ for PARAM in "${PARAMS[@]}"; do
             # inbound dependency too -- it is not covered by the array's EXTRA_DEPS.
             WEIGHTS_DEP=""
             [ -n "$AFTER_JOB" ] && WEIGHTS_DEP="--dependency=afterok:$AFTER_JOB"
-            # shellcheck disable=SC2086  # deliberately unquoted: empty or a whole
+            # deliberately unquoted: empty or a whole
             # --dependency=... argument (see Step C's note).
+            # shellcheck disable=SC2086
             WEIGHTS_JOB_ID=$(sbatch \
                 $WEIGHTS_DEP \
                 --export=ALL,BASE_CONFIG="$BASE_CONFIG",FABRIC="$FABRIC" \
-                slurm_batch/build_zonal_weights.batch | awk '{print $NF}')
+                slurm_batch/build_zonal_weights.batch | sed -n 's/^Submitted batch job \([0-9][0-9]*\).*/\1/p')
             echo "  weights: $WEIGHTS_JOB_ID"
         else
             echo "  weights: $WEIGHTS_JOB_ID (reused)"
@@ -189,20 +200,21 @@ for PARAM in "${PARAMS[@]}"; do
     fi
 
     # Step C: array zonal job.
-    # shellcheck disable=SC2086  # $DEP_ARG is deliberately unquoted: it is either
+    # $DEP_ARG is deliberately unquoted: it is either
     # empty or a whole `--dependency=...` argument, and quoting it would pass an
     # EMPTY string as an argument to sbatch whenever this param has no upstream
     # dependency. The word-splitting is the mechanism, not an oversight.
+    # shellcheck disable=SC2086
     ARRAY_JOB_ID=$(sbatch --array="$ARRAY_SPEC" \
                          $DEP_ARG \
                          --export=ALL,BASE_CONFIG="$BASE_CONFIG",FABRIC="$FABRIC",PARAM="$PARAM" \
-                         slurm_batch/derive_zonal_params.batch | awk '{print $NF}')
+                         slurm_batch/derive_zonal_params.batch | sed -n 's/^Submitted batch job \([0-9][0-9]*\).*/\1/p')
     echo "  zonal  array: $ARRAY_JOB_ID${DEP_ARG:+ ($DEP_ARG)}"
 
     # Step D: merge job, afterok the array.
     MERGE_JOB_ID=$(sbatch --dependency=afterok:"$ARRAY_JOB_ID" \
                          --export=ALL,BASE_CONFIG="$BASE_CONFIG",FABRIC="$FABRIC",PARAM="$PARAM" \
-                         slurm_batch/merge_zonal_param.batch | awk '{print $NF}')
+                         slurm_batch/merge_zonal_param.batch | sed -n 's/^Submitted batch job \([0-9][0-9]*\).*/\1/p')
     echo "  merge afterok:$ARRAY_JOB_ID -> $MERGE_JOB_ID"
     MERGE_JOB_BY_PARAM[$PARAM]="$MERGE_JOB_ID"
 done
@@ -218,5 +230,8 @@ echo "Done. Submitted ${#PARAMS[@]} params; last merge job ID: ${MERGE_JOB_ID}"
 # last-submitted merge (the `MERGE_JOB_ID` on the line above) would let the next stage
 # start while sibling params were still writing their CSVs, with every job still
 # reporting COMPLETED.
+# NOTE: MERGE_JOB_BY_PARAM is an ASSOCIATIVE array, so this expansion is in bash's
+# internal hash order, not submission order. That is fine for `afterok:` -- SLURM does not
+# care -- but nothing here should ever be read as "the first id is the last param".
 TERMINAL_IDS=$(IFS=:; echo "${MERGE_JOB_BY_PARAM[*]}")
 echo "TERMINAL_JOB_ID=${TERMINAL_IDS}"

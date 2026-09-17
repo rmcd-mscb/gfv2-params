@@ -14,7 +14,7 @@
 # as a SLURM job rather than on the login node. Override FABRIC for other
 # fabrics:  FABRIC=oregon sbatch slurm_batch/prepare_fabric.batch
 # --mem/--time are starting points; right-size from `sacct -j <id> -o MaxRSS`.
-cd "$SLURM_SUBMIT_DIR"
+cd "$SLURM_SUBMIT_DIR" || exit 1
 BASE_CONFIG=${BASE_CONFIG:-configs/base_config.yml}
 FABRIC=${FABRIC:-gfv2}
 
