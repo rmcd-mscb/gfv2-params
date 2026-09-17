@@ -926,7 +926,7 @@ All four workflow wrappers — `submit_zonal_params.sh`, `submit_depstor_params.
   `submit_zonal_params.sh` submits an independent array per param, so chaining only the
   first would let the rest start against inputs the previous stage had not finished
   writing.
-- **`TERMINAL_JOB_ID=<id>`** is printed as the final line, in addition to the existing
+- **`TERMINAL_JOB_ID=<id>`** is printed on a line of its own, exactly once, in addition to the existing
   human-readable `Done. …` line. It names the run's whole completion frontier, so it may
   be **colon-joined** (`afterok:a:b:c` is SLURM's own "after all of these" syntax).
   `submit_zonal_params.sh` fans out and reports every param's merge job; the other three
@@ -936,7 +936,7 @@ All four workflow wrappers — `submit_zonal_params.sh`, `submit_depstor_params.
 
 `--after` is backward-compatible: omit it and the wrappers behave exactly as before.
 
-Env knobs (both wrappers):
+Env knobs (`submit_zonal_params.sh` / `submit_depstor_params.sh`):
 
 - `FABRIC=gfv2_vpu01` — non-default fabric (or pass as the 2nd positional arg)
 - `SUBMIT_JOBS_MAX_CONCURRENT=4` — array concurrency cap (or the 4th positional arg to `submit_zonal_params.sh` / `submit_depstor_params.sh`)

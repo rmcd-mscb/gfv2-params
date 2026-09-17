@@ -84,8 +84,10 @@ Part 2 split, the **orchestrator + builder + unified-config pattern** for the
 per-key required-field table), and how to add a new pipeline step.
 
 `slurm_batch/RUNME.md` is the step-by-step runbook (the CONUS-gfv2 happy path) — it opens
-with a **Quick Start for Scientists** section (condensed copy-paste commands), then the full
-per-step reference. Optional steps are marked with `> **Optional:**` blockquotes; Step 4
+with a **Quick Start for Scientists** section (condensed copy-paste commands), then a
+**Complete re-run for one fabric** section GENERATED from `configs/workflow/fabric_rerun.yml`
+(do not hand-edit between its markers — `python scripts/build_workflow_doc.py` overwrites
+them and CI fails on drift), then the full per-step reference. Optional steps are marked with `> **Optional:**` blockquotes; Step 4
 leads with the wholesale `submit_zonal_params.sh` / `submit_depstor_params.sh` wrappers
 (manual per-param commands are in a collapsed `<details>` block).
 `slurm_batch/HPC_REFERENCE.md` holds the per-stage detail, alternate paths, and recovery;
@@ -429,7 +431,7 @@ Repo-specific rules — uphold these when writing or reviewing code here:
   things are load-bearing and easy to get wrong: the driver **skips `scope: shared`**
   (`build_shared_rasters` writes `shared/`, which every fabric reads — rebuilding it
   obliges a re-run of *every* fabric, which is exactly how the 2026-06-30/07-01 rebuild
-  silently staled every fabric's elevation product); **`--force` reaches only stages
+  silently staled every fabric's elevation and aspect products); **`--force` reaches only stages
   whose `accepts_force` is true** — today just `depstor_rasters`, the only fabric-scope
   stage whose builders skip existing outputs (`shared_rasters` accepts it too, but the
   driver never runs it). The driver appends `--force` **after** the positionals, so a
