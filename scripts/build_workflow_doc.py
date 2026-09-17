@@ -54,8 +54,13 @@ def render_one_command(stages: list[dict]) -> str:
             "```bash",
             'BATCHES="$(pixi run data-root)/<fabric>/batches"',
             "",
+            "# Required on this data root -- see ZONAL_PARAMS below. One unstaged param",
+            "# cancels the whole remaining chain.",
+            'export ZONAL_PARAMS="elevation slope aspect soils soil_moist_max lulc_nhm_v11 lulc_nalcms ssflux"',
+            "",
             "# ALWAYS dry-run first: prints the exact submission sequence, submits nothing,",
-            "# and is safe on the login node.",
+            "# and is safe on the login node. Flags go BEFORE the positionals; a trailing",
+            "# --dry-run is rejected rather than read as the base_config argument.",
             './slurm_batch/submit_fabric_rerun.sh --dry-run "$BATCHES" <fabric>',
             "",
             "# Then, for real. --force is applied only to the stages that accept it.",
@@ -105,9 +110,14 @@ def render_one_command(stages: list[dict]) -> str:
             '  ./slurm_batch/submit_fabric_rerun.sh --force "$BATCHES" tjc',
             "```",
             "",
-            "> These apply to **every** job in the chain. Use them only when every stage",
-            "> genuinely fits — true for a small fabric, false for `gfv2`, where the CONUS",
-            "> defaults are the right numbers and this would OOM the depstor clump ops.",
+            "> They reach every job that does **not** set `--mem`/`--time` on its own",
+            "> `sbatch` line — a command-line option beats the environment variable. Two",
+            "> stages do: `submit_snarea_pipeline.sh`'s Stage 2 (`STAGE2_MEM` defaults to",
+            "> **384G** for every fabric but `oregon`; override with `STAGE2_MEM` /",
+            "> `STAGE2_TIME`) and `submit_dprst_depth.sh`'s build job (fixed at 64G/2h,",
+            "> already small-fabric sized). Use them only when every stage genuinely fits —",
+            "> true for a small fabric, false for `gfv2`, where the CONUS defaults are the",
+            "> right numbers and this would OOM the depstor clump ops.",
         ]
     )
 
@@ -141,7 +151,13 @@ def render_stage(stage: dict) -> str:
         ("Resources", stage["resources"]),
         (
             "`--force`",
-            "**applies here**" if stage["accepts_force"] else "no effect (always rebuilds)",
+            # NOT "always rebuilds" for the false case: zonal_params does have one
+            # exists-skipped artefact (the lithology weight matrix), which --force cannot
+            # reach and FORCE=1 does. Say what the flag does here, and leave the exception
+            # to the stage's own note.
+            "**applies here**"
+            if stage["accepts_force"]
+            else "not accepted (the driver does not pass it)",
         ),
     ]
     out.append("| | |")

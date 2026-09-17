@@ -87,18 +87,24 @@ The raster orchestrators (`build_shared_rasters`, `build_depstor_rasters`)
 support `--step <name>` (one step), `--from <name>` (resume), and `--force`
 (rebuild outputs that already exist).
 
-`--force` means the same thing on **every** orchestrator — rebuild regardless
-of what exists — so a driver can pass it uniformly. On the two parameter
-orchestrators (`derive_zonal_params`, `derive_depstor_params`) it is an
-accepted **no-op**, because neither ever skips an existing output: every
-`exists()` check in them guards an *input* and raises. Their help text says so
-rather than staying silent, since an operator who passes `--force` without
-complaint reasonably concludes a rebuild was forced.
+`--force` means the same thing on every orchestrator that accepts one —
+rebuild regardless of what exists. Four do: `build_shared_rasters`,
+`build_depstor_rasters`, `derive_zonal_params`, `derive_depstor_params`. The
+snarea and aggregate drivers (`derive_snarea_curve`, `derive_snarea_library`,
+`derive_aggregate`) take no `--force` at all, which is why the re-run manifest
+gates it on `accepts_force` per stage rather than passing it uniformly.
 
-The zonal orchestrator also supports `--mode zonal|merge|build_weights` for
-per-batch debugging, and `--force-weights` — the one genuinely skippable
-output in the parameter pass is the CONUS lithology weight matrix, which is
-what the old, narrower `--force` used to rebuild.
+On the two parameter orchestrators it is an accepted **no-op** for their
+per-batch and merge products, which always rebuild: every `exists()` check on
+those paths guards an *input* and raises. Their help text says so rather than
+staying silent, since an operator who passes `--force` without complaint
+reasonably concludes a rebuild was forced.
+
+The one genuinely skippable output in the parameter pass is the CONUS
+lithology weight matrix, and it has its own flag rather than riding on that
+no-op. The zonal orchestrator supports `--mode zonal|merge|build_weights` for
+per-batch debugging, and `--force-weights`, which is what the old, narrower
+`--force` used to rebuild. Plain `--force` does **not** reach it.
 
 SLURM submission wrappers (`slurm_batch/submit_*.sh`) chain array jobs →
 merges → ratios via `afterok` dependencies.

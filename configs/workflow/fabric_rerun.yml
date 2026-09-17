@@ -50,9 +50,15 @@
 #   SBATCH_MEM_PER_NODE=64G SBATCH_TIMELIMIT=02:00:00 \
 #     ./slurm_batch/submit_fabric_rerun.sh --force "$BATCHES" tjc
 #
-# They apply to EVERY job in the chain, so use them only when every stage genuinely fits
-# -- true for a small fabric, false for gfv2, where the CONUS defaults are the right
-# numbers and this would OOM the depstor clump ops.
+# They apply to every job that does NOT set --mem/--time on its own sbatch line, because
+# a command-line option beats the environment variable. Two stages do set them, and need
+# their own knobs:
+#   submit_snarea_pipeline.sh  Stage 2 passes --mem="$STAGE2_MEM", which defaults to 384G
+#                              for every fabric except oregon. Use STAGE2_MEM/STAGE2_TIME.
+#   submit_dprst_depth.sh      its build job is fixed at --mem=64G --time=02:00:00, which
+#                              is already small-fabric sized.
+# Use them only when every stage genuinely fits -- true for a small fabric, false for
+# gfv2, where the CONUS defaults are the right numbers and this would OOM the clump ops.
 stages:
   - name: shared_rasters
     command: sbatch slurm_batch/build_shared_rasters.batch
@@ -77,9 +83,11 @@ stages:
     produces: "{fabric}/depstor_rasters/ (waterbody, dprst, routing, carea_map, ...)"
     resources: "18h / 384G / 8 cpu"
     note: >-
-      The ONLY stage where --force does anything: its builders skip existing outputs,
-      and every other stage always rebuilds. So a complete re-run needs --force in
-      exactly one place. Without it a re-run silently keeps the previous cascade.
+      The only FABRIC-SCOPE stage that takes --force, and the only one whose builders
+      skip existing outputs wholesale. So a complete re-run needs --force here, and
+      without it silently keeps the previous cascade. (shared_rasters also accepts it,
+      but the driver never runs that stage. The one other skippable artefact in the
+      workflow is the zonal lithology weight matrix -- see the zonal_params note.)
 
   - name: zonal_params
     command: ./slurm_batch/submit_zonal_params.sh {batches} {fabric} {base_config}
@@ -101,6 +109,12 @@ stages:
       ZONAL_PARAMS="elevation slope aspect soils soil_moist_max lulc_nhm_v11
       lulc_nalcms ssflux" (keep slope before ssflux -- ssflux reads the merged slope
       CSV at zonal time).
+      accepts_force is false because the per-batch and merge products always rebuild --
+      but ONE artefact here is exists-skipped and --force does not reach it: the CONUS
+      lithology weight matrix (zonal_runners/weights.py). It is rebuilt only by FORCE=1,
+      which build_zonal_weights.batch turns into --force-weights. After restaging
+      lithology, or changing the weight derivation, export FORCE=1 -- otherwise ssflux
+      is rebuilt on the old matrix and every job still reports COMPLETED (cf. #175).
 
   - name: depstor_params
     command: ./slurm_batch/submit_depstor_params.sh {batches} {fabric} {base_config}

@@ -144,8 +144,13 @@ then run `python scripts/build_workflow_doc.py`; CI fails if this section is sta
 ```bash
 BATCHES="$(pixi run data-root)/<fabric>/batches"
 
+# Required on this data root -- see ZONAL_PARAMS below. One unstaged param
+# cancels the whole remaining chain.
+export ZONAL_PARAMS="elevation slope aspect soils soil_moist_max lulc_nhm_v11 lulc_nalcms ssflux"
+
 # ALWAYS dry-run first: prints the exact submission sequence, submits nothing,
-# and is safe on the login node.
+# and is safe on the login node. Flags go BEFORE the positionals; a trailing
+# --dry-run is rejected rather than read as the base_config argument.
 ./slurm_batch/submit_fabric_rerun.sh --dry-run "$BATCHES" <fabric>
 
 # Then, for real. --force is applied only to the stages that accept it.
@@ -195,9 +200,14 @@ SBATCH_MEM_PER_NODE=64G SBATCH_TIMELIMIT=02:00:00 \
   ./slurm_batch/submit_fabric_rerun.sh --force "$BATCHES" tjc
 ```
 
-> These apply to **every** job in the chain. Use them only when every stage
-> genuinely fits — true for a small fabric, false for `gfv2`, where the CONUS
-> defaults are the right numbers and this would OOM the depstor clump ops.
+> They reach every job that does **not** set `--mem`/`--time` on its own
+> `sbatch` line — a command-line option beats the environment variable. Two
+> stages do: `submit_snarea_pipeline.sh`'s Stage 2 (`STAGE2_MEM` defaults to
+> **384G** for every fabric but `oregon`; override with `STAGE2_MEM` /
+> `STAGE2_TIME`) and `submit_dprst_depth.sh`'s build job (fixed at 64G/2h,
+> already small-fabric sized). Use them only when every stage genuinely fits —
+> true for a small fabric, false for `gfv2`, where the CONUS defaults are the
+> right numbers and this would OOM the depstor clump ops.
 
 ### The stages, individually
 
@@ -233,7 +243,7 @@ sbatch --export=ALL,BASE_CONFIG={base_config},FABRIC={fabric} slurm_batch/build_
 | Resources | 18h / 384G / 8 cpu |
 | `--force` | **applies here** |
 
-> The ONLY stage where --force does anything: its builders skip existing outputs, and every other stage always rebuilds. So a complete re-run needs --force in exactly one place. Without it a re-run silently keeps the previous cascade.
+> The only FABRIC-SCOPE stage that takes --force, and the only one whose builders skip existing outputs wholesale. So a complete re-run needs --force here, and without it silently keeps the previous cascade. (shared_rasters also accepts it, but the driver never runs that stage. The one other skippable artefact in the workflow is the zonal lithology weight matrix -- see the zonal_params note.)
 
 #### zonal_params
 
@@ -246,9 +256,9 @@ sbatch --export=ALL,BASE_CONFIG={base_config},FABRIC={fabric} slurm_batch/build_
 | Consumes | shared rasters, fabric batches |
 | Produces | {fabric}/params/merged/nhm_<param>_params.csv (10 params) |
 | Resources | array per param; 4h / 64G / 2 cpu per task, then a merge each |
-| `--force` | no effect (always rebuilds) |
+| `--force` | not accepted (the driver does not pass it) |
 
-> Fans out: an independent array + merge per param, so its terminal is ALL the merge jobs, colon-joined. Independent of depstor_rasters -- ordered after it only because the chain is linear. RUNS ALL 10 PARAMS BY DEFAULT, which fails on any fabric whose sources are not staged -- and because depstor_params waits on every merge, one unstaged param cancels the WHOLE remaining chain. Set ZONAL_PARAMS to the subset this data root can actually build; the driver passes the environment through. Neither lulc_nlcd nor lulc_foresce is staged in this data root, so every fabric here needs: ZONAL_PARAMS="elevation slope aspect soils soil_moist_max lulc_nhm_v11 lulc_nalcms ssflux" (keep slope before ssflux -- ssflux reads the merged slope CSV at zonal time).
+> Fans out: an independent array + merge per param, so its terminal is ALL the merge jobs, colon-joined. Independent of depstor_rasters -- ordered after it only because the chain is linear. RUNS ALL 10 PARAMS BY DEFAULT, which fails on any fabric whose sources are not staged -- and because depstor_params waits on every merge, one unstaged param cancels the WHOLE remaining chain. Set ZONAL_PARAMS to the subset this data root can actually build; the driver passes the environment through. Neither lulc_nlcd nor lulc_foresce is staged in this data root, so every fabric here needs: ZONAL_PARAMS="elevation slope aspect soils soil_moist_max lulc_nhm_v11 lulc_nalcms ssflux" (keep slope before ssflux -- ssflux reads the merged slope CSV at zonal time). accepts_force is false because the per-batch and merge products always rebuild -- but ONE artefact here is exists-skipped and --force does not reach it: the CONUS lithology weight matrix (zonal_runners/weights.py). It is rebuilt only by FORCE=1, which build_zonal_weights.batch turns into --force-weights. After restaging lithology, or changing the weight derivation, export FORCE=1 -- otherwise ssflux is rebuilt on the old matrix and every job still reports COMPLETED (cf. #175).
 
 #### depstor_params
 
@@ -261,7 +271,7 @@ sbatch --export=ALL,BASE_CONFIG={base_config},FABRIC={fabric} slurm_batch/build_
 | Consumes | {fabric}/depstor_rasters/ |
 | Produces | {fabric}/params/merged/ (6 PRMS ratios; counts in _intermediates/) |
 | Resources | chained: array per fraction -> merge each -> ratios -> copy_constants |
-| `--force` | no effect (always rebuilds) |
+| `--force` | not accepted (the driver does not pass it) |
 
 #### dprst_depth
 
@@ -274,7 +284,7 @@ sbatch --export=ALL,BASE_CONFIG={base_config},FABRIC={fabric} slurm_batch/build_
 | Consumes | {fabric}/depstor_rasters/dprst_binary.tif, 3DEP elevation, WESM |
 | Produces | {fabric}/params/merged/nhm_dprst_depth_avg_params.csv |
 | Resources | chained: plan -> tile array -> build -> HRU array -> mean_finalize |
-| `--force` | no effect (always rebuilds) |
+| `--force` | not accepted (the driver does not pass it) |
 
 > Already passes --force to its own build stage internally, which is required, not optional: without it the builder's exists-skip path returns in 0s and the HRU aggregation runs against the PREVIOUS run's depth raster, every job reporting COMPLETED. Observed on the oregon 2026-07-25 rebuild.
 
@@ -289,7 +299,7 @@ sbatch --export=ALL,BASE_CONFIG={base_config},FABRIC={fabric} slurm_batch/build_
 | Consumes | SNODAS daily SWE, fabric batches |
 | Produces | {fabric}/params/merged/nhm_snarea_curve_params.csv |
 | Resources | chained: aggregate array -> merge -> coverage -> derive -> library |
-| `--force` | no effect (always rebuilds) |
+| `--force` | not accepted (the driver does not pass it) |
 
 > Reads only SNODAS, so it is independent of both the depstor and zonal chains -- but it WRITES into {fabric}/params/merged/, which `fill` then reads. That is why the design's proposed `gate: false` was dropped: snarea is independent of what runs BEFORE it, not of what runs after.
 
@@ -304,7 +314,7 @@ sbatch --export=ALL,BASE_CONFIG={base_config},FABRIC={fabric} slurm_batch/merge_
 | Consumes | {fabric}/params/merged/*.csv (every stage above) |
 | Produces | {fabric}/params/merged/*.csv gap-filled IN PLACE (pre-fill copy in _unfilled/) |
 | Resources | 2h / 64G / 8 cpu |
-| `--force` | no effect (always rebuilds) |
+| `--force` | not accepted (the driver does not pass it) |
 
 > Must be last. It rewrites merged/*.csv in place, so a stage scheduled after it leaves its product unfilled -- and because the rewrite is in-place, the filename does not reveal it. merged/<name>.csv IS the gap-filled product (PR #189).
 <!-- END GENERATED: workflow -->

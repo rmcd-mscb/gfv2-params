@@ -430,9 +430,16 @@ Repo-specific rules — uphold these when writing or reviewing code here:
   (`build_shared_rasters` writes `shared/`, which every fabric reads — rebuilding it
   obliges a re-run of *every* fabric, which is exactly how the 2026-06-30/07-01 rebuild
   silently staled every fabric's elevation product); **`--force` reaches only stages
-  whose `accepts_force` is true** — today just `depstor_rasters`, the one stage whose
-  builders skip existing outputs, and passing it to a submit wrapper would abort the
-  chain since they reject unknown leading flags; and **`TERMINAL_JOB_ID` may be
+  whose `accepts_force` is true** — today just `depstor_rasters`, the only fabric-scope
+  stage whose builders skip existing outputs (`shared_rasters` accepts it too, but the
+  driver never runs it). The driver appends `--force` **after** the positionals, so a
+  wrapper would absorb it as `max_concurrent`/`n_tile_batches` — or, for snarea, forward
+  it to every `sbatch` — rather than rejecting it: the wrappers' unknown-flag guard
+  covers *leading* flags, i.e. `--after`, not this. Do not expect a loud abort to catch
+  a mis-set `accepts_force`. Note also that `--force` is NOT a complete "rebuild
+  everything": the CONUS lithology weight matrix is exists-skipped and rebuilt only by
+  `FORCE=1` → `--force-weights`, so a re-run after restaging lithology needs that too or
+  ssflux is rebuilt on the old matrix, COMPLETED throughout. And **`TERMINAL_JOB_ID` may be
   colon-joined** because `submit_zonal_params.sh` fans out, so it names every merge job
   rather than the last-submitted one — truncating it to the first id would start the
   next stage while sibling params were still writing, with every job reporting
