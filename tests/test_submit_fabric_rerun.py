@@ -286,6 +286,93 @@ class TestUsage:
         assert r.returncode != 0
         assert "--bogus" in r.stderr
 
+    def test_a_flag_after_the_positionals_is_rejected(self, tmp_path):
+        """A trailing flag must not be absorbed as ``base_config``.
+
+        The option loop stops at the first positional, so anything after <batches>
+        <fabric> lands in $3. Unguarded, that turns the one command whose entire purpose
+        is NOT to submit into a full submission: no DRY RUN line, no error, and a
+        completely normal-looking log. Trailing is where the flag is natural to type.
+        """
+        batches, _cfg = _tree(tmp_path)
+        bindir = tmp_path / "bin"
+        bindir.mkdir()
+        marker = tmp_path / "sbatch-was-called"
+        fake = bindir / "sbatch"
+        fake.write_text(f'#!/usr/bin/env bash\ntouch "{marker}"\necho "Submitted batch job 1"\n')
+        fake.chmod(0o755)
+        r = _run([str(batches), "tjc", "--dry-run"], tmp_path, path_prefix=bindir)
+        assert r.returncode != 0, f"a trailing --dry-run was accepted:\n{r.stdout}"
+        assert not marker.exists(), "a trailing --dry-run submitted the chain for real"
+
+    def test_a_base_config_that_does_not_exist_is_rejected(self, tmp_path):
+        """base_config was the one positional whose existence went unchecked, though the
+        manifest and the batches dir are both checked two lines later. A typo resolves
+        every stage against a different data root than the operator passed."""
+        batches, _cfg = _tree(tmp_path)
+        missing = tmp_path / "nope.yml"
+        r = _run(["--dry-run", str(batches), "tjc", str(missing)], tmp_path)
+        assert r.returncode != 0, "a nonexistent base_config was accepted"
+        assert "nope.yml" in r.stdout + r.stderr
+
+    def test_an_extra_positional_is_rejected(self, tmp_path):
+        """A 4th positional is silently dropped, so a mistyped invocation runs with
+        arguments the operator did not intend and cannot see were ignored."""
+        batches, cfg = _tree(tmp_path)
+        r = _run(["--dry-run", str(batches), "tjc", str(cfg), "EXTRA"], tmp_path)
+        assert r.returncode != 0, "a 4th positional was silently dropped"
+
+
+class TestManifestValidation:
+    """The driver honours FABRIC_RERUN_MANIFEST, so the checked-in manifest's own schema
+    tests do not cover the manifest it actually reads at runtime."""
+
+    @staticmethod
+    def _stage(**over):
+        s = {
+            "name": "a",
+            "command": "/bin/true {fabric}",
+            "kind": "wrapper",
+            "scope": "fabric",
+            "accepts_force": False,
+            "consumes": ["x"],
+            "produces": "y",
+            "resources": "z",
+        }
+        s.update(over)
+        return s
+
+    def _manifest(self, tmp_path, stages):
+        m = tmp_path / "custom.yml"
+        m.write_text(yaml.safe_dump({"stages": stages}))
+        return m
+
+    def test_a_manifest_with_no_fabric_stage_is_an_error(self, tmp_path):
+        """Having nothing to run must not look like a completed run.
+
+        The scope filter yields an empty list, the read loop skips the single empty line,
+        and the driver prints `Chain:` and the monitor hint and exits 0 -- an operator who
+        just ran the "complete re-run" concludes their fabric was rebuilt.
+        """
+        batches, cfg = _tree(tmp_path)
+        m = self._manifest(tmp_path, [self._stage(scope="shared")])
+        r = _run(["--dry-run", str(batches), "tjc", str(cfg)], tmp_path, manifest=m)
+        assert r.returncode != 0, f"a manifest with no fabric stage exited 0:\n{r.stdout}"
+
+    def test_an_unrecognised_scope_is_an_error(self, tmp_path):
+        """A mistyped scope must not silently drop just that stage.
+
+        `Fabric` is not `fabric`, so that stage vanishes from the plan while every other
+        stage runs and reports success -- the canonical "skipped a stage entirely, and
+        everything still reported COMPLETED".
+        """
+        batches, cfg = _tree(tmp_path)
+        m = self._manifest(
+            tmp_path, [self._stage(name="a", scope="Fabric"), self._stage(name="b")]
+        )
+        r = _run(["--dry-run", str(batches), "tjc", str(cfg)], tmp_path, manifest=m)
+        assert r.returncode != 0, f"scope 'Fabric' was silently skipped:\n{r.stdout}"
+
 
 # --------------------------------------------------------------------------------------
 # Layer 2: a synthetic manifest of stub stages -- observes the real --after handoff

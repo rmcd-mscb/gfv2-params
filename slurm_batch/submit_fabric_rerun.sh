@@ -65,9 +65,37 @@ if [ $# -lt 2 ]; then
     usage >&2
     exit 1
 fi
+if [ $# -gt 3 ]; then
+    echo "ERROR: too many arguments; expected <batches_dir> <fabric> [base_config]" >&2
+    usage >&2
+    exit 1
+fi
 BATCHES="$1"
 FABRIC="$2"
 BASE_CONFIG="${3:-configs/base_config.yml}"
+
+# Flags are recognised only BEFORE the positionals -- the option loop above breaks at the
+# first non-flag. One typed AFTER them arrives here as a positional, and the worst case is
+# silent rather than loud: `... <batches> <fabric> --dry-run` sets BASE_CONFIG=--dry-run
+# and submits the ENTIRE chain for real, with no DRY RUN line and nothing in the log to
+# read as wrong. Trailing is a natural place to type it, so reject it explicitly. The four
+# submit wrappers make the same guarantee for their own leading flags.
+for arg in "$BATCHES" "$FABRIC" "$BASE_CONFIG"; do
+    case "$arg" in
+        -*)
+            echo "ERROR: '$arg' is a flag, but it came after the positional arguments," >&2
+            echo "       where it is read as one of them. Flags go FIRST:" >&2
+            echo "         $0 --dry-run <batches_dir> <fabric>" >&2
+            exit 1
+            ;;
+    esac
+done
+if [ ! -f "$BASE_CONFIG" ]; then
+    echo "ERROR: base_config not found: $BASE_CONFIG" >&2
+    echo "       Every stage resolves its data root through this file; a wrong path" >&2
+    echo "       would silently run the chain against a different one." >&2
+    exit 1
+fi
 
 if [ ! -f "$MANIFEST" ]; then
     echo "ERROR: stage manifest not found: $MANIFEST" >&2
@@ -94,6 +122,14 @@ import yaml
 
 manifest, batches, fabric, base_config = sys.argv[1:5]
 for s in yaml.safe_load(open(manifest))["stages"]:
+    # Validate rather than filter. A mistyped scope ("Fabric") is not "fabric", so a bare
+    # filter drops that ONE stage and runs the rest -- the chain completes, every job
+    # reports COMPLETED, and a stage simply never happened.
+    if s["scope"] not in ("fabric", "shared"):
+        sys.exit(
+            f"ERROR: stage {s['name']!r} has scope {s['scope']!r};"
+            " expected 'fabric' or 'shared'"
+        )
     if s["scope"] != "fabric":
         continue
     cmd = (s["command"].replace("{batches}", batches)
@@ -102,6 +138,13 @@ for s in yaml.safe_load(open(manifest))["stages"]:
     print(f"{s['name']}\t{s['kind']}\t{int(bool(s['accepts_force']))}\t{cmd}")
 PY
 )
+
+if [ -z "$STAGES" ]; then
+    echo "ERROR: $MANIFEST declares no fabric-scope stage -- there is nothing to run." >&2
+    echo "       Exiting 0 here would print an empty chain and read as a completed" >&2
+    echo "       re-run." >&2
+    exit 1
+fi
 
 ALL_NAMES=$(printf '%s\n' "$STAGES" | cut -f1 | tr '\n' ' ')
 
