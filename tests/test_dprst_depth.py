@@ -733,44 +733,58 @@ def test_build_context_dprst_depth_min_measured_frac_default():
     assert ctx.dprst_depth_min_measured_frac == pytest.approx(0.5)
 
 
+def _write_plan(batch_dir, comids, n_batches):
+    """The `_plan/` the tiled planner writes: the polygon set the parquets were
+    computed for, and how many batch files the array produces."""
+    import json
+
+    plan = batch_dir / "_plan"
+    plan.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame({"COMID": list(comids)}).to_parquet(plan / "dprst_polygons_tagged.parquet")
+    (plan / "batch_manifest.json").write_text(json.dumps({"n_batches": n_batches}))
+
+
+def _write_batch(batch_dir, i, comids, depths):
+    n = len(comids)
+    pd.DataFrame({
+        "COMID": comids,
+        "dprst_depth_m": depths,
+        "measured_max_m": [d + 0.5 for d in depths],
+        "hollister_max_m": [d + 0.2 for d in depths],
+        "flat": [False] * n,
+        "resolution": ["10m"] * n,
+        "method": ["measured"] * n,
+    }).to_parquet(batch_dir / f"batch_{i:04d}.parquet", index=False)
+
+
+def _parquet_ctx(tmp_path):
+    return BuildContext(
+        fabric="t", template_path=tmp_path / "unused_template.tif", output_dir=tmp_path,
+        hru_gpkg=tmp_path / "unused_hru.gpkg", hru_layer="nhru",
+    )
+
+
 def test_compute_depths_ingests_and_dedupes_batch_parquets(tmp_path):
     """Two per-batch parquets (Task 9's SLURM array output shape), one
     COMID (555) present in both with DIFFERENT depths. `_compute_depths`
     must concat + `drop_duplicates(subset='COMID', keep='first')`, so the
     surviving row is whichever file sorts first (`sorted(batch_dir.glob(...))`
-    -- batch_000 before batch_001), and every other COMID passes through
-    untouched."""
+    -- batch_0000 before batch_0001), and every other COMID passes through
+    untouched.
+
+    #221: parquets are now only loaded alongside the `_plan/` that produced them,
+    and only when that plan's polygon set is the current one -- so this fixture
+    writes a matching plan and uses the real 4-digit batch names."""
     batch_dir = tmp_path / "dprst_depth_batches"
     batch_dir.mkdir()
+    _write_plan(batch_dir, [555, 600, 700], n_batches=2)
+    _write_batch(batch_dir, 0, [555, 600], [1.0, 2.0])
+    _write_batch(batch_dir, 1, [555, 700], [99.0, 3.0])  # 555's depth here must NOT win
 
-    pd.DataFrame({
-        "COMID": [555, 600],
-        "dprst_depth_m": [1.0, 2.0],
-        "measured_max_m": [1.5, 2.5],
-        "hollister_max_m": [1.2, 2.2],
-        "flat": [False, False],
-        "resolution": ["10m", "10m"],
-        "method": ["measured", "measured"],
-    }).to_parquet(batch_dir / "batch_000.parquet", index=False)
-
-    pd.DataFrame({
-        "COMID": [555, 700],
-        "dprst_depth_m": [99.0, 3.0],  # 555's depth here must NOT win
-        "measured_max_m": [99.5, 3.5],
-        "hollister_max_m": [99.2, 3.2],
-        "flat": [False, False],
-        "resolution": ["10m", "10m"],
-        "method": ["measured", "measured"],
-    }).to_parquet(batch_dir / "batch_001.parquet", index=False)
-
-    ctx = BuildContext(
-        fabric="t", template_path=tmp_path / "unused_template.tif", output_dir=tmp_path,
-        hru_gpkg=tmp_path / "unused_hru.gpkg", hru_layer="nhru",
-    )
     step_cfg = {"batch_dir": str(batch_dir)}
-    empty_dprst = gpd.GeoDataFrame({"COMID": []}, geometry=[], crs="EPSG:5070")
+    dprst = _make_dprst_gdf([555, 600, 700])
 
-    out = dprst_depth._compute_depths(empty_dprst, wesm_gdf=None, ctx=ctx, step_cfg=step_cfg, logger=_L())
+    out = dprst_depth._compute_depths(dprst, wesm_gdf=None, ctx=_parquet_ctx(tmp_path), step_cfg=step_cfg, logger=_L())
 
     assert sorted(out["COMID"].tolist()) == [555, 600, 700]
     by_comid = out.set_index("COMID")
@@ -859,3 +873,84 @@ def test_default_inprocess_ceiling_separates_small_fabrics_from_conus():
     ceiling = dprst_depth.DEFAULT_MAX_INPROCESS_POLYGONS
     assert max(3_717, 6_113) < ceiling < min(279_391, 392_673)
     assert ceiling / 3_300 < 18 * 0.6, "the ceiling would not comfortably finish in 18 h"
+
+
+# ---------------------------------------------------------------------------
+# #221: tiled parquets are loaded only when they belong to the CURRENT polygon set.
+#
+# Nothing ever cleared `dprst_depth_batches/`, and the builder loaded whatever it
+# found. The documented cascade rebuild after a classifier change -- `--from
+# wbody_connectivity --force` -- runs through dprst_depth and so picked up parquets
+# planned for the OLD polygon set: consistent with their own plan, wrong for the
+# current one. gfv2's parquets (279,391 polygons, July) predate the segment-driven
+# classifier that now yields ~392k on the same extent. The final product was only
+# protected by coincidence (left join onto the current set; fresh batch indices
+# sorting before stale ones under keep="first"). These make it structural.
+# ---------------------------------------------------------------------------
+
+
+def test_parquets_planned_for_a_different_polygon_set_are_refused(tmp_path):
+    """The classifier-changed case: plan and parquets agree with each other, and
+    disagree with the polygons the builder is about to fill. A count check would pass
+    this; only comparing the sets catches it."""
+    batch_dir = tmp_path / "dprst_depth_batches"
+    batch_dir.mkdir()
+    _write_plan(batch_dir, [1, 2, 3], n_batches=1)
+    _write_batch(batch_dir, 0, [1, 2, 3], [1.0, 1.0, 1.0])
+
+    current = _make_dprst_gdf([1, 2, 4, 5])  # 3 gone, 4 and 5 new
+    with pytest.raises(RuntimeError, match="submit_dprst_depth.sh") as exc:
+        dprst_depth._compute_depths(
+            current, wesm_gdf=None, ctx=_parquet_ctx(tmp_path),
+            step_cfg={"batch_dir": str(batch_dir)}, logger=_L(),
+        )
+    msg = str(exc.value)
+    assert "2 new" in msg and "1 no longer" in msg, msg
+
+
+def test_parquets_without_their_plan_are_refused(tmp_path):
+    """No _plan/ means there is no way to tell which polygon set they were computed
+    for. A stale output directory is never a legitimate configuration."""
+    batch_dir = tmp_path / "dprst_depth_batches"
+    batch_dir.mkdir()
+    _write_batch(batch_dir, 0, [1, 2], [1.0, 1.0])
+
+    with pytest.raises(RuntimeError, match="_plan"):
+        dprst_depth._compute_depths(
+            _make_dprst_gdf([1, 2]), wesm_gdf=None, ctx=_parquet_ctx(tmp_path),
+            step_cfg={"batch_dir": str(batch_dir)}, logger=_L(),
+        )
+
+
+def test_a_missing_batch_file_is_refused(tmp_path):
+    """A partially-completed array leaves polygons without a depth. They would be
+    quietly regionally filled instead of measured; the measured-fraction gate only
+    catches a MASS failure, not a batch or two."""
+    batch_dir = tmp_path / "dprst_depth_batches"
+    batch_dir.mkdir()
+    _write_plan(batch_dir, [1, 2, 3], n_batches=3)
+    _write_batch(batch_dir, 0, [1], [1.0])
+    _write_batch(batch_dir, 2, [3], [1.0])  # batch_0001 never written
+
+    with pytest.raises(RuntimeError, match="batch_0001"):
+        dprst_depth._compute_depths(
+            _make_dprst_gdf([1, 2, 3]), wesm_gdf=None, ctx=_parquet_ctx(tmp_path),
+            step_cfg={"batch_dir": str(batch_dir)}, logger=_L(),
+        )
+
+
+def test_a_stale_extra_batch_file_is_refused(tmp_path):
+    """A new plan with FEWER batches used to leave the old high-index files behind,
+    and the builder globbed them in with the fresh ones."""
+    batch_dir = tmp_path / "dprst_depth_batches"
+    batch_dir.mkdir()
+    _write_plan(batch_dir, [1, 2], n_batches=2)
+    _write_batch(batch_dir, 0, [1], [1.0])
+    _write_batch(batch_dir, 1, [2], [1.0])
+    _write_batch(batch_dir, 7, [99], [5.0])  # left over from an older, larger plan
+
+    with pytest.raises(RuntimeError, match="batch_0007"):
+        dprst_depth._compute_depths(
+            _make_dprst_gdf([1, 2]), wesm_gdf=None, ctx=_parquet_ctx(tmp_path),
+            step_cfg={"batch_dir": str(batch_dir)}, logger=_L(),
+        )

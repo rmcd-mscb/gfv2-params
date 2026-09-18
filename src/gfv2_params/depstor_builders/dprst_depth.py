@@ -243,6 +243,64 @@ def _tag_polygons(dprst: gpd.GeoDataFrame, ctx: BuildContext, logger) -> tuple[g
     return dprst, wesm_gdf
 
 
+def _first_few(names: list[str], n: int = 5) -> str:
+    return ", ".join(names[:n]) + (f" (+{len(names) - n} more)" if len(names) > n else "")
+
+
+def _verify_batches_match_plan(batch_dir: Path, parquet_files: list[Path], dprst) -> None:
+    """Refuse per-batch parquets that do not belong to the CURRENT polygon set (#221).
+
+    Nothing ever cleared `dprst_depth_batches/`, and this builder used to load whatever
+    it found. The documented cascade rebuild after a classifier change (`--from
+    wbody_connectivity --force`) runs through this step, so it picked up parquets
+    planned for the OLD polygon set -- consistent with their own plan, wrong for the
+    current one. The final product survived only by coincidence (the left join in
+    `_fill_and_join` drops polygons that are gone; new ones fell to the regional fill).
+
+    The tiled planner records exactly what a check needs under `_plan/`: the polygon set
+    it planned (`dprst_polygons_tagged.parquet`) and how many batch files the array
+    writes (`batch_manifest.json`). The planner and this builder both reconstruct that
+    set through `topo.load_fabric_dprst_polygons`, and tagging never drops a polygon, so
+    the two COMID sets are equal by construction -- any difference is a stale plan.
+    """
+    import json
+
+    plan_dir = batch_dir / "_plan"
+    manifest_path = plan_dir / "batch_manifest.json"
+    tagged_path = plan_dir / "dprst_polygons_tagged.parquet"
+    if not (manifest_path.exists() and tagged_path.exists()):
+        raise RuntimeError(
+            f"dprst_depth: {len(parquet_files)} per-batch parquet(s) in {batch_dir} but no "
+            f"_plan/ ({manifest_path.name} + {tagged_path.name}) recording which polygon "
+            f"set they were computed for, so they cannot be trusted. Re-run "
+            f"slurm_batch/submit_dprst_depth.sh, which plans and computes them together."
+        )
+
+    n_batches = int(json.loads(manifest_path.read_text())["n_batches"])
+    expected = {f"batch_{i:04d}.parquet" for i in range(n_batches)}
+    found = {p.name for p in parquet_files}
+    missing, extra = sorted(expected - found), sorted(found - expected)
+    if missing or extra:
+        raise RuntimeError(
+            f"dprst_depth: {batch_dir} does not match its plan of {n_batches} batch(es). "
+            + (f"Missing: {_first_few(missing)}. " if missing else "")
+            + (f"Not in the plan: {_first_few(extra)}. " if extra else "")
+            + "A missing file is a batch the array did not finish; an extra one is left "
+            "over from an older plan. Re-run slurm_batch/submit_dprst_depth.sh."
+        )
+
+    planned = set(pd.read_parquet(tagged_path, columns=["COMID"])["COMID"])
+    current = set(dprst["COMID"])
+    if planned != current:
+        raise RuntimeError(
+            f"dprst_depth: the per-batch parquets in {batch_dir} were planned for a "
+            f"different dprst polygon set ({len(planned):,} planned vs {len(current):,} now: "
+            f"{len(current - planned):,} new, {len(planned - current):,} no longer dprst). "
+            f"That is what a classifier change followed by a `--from` cascade rebuild looks "
+            f"like. Re-run slurm_batch/submit_dprst_depth.sh to replan and recompute."
+        )
+
+
 def _compute_depths(
     dprst: gpd.GeoDataFrame, wesm_gdf: gpd.GeoDataFrame, ctx: BuildContext, step_cfg: dict, logger,
 ) -> pd.DataFrame:
@@ -258,8 +316,10 @@ def _compute_depths(
     parquet_files = sorted(batch_dir.glob("*.parquet")) if batch_dir.exists() else []
 
     if parquet_files:
+        _verify_batches_match_plan(batch_dir, parquet_files, dprst)
         logger.info(
-            "  found %d per-batch parquet(s) in %s — loading SLURM array output",
+            "  found %d per-batch parquet(s) in %s — loading SLURM array output "
+            "(verified against its plan)",
             len(parquet_files), batch_dir,
         )
         depth_df = pd.concat([pd.read_parquet(f) for f in parquet_files], ignore_index=True)
