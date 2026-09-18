@@ -232,18 +232,18 @@ def test_stage_order_satisfies_the_real_data_dependencies(stages):
     parameters from the previous run's rasters -- silent, everything COMPLETED. These are
     the pairs the manifest's own prose asserts; pin them.
 
-    depstor_params -> dprst_depth is subtle and currently holds only by accident:
+    dprst_depth -> depstor_params is the one that used to hold by accident (#221):
     submit_depstor_params.sh chains copy_depstor_constants.batch, which reads
-    op_flow_thres_params.csv and by its own header needs dprst_depth to have completed.
-    It works because dprst_depth is ALSO an in-process step of depstor_rasters. Removing
-    it from configs/depstor/depstor_rasters.yml -- a plausible optimisation, since the
-    tiled wrapper stage recomputes it -- would break depstor_params, so that coupling is
-    recorded here rather than left to be rediscovered.
+    op_flow_thres_params.csv -- written by the dprst_depth step. It worked only because
+    the whole-stack depstor_rasters stage ALSO ran dprst_depth in-process, the path that
+    costs ~a week on a fresh CONUS fabric. It is now an explicit ordering edge.
     """
     names = [s["name"] for s in stages]
     for earlier, later in (
-        ("depstor_rasters", "depstor_params"),
         ("depstor_rasters", "dprst_depth"),
+        ("dprst_depth", "depstor_rasters_post"),
+        ("depstor_rasters_post", "depstor_params"),
+        ("dprst_depth", "depstor_params"),
         ("zonal_params", "fill"),
         ("depstor_params", "fill"),
         ("dprst_depth", "fill"),
@@ -307,3 +307,47 @@ def test_every_command_names_a_file_that_exists_including_absolute_paths(stages)
                 continue
             path = Path(token) if token.startswith("/") else REPO / token.lstrip("./")
             assert path.exists(), f"{s['name']}: command names missing file {token}"
+
+
+def test_depstor_is_split_around_the_tiled_dprst_depth_stage(stages):
+    """The #221 fix, pinned at the manifest level.
+
+    depstor_rasters used to run the WHOLE stack first, including dprst_depth. With no
+    tiled parquets on disk -- every first build -- the builder fell back to computing
+    dprst_depth in-process, serially: on gfv2r2 that was 9.4% of 392,672 polygons in
+    11 h against an 18 h limit, so the job could only time out and cancel the chain.
+
+    The stack now runs in two halves with the tiled stage between them, and both halves
+    name the SAME boundary step (--stop-before X / --from X). That is what guarantees
+    the halves partition the stack; the orchestrator's own tests prove the partition at
+    every boundary.
+    """
+    by_name = {s["name"]: s for s in stages}
+    names = [s["name"] for s in stages]
+
+    first = by_name["depstor_rasters"]["command"].split()
+    second = by_name["depstor_rasters_post"]["command"].split()
+    assert "--stop-before" in first, "first half does not stop early"
+    assert "--from" in second, "second half does not resume"
+
+    boundary_1 = first[first.index("--stop-before") + 1]
+    boundary_2 = second[second.index("--from") + 1]
+    assert boundary_1 == boundary_2 == "dprst_depth", (
+        f"the halves must split at ONE shared step, dprst_depth; got "
+        f"--stop-before {boundary_1} / --from {boundary_2}"
+    )
+
+    i1, i_tiled, i2 = (
+        names.index(n) for n in ("depstor_rasters", "dprst_depth", "depstor_rasters_post")
+    )
+    assert i1 < i_tiled < i2, "the tiled dprst_depth stage must sit BETWEEN the two halves"
+
+
+def test_both_depstor_halves_accept_force(stages):
+    """Both halves run builders that skip existing outputs, so a genuine re-run needs
+    --force on each. Leaving it off the second half would silently keep the previous
+    run's routing and carea_map products while the first half rebuilt everything they
+    were derived from."""
+    by_name = {s["name"]: s for s in stages}
+    assert by_name["depstor_rasters"]["accepts_force"]
+    assert by_name["depstor_rasters_post"]["accepts_force"]

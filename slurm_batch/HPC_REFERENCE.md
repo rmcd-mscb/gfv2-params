@@ -412,12 +412,15 @@ rather than proceeding without the demotion. A fabric whose domain has no closed
 below that floor, or if either signal has died entirely. Checking it at the
 consuming end too is what covers `--from wbody_connectivity` — that recipe
 skips the `endorheic` step, so the orchestrator hydrates its table off disk
-and the producing builder's own check never runs. Selective re-runs via `--step <name>` or
-`--from <name>` passed through to the Python script. `dprst_depth` (issue
+and the producing builder's own check never runs. Selective re-runs via `--step <name>`,
+`--from <name>` or `--stop-before <name>` passed through to the Python script. `dprst_depth` (issue
 #173) is a CONUS-scale compute outlier in this DAG — see "Stage 2d'" below; it
 needs its own SLURM array run **before** a full unfiltered
 `build_depstor_rasters.batch`, or that job will attempt an unbounded
-in-process fallback compute at the `dprst_depth` step.
+in-process fallback compute at the `dprst_depth` step. `submit_fabric_rerun.sh`
+does this for you: it runs `--stop-before dprst_depth`, then the tiled
+`submit_dprst_depth.sh`, then `--from dprst_depth` (#221 — before that split,
+gfv2r2's first run fell into the in-process path and could not finish in 18 h).
 
 **Endorheic classifier inputs.** Signal A needs only `fdr_raster` (already
 required on every fabric) and needs no extra staging. Signal B and the
