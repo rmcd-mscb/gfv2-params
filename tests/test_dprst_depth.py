@@ -777,3 +777,85 @@ def test_compute_depths_ingests_and_dedupes_batch_parquets(tmp_path):
     assert by_comid.loc[555, "dprst_depth_m"] == pytest.approx(1.0)  # batch_000 kept (keep="first")
     assert by_comid.loc[600, "dprst_depth_m"] == pytest.approx(2.0)
     assert by_comid.loc[700, "dprst_depth_m"] == pytest.approx(3.0)
+
+
+# ---------------------------------------------------------------------------
+# #221 guard: the in-process fallback must refuse CONUS-scale work.
+#
+# With no tiled parquets on disk, `_compute_depths` used to compute every polygon
+# serially and log it only at INFO. gfv2r2's first run took that path: 36,974 of
+# 392,672 polygons (9.4%) in 11 h against an 18 h job limit. The fallback exists
+# for small fabrics (oregon 3,717 polygons, tjc 6,113), so the guard is a polygon
+# ceiling, not a ban.
+# ---------------------------------------------------------------------------
+
+
+def _no_batches_ctx(tmp_path):
+    ctx = BuildContext(
+        fabric="t", template_path=tmp_path / "unused.tif", output_dir=tmp_path,
+        hru_gpkg=tmp_path / "unused.gpkg", hru_layer="nhru",
+    )
+    return ctx, str(tmp_path / "no_such_batch_dir")
+
+
+def test_inprocess_fallback_refuses_more_polygons_than_the_ceiling(tmp_path, monkeypatch):
+    """Over the ceiling -> RuntimeError naming the tiled wrapper, raised BEFORE any
+    tile is grouped. Proven by making the first unit of work explode: if the guard
+    were checked after starting, this would raise the wrong error."""
+    ctx, missing = _no_batches_ctx(tmp_path)
+
+    def _started(*a, **k):
+        raise AssertionError("in-process compute STARTED despite exceeding the ceiling")
+
+    monkeypatch.setattr(dprst_depth, "group_by_tile", _started)
+    dprst = _make_dprst_gdf(list(range(1, 7)))  # 6 polygons
+    step_cfg = {"batch_dir": missing, "max_inprocess_polygons": 5}
+
+    with pytest.raises(RuntimeError, match="submit_dprst_depth.sh"):
+        dprst_depth._compute_depths(dprst, wesm_gdf=None, ctx=ctx, step_cfg=step_cfg, logger=_L())
+
+
+def test_inprocess_fallback_runs_at_or_under_the_ceiling(tmp_path, monkeypatch):
+    """At the ceiling exactly, the small-fabric path must still work."""
+    ctx, missing = _no_batches_ctx(tmp_path)
+    ran = {}
+
+    monkeypatch.setattr(dprst_depth, "group_by_tile", lambda d, w: {"k": list(d.index)})
+
+    def _fake_run(dprst, tile_keys, wesm, out, logger):
+        ran["n"] = len(dprst)
+        return _make_depth_df(dprst["COMID"].tolist())
+
+    monkeypatch.setattr(dprst_depth, "run_batch", _fake_run)
+    dprst = _make_dprst_gdf(list(range(1, 6)))  # exactly 5
+    step_cfg = {"batch_dir": missing, "max_inprocess_polygons": 5}
+
+    out = dprst_depth._compute_depths(dprst, wesm_gdf=None, ctx=ctx, step_cfg=step_cfg, logger=_L())
+    assert ran["n"] == 5
+    assert len(out) == 5
+
+
+def test_inprocess_ceiling_zero_is_the_escape_hatch(tmp_path, monkeypatch):
+    """Same convention as `dprst_depth_min_measured_frac=0`: 0 disables the guard, for
+    an operator who has decided the long in-process run is what they want."""
+    ctx, missing = _no_batches_ctx(tmp_path)
+    monkeypatch.setattr(dprst_depth, "group_by_tile", lambda d, w: {"k": list(d.index)})
+    monkeypatch.setattr(
+        dprst_depth, "run_batch", lambda d, t, w, o, lg: _make_depth_df(d["COMID"].tolist())
+    )
+    dprst = _make_dprst_gdf(list(range(1, 7)))
+    step_cfg = {"batch_dir": missing, "max_inprocess_polygons": 0}
+
+    out = dprst_depth._compute_depths(dprst, wesm_gdf=None, ctx=ctx, step_cfg=step_cfg, logger=_L())
+    assert len(out) == 6
+
+
+def test_default_inprocess_ceiling_separates_small_fabrics_from_conus():
+    """The default must let every small fabric through and stop every CONUS one.
+    Measured from the tiled planners' own manifests (2026-09-18): oregon 3,717 and tjc
+    6,113 polygons; gfv2 279,391 (July) and gfv2_dev 392,673. It must also fit the job:
+    at the ~3,300 polygons/h gfv2r2 actually achieved, the ceiling has to finish well
+    inside build_depstor_rasters.batch's 18 h limit."""
+    ceiling = dprst_depth.DEFAULT_MAX_INPROCESS_POLYGONS
+    assert max(3_717, 6_113) < ceiling < min(279_391, 392_673)
+    assert ceiling / 3_300 < 18 * 0.6, "the ceiling would not comfortably finish in 18 h"

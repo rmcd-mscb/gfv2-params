@@ -115,6 +115,15 @@ OP_FLOW_THRES_VALUE = 1.0
 # docstring point 7) — always written next to dprst_depth.tif.
 POLYGON_PROVENANCE_FILENAME = "dprst_depth_polygons.parquet"
 
+# Ceiling on the serial in-process fallback (#221). Above it, `_compute_depths` refuses
+# and points at the tiled `submit_dprst_depth.sh` instead. Measured 2026-09-18 from the
+# tiled planners' own manifests: oregon 3,717 and tjc 6,113 polygons sit well under it;
+# gfv2 (279,391) and gfv2_dev (392,673) sit well over. gfv2r2's first run achieved about
+# 3,300 polygons/h in-process, so the ceiling finishes in ~7.5 h -- inside the 18 h
+# build_depstor_rasters.batch limit with room to spare. Override per step with
+# `max_inprocess_polygons`; 0 disables the guard.
+DEFAULT_MAX_INPROCESS_POLYGONS = 25_000
+
 
 def _load_dprst_polygons(ctx: BuildContext, logger) -> gpd.GeoDataFrame:
     """Reconstruct the fabric-clipped dprst polygon set.
@@ -255,9 +264,25 @@ def _compute_depths(
         )
         depth_df = pd.concat([pd.read_parquet(f) for f in parquet_files], ignore_index=True)
     else:
+        # Refuse CONUS-scale work BEFORE starting it (#221). This branch used to accept any
+        # size and say so only at INFO: gfv2r2's first run reached it with 392,672
+        # polygons and managed 9.4% in 11 h against an 18 h job limit, so the job could
+        # only time out and cancel the whole re-run chain behind it.
+        ceiling = int(step_cfg.get("max_inprocess_polygons", DEFAULT_MAX_INPROCESS_POLYGONS))
+        if ceiling > 0 and len(dprst) > ceiling:
+            raise RuntimeError(
+                f"dprst_depth: {len(dprst):,} polygons but no per-batch parquets in "
+                f"{batch_dir}, and the serial in-process fallback is capped at {ceiling:,} "
+                f"(`max_inprocess_polygons`). At this size it would run for days. Run the "
+                f"tiled stage first -- slurm_batch/submit_dprst_depth.sh -- which writes "
+                f"those parquets; submit_fabric_rerun.sh does this for you. Set "
+                f"`max_inprocess_polygons: 0` in this step's config only if you really "
+                f"want the long serial run."
+            )
         logger.info(
-            "  no per-batch parquet dir found (%s) — running compute in-process",
-            batch_dir,
+            "  no per-batch parquet dir found (%s) — running compute in-process "
+            "(%d polygons, ceiling %d)",
+            batch_dir, len(dprst), ceiling,
         )
         # Rim buffer (200 m) and flatness tol (0.01 m, used inside
         # compute.run_batch's is_hydroflattened call) are the validated spike
