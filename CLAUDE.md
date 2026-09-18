@@ -432,9 +432,18 @@ Repo-specific rules — uphold these when writing or reviewing code here:
   (`build_shared_rasters` writes `shared/`, which every fabric reads — rebuilding it
   obliges a re-run of *every* fabric, which is exactly how the 2026-06-30/07-01 rebuild
   silently staled every fabric's elevation and aspect products); **`--force` reaches only stages
-  whose `accepts_force` is true** — today just `depstor_rasters`, the only fabric-scope
-  stage whose builders skip existing outputs (`shared_rasters` accepts it too, but the
-  driver never runs it). The driver appends `--force` **after** the positionals, so a
+  whose `accepts_force` is true** — today the two depstor halves, `depstor_rasters` and
+  `depstor_rasters_post`, the only fabric-scope stages whose builders skip existing
+  outputs (`shared_rasters` accepts it too, but the driver never runs it). **The depstor
+  stack is deliberately SPLIT around `dprst_depth`** (#221): `--stop-before dprst_depth`,
+  then the 150-way tiled `submit_dprst_depth.sh`, then `--from dprst_depth`. Do not merge
+  it back into one stage. `dprst_depth` falls back to a serial in-process computation
+  whenever no tiled parquets are on disk — which is every first build — and run whole,
+  the stack reached it before the tiled stage had run: gfv2r2's first run did 9.4% of
+  392,672 polygons in 11 h against an 18 h limit. Both halves name the SAME boundary
+  step so they partition the stack with no gap; `depstor_params` must follow the tiled
+  stage because its `copy_constants` job copies the `op_flow_thres` CSV that stage
+  writes. The driver appends `--force` **after** the positionals, so a
   wrapper would absorb it as `max_concurrent`/`n_tile_batches` — or, for snarea, forward
   it to every `sbatch` — rather than rejecting it: the wrappers' unknown-flag guard
   covers *leading* flags, i.e. `--after`, not this. Do not expect a loud abort to catch

@@ -168,10 +168,10 @@ sequence runs unattended. A failed stage leaves its dependents in
 running a stage against incomplete inputs. Fix the cause, then resume:
 
 ```bash
-./slurm_batch/submit_fabric_rerun.sh --from zonal_params "$BATCHES" <fabric>
+./slurm_batch/submit_fabric_rerun.sh --from dprst_depth "$BATCHES" <fabric>
 ```
 
-Valid `--from` stages: `depstor_rasters`, `zonal_params`, `depstor_params`, `dprst_depth`, `snarea`, `fill`.
+Valid `--from` stages: `depstor_rasters`, `dprst_depth`, `depstor_rasters_post`, `zonal_params`, `depstor_params`, `snarea`, `fill`.
 
 > `--force` is not decoration. It reaches only the stages whose builders skip
 > existing outputs; every other stage always rebuilds. Which stages those are is
@@ -239,17 +239,51 @@ sbatch slurm_batch/build_shared_rasters.batch
 #### depstor_rasters
 
 ```bash
-sbatch --export=ALL,BASE_CONFIG={base_config},FABRIC={fabric} slurm_batch/build_depstor_rasters.batch
+sbatch --export=ALL,BASE_CONFIG={base_config},FABRIC={fabric} slurm_batch/build_depstor_rasters.batch --stop-before dprst_depth
 ```
 
 | | |
 |---|---|
 | Consumes | shared rasters, fabric batches |
-| Produces | {fabric}/depstor_rasters/ (waterbody, dprst, routing, carea_map, ...) |
+| Produces | {fabric}/depstor_rasters/ (landmask .. hru_id: waterbody, dprst, ...) |
 | Resources | 18h / 384G / 8 cpu |
 | `--force` | **applies here** |
 
-> The only FABRIC-SCOPE stage that takes --force, and the only one whose builders skip existing outputs wholesale. So a complete re-run needs --force here, and without it silently keeps the previous cascade. (shared_rasters also accepts it, but the driver never runs that stage. The one other skippable artefact in the workflow is the zonal lithology weight matrix -- see the zonal_params note.)
+> FIRST HALF of the depstor stack: every step BEFORE dprst_depth. The stack is split so the tiled dprst_depth stage can run between the halves (#221). Run whole, the builder reached dprst_depth with no tiled parquets on disk -- true of every first build -- and computed it in-process, serially: on gfv2r2 that was 9.4% of 392,672 polygons in 11 h against this stage's 18 h limit. Both halves name the SAME boundary step, which is what makes them partition the stack with no gap.
+>
+> Its builders skip existing outputs, so a complete re-run needs --force here and on depstor_rasters_post; without it the previous cascade is silently kept. (shared_rasters also accepts --force, but the driver never runs that stage. The one other skippable artefact in the workflow is the zonal lithology weight matrix -- see the zonal_params note.)
+
+#### dprst_depth
+
+```bash
+./slurm_batch/submit_dprst_depth.sh {batches} {fabric} {base_config}
+```
+
+| | |
+|---|---|
+| Consumes | {fabric}/depstor_rasters/dprst_binary.tif, 3DEP elevation, WESM |
+| Produces | dprst_depth.tif, op_flow_thres_params.csv, merged/nhm_dprst_depth_avg_params.csv |
+| Resources | chained: plan -> tile array -> build -> HRU array -> mean_finalize |
+| `--force` | not accepted (the driver does not pass it) |
+
+> The 150-way TILED computation, between the two depstor halves. It must precede depstor_rasters_post (whose dprst_depth step then finds these parquets instead of falling back to in-process compute) and depstor_params (whose copy_constants job copies the op_flow_thres CSV this stage writes -- a dependency that used to hold only because the whole-stack depstor_rasters also computed it).
+>
+> Already passes --force to its own build stage internally, which is required, not optional: without it the builder's exists-skip path returns in 0s and the HRU aggregation runs against the PREVIOUS run's depth raster, every job reporting COMPLETED. Observed on the oregon 2026-07-25 rebuild.
+
+#### depstor_rasters_post
+
+```bash
+sbatch --export=ALL,BASE_CONFIG={base_config},FABRIC={fabric} slurm_batch/build_depstor_rasters.batch --from dprst_depth
+```
+
+| | |
+|---|---|
+| Consumes | {fabric}/depstor_rasters/ (first half + tiled dprst_depth) |
+| Produces | {fabric}/depstor_rasters/ (vpu_id, routing, drains_*, carea_map) |
+| Resources | 18h / 384G / 8 cpu |
+| `--force` | **applies here** |
+
+> SECOND HALF of the depstor stack: dprst_depth onward. It resumes AT dprst_depth, not after it, deliberately -- naming the same step as the first half's --stop-before is what guarantees nothing between them is skipped. Here dprst_depth is cheap: it loads the tiled stage's parquets (or, without --force, skips because the tiled stage already wrote its output).
 
 #### zonal_params
 
@@ -282,21 +316,6 @@ sbatch --export=ALL,BASE_CONFIG={base_config},FABRIC={fabric} slurm_batch/build_
 | Produces | {fabric}/params/merged/ (6 PRMS ratios; counts in _intermediates/) |
 | Resources | chained: array per fraction -> merge each -> ratios -> copy_constants |
 | `--force` | not accepted (the driver does not pass it) |
-
-#### dprst_depth
-
-```bash
-./slurm_batch/submit_dprst_depth.sh {batches} {fabric} {base_config}
-```
-
-| | |
-|---|---|
-| Consumes | {fabric}/depstor_rasters/dprst_binary.tif, 3DEP elevation, WESM |
-| Produces | {fabric}/params/merged/nhm_dprst_depth_avg_params.csv |
-| Resources | chained: plan -> tile array -> build -> HRU array -> mean_finalize |
-| `--force` | not accepted (the driver does not pass it) |
-
-> Already passes --force to its own build stage internally, which is required, not optional: without it the builder's exists-skip path returns in 0s and the HRU aggregation runs against the PREVIOUS run's depth raster, every job reporting COMPLETED. Observed on the oregon 2026-07-25 rebuild.
 
 #### snarea
 

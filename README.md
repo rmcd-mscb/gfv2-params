@@ -219,7 +219,10 @@ ways to run Part 2 (they produce identical outputs):
   `submit_dprst_depth.sh` (issue #173) must be run **before** an unfiltered
   `build_depstor_rasters.batch`, since `dprst_depth`'s in-process fallback is
   a ~250-500 core-hour CONUS compute — see `slurm_batch/RUNME.md` Step 3 and
-  `slurm_batch/HPC_REFERENCE.md` "Stage 2d'".
+  `slurm_batch/HPC_REFERENCE.md` "Stage 2d'". Since #221 the builder enforces
+  this: above 25,000 polygons it refuses the in-process path and names
+  `submit_dprst_depth.sh`, and `submit_fabric_rerun.sh` runs the tiled stage
+  between two halves of the depstor stack for you.
 
 See [Zonal-pass parameter pipeline](#zonal-pass-parameter-pipeline) below
 for the design notes, and `slurm_batch/HPC_REFERENCE.md` **Stage 4A/4B** for the

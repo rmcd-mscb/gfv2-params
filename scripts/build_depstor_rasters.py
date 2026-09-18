@@ -48,18 +48,45 @@ def _elapsed(t0: float) -> str:
     return f"{m}m {s:02d}s" if m else f"{s}s"
 
 
-def _select_steps(all_steps, only_step: str | None, from_step: str | None):
+def _select_steps(
+    all_steps,
+    only_step: str | None,
+    from_step: str | None,
+    stop_before: str | None = None,
+):
+    """Choose which steps to run: one (--step), or the half-open range
+    [--from, --stop-before) of the canonical order.
+
+    `--stop-before X` and `--from X` name the SAME boundary, so the two halves of a
+    split run always partition the full order exactly -- which is what lets the re-run
+    manifest run the tiled dprst_depth stage between them (issue #221) without a gap
+    for a later-inserted step to fall into.
+    """
     names = [s["name"] for s in all_steps]
     if only_step:
         if only_step not in names:
             raise ValueError(f"--step '{only_step}' not in config; available: {names}")
         return [s for s in all_steps if s["name"] == only_step]
+
+    lo, hi = 0, len(all_steps)
     if from_step:
         if from_step not in names:
             raise ValueError(f"--from '{from_step}' not in config; available: {names}")
-        idx = names.index(from_step)
-        return all_steps[idx:]
-    return all_steps
+        lo = names.index(from_step)
+    if stop_before:
+        if stop_before not in names:
+            raise ValueError(f"--stop-before '{stop_before}' not in config; available: {names}")
+        hi = names.index(stop_before)
+
+    selected = all_steps[lo:hi]
+    if not selected:
+        # A run of zero steps logs "Running 0 step(s)" and exits 0: it did nothing and
+        # reported success. That is never what was meant.
+        raise ValueError(
+            f"--from {from_step or names[0]!r} / --stop-before {stop_before!r} selects "
+            f"no steps; the boundary must come after the start"
+        )
+    return selected
 
 
 def _build_context(config: dict, force: bool) -> BuildContext:
@@ -186,11 +213,20 @@ def main():
     parser.add_argument("--fabric", default=None, help="Fabric name (overrides FABRIC env / default_fabric)")
     parser.add_argument("--step", default=None, help="Run only this one step")
     parser.add_argument("--from", dest="from_step", default=None, help="Resume from this step")
+    parser.add_argument(
+        "--stop-before",
+        dest="stop_before",
+        default=None,
+        help="Stop BEFORE this step (it does not run). Pairs with --from STEP naming the "
+        "same step to split the stack in two with no gap.",
+    )
     parser.add_argument("--force", action="store_true", help="Overwrite existing outputs")
     args = parser.parse_args()
 
     if args.step and args.from_step:
         parser.error("--step and --from are mutually exclusive")
+    if args.step and args.stop_before:
+        parser.error("--step and --stop-before are mutually exclusive")
 
     logger = configure_logging("build_depstor_rasters")
     t_start = time.time()
@@ -246,7 +282,7 @@ def main():
 
     ordered_steps = [step_index[n] for n in STEP_ORDER]
 
-    run_steps = _select_steps(ordered_steps, args.step, args.from_step)
+    run_steps = _select_steps(ordered_steps, args.step, args.from_step, args.stop_before)
 
     logger.info("=== build_depstor_rasters ===")
     logger.info("Fabric    : %s", config["fabric"])

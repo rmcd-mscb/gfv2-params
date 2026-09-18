@@ -85,7 +85,11 @@ shells around the same builders. The four stages:
 
 The raster orchestrators (`build_shared_rasters`, `build_depstor_rasters`)
 support `--step <name>` (one step), `--from <name>` (resume), and `--force`
-(rebuild outputs that already exist).
+(rebuild outputs that already exist). `build_depstor_rasters` also takes
+`--stop-before <name>`, the half-open complement of `--from`: run
+`--stop-before X` then `--from X` and the two halves partition the stack
+exactly. The re-run manifest uses that to put the tiled `dprst_depth` stage
+between the halves (#221).
 
 `--force` means the same thing on every orchestrator that accepts one —
 rebuild regardless of what exists. Four do: `build_shared_rasters`,

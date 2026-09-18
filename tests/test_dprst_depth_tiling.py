@@ -5,6 +5,7 @@ import pytest
 from shapely.geometry import box
 
 from gfv2_params.dprst_depth.tiling import (
+    _clear_stale_batches,
     _load_and_tag_for_plan,
     component_tile_batches,
     group_by_tile,
@@ -327,3 +328,28 @@ def test_load_and_tag_for_plan_resolves_segment_and_endorheic_from_output_dir(tm
 
     with pytest.raises(FileNotFoundError, match="segment_waterbody_comids.parquet"):
         _load_and_tag_for_plan(config, logging.getLogger("t"))
+
+
+def test_a_new_plan_clears_the_previous_plans_batch_files(tmp_path):
+    """#221: workers write batch_{id:04d}.parquet, so a new plan with FEWER batches
+    used to overwrite the low indices and leave the old high ones in place, to be
+    globbed in with the fresh ones. The planner now clears them first. Only
+    batch_*.parquet go: the _plan/ directory and anything else in batches_dir stay."""
+    batches = tmp_path / "dprst_depth_batches"
+    (batches / "_plan").mkdir(parents=True)
+    for i in (0, 1, 499):
+        (batches / f"batch_{i:04d}.parquet").write_bytes(b"old")
+    (batches / "_plan" / "batch_manifest.json").write_text("{}")
+    (batches / "notes.txt").write_text("keep me")
+
+    n = _clear_stale_batches(batches, logging.getLogger("t"))
+
+    assert n == 3
+    assert not list(batches.glob("batch_*.parquet"))
+    assert (batches / "_plan" / "batch_manifest.json").exists()
+    assert (batches / "notes.txt").exists()
+
+
+def test_clearing_a_batches_dir_that_does_not_exist_yet_is_a_noop(tmp_path):
+    """Every first build: the planner runs before any batch directory exists."""
+    assert _clear_stale_batches(tmp_path / "absent", logging.getLogger("t")) == 0

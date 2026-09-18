@@ -579,6 +579,24 @@ def _load_and_tag_for_plan(config: dict, logger) -> tuple[gpd.GeoDataFrame, gpd.
     return dprst, wesm_gdf
 
 
+def _clear_stale_batches(batches_dir: Path, logger) -> int:
+    """Delete the previous plan's `batch_*.parquet` before a new plan is written (#221).
+
+    Workers write `batch_{id:04d}.parquet`, so a new plan with FEWER batches used to
+    overwrite the low indices and leave the old high ones behind, where the builder's
+    glob swept them in with the fresh ones. The builder now refuses a batch set that
+    does not match its plan; clearing here keeps the normal path from ever tripping
+    that. Only the batch files go -- `_plan/` is rewritten by the caller, and nothing
+    else in the directory is touched.
+    """
+    stale = sorted(batches_dir.glob("batch_*.parquet")) if batches_dir.exists() else []
+    for p in stale:
+        p.unlink()
+    if stale:
+        logger.info("  cleared %d batch file(s) from the previous plan in %s", len(stale), batches_dir)
+    return len(stale)
+
+
 def _plan(args) -> None:
     """Build + persist the CONUS SLURM array work-list; print the sizing projection.
 
@@ -701,6 +719,7 @@ def _plan(args) -> None:
         args.conus_ref_polygons, args.n_batches, wc_lo, wc_hi, verdict,
     )
 
+    _clear_stale_batches(batches_dir, logger)
     plan_dir.mkdir(parents=True, exist_ok=True)
     tagged_path = plan_dir / "dprst_polygons_tagged.parquet"
     tagged_cols = ["COMID", "FTYPE", "best_topo", "ecoregion", "oversized_1m", "geometry"]
