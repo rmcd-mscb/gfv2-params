@@ -166,7 +166,7 @@ behind the raw-vs-calibrated decision.
 | **`dprst_depth.tif`** | float32 **metres**; each dprst cell carries its polygon's V/A mean depth; masked to `land_mask ∩ dprst_binary` | `burn.burn_depth` (row-strip streamed) |
 | **`dprst_depth_polygons.parquet`** | per-polygon provenance: `COMID, method, dprst_depth_m` + diagnostics (`resolution, ftype, ecoregion, measured_max_m, hollister_max_m`) + geometry | `dprst_depth._write_polygon_provenance` |
 | `op_flow_thres_params.csv` | per-HRU CSV, **constant 1.0** for every HRU (legacy parity, `docs/0b_TB_depr_stor.py:994`) — a byproduct, not a DAG dependency | `dprst_depth._write_op_flow_thres` |
-| `dprst_depth_batches/` | the SLURM-array per-tile-batch parquets + a `_plan/` work-list (the CONUS fan-out) | array tasks + `tiling._plan` |
+| `dprst_depth_batches/` | the SLURM-array per-tile-batch parquets + a `_plan/` work-list (the CONUS fan-out). A plan owns its batches: `tiling._plan` clears the previous plan's files, and the builder loads them only if they are exactly `batch_0000..N-1` **and** the planned polygon set equals the current one (#221) | array tasks + `tiling._plan` |
 
 ### 3b. `dprst_depth.tif` → `dprst_depth_avg`
 
