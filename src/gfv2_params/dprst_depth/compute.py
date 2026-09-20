@@ -274,8 +274,15 @@ def run_batch(
     review FIX 2):
       - `n_read_failure` — `RasterioIOError` (the documented "tile/window
         absent" signal, see `topo.py`'s `_existing_paths`/`read_window`
-        notes) at either the tile-open or the windowed-read/compute site.
-        Logged at WARNING; expected at some baseline rate at CONUS scale.
+        notes) at either the tile-open or the windowed-read/compute site,
+        OR a single-tile read that returned WITHOUT raising but whose
+        interior_mask came back empty (`read_padded`'s all-sentinel window,
+        #223) -- that case defers the polygon to the multi-tile fallback
+        instead of emitting a nan/flat_pending row, and is counted here
+        alongside the exception-raising cases because it is the same
+        underlying signal: this tile/window did not have the polygon's
+        data. Logged at WARNING; expected at some baseline rate at CONUS
+        scale.
       - `n_compute_error` — anything else (`MemoryError`, `TypeError`,
         `ValueError`, `AttributeError`, a pyproj/CRS error, ...). Logged at
         ERROR with the offending tile/polygon id so a real bug is loud and

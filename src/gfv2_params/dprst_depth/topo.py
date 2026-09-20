@@ -225,9 +225,16 @@ TILE1M_HTTPS_TEMPLATE = (
 # sequential access -- see GDAL's virtual file systems docs), so a windowed
 # COG read fans out into many independently-timed chunk requests rather than
 # one that must finish inside 60 s. GDAL_HTTP_CONNECTTIMEOUT bounds the
-# initial TCP/TLS handshake; the LOW_SPEED pair is what actually aborts a
-# socket that connected but then stopped delivering bytes (< 1000 B/s for
-# 60 s) -- the specific "stalled socket" failure mode the cn132 incident was.
+# initial TCP/TLS handshake. The LOW_SPEED pair is the operative detector for
+# the specific "stalled socket" failure mode the cn132 incident was -- a
+# socket that connected and then stopped delivering bytes (< 1000 B/s) -- and
+# it must fire BEFORE GDAL_HTTP_TIMEOUT, not at the same value: both clocks
+# start at the same instant (the transfer's start), so if they were equal the
+# 60 s request cap would always win the race and the low-speed pair would
+# never get a chance to trip. LOW_SPEED_TIME=30 aborts a stalled-but-connected
+# socket at 30 s; GDAL_HTTP_TIMEOUT=60 remains the outer bound for a request
+# that is still moving data, just slowly (or not stalled in the LOW_SPEED
+# sense at all).
 GDAL_HTTP_ENV = {
     "AWS_NO_SIGN_REQUEST": "YES",
     "GDAL_DISABLE_READDIR_ON_OPEN": "EMPTY_DIR",
@@ -235,7 +242,7 @@ GDAL_HTTP_ENV = {
     "GDAL_HTTP_MAX_RETRY": "5",
     "GDAL_HTTP_RETRY_DELAY": "2",
     "GDAL_HTTP_CONNECTTIMEOUT": "30",
-    "GDAL_HTTP_LOW_SPEED_TIME": "60",
+    "GDAL_HTTP_LOW_SPEED_TIME": "30",
     "GDAL_HTTP_LOW_SPEED_LIMIT": "1000",
 }
 
