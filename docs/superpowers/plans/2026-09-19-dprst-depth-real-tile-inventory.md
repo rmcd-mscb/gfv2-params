@@ -995,7 +995,7 @@ git commit -m "refactor(dprst_depth): plan by real tile sets instead of hull til
 - Produces:
   - `compute.open_tile_set(ts: TileSet)`: context manager yielding an EPSG:5070 nearest-resampled `WarpedVRT` over the single key, or over an in-memory `gdal.BuildVRT` mosaic of several keys
   - `compute.run_batch(dprst_gdf, tile_sets: list[str], out_parquet, logger, n_threads: int = 1) -> pd.DataFrame`. `dprst_gdf` needs `COMID`, `source_tiles`, `candidates`. Output columns = `_OUTPUT_COLUMNS + ["source"]`, rows sorted by `COMID`.
-  - `_OUTPUT_COLUMNS` gains `"source"` (the winning set's `project`, or `"10m"`).
+  - `_OUTPUT_COLUMNS` gains `"source"` (the winning set's `project`, or `"10m"`) and `"interior_coverage"` (fraction of the polygon's interior that was real, not sentinel-padded — see the ADDENDUM after Step 3 below).
 
 - [ ] **Step 1: Replace the obsolete tests.** Delete `test_run_batch_skips_failed_tile_without_aborting_batch`, `test_run_batch_counts_compute_error_separately` and `test_run_batch_dedupes_multi_tile_polygon` (they patch the deleted `group_by_tile`/`compute_polygon` seams). Keep both `_polygon_depth_from_dem` tests. Add:
 
@@ -1161,6 +1161,19 @@ def run_batch(dprst_gdf, tile_sets, out_parquet, logger, n_threads: int = 1) -> 
                         logger.error("  set=%s idx=%s: UNEXPECTED compute error (%s: %s)",
                                      ts.project, idx, type(exc).__name__, exc)
                         r = None
+                    else:
+                        if r is None:
+                            # `_compute_one` returned None WITHOUT raising: an empty
+                            # interior on this set, not an exception. This is the
+                            # read-failure COUNT + WARNING from round-4's run_batch
+                            # fix (#223) -- carry it forward here too, or the
+                            # candidate-recovery rewrite silently drops the only
+                            # operator-visible signal that a set's window missed.
+                            _bump("n_read_failure")
+                            logger.warning(
+                                "  set=%s idx=%s: window has no valid interior on "
+                                "this set — trying next candidate", ts.project, idx,
+                            )
                     if r is None:
                         pending.append(idx)
                     else:
@@ -1209,7 +1222,7 @@ def run_batch(dprst_gdf, tile_sets, out_parquet, logger, n_threads: int = 1) -> 
     return out
 ```
 
-Set `_OUTPUT_COLUMNS = ["COMID", "dprst_depth_m", "measured_max_m", "hollister_max_m", "flat", "resolution", "method", "source"]`. The worker-thread counters must not race: `+=` on a dict int isn't atomic under free-threading, so they go through a `threading.Lock()`, which the code above already does via `_bump`. The recovery-phase counters are updated only on the main thread, as `ex.map` results are consumed.
+Set `_OUTPUT_COLUMNS = ["COMID", "dprst_depth_m", "measured_max_m", "hollister_max_m", "flat", "resolution", "method", "source", "interior_coverage"]` (see the ADDENDUM above for `interior_coverage`'s definition). The worker-thread counters must not race: `+=` on a dict int isn't atomic under free-threading, so they go through a `threading.Lock()`, which the code above already does via `_bump`. The recovery-phase counters are updated only on the main thread, as `ex.map` results are consumed.
 
 `_compute_one` calls `_read_tile_window(vrt, geom)`, which is now `read_padded` (Task 1).
 
@@ -1226,6 +1239,26 @@ In `topo.py`, **keep** `resolution_class` (the Phase-0 probe imports it) and pre
 and call `run_batch(dprst_gdf, tile_sets, out_parquet, logger, n_threads=args.threads)`. Update the module docstring's reference to `group_by_tile`/`component_tile_batches`.
 
 `slurm_batch/run_dprst_depth_batch.batch`: `#SBATCH --cpus-per-task=8` (was 2). Keep `--mem=64G` and `--time=12:00:00`. Add a comment: 8 concurrent windows fit 64G because `guard_oversized_windows` caps a 1 m window at 200M cells (~4.8 GB working set) and nearly all windows are orders of magnitude smaller.
+
+**ADDENDUM (toolkit review round 4, findings 6a/7 — #223):** `_compute_one` must
+also report an `interior_coverage` figure (the fraction of the polygon's TRUE
+interior footprint whose cells were real, not sentinel-padded) alongside its
+depth stats, since `read_padded`'s clip-and-pad means a partial void inside a
+polygon's interior no longer crashes anything — it silently drops those cells
+from `_polygon_depth_from_dem`'s V/A mean without leaving any trace on the
+output row (see `docs/dprst_depth_avg_reference.md`'s "coverage loss" paragraph
+for why this matters: an interior with a low but nonzero real-cell fraction
+still ships as `method="measured"` with no flag). Compute it as
+`interior.sum() / max(total_interior_cells, 1)`, where `total_interior_cells`
+is the interior rasterization BEFORE the `dem != sentinel` exclusion
+`_interior_mask` currently applies inline — that earlier count is lost once
+`_interior_mask` returns only the post-exclusion mask, so either split
+`_interior_mask` into "raw footprint mask" + "valid mask" or have
+`_compute_one` rasterize the footprint a second time. Add `interior_coverage`
+to `_OUTPUT_COLUMNS` (and therefore to the dict `_compute_one`/
+`_polygon_depth_from_dem` return) so it survives into the parquet, matching
+the coverage diagnostic's existing convention elsewhere in this repo (never a
+gate at write time, always a joined diagnostic column).
 
 - [ ] **Step 4: Run** `pytest tests/test_dprst_depth_compute.py tests/test_dprst_depth_topo.py -q`. Expected: PASS.
 
@@ -1295,7 +1328,7 @@ def test_tag_polygons_requires_the_inventory_keys(tmp_path):
 
     Return `dprst` alone and update the caller and signature (`-> gpd.GeoDataFrame`). Remove every `wesm_gdf` pass-through from `_compute_depths`/`build`.
   - In-process branch of `_compute_depths`: `groups = tile_set_groups(dprst)`; `depth_df = run_batch(dprst, list(groups), tmp_parquet, logger, n_threads=1)`.
-  - `_DEPTH_COLUMNS` and `_PROVENANCE_DIAGNOSTIC_COLUMNS` gain `"source"`.
+  - `_DEPTH_COLUMNS` and `_PROVENANCE_DIAGNOSTIC_COLUMNS` gain `"source"` and `"interior_coverage"` (Task 6's ADDENDUM). `interior_coverage` is provenance, not a PRMS parameter — it belongs in `_PROVENANCE_DIAGNOSTIC_COLUMNS`, following this repo's `prms.provenance` convention (CLAUDE.md). **This column exists so `fill.py`'s existing donor selection (`fit_ecoregion_models`'s `non_flat_df`, from the #173 spike's own Task 5 — a DIFFERENT, already-shipped task, not this plan's) can gain the ability to exclude a low-`interior_coverage` measured row from its donor pool** — the coverage-based donor filter `docs/dprst_depth_avg_reference.md`'s corrected richdem-void paragraph calls for (toolkit review finding 6a). Wiring `interior_coverage` through to the merged output here is the PREREQUISITE that follow-up needs; adding the actual filter/threshold to `fill.py` is out of scope for this plan and is not itself one of its tasks.
   - Imports: `from ..dprst_depth.sources import tag_and_assign`, `from ..dprst_depth.tiling import tile_set_groups`. Drop `group_by_tile`, `guard_oversized_windows` and `resolution_class`.
   - `base_config.yml`: in each of the five profiles, replace
     `wesm_index: "{data_root}/input/wesm/wesm_1m_footprints.gpkg"` with
@@ -1492,5 +1525,6 @@ Expected wall-clock: plan ≲ 20 min; array ≈ 1–2 h (an estimate; the measur
   - `pixi run --as-is python scripts/diagnose/compare_dprst_depth_runs.py $B/dprst_depth_polygons.parquet $DR/gfv2r2/depstor_rasters/dprst_depth_polygons.parquet --expect-identical $B/expect_identical.txt` must exit 0.
   - Measured fraction (build log `N/M polygons have a computed depth`) ≥ baseline; the 624 formerly-errored COMIDs should now be measured or have `source` = an alternative project / `10m`.
   - Guard 3 on disk: `srun ... pytest tests/test_merged_products_ondisk.py -q` for gfv2r2. Record its SLURM job id.
+  - **(toolkit review round 4, finding 7 — #223) Zero-valid-interior gate.** `n_compute_error=0` is a WEAKER signal after Task 6's fix than it was pre-#223: an empty-interior read that used to raise (and count as `n_compute_error`) now returns cleanly from `_compute_one`/`read_padded` and is counted as `n_read_failure` + a candidate-recovery attempt instead — a real code regression in the recovery path could silently pass `n_compute_error=0` while quietly shipping more `flat_pending`/no-source rows than before. Sum `n_read_failure` and `n_no_source` across all array logs (`grep -h "run_batch:" logs/job_<array>_*.err`) and compare the total polygon count with zero valid interior cells against the baseline run's equivalent count (pre-#223: the 624 polygons whose `n_compute_error` this plan's own motivation cites) — it must not be LARGER than baseline, and any increase must be explained before the run is accepted.
 - [ ] **Step 2: Report** to Rich with a compact before/after table: wall-clock, measured fraction, compute errors, changed-depth count and median |Δ|, and the violation count (must be 0).
 - [ ] **Step 3: Follow-on (not in this plan):** canonical gfv2 gets the same two commands, but on **`gfv2_dev` first**. Never validate on canonical gfv2.
