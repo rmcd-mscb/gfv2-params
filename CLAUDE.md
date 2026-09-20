@@ -298,6 +298,15 @@ These are hard-won; violating them silently corrupts outputs.
   carve — it is **not** a knob for limiting over-exclusion.
 - **WhiteboxTools cannot read LZW + `predictor=2` GeoTIFFs** — it silently
   corrupts them. Never pass `predictor=2` rasters to WBT subprocesses.
+- **Every dprst_depth DEM window goes through `topo.read_padded`, never a bare
+  `vrt.read(window=...)`.** rasterio clips a non-boundless read to the dataset
+  but `window_transform(window)` describes the UNCLIPPED window, so a window
+  overhanging a tile's left/top edge came back misregistered by the overhang
+  (mean 788 m on gfv2r2) with no error, and one wholly outside came back empty
+  and crashed `np.gradient` (942 "compute errors", #223). `WarpedVRT` forbids
+  `boundless=True`; `read_padded` pads with the -9999 sentinel instead. All
+  3DEP reads also use `topo.GDAL_HTTP_ENV`: without an HTTP timeout, one
+  stalled socket held seven array tasks for ~6.9 h.
 - **CONUS-scale memory: stream/window, never hold a full-grid array.** The CONUS
   template is 153830×109901 ≈ 16.9 B cells — ~17 GB as uint8, ~68 GB as int32,
   ~135 GB as float64. Oregon (~0.56 B cells) hides this; CONUS OOMs any depstor

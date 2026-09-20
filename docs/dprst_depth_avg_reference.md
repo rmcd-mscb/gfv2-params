@@ -70,6 +70,22 @@ product — `_fill_and_join` **raises `RuntimeError`** when under
 polygons get a measured depth. Set the knob to `0` to disable (escape hatch
 for a legitimately high-flattening small fabric).
 
+**Windowed reads near a tile's edge.** Because the DEM comes from a live tile
+rather than a CONUS-wide mosaic, the 200 m rim buffer around a polygon's bbox
+routinely pokes past the edge of whichever 1 m or 10 m tile is backing the
+read. Until #223, a rim that overhung a tile's left or top edge came back
+*silently* shifted from where it was requested — no error, just the wrong
+ground under the DEM array — which corrupted the depression fill and biased
+the depth for polygons sitting near a tile boundary; a rim that fell entirely
+off the tile came back empty and crashed the computation outright rather than
+producing a bad number. Both are fixed at the read itself: an overhanging
+window is now read only as far as real data exists and padded with nodata
+beyond the tile edge, so the array lines up with the ground it claims to
+cover, and a window left with too little real data to take a derivative
+reports a depth of zero instead of crashing. Nothing changes for a polygon
+whose window sits entirely inside its tile — this fix cannot move a depth
+result away from a tile edge, only correct or null one that was wrong at one.
+
 ---
 
 ## 2. The depth-method ladder
