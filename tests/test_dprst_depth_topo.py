@@ -212,6 +212,68 @@ def test_depth_to_spill_zeroes_nodata_void_no_spurious_depth():
     assert np.isclose(depth[n - 1, n - 1], 0.0)  # untouched rim cell stays 0
 
 
+def test_depth_to_spill_void_never_corrupts_a_nearby_real_depth_at_production_scale():
+    """(#223 toolkit-review finding 5c) Pin richdem's actual void behaviour,
+    because a doc claim (dprst_depth_avg_reference.md) now rests on it, and a
+    richdem version bump could silently change it. Empirically verified
+    (this is not a documentation inference): on a 9x9+ grid, a void placed
+    DIRECTLY ADJACENT to the pit, or even a void ring FULLY ENCIRCLING it
+    (severing every 4-connected path from the pit to the array's real edge
+    cells), leaves the pit's OWN computed depth unchanged -- richdem does not
+    treat an interior no_data cell as a drain/outlet that lets water escape
+    through it. Real `read_window`/`read_padded` windows are hundreds of
+    pixels wide (the 200 m rim buffer alone floors this well above 9), so
+    this is the representative, production-relevant case."""
+    n = 9
+    dem = np.full((n, n), 10.0, dtype=np.float64)
+    c = n // 2
+    dem[c - 1 : c + 2, c - 1 : c + 2] = 8.0  # 3x3 pit, same shape as the bowl test
+
+    # A void directly 4-connected-adjacent to a pit-boundary cell.
+    d_adjacent = dem.copy()
+    d_adjacent[c - 2, c - 1] = -9999.0
+    depth_adjacent = topo.depth_to_spill(d_adjacent)
+    assert np.isclose(depth_adjacent[c, c], 2.0)
+
+    # A void ring FULLY encircling the pit one cell out -- every path from
+    # the pit to a real array-edge cell must cross this ring.
+    d_ring = dem.copy()
+    lo, hi = c - 2, c + 2
+    d_ring[lo, lo : hi + 1] = -9999.0
+    d_ring[hi, lo : hi + 1] = -9999.0
+    d_ring[lo : hi + 1, lo] = -9999.0
+    d_ring[lo : hi + 1, hi] = -9999.0
+    depth_ring = topo.depth_to_spill(d_ring)
+    assert np.isclose(depth_ring[c, c], 2.0)
+
+
+def test_depth_to_spill_tiny_array_border_void_can_collapse_the_whole_fill():
+    """Companion/contrast to the test above: the known richdem small-grid
+    quirk this module's OTHER nodata test (above) explicitly sizes its grid
+    to avoid. On a grid so small that the pit's surrounding ring IS the
+    array's own border (5x5 here: a 3x3 pit leaves a ring exactly 1 cell
+    wide), a no_data cell ANYWHERE on that border can collapse the fill for
+    the WHOLE array to raw elevation -- not just the void cell itself, every
+    real cell including the pit floor, so measured_max_m/dprst_depth_m would
+    both read 0 rather than the true 2.0. This IS the "limiting case reads
+    exactly 0" that `fill.py`'s `depth_col <= 0` gate (`fill_flat`) would
+    catch and route to the regional fill, if it were ever reachable -- but it
+    reproduces ONLY at this tiny scale (gone already at 7x7, see the test
+    above), which no real `read_window`/`read_padded` window can be. Pinned
+    here so a richdem version bump that changes this quirk is caught either
+    way, without asserting it is reachable in production."""
+    dem = np.full((5, 5), 10.0, dtype=np.float64)
+    dem[1:4, 1:4] = 8.0
+    base_depth = topo.depth_to_spill(dem)
+    assert np.isclose(base_depth[2, 2], 2.0)  # sanity: the un-voided case is normal
+
+    d = dem.copy()
+    d[0, 0] = -9999.0  # array-border corner, one cell outside the pit's own ring
+    depth = topo.depth_to_spill(d)
+    assert np.isclose(depth[0, 0], 0.0)  # the void cell itself: never spurious
+    assert np.isclose(depth[2, 2], 0.0)  # the WHOLE fill collapsed, not just the void
+
+
 def test_is_hydroflattened_detects_constant_surface():
     flat = np.full((20, 20), 512.30, dtype=np.float32)
     natural = flat + np.linspace(0, 1.5, 400).reshape(20, 20).astype(np.float32)
@@ -329,6 +391,13 @@ def _ramp_dataset(memfile, width=40, height=30, nodata=-999999.0):
     # ambiguity between this test's `round()` shape check and
     # `round_lengths()`'s own rounding.
     (4989.3, 7980.2, 5010.7, 7995.6),
+    # CORNER overhang: LEFT and TOP at once (window = Window(col_off=-10,
+    # row_off=-12, width=20, height=22)). Every case above overhangs exactly
+    # ONE axis, so in `read_padded`'s placement math (`r0 = inter.row_off -
+    # snapped.row_off`, `c0 = inter.col_off - snapped.col_off`) at least one
+    # of r0/c0 is always 0 -- this is the only case where BOTH are nonzero
+    # (r0=12, c0=10) at the same time, which single-axis cases can't reach.
+    (4990.0, 7990.0, 5010.0, 8012.0),
 ])
 def test_read_padded_keeps_array_aligned_with_transform_on_every_edge(bounds):
     with MemoryFile() as mf, _ramp_dataset(mf) as ds:
@@ -362,6 +431,48 @@ def test_read_padded_inside_is_identical_to_plain_windowed_read():
         ref = topo._normalize_nodata(ds.read(1, window=w).astype(np.float32), ds.nodata)
         assert np.array_equal(dem, ref)
         assert tr == ds.window_transform(w)
+
+
+def test_read_padded_with_no_source_nodata_has_no_false_sentinel_inside():
+    """(#223 toolkit-review finding 5b) `read_padded` calls
+    `_normalize_nodata(dem, src.nodata, sentinel)` on BOTH branches; a tile
+    that declares no NODATA tag (`src.nodata is None`) has no coverage --
+    a numeric void could pass through as a real elevation, or (the opposite
+    bug) a real elevation could get misread as the sentinel. Fully inside,
+    every ramp value is real and finite, so none of them may equal -9999.0.
+    Pixel-aligned bounds (not fractional): a fractional "inside" window's
+    actual pixel selection is an internal rasterio/GDAL implementation
+    detail this test has no need to depend on -- `test_read_padded_inside_
+    is_identical_to_plain_windowed_read` already pins that path's identity
+    with a plain-read reference instead of a per-cell geographic round-trip."""
+    with MemoryFile() as mf, _ramp_dataset(mf, nodata=None) as ds:
+        assert ds.nodata is None
+        b = (5005.0, 7985.0, 5015.0, 7990.0)  # pixel-aligned, fully inside
+        dem, tr = topo.read_padded(ds, b)
+        assert not (dem == -9999.0).any()
+        rows, cols = np.nonzero(np.ones_like(dem, dtype=bool))
+        for r, c in zip(rows.ravel()[::11], cols.ravel()[::11]):
+            x, y = tr * (c + 0.5, r + 0.5)
+            src_r, src_c = ds.index(x, y)
+            assert dem[r, c] == 1000 * src_r + src_c
+
+
+def test_read_padded_with_no_source_nodata_pads_only_the_missing_region():
+    """Companion to the inside-only case above: on the padded (overhang)
+    path, the REAL region read off a no-NODATA source must still come back
+    unchanged (no false sentinel), and ONLY the genuinely-outside padding
+    -- which is `read_padded`'s own fill, not a `src.nodata` detection --
+    may read as -9999.0."""
+    with MemoryFile() as mf, _ramp_dataset(mf, nodata=None) as ds:
+        assert ds.nodata is None
+        dem, tr = topo.read_padded(ds, (4990.0, 7980.0, 5010.0, 7995.0))  # overhangs LEFT
+        rows, cols = np.nonzero(dem != -9999.0)
+        assert rows.size > 0
+        for r, c in zip(rows[::7], cols[::7]):
+            x, y = tr * (c + 0.5, r + 0.5)
+            src_r, src_c = ds.index(x, y)
+            assert dem[r, c] == 1000 * src_r + src_c
+        assert (dem == -9999.0).any()  # the padded-outside region only
 
 
 @pytest.mark.parametrize("shape", [(1, 40), (40, 1), (0, 12), (12, 0)])
