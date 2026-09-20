@@ -82,11 +82,26 @@ producing a bad number. The read itself is fixed: an overhanging window is
 now read only as far as real data exists and padded with nodata beyond the
 tile edge, so the array lines up with the ground it claims to cover. A
 separate, narrower guard catches windows too small on either axis (fewer
-than two cells) to take a derivative from at all and reports a depth of zero
-rather than crashing there — a degenerate-geometry case, not the tile-edge
-padding case above. Nothing changes for a polygon whose window sits entirely
-inside its tile — this fix cannot move a depth result away from a tile edge,
-only correct or null one that was wrong at one.
+than two cells) to take a derivative from at all and reports no shoreline
+slope rather than crashing there — a degenerate-geometry case, not the
+tile-edge padding case above. That guard's `0.0` return is the Hollister
+predictor input, not a shipped depth: `fill.py`'s ladder only trusts a
+positive `hollister_max_m`, so a polygon that hits it falls through to the
+regional fill (or, absent a donor model, the constant floor) — no polygon
+ships `dprst_depth_avg = 0`.
+
+Two qualifications on what this buys, for the re-run: a polygon whose
+**interior** overhangs its tile is now measured over a truncated interior,
+and the padding is nodata, not a wall — richdem's priority-flood
+(`topo.depth_to_spill`) treats it as an open boundary, so water can spill out
+through the void and the depth can read low, or fall to the regional fill,
+until the tile-assignment half of #223 lands. That is better than the old
+silent misregistration but it is not "correct," and nothing currently flags
+it. Separately, "nothing changes for a window wholly inside its tile" is true
+of the *computation* only, not the read: the same change adds an HTTP
+timeout/retry policy (`topo.GDAL_HTTP_ENV`) to that identical path, so a
+legitimately slow read that previously completed can now time out, log a
+warning, and drop that polygon to the regional fill.
 
 ---
 
