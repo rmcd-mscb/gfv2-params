@@ -62,6 +62,48 @@ def test_list_project_tiles_keeps_legacy_named_tiles_too():
     ]
 
 
+LOWERCASE_1M_PAGE = """<?xml version="1.0" encoding="UTF-8"?><ListBucketResult>
+<Contents><Key>StagedProducts/Elevation/1m/Projects/CA_NoCAL_Wildfires_PlumasNF_B1_2018/TIFF/USGS_1m_x58y445_CA_NoCAL_Wildfires_PlumasNF_B1_2018.tif</Key></Contents>
+<IsTruncated>false</IsTruncated></ListBucketResult>"""
+
+
+def test_list_project_tiles_keeps_lowercase_1m_named_tiles_too():
+    # Fix round 3 (job 4521496): a THIRD convention, lowercase `1m`, no zone --
+    # 92 more real project directories (e.g. CA_NoCAL_Wildfires_PlumasNF_B1_2018,
+    # PR_PRVI_G_2018) contributed zero tiles under rounds 1/2's two patterns.
+    keys = inv.list_project_tiles("CA_NoCAL_Wildfires_PlumasNF_B1_2018", fetch=lambda url: LOWERCASE_1M_PAGE)
+    assert keys == [
+        "/vsicurl/https://prd-tnm.s3.amazonaws.com/StagedProducts/Elevation/1m/Projects/"
+        "CA_NoCAL_Wildfires_PlumasNF_B1_2018/TIFF/USGS_1m_x58y445_CA_NoCAL_Wildfires_PlumasNF_B1_2018.tif",
+    ]
+
+
+def test_tile_record_takes_zone_from_header_for_a_lowercase_1m_named_tile():
+    key = ("/vsicurl/https://x/Projects/CA_NoCAL_Wildfires_PlumasNF_B1_2018/TIFF/"
+           "USGS_1m_x58y445_CA_NoCAL_Wildfires_PlumasNF_B1_2018.tif")
+    header = {"crs": "EPSG:26910", "width": 10012, "height": 10012,
+              "bounds": (249994.0, 4939994.0, 260006.0, 4950006.0)}
+    rec = inv.tile_record(key, header)
+    assert rec["project"] == "CA_NoCAL_Wildfires_PlumasNF_B1_2018"
+    assert rec["zone"] == 10  # no zone in the name at all; header CRS only
+
+
+def test_list_project_tiles_excludes_tif_aux_xml_sidecars():
+    # Real production example (S3-verified 2026-09-20): an `.aux.xml` sidecar
+    # sits right next to its `.tif` in the same TIFF/ prefix and contains its
+    # own "_x<digits>y<digits>_" token too -- e.g.
+    # USGS_1M_10_x46y441_CA_NoCAL_3DEP_Supp_Funding_2018_D18.tif.aux.xml. The
+    # generalised TILE_NAME_RE must still reject it: it doesn't END in `.tif`.
+    page = """<?xml version="1.0" encoding="UTF-8"?><ListBucketResult>
+<Contents><Key>StagedProducts/Elevation/1m/Projects/P1/TIFF/USGS_1M_10_x46y441_P1.tif</Key></Contents>
+<Contents><Key>StagedProducts/Elevation/1m/Projects/P1/TIFF/USGS_1M_10_x46y441_P1.tif.aux.xml</Key></Contents>
+<IsTruncated>false</IsTruncated></ListBucketResult>"""
+    keys = inv.list_project_tiles("P1", fetch=lambda url: page)
+    assert keys == [
+        "/vsicurl/https://prd-tnm.s3.amazonaws.com/StagedProducts/Elevation/1m/Projects/P1/TIFF/USGS_1M_10_x46y441_P1.tif",
+    ]
+
+
 def test_tile_record_projects_real_bounds_to_5070():
     key = "/vsicurl/https://x/Projects/P1/TIFF/USGS_1M_16_x27y511_P1.tif"
     # the real, CROPPED header measured 2026-09-19 for WI_12County_B22 x27y511
