@@ -4,8 +4,10 @@ from contextlib import contextmanager
 import geopandas as gpd
 import numpy as np
 import pandas as pd
+import pytest
 from affine import Affine
 from rasterio.errors import RasterioIOError
+from rasterio.io import MemoryFile
 from shapely.geometry import box
 
 import gfv2_params.dprst_depth.compute as compute_mod
@@ -132,15 +134,31 @@ def _fake_compute(void_projects):
         if vrt in void_projects:
             return None  # interior had 0 valid cells
         return {"dprst_depth_m": 1.0, "measured_max_m": 2.0, "hollister_max_m": 3.0, "flat": False,
-                "resolution": "10m" if vrt == "10m" else "1m"}
+                "resolution": "10m" if vrt == "10m" else "1m", "interior_coverage": 1.0}
     return _one
 
 
-def test_run_batch_recovers_void_primary_from_next_candidate(tmp_path, monkeypatch):
+def test_run_batch_recovers_void_primary_from_next_candidate(tmp_path, monkeypatch, caplog):
+    """(#223 fix round 1, finding 1) The predecessor PR's
+    `test_run_batch_defers_empty_interior_to_multi_tile_fallback` asserted
+    BOTH the WARNING text and `n_read_failure=1` in the summary; it was
+    deleted (correctly -- it patched dead seams) with nothing replacing
+    those two assertions, so this test would still pass if the
+    `_bump("n_read_failure")`/`logger.warning(...)` pair inside the empty-
+    interior branch were deleted and only the retry itself survived. That
+    guard is the only operator-visible signal that a set's window missed,
+    and issue #223's own acceptance gate sums `n_read_failure`."""
     monkeypatch.setattr(compute_mod, "open_tile_set", _fake_open())
     monkeypatch.setattr(compute_mod, "_compute_one", _fake_compute({"P1"}))
+    caplog.set_level(logging.INFO)
     df = run_batch(_gdf([(7, P1, [P1, P2, TEN])]), [P1], tmp_path / "b.parquet", _L())
     assert df.loc[0, "source"] == "P2" and df.loc[0, "method"] == "measured"
+    assert any(
+        r.levelno == logging.WARNING and "no valid interior" in r.getMessage()
+        for r in caplog.records
+    )
+    summaries = [r.getMessage() for r in caplog.records if "run_batch:" in r.getMessage()]
+    assert summaries and "n_read_failure=1" in summaries[-1]
 
 
 def test_run_batch_falls_to_10m_when_every_1m_set_fails(tmp_path, monkeypatch):
@@ -167,6 +185,11 @@ def test_run_batch_threads_give_identical_output_to_serial(tmp_path, monkeypatch
     threaded = run_batch(_gdf(rows), [P1, P2], tmp_path / "t.parquet", _L(), n_threads=8)
     pd.testing.assert_frame_equal(serial, threaded)
     assert serial["COMID"].is_monotonic_increasing
+    # (#223 fix round 1, finding 6) interior_coverage must actually reach the
+    # parquet, not just live in the in-memory frame this test already checks.
+    written = pd.read_parquet(tmp_path / "t.parquet")
+    assert "interior_coverage" in written.columns
+    assert (written["interior_coverage"] == 1.0).all()
 
 
 def test_run_batch_counts_unexpected_error_as_compute_error(tmp_path, monkeypatch, caplog):
@@ -179,3 +202,140 @@ def test_run_batch_counts_unexpected_error_as_compute_error(tmp_path, monkeypatc
     caplog.set_level(logging.INFO)
     df = run_batch(_gdf([(7, P1, [P1, TEN])]), [P1], tmp_path / "b.parquet", _L())
     assert len(df) == 0 and "n_compute_error=2" in caplog.text  # primary + 10m both raised
+
+
+def test_run_batch_survives_one_tile_set_erroring_at_open(tmp_path, monkeypatch, caplog):
+    """(#223 fix round 1, finding 2) `_attempt`'s outer handler caught only
+    `RasterioIOError` -- a corrupt COG, a bad/missing CRS
+    (`_native_resolution`'s `CRSError`, `WarpedVRT`'s own `CRSError`/
+    `WarpedVRTError`, neither a `RasterioIOError` subclass), a mixed-CRS
+    `BuildVRT` failure, or a `MemoryError` at open time propagated out of
+    `_attempt`, out of `ex.map`, out of `run_batch` entirely -- one bad tile
+    set in a real batch would mean NO batch_XXXX.parquet is written and
+    every other already-computed set's work is discarded. Here `BAD`'s open
+    raises a plain `ValueError`; `P1`'s set is unaffected, and `BAD`'s
+    polygon still recovers via its next candidate (10m)."""
+    BAD = encode(TileSet("BAD", ("kbad",), True))
+
+    @contextmanager
+    def _fake_open_with_one_bad(ts):
+        if ts.project == "BAD":
+            raise ValueError("synthetic corrupt COG")
+        yield ts.project
+
+    monkeypatch.setattr(compute_mod, "open_tile_set", _fake_open_with_one_bad)
+    monkeypatch.setattr(compute_mod, "_compute_one", _fake_compute(set()))
+    caplog.set_level(logging.INFO)
+
+    df = run_batch(
+        _gdf([(7, BAD, [BAD, TEN]), (8, P1, [P1, TEN])]),
+        [BAD, P1], tmp_path / "b.parquet", _L(),
+    )
+    assert sorted(df["COMID"].tolist()) == [7, 8]
+    assert df.loc[df["COMID"] == 7, "source"].iloc[0] == "10m"  # recovered off BAD
+    assert df.loc[df["COMID"] == 8, "source"].iloc[0] == "P1"
+    assert "n_compute_error=1" in caplog.text
+    assert any(r.levelno == logging.ERROR for r in caplog.records)
+
+
+def test_run_batch_double_compute_guard_excludes_already_done_polygons(tmp_path, monkeypatch):
+    """(#223 fix round 1, "double compute" finding) An exception raised while
+    CLOSING a tile set (not opening it -- e.g. a `WarpedVRT`/`open_tile_set`
+    cleanup failure) surfaces AFTER the for-loop over this set's polygons
+    already recorded some of them in `done`. `pending` must exclude those --
+    setting it to the whole `idxs` list unconditionally would re-attempt an
+    already-resolved polygon against its next candidate and inflate
+    `n_recovered` with a phantom retry."""
+
+    @contextmanager
+    def _fake_open_raises_on_close(ts):
+        yield ts.project
+        raise RuntimeError("synthetic cleanup failure")
+
+    monkeypatch.setattr(compute_mod, "open_tile_set", _fake_open_raises_on_close)
+    monkeypatch.setattr(compute_mod, "_compute_one", _fake_compute(set()))
+
+    df = run_batch(
+        _gdf([(7, P1, [P1, TEN]), (8, P1, [P1, TEN])]),
+        [P1], tmp_path / "b.parquet", _L(),
+    )
+    assert sorted(df["COMID"].tolist()) == [7, 8]
+    assert (df["source"] == "P1").all()  # resolved on the primary set, never re-attempted
+
+
+def test_compute_one_reports_interior_coverage_fraction(monkeypatch):
+    """(#223 fix round 1, finding 6) `interior_coverage` must be measured
+    against the polygon's TRUE interior footprint, not the whole window or
+    nothing at all. `_read_tile_window` is patched to return a window whose
+    polygon interior (here, the whole window) is exactly HALF real values
+    and HALF the sentinel -- an implementation computing the fraction
+    against the whole window (real + rim), or not computing it at all,
+    would not produce this exact 0.5."""
+    dem = np.full((10, 10), 5.0, dtype=np.float32)
+    dem[:, :5] = -9999.0  # left half of the window is sentinel/void
+    transform = Affine.identity()
+    geom = box(0, 0, 10, 10)  # interior == the whole 10x10 window
+
+    monkeypatch.setattr(compute_mod, "_read_tile_window", lambda vrt, g: (dem, transform))
+    result = compute_mod._compute_one(object(), geom)
+
+    assert result is not None
+    assert result["interior_coverage"] == pytest.approx(0.5)
+
+
+def _ramp_dataset(memfile, width=40, height=30, nodata=-999999.0):
+    """Local copy of `test_dprst_depth_topo.py`'s helper (#223 fix round 1,
+    finding 5): a small in-memory EPSG:5070 raster whose value encodes its
+    own (row, col), opened exactly like a real tile set so the REAL numeric
+    stack below runs against it rather than a hand-fed dict. Duplicated
+    rather than imported across test modules -- this repo has no existing
+    precedent for one test file importing a private helper from another,
+    and the helper is 6 lines."""
+    data = (np.arange(height)[:, None] * 1000 + np.arange(width)[None, :]).astype("float32")
+    transform = Affine(1.0, 0, 5000.0, 0, -1.0, 8000.0)  # origin (5000, 8000)
+    ds = memfile.open(driver="GTiff", width=width, height=height, count=1, dtype="float32",
+                      crs="EPSG:5070", transform=transform, nodata=nodata)
+    ds.write(data, 1)
+    return ds
+
+
+def test_run_batch_runs_the_real_numeric_stack_correctly_under_threads(tmp_path, monkeypatch):
+    """(#223 fix round 1, findings 5+6) Every other threading test in this
+    file patches BOTH `open_tile_set` and `_compute_one`, so `read_padded`,
+    `geometry_mask`, and richdem's `FillDepressions` (a C++ extension whose
+    thread behaviour here was never verified) never actually run
+    concurrently anywhere. Patch ONLY `open_tile_set` -- to hand out a fresh
+    in-memory ramp raster per call instead of touching S3 (never a SHARED
+    dataset handle across threads: `open_tile_set`'s real contract is one
+    open per call, and this fake mirrors it) -- and let the REAL
+    `_compute_one` run under `n_threads=1` and `n_threads=8`, comparing full
+    frames. Each polygon sits well inside the raster's real 40x30 m extent,
+    so this also exercises `interior_coverage` end to end through the real
+    pipeline (not a hand-fed dict): a fully-interior polygon must read back
+    as fully covered."""
+
+    @contextmanager
+    def _fake_open(ts):
+        with MemoryFile() as mf, _ramp_dataset(mf) as ds:
+            yield ds
+
+    monkeypatch.setattr(compute_mod, "open_tile_set", _fake_open)
+
+    sets = [encode(TileSet(f"RP{i}", (f"k{i}",), True)) for i in range(8)]
+    rows = [(i, sets[i % 8], [sets[i % 8], TEN]) for i in range(16)]
+    # Small (2x2 m) boxes fully inside the ramp dataset's real extent
+    # (origin (5000, 8000), 1 m cells, 40x30) -- their interior never
+    # touches the rim buffer's sentinel padding, whatever the buffer pulls
+    # in around them.
+    geoms = [box(5010.0 + i, 7980.0, 5012.0 + i, 7982.0) for i in range(16)]
+    gdf = gpd.GeoDataFrame(
+        {"COMID": [r[0] for r in rows], "source_tiles": [r[1] for r in rows], "candidates": [r[2] for r in rows]},
+        geometry=geoms, crs="EPSG:5070",
+    )
+
+    serial = run_batch(gdf, sets, tmp_path / "rs.parquet", _L(), n_threads=1)
+    threaded = run_batch(gdf, sets, tmp_path / "rt.parquet", _L(), n_threads=8)
+
+    pd.testing.assert_frame_equal(serial, threaded)
+    assert len(serial) == 16
+    assert (serial["interior_coverage"] == 1.0).all()

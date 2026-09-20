@@ -60,7 +60,7 @@ from rasterio.errors import RasterioIOError
 from rasterio.features import geometry_mask
 from rasterio.vrt import WarpedVRT
 
-from .sources import decode
+from .sources import TileSet, decode
 from .topo import (
     GDAL_HTTP_ENV,
     _interior_mask,
@@ -88,10 +88,12 @@ _ENV_OPTS = dict(GDAL_HTTP_ENV)
 # concat-able parquet rather than a columnless one. `source` is the winning
 # tile set's `project` (or `"10m"` on the seamless fallback); `interior_coverage`
 # is the fraction of the polygon's TRUE interior footprint whose cells were
-# real, not `read_padded` sentinel padding -- a diagnostic, never a gate at
-# write time (toolkit review round 4, finding 6a/7, issue #223): a partially-
-# covered polygon still ships as `method="measured"`, and this column is what
-# lets a later donor-filter (next task) exclude it from regional calibration.
+# NOT VOID -- covers both `read_padded`'s out-of-window sentinel padding and
+# a genuine source-nodata gap inside real coverage (see `_compute_one`'s
+# docstring) -- a diagnostic, never a gate at write time (toolkit review
+# round 4, finding 6a/7, issue #223): a partially-covered polygon still
+# ships as `method="measured"`, and this column is what lets a later
+# donor-filter (next task) exclude it from regional calibration.
 _OUTPUT_COLUMNS = [
     "COMID",
     "dprst_depth_m",
@@ -190,7 +192,7 @@ def compute_polygon(geom, best_topo: str, wesm_row=None) -> dict:
 
 
 @contextmanager
-def open_tile_set(ts):
+def open_tile_set(ts: TileSet):
     """ONE open per tile set: a single tile, or an in-memory mosaic of one
     project's same-zone tiles (BuildVRT cannot mix CRSs, which is why a set
     is single-zone -- see sources.rank_candidates). Warped to EPSG:5070 at
@@ -200,7 +202,18 @@ def open_tile_set(ts):
     path = ts.keys[0]
     if len(ts.keys) > 1:
         vsimem = f"/vsimem/dprst_depth_set_{uuid.uuid4().hex}.vrt"
-        gdal.BuildVRT(vsimem, list(ts.keys))
+        vrt_ds = gdal.BuildVRT(vsimem, list(ts.keys))
+        if vrt_ds is None:
+            # A mixed CRS/UTM zone slipping through sources.rank_candidates
+            # (BuildVRT cannot mosaic mixed CRSs) is the expected cause.
+            # Raise HERE, attributed to the set, rather than let a `None`
+            # write silently fall through to a downstream RasterioIOError
+            # at the read site that would misleadingly blame the read
+            # (fix round 1, cheap finding).
+            raise RuntimeError(
+                f"gdal.BuildVRT returned None for tile set project={ts.project!r} "
+                f"keys={ts.keys!r} -- cannot build the mosaic"
+            )
         path = vsimem
     try:
         with rasterio.open(path) as src:
@@ -241,17 +254,23 @@ def _compute_one(vrt, geom) -> dict | None:
 
     Also reports `interior_coverage`: the fraction of the polygon's TRUE
     interior footprint (before the `dem != sentinel` exclusion `_interior_mask`
-    applies inline) whose cells were real, not `read_padded` sentinel
-    padding. `_interior_mask` returns only the post-exclusion mask and
-    `topo.py` is out of scope for this task, so the footprint is rasterized a
-    SECOND time here rather than splitting `_interior_mask` into two return
-    values (toolkit review round 4, findings 6a/7, issue #223) -- `geom` is
-    guaranteed non-degenerate here (`interior.any()` already returned True),
-    so `footprint.sum()` is always >= 1. A low-but-nonzero coverage still
-    ships as `method="measured"` with no gate at write time -- this figure is
-    what lets a later donor-filter (next task) exclude it from regional
-    calibration; see docs/dprst_depth_avg_reference.md's "coverage loss"
-    paragraph.
+    applies inline) whose cells are NOT VOID -- `_interior_mask` excludes
+    `dem == sentinel`, and `read_padded`'s `_normalize_nodata` maps BOTH
+    `read_padded`'s own out-of-window sentinel padding AND the source
+    raster's own declared nodata (a genuine void inside real coverage, e.g.
+    a data gap in a 3DEP tile) onto that same sentinel value -- so this
+    figure covers both causes of "not real data here", which is the right
+    single number for a donor filter (it doesn't matter to the filter WHY a
+    cell was missing). `_interior_mask` returns only the post-exclusion mask
+    and `topo.py` is out of scope for this task, so the footprint is
+    rasterized a SECOND time here rather than splitting `_interior_mask`
+    into two return values (toolkit review round 4, findings 6a/7, issue
+    #223) -- `geom` is guaranteed non-degenerate here (`interior.any()`
+    already returned True), so `footprint.sum()` is always >= 1. A
+    low-but-nonzero coverage still ships as `method="measured"` with no gate
+    at write time -- this figure is what lets a later donor-filter (next
+    task) exclude it from regional calibration; see
+    docs/dprst_depth_avg_reference.md's "coverage loss" paragraph.
     """
     dem, transform = _read_tile_window(vrt, geom)
     interior = _interior_mask(dem, transform, geom)
@@ -284,6 +303,22 @@ def run_batch(
     ranked `candidates`, ending at the 10 m seamless tile. Counters stay split
     (#173 PR#177 FIX 2): read failures (expected, WARNING) vs compute errors
     (bugs, ERROR) vs polygons with no usable source at all.
+
+    The counters count ATTEMPTS, not polygons: a polygon that walks all of
+    P1 -> P2 -> 10m before succeeding adds 2 to `n_read_failure` (one per
+    failed candidate) and 1 to `n_recovered`, not 1 total. An empty interior
+    (`_compute_one` returns `None` without raising) is folded into
+    `n_read_failure` alongside the exception-raising cases -- both mean
+    "this candidate did not have the polygon's data", the same signal by a
+    different mechanism.
+
+    The final summary line is escalated (#173 FIX 3, restored in the #223
+    fix-round-1 rewrite): ERROR if `n_compute_error > 0` (a real bug must
+    never hide behind the expected read-failure rate), else WARNING if the
+    written fraction of polygons drops below 90% (a mass read failure -- S3
+    outage, HPC firewall regression -- must not exit 0 with only an INFO
+    line while the product quietly degrades, e.g. every 1 m set failing and
+    every polygon recovering to 10 m).
     """
     for col in ("source_tiles", "candidates", "COMID"):
         if col not in dprst_gdf.columns:
@@ -334,9 +369,30 @@ def run_batch(
                         r["source"] = ts.project
                         done[idx] = r
         except RasterioIOError as exc:
+            # Expected: the set doesn't exist / can't be opened -- a routine
+            # 404/read gap, not a code bug. `done` may be non-empty here (a
+            # `WarpedVRT`/`open_tile_set` cleanup-time exception can surface
+            # AFTER the for loop already emitted some results), so `pending`
+            # must exclude anything already resolved -- re-including a
+            # resolved idx would double-compute it and inflate n_recovered
+            # (fix round 1, "double compute" finding).
+            pending = [i for i in idxs if i not in done]
             _bump("n_read_failure")
-            logger.warning("  set=%s: open failed (%s) — %d polygon(s) to recovery", ts.project, exc, len(idxs))
-            pending = list(idxs)
+            logger.warning("  set=%s: open failed (%s) — %d polygon(s) to recovery", ts.project, exc, len(pending))
+        except Exception as exc:  # noqa: BLE001 - one bad set (corrupt COG, bad/missing CRS, MemoryError, ...) must not abort the batch
+            # Unexpected: a corrupt COG, a bad or missing CRS
+            # (`_native_resolution`'s `CRSError`, `WarpedVRT`'s
+            # `WarpedVRTError`/`CRSError` -- neither is a `RasterioIOError`
+            # subclass), a mixed-CRS BuildVRT failure, MemoryError, etc -- a
+            # real code/data bug, not a routine read gap. Without this
+            # handler one bad tile set kills the whole array task: nothing
+            # after it runs, no batch_XXXX.parquet is written, and every
+            # already-computed set's work in this call is discarded
+            # (fix round 1, finding 2).
+            pending = [i for i in idxs if i not in done]
+            _bump("n_compute_error")
+            logger.error("  set=%s: UNEXPECTED error (%s: %s) — %d polygon(s) to recovery",
+                         ts.project, type(exc).__name__, exc, len(pending))
         return done, pending
 
     results, to_recover = {}, []
@@ -348,10 +404,19 @@ def run_batch(
                 logger.info("  [%d/%d tile sets] %d polygons done", i, len(members), len(results))
 
     def _recover(idx):
-        for ts_str in dprst_gdf.at[idx, "candidates"][1:]:
+        candidates = dprst_gdf.at[idx, "candidates"][1:]
+        for ts_str in candidates:
             done, _ = _attempt(ts_str, [idx])
             if idx in done:
                 return idx, done[idx]
+        # Named individually, not just counted in the aggregate n_no_source
+        # -- an operator working through a bad batch needs to find THIS
+        # polygon, and the per-attempt WARNINGs above carry the DataFrame
+        # index, not the COMID (fix round 1, cheap finding).
+        logger.warning(
+            "  idx=%s COMID=%s: no usable source after trying %d candidate(s)",
+            idx, dprst_gdf.at[idx, "COMID"], len(candidates),
+        )
         return idx, None
 
     with ThreadPoolExecutor(max(1, n_threads)) as ex:
@@ -370,7 +435,25 @@ def run_batch(
     out = pd.DataFrame(rows, columns=_OUTPUT_COLUMNS)
     out = out.sort_values("COMID").reset_index(drop=True) if len(out) else _empty_batch_frame()
     out.to_parquet(out_parquet, index=False)
-    logger.info("run_batch: %d/%d polygons written (%d tile sets, %s) -> %s",
-                len(out), sum(len(v) for v in members.values()), len(members),
-                ", ".join(f"{k}={v}" for k, v in counts.items()), out_parquet)
+
+    n_planned = sum(len(v) for v in members.values())
+    success_fraction = len(out) / n_planned if n_planned else 1.0
+    summary_args = (
+        len(out), n_planned, len(members),
+        ", ".join(f"{k}={v}" for k, v in counts.items()), out_parquet,
+    )
+    summary_fmt = "run_batch: %d/%d polygons written (%d tile sets, %s) -> %s"
+    # (#173 FIX 3, restored in the #223 fix-round-1 rewrite) Completeness
+    # gate: a mass read-failure (S3 outage / HPC firewall regression) or ANY
+    # unexpected compute error must not ship silently at INFO -- escalate
+    # the whole summary line so it's visible in a normal log scan. Without
+    # this, an S3/firewall regression that fails every 1 m set (every
+    # polygon quietly recovering to 10 m) would exit 0 with one INFO line
+    # and the product would silently degrade.
+    if counts["n_compute_error"] > 0:
+        logger.error(summary_fmt, *summary_args)
+    elif success_fraction < 0.90:
+        logger.warning(summary_fmt, *summary_args)
+    else:
+        logger.info(summary_fmt, *summary_args)
     return out
