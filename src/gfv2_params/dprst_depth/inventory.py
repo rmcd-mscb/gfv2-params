@@ -33,6 +33,26 @@ with anything in between. `MODERN_ZONED_TILE_NAME_RE` (the original,
 zone-specific pattern) is kept ONLY as a cross-check for the
 filename-vs-header zone WARNING in `tile_record`, never for
 matching/filtering -- `TILE_NAME_RE` alone decides what counts as a tile.
+
+Fix round 4 (design review of round 3): round 3's generalised `.+` is
+greedy, so an adversarial project name that happens to embed its OWN
+`_x<digits>y<digits>_`-shaped substring -- e.g.
+`USGS_one_meter_x1y2_PROJECT_x99y88_SUFFIX.tif` -- backtracks to the LAST
+such token, silently truncating both the parsed coordinate and the parsed
+project to the wrong values. Rounds 1-2's literal prefixes could not do
+this; only one place in the string could ever match. `project` is now taken
+from the tile's own `/Projects/<dir>/` key component (`_project_from_key`),
+never the filename -- structurally impossible to get wrong regardless of
+what the regex captures, and it's also the exact directory
+`list_project_tiles` was called with and what `project_attrs` joins WESM
+against, so it's the name that has to win on any disagreement anyway.
+`TILE_NAME_RE`'s own `.+` is additionally made non-greedy (`.+?`) as
+defence in depth for its `x`/`y` groups, which nothing downstream reads
+today but which the pattern still captures. A filename-vs-directory project
+mismatch, and an uppercase `.TIF` extension, are both handled the same way
+the filename-vs-header zone mismatch already is: matched via
+case-insensitive extension, cross-checked, and logged rather than silently
+resolved one way or the other.
 """
 from __future__ import annotations
 
@@ -63,7 +83,15 @@ PROJECTS_PREFIX = "StagedProducts/Elevation/1m/Projects/"
 # `readme.txt`, an `.xml` sidecar, a browse image) -- none of those carry a
 # `_x<digits>y<digits>_` token immediately before `.tif`. No `zone` group:
 # `zone` always comes from the header CRS (`zone_from_crs`), never the name.
-TILE_NAME_RE = re.compile(r"USGS_.+_x(?P<x>\d+)y(?P<y>\d+)_(?P<project>.+)\.tif$")
+# `.+?` (non-greedy, fix round 4) rather than `.+`: a greedy match backtracks
+# to the LAST `_x<digits>y<digits>_`-shaped substring in the string, which an
+# adversarial (or just unlucky) project name containing its own such
+# substring would silently hijack. `project`/`x`/`y` from this pattern are
+# NOT authoritative regardless (see `_project_from_key`), but there's no
+# reason to prefer the wrong split when the right one is free. `(?i:tif)`
+# makes only the extension case-insensitive -- a real `.TIF` tile must not
+# be silently dropped -- without loosening the rest of the pattern.
+TILE_NAME_RE = re.compile(r"USGS_.+?_x(?P<x>\d+)y(?P<y>\d+)_(?P<project>.+)\.(?i:tif)$")
 # The ORIGINAL, zone-specific modern pattern. Kept ONLY as a cross-check for
 # the filename-vs-header zone WARNING in `tile_record` -- never used for
 # matching/filtering (that's `TILE_NAME_RE` alone now).
@@ -141,8 +169,44 @@ def read_tile_header(key: str) -> dict:
                 "bounds": tuple(src.bounds)}
 
 
+_PROJECTS_ANCHOR = "/Projects/"
+
+
+def _project_from_key(key: str) -> str:
+    """The `/Projects/<dir>/` directory component of `key` -- AUTHORITATIVE
+    for `project` (fix round 4), never re-derived from the filename. It's
+    exactly the directory `list_project_tiles` was called with, and exactly
+    what `project_attrs` joins WESM rows against, so it's the value that has
+    to win on any disagreement. Structural, not a regex mitigation: a
+    filename-only parse can never get this wrong regardless of how
+    adversarial the project name is, because the directory isn't parsed out
+    of the same string the coordinate is.
+
+    Anchors on the bare `/Projects/` substring, not the full `PROJECTS_PREFIX`
+    -- every real key contains `.../1m/Projects/<dir>/...`, and this is
+    deliberately tolerant of whatever comes before it (a `/vsicurl/https://...`
+    prefix, a shortened test fixture, or a future staging-path change), since
+    the directory boundary itself is the only thing this needs to find.
+    """
+    try:
+        return key.split(_PROJECTS_ANCHOR, 1)[1].split("/", 1)[0]
+    except IndexError:
+        raise ValueError(f"key {key!r} does not contain {_PROJECTS_ANCHOR!r}") from None
+
+
 def tile_record(key: str, header: dict) -> dict:
     m = TILE_NAME_RE.search(key)
+    project = _project_from_key(key)
+    # Cross-check only: a filename whose OWN apparent project (per
+    # TILE_NAME_RE, non-greedy or not) disagrees with the directory it's
+    # actually filed under is worth a loud WARNING -- same shape as the
+    # zone cross-check below -- but `project` itself always comes from the
+    # directory, never this match.
+    if m.group("project") != project:
+        logger.warning(
+            "tile name project %r disagrees with its own directory %r for %s (using the directory)",
+            m.group("project"), project, key,
+        )
     zone = zone_from_crs(header["crs"])
     # Cross-check only, and only for the modern zoned convention -- the
     # legacy/lowercase conventions have no zone digits to check at all. A
@@ -157,7 +221,7 @@ def tile_record(key: str, header: dict) -> dict:
             modern.group("zone"), zone, key,
         )
     minx, miny, maxx, maxy = transform_bounds(header["crs"], "EPSG:5070", *header["bounds"], densify_pts=21)
-    return {"project": m.group("project"), "key": key, "zone": zone,
+    return {"project": project, "key": key, "zone": zone,
             "crs": header["crs"], "width": int(header["width"]), "height": int(header["height"]),
             "minx": minx, "miny": miny, "maxx": maxx, "maxy": maxy}
 

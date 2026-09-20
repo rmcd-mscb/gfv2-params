@@ -148,6 +148,62 @@ def test_tile_record_prefers_header_zone_and_warns_on_filename_mismatch(caplog):
     assert "disagrees" in caplog.text and "15" in caplog.text and "16" in caplog.text
 
 
+def test_tile_record_takes_project_from_directory_and_warns_on_filename_mismatch(caplog):
+    # Fix round 4: the filename claims a different project than the
+    # directory the key is actually filed under -- the directory must win
+    # (it's what list_project_tiles was called with and what project_attrs
+    # joins WESM against), and the disagreement must be a loud WARNING.
+    key = "/vsicurl/https://x/Projects/REAL_DIR/TIFF/USGS_one_meter_x25y494_WRONG_NAME.tif"
+    header = {"crs": "EPSG:26910", "width": 10012, "height": 10012,
+              "bounds": (249994.0, 4939994.0, 260006.0, 4950006.0)}
+    with caplog.at_level(logging.WARNING, logger="gfv2_params.dprst_depth.inventory"):
+        rec = inv.tile_record(key, header)
+    assert rec["project"] == "REAL_DIR"
+    assert "disagrees" in caplog.text and "REAL_DIR" in caplog.text and "WRONG_NAME" in caplog.text
+
+
+def test_tile_record_project_survives_an_adversarial_embedded_coordinate_token(caplog):
+    # Adversarial case from design review: a project name that itself
+    # contains a "_x<digits>y<digits>_"-shaped substring used to make a
+    # greedy filename-only parse backtrack to the LAST such token, silently
+    # truncating the parsed project (and coordinate) to the wrong value.
+    # Taking `project` from the key's own directory component makes this
+    # impossible regardless of what the regex captures.
+    key = ("/vsicurl/https://x/Projects/PROJECT/TIFF/"
+           "USGS_one_meter_x1y2_PROJECT_x99y88_SUFFIX.tif")
+    header = {"crs": "EPSG:26910", "width": 10012, "height": 10012,
+              "bounds": (249994.0, 4939994.0, 260006.0, 4950006.0)}
+    with caplog.at_level(logging.WARNING, logger="gfv2_params.dprst_depth.inventory"):
+        rec = inv.tile_record(key, header)
+    # The directory ("PROJECT") wins, never the filename's own guess at its
+    # project (whatever the regex happened to capture for the adversarial
+    # name) -- and since they disagree here, a WARNING must also fire.
+    assert rec["project"] == "PROJECT"
+    assert "disagrees" in caplog.text
+
+
+def test_list_project_tiles_keeps_an_uppercase_tif_extension():
+    page = """<?xml version="1.0" encoding="UTF-8"?><ListBucketResult>
+<Contents><Key>StagedProducts/Elevation/1m/Projects/P1/TIFF/USGS_1M_16_x27y511_P1.TIF</Key></Contents>
+<IsTruncated>false</IsTruncated></ListBucketResult>"""
+    keys = inv.list_project_tiles("P1", fetch=lambda url: page)
+    assert keys == [
+        "/vsicurl/https://prd-tnm.s3.amazonaws.com/StagedProducts/Elevation/1m/Projects/P1/TIFF/USGS_1M_16_x27y511_P1.TIF",
+    ]
+
+
+def test_tile_record_matches_an_uppercase_tif_extension():
+    # Pre-existing gap the design review flagged: \.tif$ alone is case
+    # sensitive, so a real .TIF tile would be silently dropped by
+    # list_project_tiles and crash tile_record's own TILE_NAME_RE.search
+    # (None has no .group()) if it ever reached it.
+    key = "/vsicurl/https://x/Projects/P1/TIFF/USGS_1M_16_x27y511_P1.TIF"
+    header = {"crs": "EPSG:26916", "width": 10012, "height": 10012,
+              "bounds": (499994.0, 4990006.0, 510006.0, 5000018.0)}
+    rec = inv.tile_record(key, header)
+    assert rec["project"] == "P1" and rec["zone"] == 16
+
+
 def test_zone_from_crs_raises_on_a_non_utm_crs():
     with pytest.raises(ValueError, match="EPSG:4326"):
         inv.zone_from_crs("EPSG:4326")
