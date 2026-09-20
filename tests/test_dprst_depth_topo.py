@@ -216,14 +216,20 @@ def test_depth_to_spill_void_never_corrupts_a_nearby_real_depth_at_production_sc
     """(#223 toolkit-review finding 5c) Pin richdem's actual void behaviour,
     because a doc claim (dprst_depth_avg_reference.md) now rests on it, and a
     richdem version bump could silently change it. Empirically verified
-    (this is not a documentation inference): on a 9x9+ grid, a void placed
-    DIRECTLY ADJACENT to the pit, or even a void ring FULLY ENCIRCLING it
-    (severing every 4-connected path from the pit to the array's real edge
-    cells), leaves the pit's OWN computed depth unchanged -- richdem does not
+    (this is not a documentation inference), and independently re-verified by
+    a second probe: for THESE TWO PLACEMENTS -- a void placed DIRECTLY
+    ADJACENT to the pit, or a void ring FULLY ENCIRCLING it (severing every
+    4-connected path from the pit to the array's real edge cells) -- a 9x9
+    grid leaves the pit's OWN computed depth unchanged; richdem does not
     treat an interior no_data cell as a drain/outlet that lets water escape
-    through it. Real `read_window`/`read_padded` windows are hundreds of
-    pixels wide (the 200 m rim buffer alone floors this well above 9), so
-    this is the representative, production-relevant case."""
+    through it. This is NOT a blanket "any void is safe at 9x9+" guarantee --
+    see the companion test below, which reproduces a collapse at this same
+    9x9 size for a DIFFERENT placement (a void block at the array's own
+    border corner, with the pit left too little rim). Real
+    `read_window`/`read_padded` windows are hundreds of pixels wide with a
+    real-cell ring around a polygon's interior at least a 200 m rim buffer
+    deep, far beyond anything the border-corner quirk needs, so THESE
+    placements are the production-relevant case, not the corner one."""
     n = 9
     dem = np.full((n, n), 10.0, dtype=np.float64)
     c = n // 2
@@ -250,18 +256,25 @@ def test_depth_to_spill_void_never_corrupts_a_nearby_real_depth_at_production_sc
 def test_depth_to_spill_tiny_array_border_void_can_collapse_the_whole_fill():
     """Companion/contrast to the test above: the known richdem small-grid
     quirk this module's OTHER nodata test (above) explicitly sizes its grid
-    to avoid. On a grid so small that the pit's surrounding ring IS the
-    array's own border (5x5 here: a 3x3 pit leaves a ring exactly 1 cell
-    wide), a no_data cell ANYWHERE on that border can collapse the fill for
-    the WHOLE array to raw elevation -- not just the void cell itself, every
-    real cell including the pit floor, so measured_max_m/dprst_depth_m would
-    both read 0 rather than the true 2.0. This IS the "limiting case reads
-    exactly 0" that `fill.py`'s `depth_col <= 0` gate (`fill_flat`) would
-    catch and route to the regional fill, if it were ever reachable -- but it
-    reproduces ONLY at this tiny scale (gone already at 7x7, see the test
-    above), which no real `read_window`/`read_padded` window can be. Pinned
-    here so a richdem version bump that changes this quirk is caught either
-    way, without asserting it is reachable in production."""
+    (and the ring it leaves between depression and border) to avoid. On a
+    grid so small that the pit's surrounding ring IS the array's own border
+    (5x5 here: a 3x3 pit leaves a ring exactly 1 cell wide), a no_data cell
+    ANYWHERE on that border can collapse the fill for the WHOLE array to raw
+    elevation -- not just the void cell itself, every real cell including the
+    pit floor, so measured_max_m/dprst_depth_m would both read 0 rather than
+    the true 2.0. This IS the "limiting case reads exactly 0" that
+    `fill.py`'s `depth_col <= 0` gate (`fill_flat`) would catch and route to
+    the regional fill, if it were ever reachable. This quirk is
+    PLACEMENT-dependent, not bounded by a clean size threshold: it does NOT
+    reproduce here for a single-cell void placed away from the pit's own ring
+    (see the test above), but the companion test below reproduces the SAME
+    collapse at 9x9 -- three times this grid's side length -- for a void
+    block sitting at the array's own border corner with too little ring left
+    around a closer pit. Real `read_window`/`read_padded` windows are hundreds
+    of pixels wide with a real-cell ring at least a 200 m rim buffer deep, far
+    beyond anything either reproduction needs. Pinned here so a richdem
+    version bump that changes this quirk is caught either way, without
+    asserting it is reachable in production."""
     dem = np.full((5, 5), 10.0, dtype=np.float64)
     dem[1:4, 1:4] = 8.0
     base_depth = topo.depth_to_spill(dem)
@@ -272,6 +285,31 @@ def test_depth_to_spill_tiny_array_border_void_can_collapse_the_whole_fill():
     depth = topo.depth_to_spill(d)
     assert np.isclose(depth[0, 0], 0.0)  # the void cell itself: never spurious
     assert np.isclose(depth[2, 2], 0.0)  # the WHOLE fill collapsed, not just the void
+
+
+def test_depth_to_spill_border_corner_void_collapses_even_at_9x9_when_pit_is_close():
+    """(#223 review round 5 correction) The tiny-grid quirk above is NOT
+    bounded by a clean "gone at 7x7"/"safe at 9x9+" size threshold -- it is
+    placement-dependent. Reproduced independently by the coordinator and
+    re-verified here: a 5x5 pit (rows/cols 2-6) in a 9x9 grid leaves only a
+    2-cell ring to the array's border: a 2x2 no_data block at that border's
+    corner collapses the pit's depth to 0.0, exactly like the 5x5 case above,
+    even though the array itself is 9x9 -- nearly twice the side length of
+    the OTHER 9x9 test above, which uses a SMALLER 3x3 pit (a wider, 2-cell-
+    plus-clearance ring) and single/ring void placements that do NOT
+    collapse it. The determining factor is how much real rim separates the
+    depression from the array's own border, not the array's raw size."""
+    n = 9
+    dem = np.full((n, n), 10.0, dtype=np.float64)
+    dem[2:7, 2:7] = 8.0  # 5x5 pit, rows/cols 2-6 -- only a 2-cell ring to the border
+    c = 4
+    base_depth = topo.depth_to_spill(dem)
+    assert np.isclose(base_depth[c, c], 2.0)  # sanity: the un-voided case is normal
+
+    d = dem.copy()
+    d[0:2, 0:2] = -9999.0  # 2x2 block at the array's own border corner
+    depth = topo.depth_to_spill(d)
+    assert np.isclose(depth[c, c], 0.0)  # collapses -- NOT "gone at 7x7/9x9"
 
 
 def test_is_hydroflattened_detects_constant_surface():

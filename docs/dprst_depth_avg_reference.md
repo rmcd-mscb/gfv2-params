@@ -96,17 +96,26 @@ and the padding is nodata, not a wall. `_interior_mask` already excludes
 void cells from the interior (`mask &= dem != sentinel`), and
 `depth_to_spill` zeroes each void cell's own reported depth
 (`depth[a == nd] = 0.0`) — and richdem's priority-flood (verified
-empirically, not by inspection: a void placed adjacent to, or fully
-encircling, a synthetic depression leaves the REMAINING real cells' fill
-numerically unchanged on any grid 7x7 or larger, including full 4-sided
-encirclement) does not corrupt the surrounding real fill at anything near
-production scale — a real window is hundreds of pixels wide (the 200 m rim
-buffer alone floors it well above that). Richdem CAN collapse an entire
-window's fill to raw (0 depth everywhere) when a no-data cell sits on a
-**tiny** array's own border — reproduced at 5x5, gone already at 7x7 — a
-long-known quirk this module's own test suite already sizes its nodata-void
-fixture (9x9) to stay clear of; it is not reachable at production window
-sizes. So the failure mode a truncated interior actually introduces is
+empirically, not by inspection, and independently re-verified by a second
+probe) does not corrupt the surrounding real fill at anything near
+production scale: a void placed adjacent to, or fully 4-sided-encircling, a
+synthetic depression leaves the REMAINING real cells' fill numerically
+unchanged for those placements at 7x7 and larger, including full
+encirclement. Richdem CAN still collapse an entire array's fill to raw (0
+depth everywhere) for a **different** placement, though: a no-data block
+sitting at the array's own border **corner**, with too little real rim
+separating it from the depression — reproduced at 5x5 (where a single
+border cell already suffices) and even at 9x9 (a 2x2 border-corner block,
+against a depression left only 2 cells clear of that corner). So the quirk
+is **placement-dependent, not bounded by a clean size threshold** — it needs
+a no-data cell ON the array's own border with the depression close enough to
+it. This module's own test suite already sizes its nodata-void fixture, and
+the ring it leaves between depression and border, generously enough to stay
+clear of it — a long-known quirk. It is not reachable at production window
+sizes either way: a real window is hundreds of pixels wide, and the 200 m
+rim buffer alone floors the real-cell ring around a polygon's own interior
+well above the handful of cells the quirk needs. So the failure mode a
+truncated interior actually introduces is
 narrower than "the fill collapses": it is a **coverage loss**. The V/A mean
 is computed over FEWER interior cells (the void ones excluded), not over
 corrupted ones — an interior voided ENTIRELY reads NaN and IS caught by
