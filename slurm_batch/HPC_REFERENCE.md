@@ -412,12 +412,15 @@ rather than proceeding without the demotion. A fabric whose domain has no closed
 below that floor, or if either signal has died entirely. Checking it at the
 consuming end too is what covers `--from wbody_connectivity` — that recipe
 skips the `endorheic` step, so the orchestrator hydrates its table off disk
-and the producing builder's own check never runs. Selective re-runs via `--step <name>` or
-`--from <name>` passed through to the Python script. `dprst_depth` (issue
+and the producing builder's own check never runs. Selective re-runs via `--step <name>`,
+`--from <name>` or `--stop-before <name>` passed through to the Python script. `dprst_depth` (issue
 #173) is a CONUS-scale compute outlier in this DAG — see "Stage 2d'" below; it
 needs its own SLURM array run **before** a full unfiltered
 `build_depstor_rasters.batch`, or that job will attempt an unbounded
-in-process fallback compute at the `dprst_depth` step.
+in-process fallback compute at the `dprst_depth` step. `submit_fabric_rerun.sh`
+does this for you: it runs `--stop-before dprst_depth`, then the tiled
+`submit_dprst_depth.sh`, then `--from dprst_depth` (#221 — before that split,
+gfv2r2's first run fell into the in-process path and could not finish in 18 h).
 
 **Endorheic classifier inputs.** Signal A needs only `fdr_raster` (already
 required on every fabric) and needs no extra staging. Signal B and the
@@ -536,14 +539,18 @@ but a classifier change invalidates more than the raster: it changes the
 reconstructed dprst *polygon set* (`tiling.py::_load_and_tag_for_plan` /
 `dprst_depth.py::_load_dprst_polygons`, both keyed on the segment/endorheic
 on-stream COMIDs). `dprst_depth_batches/` — the per-tile-batch parquets
-`submit_dprst_depth.sh`'s SLURM array wrote against the OLD polygon set — must
-be wiped, and the full 4-stage `submit_dprst_depth.sh` DAG (plan → array →
-build → mean_zonal → mean_finalize; see "Stage 2d'" below) re-run from
-scratch, after `dprst` completes. Reusing stale batches left-joins the NEW
-polygon set onto the OLD one by COMID: a polygon newly classified dprst has no
-row, silently falls through to the regional-fill ladder instead of a measured
-3DEP depth, and only trips `dprst_depth_min_measured_frac` if enough of them
-do — fewer is a silent quality regression, not a raise.
+`submit_dprst_depth.sh`'s SLURM array wrote against the OLD polygon set — are
+then stale, and the full 4-stage `submit_dprst_depth.sh` DAG (plan → array →
+build → mean_zonal → mean_finalize; see "Stage 2d'" below) must be re-run
+after `dprst` completes. Since #221 that is enforced rather than remembered:
+the `dprst_depth` builder compares the polygon set recorded in
+`_plan/dprst_polygons_tagged.parquet` against the one it reconstructs now, and
+**refuses** on any difference (and on any batch file missing from, or not in,
+the plan). So the `--from … --force` cascades above now stop at `dprst_depth`
+with a message naming `submit_dprst_depth.sh`, instead of silently left-joining
+the new polygon set onto old depths — where each newly-dprst polygon fell
+through to the regional-fill ladder and only a mass failure tripped
+`dprst_depth_min_measured_frac`.
 
 **dprst rebuild cascade.** Changing `dprst` membership (e.g. the per-cell
 impervious carve-out, or the on-stream COMID set) invalidates everything
@@ -670,8 +677,9 @@ existing data_root, or a hard `ctx.require` failure on a from-scratch one.
    vs 10m polygons), not raw polygon count, connected-component safe so a
    polygon spanning >1 tile is never split across batches).
    Writes `{fabric}/depstor_rasters/dprst_depth_batches/_plan/
-   {dprst_polygons_tagged.parquet, batch_manifest.json}`. Pure geometry +
-   local vector reads — no live S3/vsicurl.
+   {dprst_polygons_tagged.parquet, batch_manifest.json}`, after first
+   **deleting the previous plan's `batch_*.parquet`** (#221): a plan owns its
+   batches. Pure geometry + local vector reads — no live S3/vsicurl.
 2. **Array** (`run_dprst_depth_batch.batch`, `0..N_TILE_BATCHES-1`, afterok
    the plan) — one array task computes `dprst_depth` for ONE tile-batch
    (`scripts/run_dprst_depth_batch.py` → `dprst_depth.compute.run_batch`),
@@ -682,7 +690,9 @@ existing data_root, or a hard `ctx.require` failure on a from-scratch one.
    afterok the array, `--mem=64G --time=02:00:00` override — dprst_depth's
    own compute is vector-scale + a streamed row-strip burn, not a
    full-CONUS-grid materialization, so it doesn't need the 384G/18h whole-DAG
-   default) — finds the populated `dprst_depth_batches/*.parquet`, fills
+   default) — finds the populated `dprst_depth_batches/*.parquet`, verifies
+   them against `_plan/` (exactly `batch_0000..N-1`, planned polygon set ==
+   current one — else it raises), fills
    every flat/degenerate polygon (`fit_ecoregion_models`/`fill_flat`), burns
    `dprst_depth.tif`, and writes `op_flow_thres_params.csv` +
    `dprst_depth_polygons.parquet` (the per-polygon fill-method provenance
@@ -734,8 +744,13 @@ pixi run python -m gfv2_params.dprst_depth.tiling --plan \
 - A failed/timed-out array task (stage 2) only owns its own
   `batch_XXXX.parquet` — resubmit just that index:
   `sbatch --array=<idx> --export=ALL,BASE_CONFIG=...,FABRIC=... slurm_batch/run_dprst_depth_batch.batch`.
-- Re-running the plan step (stage 1) is idempotent and cheap relative to the
-  array — it only rewrites `_plan/*`, never touches the per-batch parquets.
+- Re-running the plan step (stage 1) **deletes the per-batch parquets** and
+  rewrites `_plan/*` (#221), so re-run the whole array after it — or just use
+  `submit_dprst_depth.sh`, which always runs plan → array → build together.
+  This is deliberate: if a re-plan kept the old files and the polygon set had
+  changed, they would carry the new plan's names and the old plan's depths, and
+  nothing could tell. A lone re-plan followed by the build now fails loud
+  (`Missing: batch_0000 …`) — it costs recompute time, never a wrong product.
 - If `dprst_depth.tif`/`op_flow_thres_params.csv` need a full rebuild (e.g.
   after a WESM/ecoregion re-stage), pass `--force`:
   `sbatch slurm_batch/build_depstor_rasters.batch --step dprst_depth --force`

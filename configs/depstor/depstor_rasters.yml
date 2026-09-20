@@ -72,6 +72,11 @@ steps:
     # is missing/empty the builder falls back to an in-process compute
     # (correct for a small/test fabric, not the CONUS-scale fan-out).
     batch_dir: "{data_root}/{fabric}/depstor_rasters/dprst_depth_batches"
+    # Ceiling on that in-process fallback (#221): above it the builder refuses
+    # and names slurm_batch/submit_dprst_depth.sh instead of silently starting
+    # days of serial work. Default 25000 (oregon 3,717 / tjc 6,113 pass; CONUS
+    # ~280k-393k refuse). 0 disables the guard.
+    # max_inprocess_polygons: 25000
     outputs:
       dprst_depth: dprst_depth.tif
       op_flow_thres: op_flow_thres_params.csv

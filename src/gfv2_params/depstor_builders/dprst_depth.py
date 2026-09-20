@@ -115,6 +115,15 @@ OP_FLOW_THRES_VALUE = 1.0
 # docstring point 7) — always written next to dprst_depth.tif.
 POLYGON_PROVENANCE_FILENAME = "dprst_depth_polygons.parquet"
 
+# Ceiling on the serial in-process fallback (#221). Above it, `_compute_depths` refuses
+# and points at the tiled `submit_dprst_depth.sh` instead. Measured 2026-09-18 from the
+# tiled planners' own manifests: oregon 3,717 and tjc 6,113 polygons sit well under it;
+# gfv2 (279,391) and gfv2_dev (392,673) sit well over. gfv2r2's first run achieved about
+# 3,300 polygons/h in-process, so the ceiling finishes in ~7.5 h -- inside the 18 h
+# build_depstor_rasters.batch limit with room to spare. Override per step with
+# `max_inprocess_polygons`; 0 disables the guard.
+DEFAULT_MAX_INPROCESS_POLYGONS = 25_000
+
 
 def _load_dprst_polygons(ctx: BuildContext, logger) -> gpd.GeoDataFrame:
     """Reconstruct the fabric-clipped dprst polygon set.
@@ -234,6 +243,64 @@ def _tag_polygons(dprst: gpd.GeoDataFrame, ctx: BuildContext, logger) -> tuple[g
     return dprst, wesm_gdf
 
 
+def _first_few(names: list[str], n: int = 5) -> str:
+    return ", ".join(names[:n]) + (f" (+{len(names) - n} more)" if len(names) > n else "")
+
+
+def _verify_batches_match_plan(batch_dir: Path, parquet_files: list[Path], dprst) -> None:
+    """Refuse per-batch parquets that do not belong to the CURRENT polygon set (#221).
+
+    Nothing ever cleared `dprst_depth_batches/`, and this builder used to load whatever
+    it found. The documented cascade rebuild after a classifier change (`--from
+    wbody_connectivity --force`) runs through this step, so it picked up parquets
+    planned for the OLD polygon set -- consistent with their own plan, wrong for the
+    current one. The final product survived only by coincidence (the left join in
+    `_fill_and_join` drops polygons that are gone; new ones fell to the regional fill).
+
+    The tiled planner records exactly what a check needs under `_plan/`: the polygon set
+    it planned (`dprst_polygons_tagged.parquet`) and how many batch files the array
+    writes (`batch_manifest.json`). The planner and this builder both reconstruct that
+    set through `topo.load_fabric_dprst_polygons`, and tagging never drops a polygon, so
+    the two COMID sets are equal by construction -- any difference is a stale plan.
+    """
+    import json
+
+    plan_dir = batch_dir / "_plan"
+    manifest_path = plan_dir / "batch_manifest.json"
+    tagged_path = plan_dir / "dprst_polygons_tagged.parquet"
+    if not (manifest_path.exists() and tagged_path.exists()):
+        raise RuntimeError(
+            f"dprst_depth: {len(parquet_files)} per-batch parquet(s) in {batch_dir} but no "
+            f"_plan/ ({manifest_path.name} + {tagged_path.name}) recording which polygon "
+            f"set they were computed for, so they cannot be trusted. Re-run "
+            f"slurm_batch/submit_dprst_depth.sh, which plans and computes them together."
+        )
+
+    n_batches = int(json.loads(manifest_path.read_text())["n_batches"])
+    expected = {f"batch_{i:04d}.parquet" for i in range(n_batches)}
+    found = {p.name for p in parquet_files}
+    missing, extra = sorted(expected - found), sorted(found - expected)
+    if missing or extra:
+        raise RuntimeError(
+            f"dprst_depth: {batch_dir} does not match its plan of {n_batches} batch(es). "
+            + (f"Missing: {_first_few(missing)}. " if missing else "")
+            + (f"Not in the plan: {_first_few(extra)}. " if extra else "")
+            + "A missing file is a batch the array did not finish; an extra one is left "
+            "over from an older plan. Re-run slurm_batch/submit_dprst_depth.sh."
+        )
+
+    planned = set(pd.read_parquet(tagged_path, columns=["COMID"])["COMID"])
+    current = set(dprst["COMID"])
+    if planned != current:
+        raise RuntimeError(
+            f"dprst_depth: the per-batch parquets in {batch_dir} were planned for a "
+            f"different dprst polygon set ({len(planned):,} planned vs {len(current):,} now: "
+            f"{len(current - planned):,} new, {len(planned - current):,} no longer dprst). "
+            f"That is what a classifier change followed by a `--from` cascade rebuild looks "
+            f"like. Re-run slurm_batch/submit_dprst_depth.sh to replan and recompute."
+        )
+
+
 def _compute_depths(
     dprst: gpd.GeoDataFrame, wesm_gdf: gpd.GeoDataFrame, ctx: BuildContext, step_cfg: dict, logger,
 ) -> pd.DataFrame:
@@ -249,15 +316,33 @@ def _compute_depths(
     parquet_files = sorted(batch_dir.glob("*.parquet")) if batch_dir.exists() else []
 
     if parquet_files:
+        _verify_batches_match_plan(batch_dir, parquet_files, dprst)
         logger.info(
-            "  found %d per-batch parquet(s) in %s — loading SLURM array output",
+            "  found %d per-batch parquet(s) in %s — loading SLURM array output "
+            "(verified against its plan)",
             len(parquet_files), batch_dir,
         )
         depth_df = pd.concat([pd.read_parquet(f) for f in parquet_files], ignore_index=True)
     else:
+        # Refuse CONUS-scale work BEFORE starting it (#221). This branch used to accept any
+        # size and say so only at INFO: gfv2r2's first run reached it with 392,672
+        # polygons and managed 9.4% in 11 h against an 18 h job limit, so the job could
+        # only time out and cancel the whole re-run chain behind it.
+        ceiling = int(step_cfg.get("max_inprocess_polygons", DEFAULT_MAX_INPROCESS_POLYGONS))
+        if ceiling > 0 and len(dprst) > ceiling:
+            raise RuntimeError(
+                f"dprst_depth: {len(dprst):,} polygons but no per-batch parquets in "
+                f"{batch_dir}, and the serial in-process fallback is capped at {ceiling:,} "
+                f"(`max_inprocess_polygons`). At this size it would run for days. Run the "
+                f"tiled stage first -- slurm_batch/submit_dprst_depth.sh -- which writes "
+                f"those parquets; submit_fabric_rerun.sh does this for you. Set "
+                f"`max_inprocess_polygons: 0` in this step's config only if you really "
+                f"want the long serial run."
+            )
         logger.info(
-            "  no per-batch parquet dir found (%s) — running compute in-process",
-            batch_dir,
+            "  no per-batch parquet dir found (%s) — running compute in-process "
+            "(%d polygons, ceiling %d)",
+            batch_dir, len(dprst), ceiling,
         )
         # Rim buffer (200 m) and flatness tol (0.01 m, used inside
         # compute.run_batch's is_hydroflattened call) are the validated spike
