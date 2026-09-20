@@ -8,15 +8,17 @@ per polygon. This module builds that tile -> polygons work-list (Task 3);
 the SLURM array batching (Task 9) and the per-tile compute (Task 4) consume
 its output.
 
-Pure index math only: no raster reads, no `/vsicurl` existence probes. Tile
-*existence* is a Task 4 read-time concern (an absent 1 m tile at the edge of
-a project's non-rectangular footprint simply yields no data for the handful
-of polygons uniquely assigned to it — see `topo.read_window`'s runtime
-1m -> 10m fallback); this module only resolves which tile keys COULD cover a
-polygon's window from geometry + the WESM footprint index, reusing
-`topo.py`'s own tile-naming helpers so a tile key doubles as the exact
-`/vsicurl/` path `topo.read_window` would read (Task 4 can `rasterio.open`
-it directly, no re-derivation).
+Tile *existence* and *extent* now come from the staged 3DEP inventory
+(`inventory.load_inventory`, issue #223), not from geometry-only WESM hull
+enumeration — a hull claims ground a project never flew (see
+`sources.py`'s module docstring for the measured 51.6%/67.8% fallout this
+caused). `sources.tag_and_assign` does the real tile-set assignment per
+polygon (candidates ranked by coverage/QL/date, primary = `source_tiles`);
+this module only groups the already-assigned `source_tiles` into batches
+(`tile_set_groups`) and bin-packs those groups for the SLURM array
+(`tile_batches`) — no raster reads or `/vsicurl` probes here either way.
+`_tile13_key` (the 10 m seamless-tile path builder) is kept because
+`sources.py` imports it to build the last-resort `TileSet`.
 
 See docs/superpowers/specs/2026-07-10-dprst-depth-phase0-spike-design.md for
 the compute-budget rationale this design responds to.
@@ -33,19 +35,13 @@ from pathlib import Path
 
 import geopandas as gpd
 import pandas as pd
-from rasterio.warp import transform_bounds, transform_geom
+from rasterio.warp import transform_geom
 
-from .topo import (
-    TILE13_HTTPS_TEMPLATE,
-    _1m_candidate_tiles,
-    _tile13_name,
-    _utm_zone_epsg,
-)
+from .topo import TILE13_HTTPS_TEMPLATE, _tile13_name
 
 __all__ = [
-    "group_by_tile",
+    "tile_set_groups",
     "tile_batches",
-    "component_tile_batches",
     "guard_oversized_windows",
     "polygon_window_cost",
     "MAX_1M_WINDOW_CELLS",
@@ -66,108 +62,27 @@ def _tile13_key(geom, src_crs) -> str:
     return TILE13_HTTPS_TEMPLATE.format(tile=_tile13_name(lon, lat))
 
 
-def _1m_tile_keys(
-    geom, project: str, bounds_buffered: tuple[float, float, float, float], src_crs
-) -> list[str]:
-    """Candidate 3DEP 1 m tile keys (full `/vsicurl/` read paths) for a rim-buffered bbox.
+def tile_set_groups(dprst: gpd.GeoDataFrame) -> dict[str, list]:
+    """Encoded primary tile set -> polygon index labels, from `dprst["source_tiles"]`.
 
-    Reuses `_utm_zone_epsg`/`_1m_candidate_tiles` (Task 1) to enumerate the
-    10 km UTM grid candidates a polygon's buffered window overlaps —
-    deliberately WITHOUT `topo._existing_paths`'s per-candidate probe (see
-    module docstring): existence is resolved at read time in Task 4, not
-    here. `bounds_buffered` is the already rim-buffered window (in
-    `src_crs`); `geom`'s centroid (unbuffered) picks the UTM zone, matching
-    `topo.read_window`/`topo._resolve_1m_paths`.
+    `dprst` must already carry `source_tiles` (`sources.tag_and_assign`'s
+    output) -- one encoded `TileSet` per polygon, chosen by rank among real
+    candidates. Each polygon is in EXACTLY ONE set, so no union-find is
+    needed: the transitive tile-key chaining `_tile_components` used to do
+    (now deleted) produced components spanning >4,000 tiles on the CONUS
+    plan, and because a component can never be split across SLURM array
+    tasks, two array tasks inherited ~16,000 and ~12,000 fallback polygons
+    each and ran over 24 h against a median task time of 34 minutes (issue
+    #223 part 2, measured on the gfv2r2 CONUS run). That chaining came from
+    hull-overlap false positives (67.8% of the slow-fallback polygons); real
+    tile sets don't produce it, because ranking always resolves to ONE
+    primary set per polygon, never a shared multi-tile membership across
+    unrelated polygons.
     """
-    centroid = {"type": "Point", "coordinates": (geom.centroid.x, geom.centroid.y)}
-    lon, lat = transform_geom(src_crs, "EPSG:4326", centroid)["coordinates"]
-    zone, utm_crs = _utm_zone_epsg(lon)
-    bounds_utm = transform_bounds(src_crs, utm_crs, *bounds_buffered, densify_pts=21)
-    return _1m_candidate_tiles(project, bounds_utm, zone)
-
-
-def group_by_tile(
-    dprst_gdf: gpd.GeoDataFrame,
-    wesm_gdf: gpd.GeoDataFrame,
-    rim_buffer_m: float = 200.0,
-) -> dict[str, list[int]]:
-    """Map each covering elevation tile key to the dprst polygon indices in its window.
-
-    `dprst_gdf` must already carry a `best_topo` column (`topo.resolution_class`
-    output):
-
-    - `"1m"` polygons resolve their covering 3DEP 1 m project tile(s) from
-      every WESM footprint whose geometry intersects the polygon's
-      rim-buffered bbox (`rim_buffer_m`, matching `topo.read_window`'s
-      window padding). A polygon straddling a tile or project boundary can
-      resolve to 2-4 tile keys — the same polygon index becomes a member of
-      every one of them, which is expected and fine (Task 4 dedups
-      per-polygon results across tiles).
-    - `"10m"` polygons resolve the single seamless 1/3 arc-second tile via
-      `_tile13_name` on the centroid.
-    - If a `"1m"`-tagged polygon's buffered window does not intersect any
-      WESM footprint (a `resolution_class` centroid-inside-footprint hit
-      near a footprint edge, with the rim buffer pushing the window back
-      out — or no usable WESM index at all), it falls back to its 10 m tile
-      key, mirroring `topo.read_window`'s own runtime 1m -> 10m fallback.
-      This guarantees every polygon lands in at least one group.
-
-    No raster reads and no `/vsicurl` existence probes (see module
-    docstring) — pure geometry against `dprst_gdf`/`wesm_gdf` in memory.
-
-    Returns `{tile_key: [dprst_gdf index labels]}`; `tile_key` is the exact
-    `/vsicurl/` path `topo.read_window` would open for that tile.
-    """
-    if "best_topo" not in dprst_gdf.columns:
-        raise KeyError(
-            "dprst_gdf must be tagged by topo.resolution_class() first (missing 'best_topo')"
-        )
-
-    groups: dict[str, set] = defaultdict(set)
-    if len(dprst_gdf) == 0:
-        return {}
-
-    src_crs = dprst_gdf.crs
-
-    is_1m = dprst_gdf["best_topo"] == "1m"
-    for idx, geom in dprst_gdf.loc[~is_1m, "geometry"].items():
-        groups[_tile13_key(geom, src_crs)].add(idx)
-
-    df_1m = dprst_gdf.loc[is_1m]
-    if len(df_1m) == 0:
-        return {k: sorted(v) for k, v in groups.items()}
-
-    has_wesm = wesm_gdf is not None and len(wesm_gdf) > 0 and "project" in wesm_gdf.columns
-    resolved: set = set()
-    if has_wesm:
-        wesm = wesm_gdf.to_crs(src_crs)[["project", "geometry"]]
-        windows = gpd.GeoDataFrame(
-            {"dprst_idx": df_1m.index},
-            geometry=df_1m.geometry.buffer(rim_buffer_m).envelope.values,
-            crs=src_crs,
-        )
-        hits = gpd.sjoin(windows, wesm, how="left", predicate="intersects")
-        for _, hit in hits.iterrows():
-            project = hit["project"]
-            if pd.isna(project):
-                continue
-            idx = hit["dprst_idx"]
-            geom = df_1m.geometry.loc[idx]
-            # hit.geometry here is the LEFT frame's (`windows`) rim-buffered
-            # envelope geometry, i.e. the polygon's search WINDOW -- not the
-            # WESM project footprint geometry (that was consumed by the sjoin
-            # predicate and dropped from the right side's output columns).
-            for key in _1m_tile_keys(geom, str(project), hit.geometry.bounds, src_crs):
-                groups[key].add(idx)
-            resolved.add(idx)
-
-    # 1m-tagged polygons that never resolved a covering WESM project fall
-    # back to their 10m tile so every polygon is placed in >=1 group.
-    for idx, geom in df_1m.geometry.items():
-        if idx not in resolved:
-            groups[_tile13_key(geom, src_crs)].add(idx)
-
-    return {k: sorted(v) for k, v in groups.items()}
+    groups: dict[str, list] = defaultdict(list)
+    for idx, s in dprst["source_tiles"].items():
+        groups[s].append(idx)
+    return dict(groups)
 
 
 def tile_batches(
@@ -208,104 +123,6 @@ def tile_batches(
         batches[i].append(tile_key)
         loads[i] += _load(members)
     return batches
-
-
-def _tile_components(groups: dict[str, list[int]]) -> list[list[str]]:
-    """Union-find: merge tile keys sharing >=1 polygon into connected components.
-
-    A polygon whose buffered window spans more than one tile is a member of
-    EVERY one of those tile keys' groups (`group_by_tile`'s documented
-    behavior). If plain `tile_batches` happened to bin-pack those tile keys
-    into DIFFERENT SLURM batches, `compute.run_batch` would independently
-    treat the polygon as single-tile within EACH batch's restricted view (it
-    only ever sees its own batch's tile keys) and compute it TWICE, each
-    time from only ONE of its covering tiles -- an incomplete, wrong DEM
-    window for a polygon straddling a tile boundary, not a harmless
-    duplicate (`compute.run_batch`'s own docstring flags cross-batch
-    dedup/splitting as explicitly out of its scope -- see Task 4's report).
-    Grouping tile keys into connected components before bin-packing
-    (`component_tile_batches`, below) makes this structurally impossible:
-    every polygon's full covering-tile set is always inside one component,
-    and `tile_batches` never splits a dict key (here, a whole component)
-    across batches.
-    """
-    parent: dict[str, str] = {tile_key: tile_key for tile_key in groups}
-
-    def find(x: str) -> str:
-        while parent[x] != x:
-            parent[x] = parent[parent[x]]
-            x = parent[x]
-        return x
-
-    def union(a: str, b: str) -> None:
-        ra, rb = find(a), find(b)
-        if ra != rb:
-            parent[ra] = rb
-
-    poly_to_tiles: dict[int, list[str]] = defaultdict(list)
-    for tile_key, idxs in groups.items():
-        for idx in idxs:
-            poly_to_tiles[idx].append(tile_key)
-    for tile_keys in poly_to_tiles.values():
-        for a, b in zip(tile_keys, tile_keys[1:]):
-            union(a, b)
-
-    components: dict[str, list[str]] = defaultdict(list)
-    for tile_key in groups:
-        components[find(tile_key)].append(tile_key)
-    return list(components.values())
-
-
-def component_tile_batches(
-    groups: dict[str, list[int]],
-    n_batches: int,
-    costs: dict[int, float] | None = None,
-) -> list[list[str]]:
-    """`tile_batches`, but a multi-tile polygon's covering tiles never split across batches.
-
-    Bin-packs connected COMPONENTS of tile keys (`_tile_components`), not
-    individual tile keys, by their combined load -- same greedy LPT
-    heuristic `tile_batches` itself uses, just applied one level up. `costs`
-    is forwarded to `tile_batches` unchanged (`{polygon_idx: cost}`, e.g.
-    `polygon_window_cost`'s output) so a component's load is its polygons'
-    summed estimated window-read cost rather than raw polygon count -- see
-    `tile_batches`' docstring for why count-based balancing is insufficient
-    (issue #173).
-
-    Measured on the real full-CONUS dprst polygon set (`--plan`, 2026-07-11,
-    the ~321k-polygon `gfv2`-scale set): componentisation is NOT a rare edge
-    case -- of ~84k tile keys, a large fraction end up in a component with >1
-    tile, and transitive chaining (tile A shares a polygon with B, B shares a
-    different polygon with C -> A/B/C all merge even though A and C share
-    nothing directly) produces a handful of large components (the single
-    largest CONUS-wide spans >4k tiles, almost certainly the prairie-pothole
-    belt's dense depression clusters); a fabric-clipped regional run has
-    correspondingly smaller components (oregon: 506 components, largest 83
-    tiles). LPT bin-packing still keeps batches reasonably balanced despite
-    this (max/mean load ratio -- see `--plan`'s logged output -- comparable to
-    plain `tile_batches`' own balance), but a single oversized component could
-    in principle dominate one batch; `--plan`'s summary line surfaces the
-    largest component size so this is visible before submitting, not silently
-    absorbed. This is what `--plan` (below) uses to build the real SLURM array
-    work-list; `tile_batches` itself is kept as the simpler, directly-tested
-    primitive (Task 3).
-    """
-    components = _tile_components(groups)
-    component_members: dict[str, list[int]] = {}
-    component_tiles: dict[str, list[str]] = {}
-    for i, comp in enumerate(components):
-        comp_id = f"_component_{i}"
-        members: set = set()
-        for tile_key in comp:
-            members.update(groups[tile_key])
-        component_members[comp_id] = sorted(members)
-        component_tiles[comp_id] = comp
-
-    component_batches = tile_batches(component_members, n_batches, costs=costs)
-    return [
-        [tile_key for comp_id in batch for tile_key in component_tiles[comp_id]]
-        for batch in component_batches
-    ]
 
 
 # --- Giant-window guard + cost model (issue #173 CONUS load-balance/OOM fix) -
@@ -372,13 +189,16 @@ def guard_oversized_windows(
     budget arithmetic behind the default threshold. `"10m"`-tagged polygons
     are left alone (their window is already 100x smaller at the same bbox).
 
-    Pure geometry -- no raster I/O. Must run AFTER `resolution_class` and
-    BEFORE `group_by_tile`/batching so every downstream consumer (the tile
-    grouping, the cost model below, and the actual `topo.read_window` call
-    in `compute.py`) agrees on the FINAL resolution. Called from both the
-    `--plan` SLURM-array hook (`_load_and_tag_for_plan`) and the in-process
-    builder's tag step (`depstor_builders/dprst_depth.py::_tag_polygons`) so
-    the two paths can't diverge on which polygons get downgraded.
+    Pure geometry -- no raster I/O. Must run AFTER `best_topo` is tagged
+    (`resolution_class`, or `sources.tag_best_topo`) and BEFORE tile
+    grouping/batching or real tile-set assignment, so every downstream
+    consumer (`tile_set_groups`, the cost model below, `sources.
+    assign_sources`, and the actual `topo.read_window`/`open_tile_set` call
+    at compute time) agrees on the FINAL resolution. Called from both the
+    `--plan` SLURM-array hook (via `sources.tag_and_assign`, issue #223) and
+    the in-process builder's tag step (`depstor_builders/dprst_depth.py::
+    _tag_polygons`) so the two paths can't diverge on which polygons get
+    downgraded.
 
     Returns a copy of `dprst_gdf` with `best_topo` adjusted and a new
     `oversized_1m` bool column (True for every polygon this guard retagged,
@@ -440,7 +260,7 @@ def polygon_window_cost(
     modeled as free next to a huge one (see `BASE_POLYGON_OVERHEAD_CELLS`).
 
     Pure geometry -- no raster I/O. Returns `{dprst_gdf index label: cost}`,
-    the shape `tile_batches`/`component_tile_batches`'s `costs` argument
+    the shape `tile_batches`'s `costs` argument
     expects (a tile's load is the sum of its member polygons' cost).
     """
     if "best_topo" not in dprst_gdf.columns:
@@ -457,23 +277,25 @@ def polygon_window_cost(
     return cost.to_dict()
 
 
-# --- SLURM array plan/dry-run hook (Task 9, issue #173) --------------------
+# --- SLURM array plan/dry-run hook (Task 9, issue #173; tile-set batching #223) --
 #
 # Everything below is only imported/executed when this module is run as a
-# script (`python -m gfv2_params.dprst_depth.tiling --plan ...`) -- the
-# extra config/vector-I/O imports are deliberately local to `_load_and_tag_
-# for_plan`/`_plan` so importing `group_by_tile`/`tile_batches` elsewhere
-# (e.g. `compute.py`, on every one of the ~150 CONUS array tasks) never pays
-# for them. `_load_and_tag_for_plan` reimplements
-# `depstor_builders/dprst_depth.py`'s `_load_dprst_polygons`/`_tag_polygons`
-# rather than importing them: `depstor_builders.dprst_depth` imports THIS
-# module (`from ..dprst_depth.tiling import group_by_tile`), so importing it
-# back here would be a circular import. See slurm_batch/submit_dprst_depth.sh
-# for the full array + finalize DAG this feeds and the <=5 hr sizing
-# arithmetic.
+# script (`python -m gfv2_params.dprst_depth.tiling --plan ...`) -- the extra
+# config/vector-I/O imports, including `sources.tag_and_assign`, are
+# deliberately local to `_load_and_tag_for_plan` so importing `tile_batches`/
+# `tile_set_groups` elsewhere (e.g. `compute.py`, on every one of the ~150
+# CONUS array tasks) never pays for them. The `tag_and_assign` import is ALSO
+# a circular-import guard, not just a startup-cost one: `sources.py` imports
+# `_tile13_key`/`guard_oversized_windows` from THIS module at its own top
+# level, so a top-level `from .sources import tag_and_assign` here would
+# import-cycle. `_load_and_tag_for_plan` calls `tag_and_assign` -- the SAME
+# entry point the in-process builder calls -- so the two paths cannot diverge
+# on which candidate tile sets a polygon gets. See
+# slurm_batch/submit_dprst_depth.sh for the full array + finalize DAG this
+# feeds and the <=5 hr sizing arithmetic.
 
 
-def _load_and_tag_for_plan(config: dict, logger) -> tuple[gpd.GeoDataFrame, gpd.GeoDataFrame]:
+def _load_and_tag_for_plan(config: dict, logger) -> gpd.GeoDataFrame:
     """Reconstruct + fabric-clip + tag the dprst polygon set for `--plan`.
 
     Reuses `topo.load_fabric_dprst_polygons` — the SAME shared helper the
@@ -487,12 +309,17 @@ def _load_and_tag_for_plan(config: dict, logger) -> tuple[gpd.GeoDataFrame, gpd.
     the SAME two tables `ctx.paths` tracks for the in-process builder, just
     reached by a different route (this hook runs standalone ahead of any
     other depstor_rasters step, so it has no `BuildContext`/orchestrator to
-    read `ctx.paths` from). Then applies the same WESM `best_topo` and EPA L3
-    `ecoregion` tags the builder's `_tag_polygons` does, reading directly off
-    the resolved config dict instead of a `BuildContext`. Every input is a
-    local, pre-staged vector file -- no network I/O at all in `--plan` (tile
-    *existence* is a Task 4 compute-time concern; `group_by_tile` never
-    probes it).
+    read `ctx.paths` from). Then hands off to `sources.tag_and_assign` --
+    the ONE entry point both the in-process builder and this plan hook call
+    (issue #223) -- to tag `best_topo`, guard oversized windows, and assign
+    each polygon its ranked real tile-set candidates (`source_tiles`/
+    `candidates`) from the staged 3DEP inventory + WESM project attrs.
+    Finally applies the same EPA L3 `ecoregion` tag the builder's
+    `_tag_polygons` does, reading directly off the resolved config dict
+    instead of a `BuildContext`. Every input is a local, pre-staged file --
+    no live S3/`/vsicurl` at all in `--plan` (tile existence and extent are
+    already resolved in the staged inventory; `tag_and_assign` never probes
+    a raster).
 
     Applies the SAME `min_onstream_comids`/`min_endorheic_comids` floors
     `wbody_connectivity` enforces at its consuming end
@@ -506,11 +333,12 @@ def _load_and_tag_for_plan(config: dict, logger) -> tuple[gpd.GeoDataFrame, gpd.
     from ..download.epa_ecoregions import ECO_ID_FIELD, ecoregion_of
     from ..endorheic import check_endorheic_floor, load_endorheic_comids, read_signal_counts
     from ..segment_wbody import check_onstream_floor, load_segment_comids
-    from .topo import load_fabric_dprst_polygons, resolution_class
+    from .sources import tag_and_assign
+    from .topo import load_fabric_dprst_polygons
 
     required = [
         "waterbody_gpkg", "waterbody_layer", "output_dir",
-        "wesm_index", "ecoregions_gpkg", "hru_gpkg", "hru_layer",
+        "dem_1m_inventory", "wesm_project_attrs", "ecoregions_gpkg", "hru_gpkg", "hru_layer",
     ]
     missing = [k for k in required if not config.get(k)]
     if missing:
@@ -519,7 +347,8 @@ def _load_and_tag_for_plan(config: dict, logger) -> tuple[gpd.GeoDataFrame, gpd.
         )
 
     waterbody_gpkg = Path(config["waterbody_gpkg"])
-    wesm_index = Path(config["wesm_index"])
+    dem_1m_inventory = Path(config["dem_1m_inventory"])
+    wesm_project_attrs = Path(config["wesm_project_attrs"])
     ecoregions_gpkg = Path(config["ecoregions_gpkg"])
     hru_gpkg = Path(config["hru_gpkg"])
     output_dir = Path(config["output_dir"])
@@ -527,7 +356,8 @@ def _load_and_tag_for_plan(config: dict, logger) -> tuple[gpd.GeoDataFrame, gpd.
     endorheic_table = output_dir / "endorheic_waterbody_comids.parquet"
     checks = [
         ("waterbody_gpkg", waterbody_gpkg),
-        ("wesm_index", wesm_index),
+        ("dem_1m_inventory", dem_1m_inventory),
+        ("wesm_project_attrs", wesm_project_attrs),
         ("ecoregions_gpkg", ecoregions_gpkg),
         ("hru_gpkg", hru_gpkg),
         ("segment_waterbody_comids.parquet", segment_table),
@@ -566,17 +396,13 @@ def _load_and_tag_for_plan(config: dict, logger) -> tuple[gpd.GeoDataFrame, gpd.
         logger=logger,
     )
 
-    wesm_gdf = gpd.read_file(wesm_index)
-    dprst = resolution_class(dprst, wesm_gdf)
-    n_1m = int((dprst["best_topo"] == "1m").sum())
-    logger.info("  best_topo: %d/%d polygons tagged 1m (rest 10m)", n_1m, len(dprst))
-    dprst = guard_oversized_windows(dprst, logger=logger)
+    dprst = tag_and_assign(dprst, dem_1m_inventory, wesm_project_attrs, logger)
 
     eco_gdf = gpd.read_file(ecoregions_gpkg)
     dprst["ecoregion"] = ecoregion_of(dprst, eco_gdf, id_field=ECO_ID_FIELD)
     dprst["ecoregion"] = dprst["ecoregion"].fillna("unassigned")
 
-    return dprst, wesm_gdf
+    return dprst
 
 
 def _clear_stale_batches(batches_dir: Path, logger) -> int:
@@ -607,16 +433,21 @@ def _plan(args) -> None:
 
       - `dprst_polygons_tagged.parquet` -- the full tagged dprst polygon set
         (`COMID`, `FTYPE`, `best_topo`, `ecoregion`, `oversized_1m`,
-        geometry -- `best_topo`/`oversized_1m` reflect
-        `guard_oversized_windows`'s post-guard FINAL resolution, not the raw
-        `resolution_class` tag) so every array task reads it once instead of
-        re-deriving it from waterbody_gpkg/WESM/ecoregions independently
-        (n_batches redundant reconstructions).
-      - `batch_manifest.json` -- `{"n_batches", "n_polygons", "n_tiles",
-        "tile_batches": [[tile_key, ...], ...]}`, one entry per SLURM array
-        index, from `component_tile_batches`, COST-weighted via
-        `polygon_window_cost` (never splits a multi-tile polygon's covering
-        tiles across batches -- see `_tile_components`).
+        `source_tiles`, `candidates`, geometry -- `best_topo`/`oversized_1m`
+        reflect `guard_oversized_windows`'s post-guard FINAL resolution, and
+        `source_tiles`/`candidates` are `sources.tag_and_assign`'s ranked
+        real tile-set assignment, not a raw tag) so every array task reads it
+        once instead of re-deriving it from waterbody_gpkg/inventory/WESM
+        attrs/ecoregions independently (n_batches redundant reconstructions).
+      - `batch_manifest.json` -- `{"n_batches", "n_polygons", "n_tile_sets",
+        "tile_sets": [[encoded_tile_set, ...], ...]}`, one entry per SLURM
+        array index, from `tile_batches` on `tile_set_groups`'s per-polygon
+        primary tile sets, COST-weighted via `polygon_window_cost`. Each
+        polygon is in exactly ONE tile set (its `source_tiles`), so no
+        union-find/component step is needed here any more -- see
+        `tile_set_groups`'s docstring for the measured fallout
+        (>4k-tile components, two array tasks running 24+ h) the old
+        hull-based `group_by_tile`/`component_tile_batches` produced.
 
     Pure geometry + local vector reads only -- no live S3/vsicurl (see
     `_load_and_tag_for_plan`).
@@ -644,30 +475,21 @@ def _plan(args) -> None:
     logger.info("  batches_dir   : %s", batches_dir)
     logger.info("  n_batches     : %d", args.n_batches)
 
-    dprst, wesm_gdf = _load_and_tag_for_plan(raw, logger)
-
-    groups = group_by_tile(dprst, wesm_gdf)
+    dprst = _load_and_tag_for_plan(raw, logger)
+    groups = tile_set_groups(dprst)
     costs = polygon_window_cost(dprst)
-    batches = component_tile_batches(groups, args.n_batches, costs=costs)
+    batches = tile_batches(groups, args.n_batches, costs=costs)
 
     n_polygons = len(dprst)
-    n_tiles = len(groups)
-    components = _tile_components(groups)
-    n_multi_tile_components = sum(1 for c in components if len(c) > 1)
-    max_component_size = max((len(c) for c in components), default=0)
+    n_tile_sets = len(groups)
 
     loads = [sum(len(groups[tk]) for tk in b) for b in batches]
     cost_loads = [sum(costs.get(idx, 0.0) for tk in b for idx in groups[tk]) for b in batches]
     nonempty = sum(1 for load in loads if load)
 
     logger.info(
-        "  %d dprst polygons -> %d covering tile(s) -> %d batch(es) (%d non-empty)",
-        n_polygons, n_tiles, len(batches), nonempty,
-    )
-    logger.info(
-        "  tile components: %d total, %d span >1 tile (multi-tile polygons kept "
-        "co-batched), largest component = %d tile(s)",
-        len(components), n_multi_tile_components, max_component_size,
+        "  %d dprst polygons -> %d tile set(s) -> %d batch(es) (%d non-empty)",
+        n_polygons, n_tile_sets, len(batches), nonempty,
     )
     if loads:
         logger.info(
@@ -682,24 +504,6 @@ def _plan(args) -> None:
             "+%d/polygon overhead): min=%.0f max=%.0f mean=%.1f (balance ratio max/mean=%.2f)",
             BASE_POLYGON_OVERHEAD_CELLS, min(cost_loads), max(cost_loads), mean_cost,
             (max(cost_loads) / mean_cost) if mean_cost else 0.0,
-        )
-        # A/B: what the SAME cost would look like under the OLD count-based
-        # packing (`costs=None`) — shows how much cost-weighting tightened the
-        # COST balance (bin-packing is cheap; the 6-min `group_by_tile` step
-        # above already ran once and is reused). Any residual COST imbalance
-        # under either packing is bounded below by the single largest
-        # un-splittable connected component (logged above) — cost-weighting
-        # cannot beat that structural atomicity, only balance around it.
-        count_batches = component_tile_batches(groups, args.n_batches, costs=None)
-        count_cost_loads = [
-            sum(costs.get(idx, 0.0) for tk in b for idx in groups[tk]) for b in count_batches
-        ]
-        mean_cc = sum(count_cost_loads) / len(count_cost_loads)
-        logger.info(
-            "  cost-weighting A/B: COST balance ratio max/mean=%.2f (cost-packed) vs %.2f "
-            "(count-packed) — lower is better",
-            (max(cost_loads) / mean_cost) if mean_cost else 0.0,
-            (max(count_cost_loads) / mean_cc) if mean_cc else 0.0,
         )
 
     # The 250-500 core-hour figure is the CONUS-scale estimate (~286k
@@ -722,7 +526,10 @@ def _plan(args) -> None:
     _clear_stale_batches(batches_dir, logger)
     plan_dir.mkdir(parents=True, exist_ok=True)
     tagged_path = plan_dir / "dprst_polygons_tagged.parquet"
-    tagged_cols = ["COMID", "FTYPE", "best_topo", "ecoregion", "oversized_1m", "geometry"]
+    tagged_cols = [
+        "COMID", "FTYPE", "best_topo", "ecoregion", "oversized_1m",
+        "source_tiles", "candidates", "geometry",
+    ]
     dprst[tagged_cols].to_parquet(tagged_path)
     logger.info("  wrote tagged polygon set -> %s", tagged_path)
 
@@ -730,12 +537,12 @@ def _plan(args) -> None:
     manifest = {
         "n_batches": args.n_batches,
         "n_polygons": n_polygons,
-        "n_tiles": n_tiles,
-        "tile_batches": batches,
+        "n_tile_sets": n_tile_sets,
+        "tile_sets": batches,
     }
     manifest_path.write_text(json.dumps(manifest))
     logger.info(
-        "  wrote batch manifest -> %s (%d tile keys total)",
+        "  wrote batch manifest -> %s (%d tile set(s) total)",
         manifest_path, sum(len(b) for b in batches),
     )
     logger.info("=== plan complete in %.1fs ===", time.time() - t0)
@@ -746,10 +553,10 @@ if __name__ == "__main__":
 
     _parser = argparse.ArgumentParser(
         description=(
-            "dprst_depth tile-batch work-list. Library use is group_by_tile/"
-            "tile_batches/component_tile_batches; --plan builds + persists the "
-            "CONUS SLURM array work-list (Task 9, issue #173) -- see "
-            "slurm_batch/submit_dprst_depth.sh."
+            "dprst_depth tile-batch work-list. Library use is tile_set_groups/"
+            "tile_batches; --plan builds + persists the CONUS SLURM array "
+            "work-list (Task 9, issue #173; real tile-set batching, issue "
+            "#223) -- see slurm_batch/submit_dprst_depth.sh."
         )
     )
     _parser.add_argument("--plan", action="store_true", help="Build the SLURM array work-list (currently the only mode).")
