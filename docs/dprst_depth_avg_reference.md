@@ -78,13 +78,15 @@ read. Until #223, a rim that overhung a tile's left or top edge came back
 ground under the DEM array — which corrupted the depression fill and biased
 the depth for polygons sitting near a tile boundary; a rim that fell entirely
 off the tile came back empty and crashed the computation outright rather than
-producing a bad number. Both are fixed at the read itself: an overhanging
-window is now read only as far as real data exists and padded with nodata
-beyond the tile edge, so the array lines up with the ground it claims to
-cover, and a window left with too little real data to take a derivative
-reports a depth of zero instead of crashing. Nothing changes for a polygon
-whose window sits entirely inside its tile — this fix cannot move a depth
-result away from a tile edge, only correct or null one that was wrong at one.
+producing a bad number. The read itself is fixed: an overhanging window is
+now read only as far as real data exists and padded with nodata beyond the
+tile edge, so the array lines up with the ground it claims to cover. A
+separate, narrower guard catches windows too small on either axis (fewer
+than two cells) to take a derivative from at all and reports a depth of zero
+rather than crashing there — a degenerate-geometry case, not the tile-edge
+padding case above. Nothing changes for a polygon whose window sits entirely
+inside its tile — this fix cannot move a depth result away from a tile edge,
+only correct or null one that was wrong at one.
 
 ---
 
