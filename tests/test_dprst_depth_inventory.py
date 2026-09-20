@@ -14,6 +14,7 @@ PAGE2 = """<?xml version="1.0" encoding="UTF-8"?><ListBucketResult>
 <Contents><Key>StagedProducts/Elevation/1m/Projects/P1/TIFF/USGS_1M_16_x27y511_P1.tif</Key></Contents>
 <IsTruncated>false</IsTruncated></ListBucketResult>"""
 PREFIXES = """<?xml version="1.0" encoding="UTF-8"?><ListBucketResult>
+<Prefix>StagedProducts/Elevation/1m/Projects/</Prefix>
 <CommonPrefixes><Prefix>StagedProducts/Elevation/1m/Projects/P1/</Prefix></CommonPrefixes>
 <CommonPrefixes><Prefix>StagedProducts/Elevation/1m/Projects/P2_B22/</Prefix></CommonPrefixes>
 <IsTruncated>false</IsTruncated></ListBucketResult>"""
@@ -82,6 +83,16 @@ def test_build_inventory_counts_failures_and_raises_above_threshold():
                              logger=logging.getLogger("t"), n_threads=4, max_fail_frac=0.2)
     assert len(df) == 9 and list(df.columns) == inv.INVENTORY_COLUMNS
     assert df["key"].is_unique and df["key"].is_monotonic_increasing  # deterministic order
+
+
+def test_build_inventory_raises_on_zero_keys_with_nonempty_projects():
+    # A systemic listing bug (renamed TIFF/ subpath, changed directory layout,
+    # anything that returns [] rather than raising) must not fall through to a
+    # well-formed, silently EMPTY DataFrame -- see CLAUDE.md on the endorheic
+    # table / min_onstream_comids floor for why an empty result must raise.
+    with pytest.raises(RuntimeError, match="0 tile keys listed across 3 project"):
+        inv.build_inventory(["P1", "P2", "P3"], lister=lambda p: [],
+                            header_reader=lambda k: {}, logger=logging.getLogger("t"))
 
 
 @pytest.mark.parametrize("value,rank", [("QL 0", 0), ("QL 1", 1), ("QL1", 1), ("QL 2", 2),

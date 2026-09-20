@@ -91,6 +91,18 @@ def build_inventory(projects, *, n_threads: int = 32, lister=list_project_tiles,
     with ThreadPoolExecutor(n_threads) as ex:
         keys = [k for ks in ex.map(lister, projects) for k in ks]
     logger.info("  listed %d tile(s) across %d project(s)", len(keys), len(projects))
+    if not keys and projects:
+        # `if keys and ...` below short-circuits to False on an empty list, so a
+        # systemic listing bug (renamed TIFF/ subpath, changed layout -- anything
+        # that returns [] rather than raising) would otherwise fall through to a
+        # well-formed, EMPTY DataFrame and a silent 0-row inventory written to the
+        # shared data root. Mirrors the `min_onstream_comids`/endorheic-floor
+        # convention in CLAUDE.md: an empty result must raise, never masquerade as
+        # success just because it type-checks.
+        raise RuntimeError(
+            f"0 tile keys listed across {len(projects)} project(s) -- refusing to "
+            "stage an empty inventory"
+        )
 
     def _one(key):
         try:
@@ -109,7 +121,10 @@ def build_inventory(projects, *, n_threads: int = 32, lister=list_project_tiles,
             f"(> {max_fail_frac:.1%}); refusing to stage a partial inventory"
         )
     df = pd.DataFrame([r for r, _ in results if r], columns=INVENTORY_COLUMNS)
-    return df.sort_values("key").reset_index(drop=True)
+    # Defensive: uniqueness should already follow from correct pagination, but
+    # don't let a future continuation-token regression silently double-count a
+    # tile -- de-dup before sorting rather than trusting `list_s3` forever.
+    return df.drop_duplicates(subset="key").sort_values("key").reset_index(drop=True)
 
 
 def load_inventory(path) -> gpd.GeoDataFrame:

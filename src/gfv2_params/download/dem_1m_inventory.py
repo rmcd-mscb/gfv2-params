@@ -59,9 +59,7 @@ def stage(data_root: Path, *, n_threads: int, force: bool, logger) -> tuple[Path
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(
-        description="Stage the real 3DEP 1m tile inventory + WESM project attributes."
-    )
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--threads", type=int, default=32)
     parser.add_argument("--force", action="store_true")
     args = parser.parse_args()
