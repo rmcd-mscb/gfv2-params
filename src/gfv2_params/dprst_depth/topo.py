@@ -164,6 +164,10 @@ def resolution_class(
 ) -> gpd.GeoDataFrame:
     """Tag each dprst polygon with its best available topo source.
 
+    Phase-0 coverage AUDIT only -- it tests WESM convex hulls, which invent
+    coverage (#223). Production tagging is sources.tag_best_topo against the
+    real tile inventory.
+
     "1m" if the polygon centroid lies inside any WESM workunit footprint,
     else "10m" (seamless 1/3 arc-second floor). Centroid test keeps it a
     single fast spatial join at CONUS scale.

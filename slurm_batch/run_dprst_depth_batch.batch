@@ -6,22 +6,31 @@
 #SBATCH --error=logs/job_%A_%a.err
 #SBATCH --time=12:00:00
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=2
+#SBATCH --cpus-per-task=8
 #SBATCH --mem=64G
 #
-# Stage 2 of the dprst_depth pipeline (issue #173 Task 9): ONE array task
-# computes dprst_depth for ONE tile-batch (Task 3's work-list; fan-out unit
-# is the elevation TILE, not the polygon -- see submit_dprst_depth.sh's
-# header for the full <=5 hr sizing arithmetic). Reads the plan step's
-# persisted tagged polygon set + batch manifest (scripts/run_dprst_depth_batch.py)
-# -- no S3/WESM/waterbody re-derivation per task -- opens each of this
-# batch's tiles ONCE, and writes one per-batch parquet (Task 4's
-# compute.run_batch). --mem=64G: every task holds the FULL CONUS dprst
-# polygon set in memory (compute.run_batch's own internal group_by_tile
-# recompute needs it) plus one open tile VRT window at a time -- a vector
-# GeoDataFrame + a single windowed raster read, not CONUS-grid-scale
-# (contrast the 384G full-grid depstor builders). --time=12:00:00 (the pothole-belt mega-component batch runs >4h; a few long-pole batches need the headroom — the guard fixed OOM but not the intrinsic long-pole) leaves
-# margin under the 5 hr target even at 2x the per-batch estimate.
+# Stage 2 of the dprst_depth pipeline (issue #173 Task 9; tile-set batching +
+# threading, issue #223 part 2): ONE array task computes dprst_depth for ONE
+# batch of real 3DEP tile SETS (Task 3's work-list; fan-out unit is the tile
+# SET, not a raw elevation tile and not the polygon -- see
+# submit_dprst_depth.sh's header for the full <=5 hr sizing arithmetic).
+# Reads the plan step's persisted tagged polygon set + batch manifest
+# (scripts/run_dprst_depth_batch.py) -- no S3/WESM/waterbody re-derivation
+# per task -- opens each of this batch's tile sets ONCE, and writes one
+# per-batch parquet (Task 4's compute.run_batch), running --cpus-per-task
+# sets CONCURRENTLY on threads (the work is remote-read bound, not CPU
+# bound: 73% measured in vrt.read on gfv2r2 -- see compute.py's module
+# docstring for the 51.6%-of-polygons-on-the-slow-path regression this
+# fixes). --cpus-per-task=8 (was 2): 8 concurrent windows fit comfortably
+# under --mem=64G because `guard_oversized_windows` caps a 1 m window at
+# 200M cells (~4.8 GB working set) and nearly all windows are orders of
+# magnitude smaller -- every task still holds the FULL CONUS dprst polygon
+# set in memory (a vector GeoDataFrame, not CONUS-grid-scale; contrast the
+# 384G full-grid depstor builders) plus up to 8 open tile-set VRT windows at
+# once. --time=12:00:00 (the pothole-belt mega-component batch runs >4h; a
+# few long-pole batches need the headroom — the guard fixed OOM but not the
+# intrinsic long-pole) leaves margin under the 5 hr target even at 2x the
+# per-batch estimate.
 #
 # Submitted by slurm_batch/submit_dprst_depth.sh (afterok the plan job,
 # stage 1). Array size ($N_TILE_BATCHES) MUST match the plan step's
