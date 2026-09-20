@@ -1,0 +1,16 @@
+#!/bin/bash
+#SBATCH -p cpu
+#SBATCH -A impd
+#SBATCH --job-name=stage_dem_1m_inventory
+#SBATCH --output=logs/job_%j.out
+#SBATCH --error=logs/job_%j.err
+#SBATCH --time=03:00:00
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=8
+#SBATCH --mem=16G
+# Shared input (issue #223): real 3DEP 1 m tile extents + WESM project QL/dates.
+# Re-staging obliges a dprst_depth re-run of EVERY fabric. Pass FORCE=1 to refresh.
+set -euo pipefail
+cd "$SLURM_SUBMIT_DIR" || exit 1
+pixi run --as-is python -m gfv2_params.download.dem_1m_inventory \
+    --threads 32 ${FORCE:+--force}
