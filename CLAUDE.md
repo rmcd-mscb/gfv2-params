@@ -334,6 +334,16 @@ These are hard-won; violating them silently corrupts outputs.
   nodata cells) but nothing downstream FILTERS on it yet — the donor filter
   that would exclude low-coverage polygons from the regional calibration is
   not built.
+- **`sources.assign_sources`'s per-polygon loop is slow enough to size SLURM
+  jobs around.** Measured against the real staged inventory: ~9.97-15 ms per
+  1m-tagged polygon (`rank_candidates`'s per-polygon `gpd.GeoDataFrame(...)`
+  construction is 55% of it), 0.43 ms per 10m polygon — 33-65 minutes at CONUS
+  scale (286k-393k dprst polygons), paid once by the tiled pipeline's plan job
+  (`slurm_batch/plan_dprst_depth_batches.batch`) and again by the build stage's
+  re-tagging (`submit_dprst_depth.sh`'s stage-3 override) — both are sized to
+  `--time=04:00:00` for this. The optimisation itself (hoisting the
+  GeoDataFrame construction, or letting the builder tag without assigning) is
+  a deliberate follow-up, not a fix folded into a time-budget correction.
 - **CONUS-scale memory: stream/window, never hold a full-grid array.** The CONUS
   template is 153830×109901 ≈ 16.9 B cells — ~17 GB as uint8, ~68 GB as int32,
   ~135 GB as float64. Oregon (~0.56 B cells) hides this; CONUS OOMs any depstor

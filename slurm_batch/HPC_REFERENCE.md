@@ -736,10 +736,13 @@ existing data_root, or a hard `ctx.require` failure on a from-scratch one.
    target only holds if `N_TILE_BATCHES` tasks actually run concurrently
    (see sizing below).
 3. **Build** (reuses `build_depstor_rasters.batch --step dprst_depth`,
-   afterok the array, `--mem=64G --time=02:00:00` override — dprst_depth's
+   afterok the array, `--mem=64G --time=04:00:00` override — dprst_depth's
    own compute is vector-scale + a streamed row-strip burn, not a
    full-CONUS-grid materialization, so it doesn't need the 384G/18h whole-DAG
-   default) — finds the populated `dprst_depth_batches/*.parquet`, verifies
+   default; the 4 h (was 2 h) accounts for this stage re-tagging the whole
+   polygon set through `sources.tag_and_assign` a second time — measured
+   ~10 ms/1m-tagged polygon, 33-65 min at CONUS scale, see the plan stage's
+   sizing note below) — finds the populated `dprst_depth_batches/*.parquet`, verifies
    them against `_plan/` (exactly `batch_0000..N-1`, planned polygon set ==
    current one — else it raises), fills
    every flat/degenerate polygon (`fit_ecoregion_models`/`fill_flat`), burns
@@ -765,9 +768,18 @@ slurm_batch/submit_dprst_depth.sh "$BATCHES" gfv2 configs/base_config.yml 150
 arg, default 150) trades array width for wall-clock:
 `wall-clock ≈ (250-500 core-hours) / N_TILE_BATCHES` — 150 batches ≈
 1.7-3.3 hr, comfortable margin under 5 hr even with imperfect load balance.
-Dry-run the exact per-batch balance and projected wall-clock for a candidate
-`N_TILE_BATCHES` before submitting (pure geometry — no live S3; safe on the
-head node for a small fabric, but see the note below about `oregon`):
+This is stage 2's (the array's) wall-clock — it does NOT include stage 1
+(the plan job) itself: `sources.tag_and_assign`'s per-polygon
+`assign_sources`/`rank_candidates` loop (called once by the plan job, and
+again by stage 3's builder) measures ~9.97-15 ms per 1m-tagged polygon
+(0.43 ms per 10m polygon), extrapolating to 33-65 minutes at CONUS scale on
+top of the plan's other vector/parquet work — hence `plan_dprst_depth_
+batches.batch`'s `--time=04:00:00` and stage 3's matching override (see the
+DAG description above). Dry-run the exact per-batch balance and projected
+array wall-clock for a candidate `N_TILE_BATCHES` before submitting (pure
+geometry — no live S3; safe on the head node for a small fabric, but see the
+note below about `oregon`; CONUS-scale should go through `sbatch` given the
+assign_sources cost above):
 
 ```bash
 pixi run python -m gfv2_params.dprst_depth.tiling --plan \

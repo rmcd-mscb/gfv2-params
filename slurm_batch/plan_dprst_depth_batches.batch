@@ -4,7 +4,7 @@
 #SBATCH --job-name=dprst_depth_plan
 #SBATCH --output=logs/job_%j.out
 #SBATCH --error=logs/job_%j.err
-#SBATCH --time=01:00:00
+#SBATCH --time=04:00:00
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=2
 #SBATCH --mem=32G
@@ -32,6 +32,20 @@
 # full CONUS waterbody/tile-inventory/ecoregions vector+parquet loads
 # comfortably (these are vector GeoDataFrames / tables, not raster grids --
 # contrast the 384G full-grid depstor builders).
+#
+# --time=04:00:00 (was 01:00:00): `sources.assign_sources` (called from
+# tag_and_assign, which this stage calls once) is a per-polygon Python loop,
+# and `rank_candidates` -- the per-polygon `gpd.GeoDataFrame(...)` construction
+# inside it -- is 55% of its cost. Measured directly against the real staged
+# inventory: 9.97 ms per 1m-tagged polygon (14-15 ms on a second sample), 0.43
+# ms per 10m polygon. Extrapolated to a CONUS fabric (286k-393k dprst
+# polygons): 33-65 minutes for this one call alone, on top of loading the
+# CONUS waterbody layer, the HRU clip sjoin, the ecoregion sjoin, and writing
+# a 392k-row parquet with a list column (`candidates`). At 1 h the plan job
+# would be killed mid-run, and because the stage 2 array is `afterok` this
+# job, the whole 4-stage DAG dies without computing a single depth. The
+# assign_sources optimisation (hoisting the per-polygon GeoDataFrame
+# construction) is deliberately deferred to a follow-up, not this fix.
 #
 # Submitted first by slurm_batch/submit_dprst_depth.sh; the array job
 # (stage 2) depends afterok on this one.
