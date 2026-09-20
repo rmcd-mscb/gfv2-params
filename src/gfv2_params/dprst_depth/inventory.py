@@ -11,9 +11,21 @@ EPSG:5070 so planning is pure geometry.
 WESM is still the source of project QUALITY and DATE, read geometry-free
 (the geometry is what made the old staging OOM). See `project_attrs` for
 how S3 directory names are joined to WESM rows.
+
+Fix round 2 (real staging run, job 4521387): the first stage wrote 88,403
+tiles across only 357 of the 967 listed project directories. The other 610
+publish under an OLDER naming convention with no UTM zone in the filename
+(`USGS_one_meter_x<X>y<Y>_<project>.tif`, vs. the modern
+`USGS_1M_<zone>_x<X>y<Y>_<project>.tif`), which the original `TILE_NAME_RE`
+alone filtered out entirely -- exactly why the old hull-based code never
+read these projects either. `LEGACY_TILE_NAME_RE` picks them up; since the
+legacy name carries no zone, `zone` is now always derived from the tile's
+own header CRS (`zone_from_crs`), authoritative either way and something
+`build_inventory` already reads regardless of naming convention.
 """
 from __future__ import annotations
 
+import logging
 import re
 import urllib.parse
 import urllib.request
@@ -27,13 +39,51 @@ from shapely.geometry import box
 
 from .topo import GDAL_HTTP_ENV
 
+logger = logging.getLogger(__name__)
+
 S3_BASE = "https://prd-tnm.s3.amazonaws.com"
 PROJECTS_PREFIX = "StagedProducts/Elevation/1m/Projects/"
 TILE_NAME_RE = re.compile(r"USGS_1M_(?P<zone>\d{2})_x(?P<x>\d+)y(?P<y>\d+)_(?P<project>.+)\.tif$")
+# Older 3DEP publishing convention, no UTM zone in the name (see module
+# docstring, fix round 2). 610 of 967 project directories measured
+# 2026-09-20 publish ONLY under this convention -- not a rare edge case.
+LEGACY_TILE_NAME_RE = re.compile(r"USGS_one_meter_x(?P<x>\d+)y(?P<y>\d+)_(?P<project>.+)\.tif$")
 INVENTORY_COLUMNS = ["project", "key", "zone", "crs", "width", "height", "minx", "miny", "maxx", "maxy"]
 _KEY_RE = re.compile(r"<Key>([^<]*)</Key>")
 _PREFIX_RE = re.compile(r"<Prefix>([^<]*)</Prefix>")
 _TOKEN_RE = re.compile(r"<NextContinuationToken>([^<]*)</NextContinuationToken>")
+# NAD83 UTM north is EPSG 269xx (zone = code - 26900); WGS84 UTM north/south
+# is 326xx/327xx. Tried in this order in `zone_from_crs`.
+_UTM_ZONE_EPSG_OFFSETS = (26900, 32600, 32700)
+
+
+def _match_tile_name(key: str) -> re.Match | None:
+    """Match `key` against whichever tile-name convention it uses (modern
+    first, then legacy); `None` if it matches neither (e.g. a stray
+    `readme.txt` in a `TIFF/` prefix)."""
+    return TILE_NAME_RE.search(key) or LEGACY_TILE_NAME_RE.search(key)
+
+
+def zone_from_crs(crs: str) -> int:
+    """Derive the UTM zone number from a tile's own CRS.
+
+    Authoritative regardless of naming convention: the legacy
+    `USGS_one_meter_*` filename carries no zone at all, and `build_inventory`
+    already reads every tile's header, so there's no reason to trust a
+    filename's zone digits over the CRS the tile is actually stored in. Raises
+    on any CRS this repo doesn't recognise as a UTM zone rather than guessing
+    -- `build_inventory` counts that like any other header-read failure
+    against `max_fail_frac`, so a systemic CRS surprise fails loud instead of
+    silently writing a fabricated `zone`.
+    """
+    m = re.fullmatch(r"EPSG:(\d+)", crs)
+    if m:
+        code = int(m.group(1))
+        for offset in _UTM_ZONE_EPSG_OFFSETS:
+            zone = code - offset
+            if 1 <= zone <= 60:
+                return zone
+    raise ValueError(f"tile CRS {crs!r} is not a recognised UTM-zone EPSG code")
 
 
 def http_get(url: str, timeout: float = 60.0) -> str:
@@ -69,7 +119,7 @@ def list_projects(fetch=http_get) -> list[str]:
 
 def list_project_tiles(project: str, fetch=http_get) -> list[str]:
     keys, _ = list_s3(f"{PROJECTS_PREFIX}{project}/TIFF/", fetch=fetch)
-    return sorted(f"/vsicurl/{S3_BASE}/{k}" for k in keys if TILE_NAME_RE.search(k))
+    return sorted(f"/vsicurl/{S3_BASE}/{k}" for k in keys if _match_tile_name(k))
 
 
 def read_tile_header(key: str) -> dict:
@@ -79,9 +129,20 @@ def read_tile_header(key: str) -> dict:
 
 
 def tile_record(key: str, header: dict) -> dict:
-    m = TILE_NAME_RE.search(key)
+    m = _match_tile_name(key)
+    zone = zone_from_crs(header["crs"])
+    # Cross-check only: the modern name's own zone digits, when present, are
+    # never used as `zone` (see `zone_from_crs`) -- a mismatch means the
+    # NAD83/WGS84 zone-derivation above is wrong somewhere and is worth a
+    # loud WARNING, not a silent pick of one value over the other.
+    name_zone = m.groupdict().get("zone")
+    if name_zone is not None and int(name_zone) != zone:
+        logger.warning(
+            "tile name zone %s disagrees with header CRS zone %d for %s (using the header)",
+            name_zone, zone, key,
+        )
     minx, miny, maxx, maxy = transform_bounds(header["crs"], "EPSG:5070", *header["bounds"], densify_pts=21)
-    return {"project": m.group("project"), "key": key, "zone": int(m.group("zone")),
+    return {"project": m.group("project"), "key": key, "zone": zone,
             "crs": header["crs"], "width": int(header["width"]), "height": int(header["height"]),
             "minx": minx, "miny": miny, "maxx": maxx, "maxy": maxy}
 
@@ -128,6 +189,13 @@ def build_inventory(projects, *, n_threads: int = 32, lister=list_project_tiles,
 
 
 def load_inventory(path) -> gpd.GeoDataFrame:
+    """Load the staged inventory parquet as a `box`-geometry GeoDataFrame in EPSG:5070.
+
+    Read the `project` column as `frame["project"]`, never `frame.project` --
+    `GeoDataFrame.project` is a bound method (CRS projection), so attribute
+    access silently returns that method instead of raising, with no warning
+    that anything went wrong.
+    """
     df = pd.read_parquet(path)
     geom = [box(a, b, c, d) for a, b, c, d in df[["minx", "miny", "maxx", "maxy"]].itertuples(index=False)]
     return gpd.GeoDataFrame(df, geometry=geom, crs="EPSG:5070")

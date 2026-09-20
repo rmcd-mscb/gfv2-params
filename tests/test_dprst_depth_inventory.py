@@ -45,6 +45,23 @@ def test_list_projects_returns_directory_names():
     assert inv.list_projects(fetch=lambda url: PREFIXES) == ["P1", "P2_B22"]
 
 
+LEGACY_PAGE = """<?xml version="1.0" encoding="UTF-8"?><ListBucketResult>
+<Contents><Key>StagedProducts/Elevation/1m/Projects/OR_DOGAMI_2017/TIFF/USGS_one_meter_x25y494_OR_DOGAMI_2017.tif</Key></Contents>
+<Contents><Key>StagedProducts/Elevation/1m/Projects/OR_DOGAMI_2017/TIFF/readme.txt</Key></Contents>
+<IsTruncated>false</IsTruncated></ListBucketResult>"""
+
+
+def test_list_project_tiles_keeps_legacy_named_tiles_too():
+    # Fix round 2 (job 4521387): 610 of 967 project directories publish ONLY
+    # under this older, zone-less naming convention -- TILE_NAME_RE alone
+    # silently dropped every one of them.
+    keys = inv.list_project_tiles("OR_DOGAMI_2017", fetch=lambda url: LEGACY_PAGE)
+    assert keys == [
+        "/vsicurl/https://prd-tnm.s3.amazonaws.com/StagedProducts/Elevation/1m/"
+        "Projects/OR_DOGAMI_2017/TIFF/USGS_one_meter_x25y494_OR_DOGAMI_2017.tif",
+    ]
+
+
 def test_tile_record_projects_real_bounds_to_5070():
     key = "/vsicurl/https://x/Projects/P1/TIFF/USGS_1M_16_x27y511_P1.tif"
     # the real, CROPPED header measured 2026-09-19 for WI_12County_B22 x27y511
@@ -66,6 +83,34 @@ def test_tile_record_projects_real_bounds_to_5070():
     assert 4_200 < rec["maxy"] - rec["miny"] < 5_500
 
 
+def test_tile_record_takes_zone_from_header_for_a_legacy_named_tile():
+    # The legacy USGS_one_meter_* name has NO zone digits at all -- zone must
+    # come entirely from the header CRS (fix round 2).
+    key = "/vsicurl/https://x/Projects/OR_DOGAMI_2017/TIFF/USGS_one_meter_x25y494_OR_DOGAMI_2017.tif"
+    header = {"crs": "EPSG:26910", "width": 10012, "height": 10012,
+              "bounds": (249994.0, 4939994.0, 260006.0, 4950006.0)}
+    rec = inv.tile_record(key, header)
+    assert rec["project"] == "OR_DOGAMI_2017"
+    assert rec["zone"] == 10  # EPSG:26910 - 26900
+
+
+def test_tile_record_prefers_header_zone_and_warns_on_filename_mismatch(caplog):
+    # Modern name says zone 15; header CRS says zone 16 -- header must win,
+    # and the disagreement must be a loud WARNING (not a silent pick).
+    key = "/vsicurl/https://x/Projects/P1/TIFF/USGS_1M_15_x50y505_P1.tif"
+    header = {"crs": "EPSG:26916", "width": 10012, "height": 10012,
+              "bounds": (499994.0, 4990006.0, 510006.0, 5000018.0)}
+    with caplog.at_level(logging.WARNING, logger="gfv2_params.dprst_depth.inventory"):
+        rec = inv.tile_record(key, header)
+    assert rec["zone"] == 16
+    assert "disagrees" in caplog.text and "15" in caplog.text and "16" in caplog.text
+
+
+def test_zone_from_crs_raises_on_a_non_utm_crs():
+    with pytest.raises(ValueError, match="EPSG:4326"):
+        inv.zone_from_crs("EPSG:4326")
+
+
 def test_build_inventory_counts_failures_and_raises_above_threshold():
     keys = [f"/vsicurl/https://x/Projects/P1/TIFF/USGS_1M_15_x{i}y500_P1.tif" for i in range(10)]
     ok = {"crs": "EPSG:26915", "width": 10012, "height": 10012,
@@ -83,6 +128,17 @@ def test_build_inventory_counts_failures_and_raises_above_threshold():
                              logger=logging.getLogger("t"), n_threads=4, max_fail_frac=0.2)
     assert len(df) == 9 and list(df.columns) == inv.INVENTORY_COLUMNS
     assert df["key"].is_unique and df["key"].is_monotonic_increasing  # deterministic order
+
+
+def test_build_inventory_counts_an_unrecognised_crs_as_a_header_failure():
+    # zone_from_crs raises rather than guessing; build_inventory must count
+    # that through the SAME fail-rate gate as any other header-read error,
+    # not let it slip past uncounted.
+    keys = ["/vsicurl/https://x/Projects/P1/TIFF/USGS_1M_15_x1y500_P1.tif"]
+    bad = {"crs": "EPSG:4326", "width": 10, "height": 10, "bounds": (0, 0, 1, 1)}
+    with pytest.raises(RuntimeError, match="1 of 1"):
+        inv.build_inventory(["P1"], lister=lambda p: keys, header_reader=lambda k: bad,
+                            logger=logging.getLogger("t"), n_threads=1, max_fail_frac=0.0)
 
 
 def test_build_inventory_raises_on_zero_keys_with_nonempty_projects():
