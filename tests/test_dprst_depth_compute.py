@@ -70,6 +70,32 @@ def test_polygon_depth_from_dem_all_nodata_interior_is_flat_with_nan_depth():
     assert np.isfinite(r["hollister_max_m"])
 
 
+def test_read_tile_window_rim_buffer_bounds(monkeypatch):
+    """(#223 review M-4) `_read_tile_window`'s four +=/-= rim-buffer
+    statements were re-transcribed into one inline bounds tuple -- a sign
+    flip would be silent (a 400 m-shifted window still returns plausible
+    depths), and every other test in this file monkeypatches
+    `_read_tile_window` itself, never exercising this arithmetic. Monkeypatch
+    `read_padded` (its only caller) and check the exact bounds tuple it
+    receives against `geom.bounds +/- rim_buffer_m`, in (minx, miny, maxx,
+    maxy) order."""
+    captured = {}
+
+    def _fake_read_padded(vrt, bounds, sentinel=-9999.0):
+        captured["vrt"] = vrt
+        captured["bounds"] = bounds
+        return np.zeros((2, 2), np.float32), Affine.identity()
+
+    monkeypatch.setattr(compute_mod, "read_padded", _fake_read_padded)
+    sentinel_vrt = object()
+    geom = box(1000.0, 2000.0, 1100.0, 2100.0)
+    compute_mod._read_tile_window(sentinel_vrt, geom)
+    assert captured["vrt"] is sentinel_vrt
+    assert captured["bounds"] == (
+        1000.0 - 200.0, 2000.0 - 200.0, 1100.0 + 200.0, 2100.0 + 200.0,
+    )
+
+
 # ---------------------------------------------------------------------------
 # PR#177 review gap: run_batch's multi-tile-polygon dedup + per-tile/
 # per-polygon failure isolation (#173). All tests below monkeypatch the I/O

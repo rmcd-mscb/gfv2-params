@@ -19,6 +19,7 @@ from osgeo import gdal
 from rasterio.enums import Resampling
 from rasterio.errors import RasterioIOError, WindowError
 from rasterio.features import geometry_mask
+from rasterio.transform import Affine
 from rasterio.vrt import WarpedVRT
 from rasterio.warp import calculate_default_transform, transform_bounds, transform_geom
 from rasterio.windows import Window, from_bounds
@@ -226,7 +227,9 @@ GDAL_HTTP_ENV = {
 }
 
 
-def read_padded(src, bounds, sentinel: float = -9999.0):
+def read_padded(
+    src, bounds: tuple[float, float, float, float], sentinel: float = -9999.0
+) -> tuple[np.ndarray, Affine]:
     """Windowed read of `bounds` whose array ALWAYS matches the returned transform.
 
     rasterio silently clips a non-boundless read to the dataset, while
@@ -238,6 +241,12 @@ def read_padded(src, bounds, sentinel: float = -9999.0):
 
     A window wholly inside the dataset takes the original float-window path
     unchanged, so in-bounds reads stay bit-identical to the pre-#223 code.
+    The padded path instead SNAPS the window to the pixel grid
+    (`round_offsets`/`round_lengths`) before reading, so its returned
+    transform can sit up to one cell from the fractional bounds actually
+    requested — the two branches use different registration conventions.
+    No consumer compares the returned transform against the request, so
+    this is a documentation note, not a bug.
     """
     window = from_bounds(*bounds, transform=src.transform)
     inside = (

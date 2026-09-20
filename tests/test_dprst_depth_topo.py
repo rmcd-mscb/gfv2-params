@@ -320,8 +320,9 @@ def _ramp_dataset(memfile, width=40, height=30, nodata=-999999.0):
     # FRACTIONAL bounds, overhangs LEFT: window = Window(col_off=-10.7,
     # row_off=4.4, width=21.4, height=15.4) -- a non-integer offset on the
     # overhanging edge AND a non-integer length. All four cases above land
-    # exactly on integer pixel boundaries, so `round_offsets()` (floor) and
-    # `round_lengths()` (round) are no-ops for them and never actually
+    # exactly on integer pixel boundaries, so `round_offsets()`
+    # (`math.floor(off + 0.1)`, not a pure floor) and `round_lengths()`
+    # (round) are no-ops for them and never actually
     # exercise the float-to-int snapping arithmetic -- which is exactly what
     # a real `geom.bounds +/- rim_buffer_m` window looks like in production.
     # No fractional part here is .5, so there is no round-half-to-even
