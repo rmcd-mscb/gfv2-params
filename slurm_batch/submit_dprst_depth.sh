@@ -1,9 +1,10 @@
 #!/bin/bash
 # Usage: ./submit_dprst_depth.sh <batches_dir> [fabric] [base_config] [n_tile_batches] [hru_max_concurrent]
 #
-# Drives the full dprst_depth_avg pipeline (issue #173) as a single afterok
+# Drives the full dprst_depth_avg pipeline (issue #173; real tile-inventory
+# planning + threaded tile-set compute, issue #223 part 2) as a single afterok
 # DAG, 4 stages:
-#   1. PLAN         (1 task)                        tiling.group_by_tile / component_tile_batches
+#   1. PLAN         (1 task)                        tiling.tile_set_groups / tile_batches
 #   2. ARRAY        (0..n_tile_batches-1, afterok:1) compute.run_batch per tile-batch
 #   3. BUILD        (1 task, afterok:2)              depstor_builders.dprst_depth fill+burn+op_flow_thres
 #   4a. MEAN_ZONAL  (0..n_hru_batches-1, afterok:3)  per-HRU exactextract mean of dprst_depth.tif
@@ -22,12 +23,17 @@
 # --- Compute-budget sizing (issue #173's <=5 hr target, stages 1-3) --------
 # CONUS has ~286k dprst polygons; reading a windowed DEM per polygon serially
 # costs ~250-500 core-hours (Task 3/9 design doc). The fan-out unit is the
-# elevation TILE, not the polygon: tiling.component_tile_batches bins the
-# tile -> polygon work-list into N_TILE_BATCHES roughly-equal-COST SLURM
-# array tasks (greedy LPT bin-packing weighted by estimated DEM-window-read
-# cost, not raw polygon count -- ~100x weight for 1m vs 10m polygons; see
-# tiling.polygon_window_cost / MAX_1M_WINDOW_CELLS -- connected-component-safe
-# so a polygon spanning >1 tile is never split across batches). With
+# assigned TILE SET (one project, one UTM zone -- `sources.tag_and_assign`
+# against the staged 3DEP inventory), not the polygon: tiling.tile_set_groups
+# groups polygons by their primary tile set and tiling.tile_batches bins those
+# groups into N_TILE_BATCHES roughly-equal-COST SLURM array tasks (greedy LPT
+# bin-packing weighted by estimated DEM-window-read cost, not raw polygon
+# count -- ~100x weight for 1m vs 10m polygons; see tiling.polygon_window_cost
+# / MAX_1M_WINDOW_CELLS). Each polygon belongs to exactly one tile set, so no
+# component-chaining is needed -- the old hull-driven transitive tile-key
+# chaining this replaced could span >4,000 tiles in one component and left
+# two array tasks with ~16,000/~12,000 fallback polygons each, running past
+# 24 h against a 34-minute median (#223 part 2). With
 # N_TILE_BATCHES array tasks running CONCURRENTLY:
 #
 #     wall-clock (stage 2) ~= (250-500 core-hours) / N_TILE_BATCHES

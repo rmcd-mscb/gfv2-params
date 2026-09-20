@@ -9,22 +9,29 @@
 #SBATCH --cpus-per-task=2
 #SBATCH --mem=32G
 #
-# Stage 1 of the dprst_depth pipeline (issue #173 Task 9): reconstructs +
-# tags the CONUS dprst polygon set (best_topo via WESM, ecoregion via EPA
-# L3 -- same reconstruction depstor_builders/dprst_depth.py's builder uses),
-# builds the tile -> polygon work-list (tiling.group_by_tile), and bins it
-# into N_TILE_BATCHES SLURM-array batches (tiling.component_tile_batches --
-# greedy LPT bin-packing by estimated DEM-window-read COST (~100x weight for
+# Stage 1 of the dprst_depth pipeline (issue #173 Task 9; real tile-inventory
+# planning, issue #223 part 2): reconstructs + tags the CONUS dprst polygon
+# set (best_topo + ranked tile-set candidates via sources.tag_and_assign
+# against the staged 3DEP inventory, ecoregion via EPA L3 -- same
+# reconstruction depstor_builders/dprst_depth.py's builder uses), groups
+# polygons by their assigned PRIMARY tile set (tiling.tile_set_groups), and
+# bins those groups into N_TILE_BATCHES SLURM-array batches (tiling.tile_batches
+# -- greedy LPT bin-packing by estimated DEM-window-read COST (~100x weight for
 # 1m vs 10m polygons; see tiling.polygon_window_cost / MAX_1M_WINDOW_CELLS),
-# not raw polygon count, connected-component-safe so a polygon spanning >1
-# tile never gets its tiles split across batches).
+# not raw polygon count). Each polygon belongs to exactly one tile set, so
+# no cross-polygon component-chaining is needed (the old hull-driven
+# transitive tile-key chaining is gone -- it produced components spanning
+# >4,000 tiles and let two array tasks inherit ~16,000/~12,000 fallback
+# polygons each and run past 24 h against a 34-minute median, #223 part 2).
 # Persists both to {output_dir}/dprst_depth_batches/_plan/ for
 # run_dprst_depth_batch.batch's array tasks to read. Pure geometry + local
-# vector reads -- NO live S3/vsicurl (tile existence is a compute-time
-# concern, Task 4, not resolved here). --mem=32G covers the full CONUS
-# waterbody/WESM/ecoregions vector loads comfortably (these are vector
-# GeoDataFrames, not raster grids -- contrast the 384G full-grid depstor
-# builders).
+# vector/parquet reads -- NO live S3/vsicurl: tile existence and extent are
+# already resolved in the staged 3DEP inventory (input/3dep/dem_1m_tile_
+# inventory.parquet, staged by stage_dem_1m_inventory.batch), so
+# sources.tag_and_assign never probes a raster here. --mem=32G covers the
+# full CONUS waterbody/tile-inventory/ecoregions vector+parquet loads
+# comfortably (these are vector GeoDataFrames / tables, not raster grids --
+# contrast the 384G full-grid depstor builders).
 #
 # Submitted first by slurm_batch/submit_dprst_depth.sh; the array job
 # (stage 2) depends afterok on this one.

@@ -101,13 +101,24 @@ Configuration (CFG-*), Code Quality (CODE-*), Hygiene (HYG-*), Architecture (ARC
   dissolves the question instead of answering it. Do not rebuild a staleness detector.
 
 ### In progress
-- #223 (dprst_depth DEM read misregistration) — **part 1 of 2 done**, on
+- #223 (dprst_depth DEM read misregistration + tile assignment) — **both
+  parts done**, PR not yet opened/merged. Part 1, on
   `fix/dprst-depth-read-padded-223`: 3DEP windowed reads near a tile edge
   could silently misregister or crash; reads now clip-and-pad, and every
   3DEP read carries an HTTP timeout/retry. See CLAUDE.md's `read_padded`
-  gotcha for the mechanism. Part 2 (closes #223) is not started; its design
-  lives in issue #223 and
-  `docs/superpowers/plans/2026-09-19-dprst-depth-real-tile-inventory.md`.
+  gotcha for the mechanism. Part 2, on `feat/dprst-depth-tile-inventory-223`:
+  tile assignment used a convex-hull WESM footprint index that invented
+  coverage a project never flew (51.6% of gfv2r2 polygons hit a slow
+  per-polygon fallback, 67.8% of those from hull overlap alone); replaced
+  with a real staged 3DEP tile inventory (`gfv2_params.dprst_depth.inventory`,
+  `input/3dep/dem_1m_tile_inventory.parquet`) and per-polygon ranked
+  candidate tile sets (`sources.tag_and_assign`), with threaded per-tile-set
+  compute (`compute.run_batch`). See CLAUDE.md's "dprst_depth sources come
+  from the staged real 3DEP tile inventory" gotcha for the mechanism, and
+  `docs/superpowers/plans/2026-09-19-dprst-depth-real-tile-inventory.md` for
+  the full design. Do not merge before CI is green and a tjc smoke-run
+  comparison (`scripts/diagnose/compare_dprst_depth_runs.py`) passes — the
+  gfv2r2 CONUS re-run is a separate, later step once merged.
 
 ### Up next (priority order)
 - CFG-1 — remove commented opt-in keys from fabric profiles in base_config.yml

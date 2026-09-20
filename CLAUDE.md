@@ -310,6 +310,30 @@ These are hard-won; violating them silently corrupts outputs.
   `logs/diag_gradient/` in the repo checkout (not the HPC data root); see
   `docs/superpowers/plans/2026-09-19-dprst-depth-real-tile-inventory.md` for
   the reproduction and the tile-inventory follow-on.
+- **dprst_depth sources come from the staged real 3DEP tile inventory, never
+  WESM footprints.** WESM workunit footprints were convex hulls (to fit login-
+  node memory) and hulls invent coverage: on gfv2r2, 67.8% of "multi-tile"
+  polygons were one tile cell under 2+ project hulls, and a HEAD probe found
+  61% of those had ONE real tile and 15% NONE. `input/3dep/dem_1m_tile_
+  inventory.parquet` holds every published tile with its header extent;
+  `sources.tag_and_assign` (shared by builder and planner) ranks per-polygon
+  tile sets by (covers window, QL, newest collect_end, project). WESM is read
+  geometry-free, for QL/dates only. The inventory is a SNAPSHOT: re-staging
+  obliges a dprst_depth re-run of every fabric. A tile set is one project in
+  ONE UTM zone, because BuildVRT cannot mosaic mixed CRSs. `tiling.tile_set_groups`
+  groups polygons by their assigned primary tile set (one polygon, exactly one
+  set — no cross-polygon component-chaining); `compute.run_batch` opens each
+  set ONCE and runs sets concurrently on a thread pool, walking a polygon's
+  remaining ranked candidates when its primary source yields no valid
+  interior, ending at the 10 m seamless tile. The old hull-driven transitive
+  tile-key chaining could span >4,000 tiles in one component and left two
+  array tasks with ~16,000/~12,000 fallback polygons each, running past 24 h
+  against a 34-minute median — gone now that each polygon resolves to exactly
+  one primary set. `interior_coverage` is written per polygon (a truncated
+  interior is COVERAGE LOSS, not fill corruption — richdem excludes interior
+  nodata cells) but nothing downstream FILTERS on it yet — the donor filter
+  that would exclude low-coverage polygons from the regional calibration is
+  not built.
 - **CONUS-scale memory: stream/window, never hold a full-grid array.** The CONUS
   template is 153830×109901 ≈ 16.9 B cells — ~17 GB as uint8, ~68 GB as int32,
   ~135 GB as float64. Oregon (~0.56 B cells) hides this; CONUS OOMs any depstor
