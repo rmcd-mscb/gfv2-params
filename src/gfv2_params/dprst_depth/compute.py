@@ -297,8 +297,10 @@ def run_batch(
     """Compute every polygon whose PRIMARY tile set is in `tile_sets`.
 
     Each set is opened once (`open_tile_set`) and all its member polygons are
-    windowed against it; sets run concurrently on `n_threads` threads (the work
-    is remote-read bound: 73% of time in `vrt.read` on gfv2r2). A polygon whose
+    windowed against it; sets run concurrently on `n_threads` threads because
+    the work is remote-read bound -- on the OLD pre-#223-part-2 per-polygon
+    path, which 51.6% of gfv2r2 polygons took, 73% of the FALLBACK time (not
+    overall pipeline time) was `vrt.read`, not arithmetic. A polygon whose
     primary yields no valid interior (or fails to read) walks its remaining
     ranked `candidates`, ending at the 10 m seamless tile. Counters stay split
     (#173 PR#177 FIX 2): read failures (expected, WARNING) vs compute errors

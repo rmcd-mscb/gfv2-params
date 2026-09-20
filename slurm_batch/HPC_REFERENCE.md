@@ -209,6 +209,20 @@ the staged S3-project-directory-to-WESM match rate ever drops below 90%
 a degraded inventory — that signals the WESM schema or S3 naming has
 changed and needs investigation, not a re-run.
 
+**Scale (measured on the third, final staging run, 2026-09-19):
+125,627 tiles across 939 of the 967 listed project directories** (the other
+28 publish no `TIFF/` prefix at all — nothing to list) **and 567 tiles
+cropped at a project edge.** By filename convention: 88,762 modern
+`USGS_1M_<zone>_x<X>y<Y>_<project>.tif`, 33,448 legacy
+`USGS_one_meter_x<X>y<Y>_<project>.tif`, and 3,417 lowercase, zone-less
+`USGS_1m_x<X>y<Y>_<project>.tif`. Those last two conventions — ~36,865 tiles,
+29% of the corpus — are exactly what the retired hull-based code could never
+address (it filtered on the modern pattern alone), which is the single most
+useful number here for deciding whether a re-run matters. (Earlier
+intermediate totals of 88,403 tiles/357 dirs and 121,849/875 dirs, from
+partway through staging before every filename convention was matched, are
+superseded by the figures above — don't quote them.)
+
 OPT-IN comparison staging (NOT required for a normal build — see "On-stream
 staging" in Stage 2d below):
 
@@ -710,8 +724,10 @@ existing data_root, or a hard `ctx.require` failure on a from-scratch one.
    `dprst_depth` for ONE batch of tile SETS
    (`scripts/run_dprst_depth_batch.py` → `dprst_depth.compute.run_batch`),
    opening each of its tile sets ONCE and running them CONCURRENTLY on 8
-   threads (the work is remote-read bound — 73% of time in `vrt.read` on
-   gfv2r2, not CPU-bound). A polygon whose primary tile set yields no valid
+   threads because the work is remote-read bound, not CPU-bound — on the OLD
+   pre-#223-part-2 per-polygon path, which 51.6% of gfv2r2 polygons took, 73%
+   of the FALLBACK time (not overall pipeline time) was `vrt.read`. A polygon
+   whose primary tile set yields no valid
    interior walks its remaining ranked candidates (from `sources.tag_and_assign`),
    ending at the 10 m seamless tile if every 1 m candidate fails. Writes
    `dprst_depth_batches/batch_XXXX.parquet` with two provenance columns,

@@ -19,9 +19,10 @@
 # per task -- opens each of this batch's tile sets ONCE, and writes one
 # per-batch parquet (Task 4's compute.run_batch), running --cpus-per-task
 # sets CONCURRENTLY on threads (the work is remote-read bound, not CPU
-# bound: 73% measured in vrt.read on gfv2r2 -- see compute.py's module
-# docstring for the 51.6%-of-polygons-on-the-slow-path regression this
-# fixes). --cpus-per-task=8 (was 2): `guard_oversized_windows` caps any
+# bound -- on the OLD pre-#223-part-2 per-polygon path, which 51.6% of
+# gfv2r2 polygons took, 73% of the FALLBACK time, not overall pipeline
+# time, was vrt.read -- see compute.py's module docstring for that
+# slow-path regression this fixes). --cpus-per-task=8 (was 2): `guard_oversized_windows` caps any
 # single 1 m window at 200M cells, budgeted in tiling.py at ~4 GiB/window
 # (20 bytes/cell); 8 concurrent windows at that cap is ~32-38 GB, and this
 # task's own second full-footprint boolean rasterization

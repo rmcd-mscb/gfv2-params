@@ -142,15 +142,19 @@ only part of a non-flat depression's interior (e.g. because the tile edge
 cut straight through one side of it) drops those cells from the average
 without necessarily emptying it, so the mean is still finite, still
 positive, and ships straight through as `method="measured"` with no flag at
-all, until the tile-assignment half of #223 lands. A reviewer traced the
-consequence: such a row also carries a finite `hollister_max_m` (computed
-from the shoreline ring, not the interior fill, so the void doesn't touch
-it), so it stays eligible as a DONOR in `fit_ecoregion_models` and biases
-every OTHER polygon filled from its `(ecoregion, FTYPE)` group, not just
-itself. A coverage-based donor filter (excluding a low-real-data-fraction
-row from the donor pool) is part 2's job, not this one's. That is better
-than the old silent misregistration but it is not "correct," and nothing
-currently flags the partial case.
+all. A reviewer traced the consequence: such a row also carries a finite
+`hollister_max_m` (computed from the shoreline ring, not the interior fill,
+so the void doesn't touch it), so it stays eligible as a DONOR in
+`fit_ecoregion_models` and biases every OTHER polygon filled from its
+`(ecoregion, FTYPE)` group, not just itself. Issue #223 part 2 (the real
+3DEP tile inventory, see CLAUDE.md's "dprst_depth sources come from the
+staged real 3DEP tile inventory" gotcha) added the `interior_coverage`
+column to every polygon's compute output for exactly this case — but nothing
+downstream reads it yet: there is no coverage-based donor filter today, so
+a low-real-data-fraction row still stays eligible as a donor. Building that
+filter is future work, not something either part of #223 has done. That is
+better than the old silent misregistration but it is not "correct," and
+nothing currently flags the partial case.
 Separately, "nothing changes for a window wholly inside its tile" is true
 of the *computation* only, not the read: the same change adds an HTTP
 timeout/retry policy (`topo.GDAL_HTTP_ENV`) to that identical path, so a
@@ -294,9 +298,12 @@ fixed SLURM array (default 150 batches):
   `MAX_1M_WINDOW_CELLS` (200 M cells, ~14 km/side) to 10 m — a mean depth doesn't
   need 1 m detail.
 - `compute.run_batch` opens each tile set ONCE and runs sets concurrently on a
-  thread pool (`--threads`, work is remote-read bound — 73% of time in
-  `vrt.read` on gfv2r2); a polygon whose primary set yields no valid interior
-  walks its remaining ranked candidates, ending at the 10 m seamless tile.
+  thread pool (`--threads`) because the work is remote-read bound — on the
+  OLD pre-#223-part-2 per-polygon path, which 51.6% of gfv2r2 polygons took,
+  73% of the FALLBACK time (not overall pipeline time) was spent in
+  `vrt.read`, not arithmetic. A polygon whose primary set yields no valid
+  interior walks its remaining ranked candidates, ending at the 10 m
+  seamless tile.
 - Budget: ~**250–500 core-hours** at CONUS scale, ~**5 h** wall-clock, ~**4 GiB**
   per window (float32 DEM + richdem float64 fill copies). The prairie-pothole
   belt is the largest single batch and the load-balance long pole. The single
