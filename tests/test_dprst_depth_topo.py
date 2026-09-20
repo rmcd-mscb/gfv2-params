@@ -317,6 +317,17 @@ def _ramp_dataset(memfile, width=40, height=30, nodata=-999999.0):
     (5010.0, 7990.0, 5020.0, 8012.0),   # overhangs TOP   by 12 cells
     (5030.0, 7980.0, 5050.0, 7990.0),   # overhangs RIGHT by 10 cells
     (5010.0, 7960.0, 5020.0, 7975.0),   # overhangs BOTTOM by 5 cells
+    # FRACTIONAL bounds, overhangs LEFT: window = Window(col_off=-10.7,
+    # row_off=4.4, width=21.4, height=15.4) -- a non-integer offset on the
+    # overhanging edge AND a non-integer length. All four cases above land
+    # exactly on integer pixel boundaries, so `round_offsets()` (floor) and
+    # `round_lengths()` (round) are no-ops for them and never actually
+    # exercise the float-to-int snapping arithmetic -- which is exactly what
+    # a real `geom.bounds +/- rim_buffer_m` window looks like in production.
+    # No fractional part here is .5, so there is no round-half-to-even
+    # ambiguity between this test's `round()` shape check and
+    # `round_lengths()`'s own rounding.
+    (4989.3, 7980.2, 5010.7, 7995.6),
 ])
 def test_read_padded_keeps_array_aligned_with_transform_on_every_edge(bounds):
     with MemoryFile() as mf, _ramp_dataset(mf) as ds:
