@@ -306,7 +306,10 @@ These are hard-won; violating them silently corrupts outputs.
   and crashed `np.gradient` (942 "compute errors", #223). `WarpedVRT` forbids
   `boundless=True`; `read_padded` pads with the -9999 sentinel instead. All
   3DEP reads also use `topo.GDAL_HTTP_ENV`: without an HTTP timeout, seven
-  array tasks sat ~6.9 h on stalled sockets.
+  array tasks sat ~6.9 h on stalled sockets. Figures measured from
+  `logs/diag_gradient/` on the HPC data root; see
+  `docs/superpowers/plans/2026-09-19-dprst-depth-real-tile-inventory.md` for
+  the reproduction and the tile-inventory follow-on.
 - **CONUS-scale memory: stream/window, never hold a full-grid array.** The CONUS
   template is 153830×109901 ≈ 16.9 B cells — ~17 GB as uint8, ~68 GB as int32,
   ~135 GB as float64. Oregon (~0.56 B cells) hides this; CONUS OOMs any depstor
