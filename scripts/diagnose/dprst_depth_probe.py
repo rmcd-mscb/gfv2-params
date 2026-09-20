@@ -942,7 +942,8 @@ def run_hollister(
 # does NOT attempt a playa-anchored fit. Instead it fits log(depth)~log(area)
 # on the ND sample's NON-FLAT polygons across all FLATNESS_FTYPES: Task 4
 # already showed hydro-flattening is a minority (SwampMarsh 21.7%, LakePond
-# 11.0%, Reservoir 5.4% flat — `flatness_by_ftype.csv`), so most polygons in
+# 11.0%, Reservoir 5.4% flat — `flatness_by_ftype.csv`; pre-#223 measurement,
+# not re-verified since), so most polygons in
 # the existing `sample_per_ftype` sample carry a genuine bare-earth
 # `depth_to_spill` reading (unlike the flat majority, whose measured depth is
 # ~freeboard, i.e. near-zero and NOT a real bed depth — Task 5's finding).

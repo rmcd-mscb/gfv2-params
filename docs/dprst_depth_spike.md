@@ -35,7 +35,12 @@ One-line per-FTYPE verdict:
 shallow, often ephemeral glacial depressions and are plausibly *systematically
 less* hydro-flattened than deep, permanently-inundated humid-region lakes or
 engineered reservoirs elsewhere in CONUS. Generalizing these flattened-fraction
-numbers nationally is **unverified** — see §7.
+numbers nationally is **unverified** — see §7. **Provenance note (added
+post-#223):** every flattened-fraction figure in this document (21.7%
+SwampMarsh, 11.0% LakePond, 5.4% Reservoir, and everything derived from them)
+was measured with the pre-#223 windowed read, which could silently misregister
+or return empty for a window overhanging a tile edge — these are pre-#223
+measurements, not re-verified since.
 
 ## 2. Study area & sample
 
@@ -161,6 +166,8 @@ the issue's feared ~89% worst case — even the union of all three wet FTYPEs
 (SwampMarsh + LakePond + Reservoir) runs 5–22% flattened, not ~89%. On this
 evidence, **the "89% worst case" does not hold** in the Prairie Pothole
 Region. **This inverts the issue's fear** and is the spike's central result.
+(Provenance: this table's reads predate #223's clip-and-pad fix — pre-#223
+measurements, not re-verified since — see §1's provenance note.)
 
 **Validity caveat (carried through to §7):** single ND PPR project.
 Generalizing 11–22% flattened nationally is unverified — see §7 for the
@@ -345,6 +352,8 @@ range for the largest dprst polygons.
 Depth–area regression is **not** in the "method chosen" column for any
 FTYPE — §8 shows it is not predictive (R² 0.004–0.071 even stratified) and
 is demoted to informational-only; the constant is the true fallback tier.
+(The flattened-% column above is pre-#223 measurement, not re-verified
+since — see §1's provenance note.)
 
 **Revision (§7a):** the "Hollister for the flattened X%" cells above are
 superseded by the [§7a follow-up](#7a-follow-up-hollister-validated-against-measured-bathymetry-2026-07-11) —

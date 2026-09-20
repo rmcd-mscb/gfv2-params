@@ -70,6 +70,76 @@ product — `_fill_and_join` **raises `RuntimeError`** when under
 polygons get a measured depth. Set the knob to `0` to disable (escape hatch
 for a legitimately high-flattening small fabric).
 
+**Windowed reads near a tile's edge.** Because the DEM comes from a live tile
+rather than a CONUS-wide mosaic, the 200 m rim buffer around a polygon's bbox
+routinely pokes past the edge of whichever 1 m or 10 m tile is backing the
+read. Until #223, a rim that overhung a tile's left or top edge came back
+*silently* shifted from where it was requested — no error, just the wrong
+ground under the DEM array — which corrupted the depression fill and biased
+the depth for polygons sitting near a tile boundary; a rim that fell entirely
+off the tile came back empty and crashed the computation outright rather than
+producing a bad number. The read itself is fixed: an overhanging window is
+now read only as far as real data exists and padded with nodata beyond the
+tile edge, so the array lines up with the ground it claims to cover. A
+separate, narrower guard catches windows too small on either axis (fewer
+than two cells) to take a derivative from at all and reports no shoreline
+slope rather than crashing there — a degenerate-geometry case, not the
+tile-edge padding case above. That guard's `0.0` return is the Hollister
+predictor input, not a shipped depth: `fill.py`'s ladder only trusts a
+positive `hollister_max_m`, so a polygon that hits it falls through to the
+regional fill (or, absent a donor model, the constant floor) — no polygon
+ships `dprst_depth_avg = 0`.
+
+Two qualifications on what this buys, for the re-run: a polygon whose
+**interior** overhangs its tile is now measured over a truncated interior,
+and the padding is nodata, not a wall. `_interior_mask` already excludes
+void cells from the interior (`mask &= dem != sentinel`), and
+`depth_to_spill` zeroes each void cell's own reported depth
+(`depth[a == nd] = 0.0`) — and richdem's priority-flood (verified
+empirically, not by inspection, and independently re-verified by a second
+probe) does not corrupt the surrounding real fill at anything near
+production scale: a void placed adjacent to, or fully 4-sided-encircling, a
+synthetic depression leaves the REMAINING real cells' fill numerically
+unchanged for those placements at 7x7 and larger, including full
+encirclement. Richdem CAN still collapse an entire array's fill to raw (0
+depth everywhere) for a **different** placement, though: a no-data block
+sitting at the array's own border **corner**, with too little real rim
+separating it from the depression — reproduced at 5x5 (where a single
+border cell already suffices) and even at 9x9 (a 2x2 border-corner block,
+against a depression left only 2 cells clear of that corner). So the quirk
+is **placement-dependent, not bounded by a clean size threshold** — it needs
+a no-data cell ON the array's own border with the depression close enough to
+it. This module's own test suite already sizes its nodata-void fixture, and
+the ring it leaves between depression and border, generously enough to stay
+clear of it — a long-known quirk. It is not reachable at production window
+sizes either way: a real window is hundreds of pixels wide, and the 200 m
+rim buffer alone floors the real-cell ring around a polygon's own interior
+well above the handful of cells the quirk needs. So the failure mode a
+truncated interior actually introduces is
+narrower than "the fill collapses": it is a **coverage loss**. The V/A mean
+is computed over FEWER interior cells (the void ones excluded), not over
+corrupted ones — an interior voided ENTIRELY reads NaN and IS caught by
+`fill.py`'s `depth_col.isna()` gate (`fill_flat`), routing to the regional
+fill. The genuinely uncaught case is the **partial** one: a void that clips
+only part of a non-flat depression's interior (e.g. because the tile edge
+cut straight through one side of it) drops those cells from the average
+without necessarily emptying it, so the mean is still finite, still
+positive, and ships straight through as `method="measured"` with no flag at
+all, until the tile-assignment half of #223 lands. A reviewer traced the
+consequence: such a row also carries a finite `hollister_max_m` (computed
+from the shoreline ring, not the interior fill, so the void doesn't touch
+it), so it stays eligible as a DONOR in `fit_ecoregion_models` and biases
+every OTHER polygon filled from its `(ecoregion, FTYPE)` group, not just
+itself. A coverage-based donor filter (excluding a low-real-data-fraction
+row from the donor pool) is part 2's job, not this one's. That is better
+than the old silent misregistration but it is not "correct," and nothing
+currently flags the partial case.
+Separately, "nothing changes for a window wholly inside its tile" is true
+of the *computation* only, not the read: the same change adds an HTTP
+timeout/retry policy (`topo.GDAL_HTTP_ENV`) to that identical path, so a
+legitimately slow read that previously completed can now time out, log a
+warning, and drop that polygon to the regional fill.
+
 ---
 
 ## 2. The depth-method ladder

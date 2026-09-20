@@ -42,25 +42,29 @@ import rasterio
 from rasterio.enums import Resampling
 from rasterio.errors import RasterioIOError
 from rasterio.vrt import WarpedVRT
-from rasterio.windows import from_bounds
 
 from .tiling import group_by_tile
 from .topo import (
+    GDAL_HTTP_ENV,
     _interior_mask,
     _native_resolution,
-    _normalize_nodata,
     depth_to_spill,
     is_hydroflattened,
     lake_max_depth,
+    read_padded,
     read_window,
     volume_mean_depth,
 )
 
 __all__ = ["_polygon_depth_from_dem", "compute_polygon", "run_batch"]
 
-# GDAL/rasterio env for anonymous public-bucket HTTPS reads — identical to
-# `read_window`'s (see topo.py's module notes on /vsicurl/ vs /vsis3/).
-_ENV_OPTS = {"AWS_NO_SIGN_REQUEST": "YES", "GDAL_DISABLE_READDIR_ON_OPEN": "EMPTY_DIR"}
+# GDAL/rasterio env for anonymous public-bucket HTTPS reads — a COPY of
+# `topo.GDAL_HTTP_ENV` (see topo.py's module notes on /vsicurl/ vs /vsis3/
+# and its HTTP timeout rationale). Copied, not aliased: `rasterio.Env(**...)`
+# never mutates its kwargs, but sharing one mutable dict between two modules
+# would make an in-place edit to either module's "own" copy silently change
+# the other's env too.
+_ENV_OPTS = dict(GDAL_HTTP_ENV)
 
 # Output columns of `run_batch`'s parquet, fixed so an empty batch (a
 # SLURM array task with 0 assigned tiles) still writes a well-formed,
@@ -85,8 +89,11 @@ def _polygon_depth_from_dem(
     breakline elevation (USGS Lidar Base Spec): the Phase 0 spike validated
     that the flatness verdict must be read off the POLYGON INTERIOR alone
     (`interior_mask`-selected cells) — that's what produced the trustworthy
-    SwampMarsh 21.7% / LakePond 11% flattened fractions (a hydro-flattened
-    lake's interior reads EXACTLY 0.000 m range). Running the gate over the
+    SwampMarsh 21.7% / LakePond 11% flattened fractions (pre-#223
+    measurement — the probe's reads predate `read_padded` and were subject
+    to the same misregistration/empty-window bug it fixes, so re-measure
+    rather than re-cite per this repo's rule) (a hydro-flattened lake's
+    interior reads EXACTLY 0.000 m range). Running the gate over the
     rim-inclusive window instead is wrong: a real hydro-flattened lake
     sitting in terrain with any surrounding relief would have a
     window-range > tol and be misclassified non-flat, and we'd then
@@ -181,26 +188,21 @@ def _open_tile_vrt(tile_key: str):
 def _read_tile_window(vrt, geom, rim_buffer_m: float = 200.0) -> tuple[np.ndarray, object]:
     """Windowed RAW-DEM read of `geom`'s buffered bbox against an ALREADY-OPEN VRT.
 
-    The single-source counterpart of `read_window`'s inner read block
-    (`from_bounds` -> `vrt.read` -> `window_transform` -> nodata
-    normalization via `_normalize_nodata`) — deliberately NOT calling
-    `read_window` itself, which always opens its source fresh (that
-    per-call open is exactly what `run_batch`'s tile cache avoids for
-    polygons that don't straddle a tile boundary). `geom` must be in the
-    VRT's CRS (EPSG:5070, matching `dprst_gdf`/`read_window`'s
-    convention), so `rim_buffer_m` (metres) adds directly to `geom.bounds`
-    with no reprojection, exactly as in `read_window`.
+    The single-source counterpart of `read_window`'s inner read block —
+    deliberately NOT calling `read_window` itself, which always opens its
+    source fresh (that per-call open is exactly what `run_batch`'s tile
+    cache avoids for polygons that don't straddle a tile boundary). `geom`
+    must be in the VRT's CRS (EPSG:5070, matching `dprst_gdf`/
+    `read_window`'s convention), so `rim_buffer_m` (metres) adds directly
+    to `geom.bounds` with no reprojection, exactly as in `read_window`.
+    Delegates to `topo.read_padded` (#223) so a buffered window that
+    overhangs this tile's edge comes back correctly clipped-and-padded
+    instead of silently misregistered or empty.
     """
     minx, miny, maxx, maxy = geom.bounds
-    minx -= rim_buffer_m
-    miny -= rim_buffer_m
-    maxx += rim_buffer_m
-    maxy += rim_buffer_m
-    window = from_bounds(minx, miny, maxx, maxy, transform=vrt.transform)
-    dem = vrt.read(1, window=window).astype(np.float32)
-    transform = vrt.window_transform(window)
-    dem = _normalize_nodata(dem, vrt.nodata)
-    return dem, transform
+    return read_padded(
+        vrt, (minx - rim_buffer_m, miny - rim_buffer_m, maxx + rim_buffer_m, maxy + rim_buffer_m)
+    )
 
 
 def _resolution_from_tile_key(tile_key: str) -> str:
@@ -272,8 +274,15 @@ def run_batch(
     review FIX 2):
       - `n_read_failure` — `RasterioIOError` (the documented "tile/window
         absent" signal, see `topo.py`'s `_existing_paths`/`read_window`
-        notes) at either the tile-open or the windowed-read/compute site.
-        Logged at WARNING; expected at some baseline rate at CONUS scale.
+        notes) at either the tile-open or the windowed-read/compute site,
+        OR a single-tile read that returned WITHOUT raising but whose
+        interior_mask came back empty (`read_padded`'s all-sentinel window,
+        #223) -- that case defers the polygon to the multi-tile fallback
+        instead of emitting a nan/flat_pending row, and is counted here
+        alongside the exception-raising cases because it is the same
+        underlying signal: this tile/window did not have the polygon's
+        data. Logged at WARNING; expected at some baseline rate at CONUS
+        scale.
       - `n_compute_error` — anything else (`MemoryError`, `TypeError`,
         `ValueError`, `AttributeError`, a pyproj/CRS error, ...). Logged at
         ERROR with the offending tile/polygon id so a real bug is loud and
@@ -334,6 +343,22 @@ def run_batch(
                         try:
                             dem, transform = _read_tile_window(vrt, geom)
                             interior_mask = _interior_mask(dem, transform, geom)
+                            if not interior_mask.any():
+                                # The window landed wholly off this tile (or on nothing but
+                                # nodata): before #223's clip-and-pad this raised in
+                                # np.gradient and fell through to the multi-tile fallback,
+                                # which resolves 1 m tiles independently and often rescues
+                                # the polygon. read_padded no longer raises, so skip WITHOUT
+                                # done.add() to keep that rescue — and count it in the
+                                # documented read-failure bucket so a broken tile assignment
+                                # stays visible (#223).
+                                n_read_failure += 1
+                                logger.warning(
+                                    "  tile=%s idx=%s: window has no valid interior on this "
+                                    "tile — deferring to the multi-tile fallback",
+                                    tile_key, idx,
+                                )
+                                continue
                             result = _polygon_depth_from_dem(dem, interior_mask, transform)
                         except RasterioIOError as exc:
                             # Expected: the polygon's window falls outside

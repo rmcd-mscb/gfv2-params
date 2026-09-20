@@ -1,5 +1,8 @@
 import geopandas as gpd
 import numpy as np
+import pytest
+from affine import Affine
+from rasterio.io import MemoryFile
 from shapely.geometry import Point
 
 from gfv2_params.dprst_depth import topo
@@ -209,6 +212,111 @@ def test_depth_to_spill_zeroes_nodata_void_no_spurious_depth():
     assert np.isclose(depth[n - 1, n - 1], 0.0)  # untouched rim cell stays 0
 
 
+def test_depth_to_spill_void_leaves_the_depression_depth_unchanged_on_realistic_grids():
+    """(#223 toolkit-review finding 5c) Pin richdem's actual void behaviour,
+    because a doc claim (dprst_depth_avg_reference.md) now rests on it, and a
+    richdem version bump could silently change it. Empirically verified
+    (this is not a documentation inference), and independently re-verified by
+    a second probe: for THESE TWO PLACEMENTS -- a void placed DIRECTLY
+    ADJACENT to the pit, or a void ring FULLY ENCIRCLING it (severing every
+    4-connected path from the pit to the array's real edge cells) -- a 9x9
+    grid leaves the pit's OWN computed depth unchanged; richdem does not
+    treat an interior no_data cell as a drain/outlet that lets water escape
+    through it. This is NOT a blanket "any void is safe at 9x9+" guarantee --
+    see the companion test below, which reproduces a collapse at this same
+    9x9 size for a DIFFERENT placement (a void block at the array's own
+    border corner, with the pit left too little rim). Real
+    `read_window`/`read_padded` windows are hundreds of pixels wide with a
+    real-cell ring around a polygon's interior at least a 200 m rim buffer
+    deep, far beyond anything the border-corner quirk needs, so THESE
+    placements are the production-relevant case, not the corner one."""
+    n = 9
+    dem = np.full((n, n), 10.0, dtype=np.float64)
+    c = n // 2
+    dem[c - 1 : c + 2, c - 1 : c + 2] = 8.0  # 3x3 pit, same shape as the bowl test
+
+    # A void directly 4-connected-adjacent to a pit-boundary cell.
+    d_adjacent = dem.copy()
+    d_adjacent[c - 2, c - 1] = -9999.0
+    depth_adjacent = topo.depth_to_spill(d_adjacent)
+    assert np.isclose(depth_adjacent[c, c], 2.0)
+
+    # A void ring FULLY encircling the pit one cell out -- every path from
+    # the pit to a real array-edge cell must cross this ring.
+    d_ring = dem.copy()
+    lo, hi = c - 2, c + 2
+    d_ring[lo, lo : hi + 1] = -9999.0
+    d_ring[hi, lo : hi + 1] = -9999.0
+    d_ring[lo : hi + 1, lo] = -9999.0
+    d_ring[lo : hi + 1, hi] = -9999.0
+    depth_ring = topo.depth_to_spill(d_ring)
+    assert np.isclose(depth_ring[c, c], 2.0)
+
+
+def test_depth_to_spill_tiny_array_border_void_can_collapse_the_whole_fill():
+    """Companion/contrast to the test above: the known richdem small-grid
+    quirk this module's OTHER nodata test (above) explicitly sizes its grid
+    (and the ring it leaves between depression and border) to avoid. On a
+    grid so small that the pit's surrounding ring IS the array's own border
+    (5x5 here: a 3x3 pit leaves a ring exactly 1 cell wide), a no_data cell
+    AT this array's own border corner can collapse the fill for the WHOLE
+    array to raw elevation -- not just the void cell itself, every real cell
+    including the pit floor, so measured_max_m/dprst_depth_m would both read
+    0 rather than the true 2.0 (only the corner placement below is asserted;
+    a full border COLUMN at a larger 9x9 array does NOT collapse it -- see
+    the companion test after this one -- so this is not a claim that any
+    border cell anywhere always triggers it). This IS the "limiting case
+    reads exactly 0" that `fill.py`'s `depth_col <= 0` gate (`fill_flat`)
+    would catch and route to the regional fill, if it were ever reachable.
+    This quirk is PLACEMENT-dependent, not bounded by a clean size
+    threshold: it does NOT reproduce here for a single-cell void placed away
+    from the pit's own ring (see the test above), but the companion test
+    below reproduces the SAME collapse at 9x9 -- 1.8x this grid's side
+    length -- for a void block sitting at the array's own border corner with
+    too little ring left around a closer pit. Real
+    `read_window`/`read_padded` windows are hundreds of pixels wide with a
+    real-cell ring at least a 200 m rim buffer deep, far beyond anything
+    either reproduction needs. Pinned here so a richdem
+    version bump that changes this quirk is caught either way, without
+    asserting it is reachable in production."""
+    dem = np.full((5, 5), 10.0, dtype=np.float64)
+    dem[1:4, 1:4] = 8.0
+    base_depth = topo.depth_to_spill(dem)
+    assert np.isclose(base_depth[2, 2], 2.0)  # sanity: the un-voided case is normal
+
+    d = dem.copy()
+    d[0, 0] = -9999.0  # array-border corner, one cell outside the pit's own ring
+    depth = topo.depth_to_spill(d)
+    assert np.isclose(depth[0, 0], 0.0)  # the void cell itself: never spurious
+    assert np.isclose(depth[2, 2], 0.0)  # the WHOLE fill collapsed, not just the void
+
+
+def test_depth_to_spill_border_corner_void_collapses_even_at_9x9_when_pit_is_close():
+    """(#223 review round 5 correction) The tiny-grid quirk above is NOT
+    bounded by a clean "gone at 7x7"/"safe at 9x9+" size threshold -- it is
+    placement-dependent. Reproduced independently by the coordinator and
+    re-verified here: a 5x5 pit (rows/cols 2-6) in a 9x9 grid leaves only a
+    2-cell ring to the array's border: a 2x2 no_data block at that border's
+    corner collapses the pit's depth to 0.0, exactly like the 5x5 case above,
+    even though the array itself is the SAME 9x9 size as the OTHER test
+    above -- what differs is the PIT: 5x5 here versus 3x3 there (a wider,
+    2-cell-plus-clearance ring), with single/ring void placements there that
+    do NOT collapse it. The determining factor is how much real rim
+    separates the depression from the array's own border, not the array's
+    raw size."""
+    n = 9
+    dem = np.full((n, n), 10.0, dtype=np.float64)
+    dem[2:7, 2:7] = 8.0  # 5x5 pit, rows/cols 2-6 -- only a 2-cell ring to the border
+    c = 4
+    base_depth = topo.depth_to_spill(dem)
+    assert np.isclose(base_depth[c, c], 2.0)  # sanity: the un-voided case is normal
+
+    d = dem.copy()
+    d[0:2, 0:2] = -9999.0  # 2x2 block at the array's own border corner
+    depth = topo.depth_to_spill(d)
+    assert np.isclose(depth[c, c], 0.0)  # collapses -- NOT "gone at 7x7/9x9"
+
+
 def test_is_hydroflattened_detects_constant_surface():
     flat = np.full((20, 20), 512.30, dtype=np.float32)
     natural = flat + np.linspace(0, 1.5, 400).reshape(20, 20).astype(np.float32)
@@ -296,3 +404,143 @@ def test_lake_max_depth_ignores_nodata_ring():
     d = topo.lake_max_depth(dem, mask, Affine.identity())
     assert np.isfinite(d)
     assert 0.5 < d < 5.0
+
+
+def _ramp_dataset(memfile, width=40, height=30, nodata=-999999.0):
+    """A 1 m EPSG:5070 raster whose value encodes its own (row, col): v = 1000*row + col.
+    Any misregistration then shows up as a wrong value at a known geographic point."""
+    data = (np.arange(height)[:, None] * 1000 + np.arange(width)[None, :]).astype("float32")
+    transform = Affine(1.0, 0, 5000.0, 0, -1.0, 8000.0)  # origin (5000, 8000)
+    ds = memfile.open(driver="GTiff", width=width, height=height, count=1, dtype="float32",
+                      crs="EPSG:5070", transform=transform, nodata=nodata)
+    ds.write(data, 1)
+    return ds
+
+
+@pytest.mark.parametrize("bounds", [
+    (4990.0, 7980.0, 5010.0, 7995.0),   # overhangs LEFT  by 10 cells
+    (5010.0, 7990.0, 5020.0, 8012.0),   # overhangs TOP   by 12 cells
+    (5030.0, 7980.0, 5050.0, 7990.0),   # overhangs RIGHT by 10 cells
+    (5010.0, 7960.0, 5020.0, 7975.0),   # overhangs BOTTOM by 5 cells
+    # FRACTIONAL bounds, overhangs LEFT: window = Window(col_off=-10.7,
+    # row_off=4.4, width=21.4, height=15.4) -- a non-integer offset on the
+    # overhanging edge AND a non-integer length. All four cases above land
+    # exactly on integer pixel boundaries, so `round_offsets()`
+    # (`math.floor(off + 0.1)`, not a pure floor) and `round_lengths()`
+    # (round) are no-ops for them and never actually
+    # exercise the float-to-int snapping arithmetic -- which is exactly what
+    # a real `geom.bounds +/- rim_buffer_m` window looks like in production.
+    # No fractional part here is .5, so there is no round-half-to-even
+    # ambiguity between this test's `round()` shape check and
+    # `round_lengths()`'s own rounding.
+    (4989.3, 7980.2, 5010.7, 7995.6),
+    # CORNER overhang: LEFT and TOP at once (window = Window(col_off=-10,
+    # row_off=-12, width=20, height=22)). Every case above overhangs exactly
+    # ONE axis, so in `read_padded`'s placement math (`r0 = inter.row_off -
+    # snapped.row_off`, `c0 = inter.col_off - snapped.col_off`) at least one
+    # of r0/c0 is always 0 -- this is the only case where BOTH are nonzero
+    # (r0=12, c0=10) at the same time, which single-axis cases can't reach.
+    (4990.0, 7990.0, 5010.0, 8012.0),
+])
+def test_read_padded_keeps_array_aligned_with_transform_on_every_edge(bounds):
+    with MemoryFile() as mf, _ramp_dataset(mf) as ds:
+        dem, tr = topo.read_padded(ds, bounds)
+        # every valid cell's value must match the value at the same geographic point
+        rows, cols = np.nonzero(dem != -9999.0)
+        assert rows.size > 0
+        for r, c in zip(rows[::7], cols[::7]):
+            x, y = tr * (c + 0.5, r + 0.5)
+            src_r, src_c = ds.index(x, y)
+            assert dem[r, c] == 1000 * src_r + src_c
+        # the requested window's full size is returned, voids padded with the sentinel
+        assert dem.shape == (round((bounds[3] - bounds[1])), round((bounds[2] - bounds[0])))
+        assert (dem == -9999.0).any()
+
+
+def test_read_padded_fully_outside_returns_all_sentinel_not_empty():
+    with MemoryFile() as mf, _ramp_dataset(mf) as ds:
+        dem, _ = topo.read_padded(ds, (6000.0, 9000.0, 6020.0, 9010.0))
+        assert dem.shape == (10, 20)
+        assert (dem == -9999.0).all()
+
+
+def test_read_padded_inside_is_identical_to_plain_windowed_read():
+    """Output-identity guarantee: an in-bounds window takes the unchanged code path."""
+    from rasterio.windows import from_bounds
+    b = (5003.3, 7981.7, 5017.9, 7996.2)  # fractional, fully inside
+    with MemoryFile() as mf, _ramp_dataset(mf) as ds:
+        dem, tr = topo.read_padded(ds, b)
+        w = from_bounds(*b, transform=ds.transform)
+        ref = topo._normalize_nodata(ds.read(1, window=w).astype(np.float32), ds.nodata)
+        assert np.array_equal(dem, ref)
+        assert tr == ds.window_transform(w)
+
+
+def test_read_padded_with_no_source_nodata_has_no_false_sentinel_inside():
+    """(#223 toolkit-review finding 5b) `read_padded` calls
+    `_normalize_nodata(dem, src.nodata, sentinel)` on BOTH branches; a tile
+    that declares no NODATA tag (`src.nodata is None`) has no coverage --
+    a numeric void could pass through as a real elevation, or (the opposite
+    bug) a real elevation could get misread as the sentinel. Fully inside,
+    every ramp value is real and finite, so none of them may equal -9999.0.
+    Pixel-aligned bounds (not fractional): a fractional "inside" window's
+    actual pixel selection is an internal rasterio/GDAL implementation
+    detail this test has no need to depend on -- `test_read_padded_inside_
+    is_identical_to_plain_windowed_read` already pins that path's identity
+    with a plain-read reference instead of a per-cell geographic round-trip."""
+    with MemoryFile() as mf, _ramp_dataset(mf, nodata=None) as ds:
+        assert ds.nodata is None
+        b = (5005.0, 7985.0, 5015.0, 7990.0)  # pixel-aligned, fully inside
+        dem, tr = topo.read_padded(ds, b)
+        assert not (dem == -9999.0).any()
+        rows, cols = np.nonzero(np.ones_like(dem, dtype=bool))
+        for r, c in zip(rows.ravel()[::11], cols.ravel()[::11]):
+            x, y = tr * (c + 0.5, r + 0.5)
+            src_r, src_c = ds.index(x, y)
+            assert dem[r, c] == 1000 * src_r + src_c
+
+
+def test_read_padded_with_no_source_nodata_pads_only_the_missing_region():
+    """Companion to the inside-only case above: on the padded (overhang)
+    path, the REAL region read off a no-NODATA source must still come back
+    unchanged (no false sentinel), and ONLY the genuinely-outside padding
+    -- which is `read_padded`'s own fill, not a `src.nodata` detection --
+    may read as -9999.0."""
+    with MemoryFile() as mf, _ramp_dataset(mf, nodata=None) as ds:
+        assert ds.nodata is None
+        dem, tr = topo.read_padded(ds, (4990.0, 7980.0, 5010.0, 7995.0))  # overhangs LEFT
+        rows, cols = np.nonzero(dem != -9999.0)
+        assert rows.size > 0
+        for r, c in zip(rows[::7], cols[::7]):
+            x, y = tr * (c + 0.5, r + 0.5)
+            src_r, src_c = ds.index(x, y)
+            assert dem[r, c] == 1000 * src_r + src_c
+        assert (dem == -9999.0).any()  # the padded-outside region only
+
+
+@pytest.mark.parametrize("shape", [(1, 40), (40, 1), (0, 12), (12, 0)])
+def test_lake_max_depth_degenerate_window_returns_zero_not_raises(shape):
+    dem = np.full(shape, 10.0)
+    mask = np.zeros(shape, bool)
+    assert topo.lake_max_depth(dem, mask, Affine(1, 0, 0, 0, -1, 0)) == 0.0
+
+
+def test_gdal_http_env_sets_timeouts():
+    assert topo.GDAL_HTTP_ENV["GDAL_HTTP_TIMEOUT"] == "60"
+    assert topo.GDAL_HTTP_ENV["GDAL_HTTP_MAX_RETRY"] == "5"
+    assert topo.GDAL_HTTP_ENV["GDAL_HTTP_RETRY_DELAY"] == "2"
+    assert topo.GDAL_HTTP_ENV["AWS_NO_SIGN_REQUEST"] == "YES"
+    # (#223 toolkit-review finding 2) GDAL_HTTP_TIMEOUT bounds each request,
+    # not a whole windowed read -- these are what actually abort a stalled
+    # socket: a bounded connect phase, plus a minimum-throughput floor that
+    # cancels a connection which stopped delivering bytes. LOW_SPEED_TIME
+    # must be LESS than GDAL_HTTP_TIMEOUT (round-5 correction): both clocks
+    # start at the transfer's start, so at equal values the request cap
+    # always wins the race and the low-speed pair would never get to fire.
+    assert topo.GDAL_HTTP_ENV["GDAL_HTTP_CONNECTTIMEOUT"] == "30"
+    assert topo.GDAL_HTTP_ENV["GDAL_HTTP_LOW_SPEED_TIME"] == "30"
+    assert topo.GDAL_HTTP_ENV["GDAL_HTTP_LOW_SPEED_LIMIT"] == "1000"
+    assert (
+        int(topo.GDAL_HTTP_ENV["GDAL_HTTP_LOW_SPEED_TIME"])
+        < int(topo.GDAL_HTTP_ENV["GDAL_HTTP_TIMEOUT"])
+    )

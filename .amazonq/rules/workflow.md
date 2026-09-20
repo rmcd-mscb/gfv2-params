@@ -100,6 +100,15 @@ Configuration (CFG-*), Code Quality (CODE-*), Hygiene (HYG-*), Architecture (ARC
   (`slurm_batch/submit_fabric_rerun.sh` + `configs/workflow/fabric_rerun.yml`), which
   dissolves the question instead of answering it. Do not rebuild a staleness detector.
 
+### In progress
+- #223 (dprst_depth DEM read misregistration) — **part 1 of 2 done**, on
+  `fix/dprst-depth-read-padded-223`: 3DEP windowed reads near a tile edge
+  could silently misregister or crash; reads now clip-and-pad, and every
+  3DEP read carries an HTTP timeout/retry. See CLAUDE.md's `read_padded`
+  gotcha for the mechanism. Part 2 (closes #223) is not started; its design
+  lives in issue #223 and
+  `docs/superpowers/plans/2026-09-19-dprst-depth-real-tile-inventory.md`.
+
 ### Up next (priority order)
 - CFG-1 — remove commented opt-in keys from fabric profiles in base_config.yml
 - CFG-2 — eliminate gfv2_dev profile duplication with YAML anchors
