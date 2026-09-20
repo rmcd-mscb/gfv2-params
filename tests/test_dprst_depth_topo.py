@@ -1,5 +1,8 @@
 import geopandas as gpd
 import numpy as np
+import pytest
+from affine import Affine
+from rasterio.io import MemoryFile
 from shapely.geometry import Point
 
 from gfv2_params.dprst_depth import topo
@@ -296,3 +299,68 @@ def test_lake_max_depth_ignores_nodata_ring():
     d = topo.lake_max_depth(dem, mask, Affine.identity())
     assert np.isfinite(d)
     assert 0.5 < d < 5.0
+
+
+def _ramp_dataset(memfile, width=40, height=30, nodata=-999999.0):
+    """A 1 m EPSG:5070 raster whose value encodes its own (row, col): v = 1000*row + col.
+    Any misregistration then shows up as a wrong value at a known geographic point."""
+    data = (np.arange(height)[:, None] * 1000 + np.arange(width)[None, :]).astype("float32")
+    transform = Affine(1.0, 0, 5000.0, 0, -1.0, 8000.0)  # origin (5000, 8000)
+    ds = memfile.open(driver="GTiff", width=width, height=height, count=1, dtype="float32",
+                      crs="EPSG:5070", transform=transform, nodata=nodata)
+    ds.write(data, 1)
+    return ds
+
+
+@pytest.mark.parametrize("bounds", [
+    (4990.0, 7980.0, 5010.0, 7995.0),   # overhangs LEFT  by 10 cells
+    (5010.0, 7990.0, 5020.0, 8012.0),   # overhangs TOP   by 12 cells
+    (5030.0, 7980.0, 5050.0, 7990.0),   # overhangs RIGHT by 10 cells
+    (5010.0, 7960.0, 5020.0, 7975.0),   # overhangs BOTTOM by 5 cells
+])
+def test_read_padded_keeps_array_aligned_with_transform_on_every_edge(bounds):
+    with MemoryFile() as mf, _ramp_dataset(mf) as ds:
+        dem, tr = topo.read_padded(ds, bounds)
+        # every valid cell's value must match the value at the same geographic point
+        rows, cols = np.nonzero(dem != -9999.0)
+        assert rows.size > 0
+        for r, c in zip(rows[::7], cols[::7]):
+            x, y = tr * (c + 0.5, r + 0.5)
+            src_r, src_c = ds.index(x, y)
+            assert dem[r, c] == 1000 * src_r + src_c
+        # the requested window's full size is returned, voids padded with the sentinel
+        assert dem.shape == (round((bounds[3] - bounds[1])), round((bounds[2] - bounds[0])))
+        assert (dem == -9999.0).any()
+
+
+def test_read_padded_fully_outside_returns_all_sentinel_not_empty():
+    with MemoryFile() as mf, _ramp_dataset(mf) as ds:
+        dem, _ = topo.read_padded(ds, (6000.0, 9000.0, 6020.0, 9010.0))
+        assert dem.shape == (10, 20)
+        assert (dem == -9999.0).all()
+
+
+def test_read_padded_inside_is_identical_to_plain_windowed_read():
+    """Output-identity guarantee: an in-bounds window takes the unchanged code path."""
+    from rasterio.windows import from_bounds
+    b = (5003.3, 7981.7, 5017.9, 7996.2)  # fractional, fully inside
+    with MemoryFile() as mf, _ramp_dataset(mf) as ds:
+        dem, tr = topo.read_padded(ds, b)
+        w = from_bounds(*b, transform=ds.transform)
+        ref = topo._normalize_nodata(ds.read(1, window=w).astype(np.float32), ds.nodata)
+        assert np.array_equal(dem, ref)
+        assert tr == ds.window_transform(w)
+
+
+@pytest.mark.parametrize("shape", [(1, 40), (40, 1), (0, 12), (12, 0)])
+def test_lake_max_depth_degenerate_window_returns_zero_not_raises(shape):
+    dem = np.full(shape, 10.0)
+    mask = np.zeros(shape, bool)
+    assert topo.lake_max_depth(dem, mask, Affine(1, 0, 0, 0, -1, 0)) == 0.0
+
+
+def test_gdal_http_env_sets_timeouts():
+    assert topo.GDAL_HTTP_ENV["GDAL_HTTP_TIMEOUT"] == "60"
+    assert topo.GDAL_HTTP_ENV["GDAL_HTTP_MAX_RETRY"] == "5"
+    assert topo.GDAL_HTTP_ENV["GDAL_HTTP_RETRY_DELAY"] == "2"
+    assert topo.GDAL_HTTP_ENV["AWS_NO_SIGN_REQUEST"] == "YES"

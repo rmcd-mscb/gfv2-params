@@ -42,16 +42,16 @@ import rasterio
 from rasterio.enums import Resampling
 from rasterio.errors import RasterioIOError
 from rasterio.vrt import WarpedVRT
-from rasterio.windows import from_bounds
 
 from .tiling import group_by_tile
 from .topo import (
+    GDAL_HTTP_ENV,
     _interior_mask,
     _native_resolution,
-    _normalize_nodata,
     depth_to_spill,
     is_hydroflattened,
     lake_max_depth,
+    read_padded,
     read_window,
     volume_mean_depth,
 )
@@ -60,7 +60,7 @@ __all__ = ["_polygon_depth_from_dem", "compute_polygon", "run_batch"]
 
 # GDAL/rasterio env for anonymous public-bucket HTTPS reads — identical to
 # `read_window`'s (see topo.py's module notes on /vsicurl/ vs /vsis3/).
-_ENV_OPTS = {"AWS_NO_SIGN_REQUEST": "YES", "GDAL_DISABLE_READDIR_ON_OPEN": "EMPTY_DIR"}
+_ENV_OPTS = GDAL_HTTP_ENV
 
 # Output columns of `run_batch`'s parquet, fixed so an empty batch (a
 # SLURM array task with 0 assigned tiles) still writes a well-formed,
@@ -181,26 +181,21 @@ def _open_tile_vrt(tile_key: str):
 def _read_tile_window(vrt, geom, rim_buffer_m: float = 200.0) -> tuple[np.ndarray, object]:
     """Windowed RAW-DEM read of `geom`'s buffered bbox against an ALREADY-OPEN VRT.
 
-    The single-source counterpart of `read_window`'s inner read block
-    (`from_bounds` -> `vrt.read` -> `window_transform` -> nodata
-    normalization via `_normalize_nodata`) — deliberately NOT calling
-    `read_window` itself, which always opens its source fresh (that
-    per-call open is exactly what `run_batch`'s tile cache avoids for
-    polygons that don't straddle a tile boundary). `geom` must be in the
-    VRT's CRS (EPSG:5070, matching `dprst_gdf`/`read_window`'s
-    convention), so `rim_buffer_m` (metres) adds directly to `geom.bounds`
-    with no reprojection, exactly as in `read_window`.
+    The single-source counterpart of `read_window`'s inner read block —
+    deliberately NOT calling `read_window` itself, which always opens its
+    source fresh (that per-call open is exactly what `run_batch`'s tile
+    cache avoids for polygons that don't straddle a tile boundary). `geom`
+    must be in the VRT's CRS (EPSG:5070, matching `dprst_gdf`/
+    `read_window`'s convention), so `rim_buffer_m` (metres) adds directly
+    to `geom.bounds` with no reprojection, exactly as in `read_window`.
+    Delegates to `topo.read_padded` (#223) so a buffered window that
+    overhangs this tile's edge comes back correctly clipped-and-padded
+    instead of silently misregistered or empty.
     """
     minx, miny, maxx, maxy = geom.bounds
-    minx -= rim_buffer_m
-    miny -= rim_buffer_m
-    maxx += rim_buffer_m
-    maxy += rim_buffer_m
-    window = from_bounds(minx, miny, maxx, maxy, transform=vrt.transform)
-    dem = vrt.read(1, window=window).astype(np.float32)
-    transform = vrt.window_transform(window)
-    dem = _normalize_nodata(dem, vrt.nodata)
-    return dem, transform
+    return read_padded(
+        vrt, (minx - rim_buffer_m, miny - rim_buffer_m, maxx + rim_buffer_m, maxy + rim_buffer_m)
+    )
 
 
 def _resolution_from_tile_key(tile_key: str) -> str:

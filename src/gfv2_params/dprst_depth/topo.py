@@ -17,11 +17,11 @@ import rasterio
 import richdem as rd
 from osgeo import gdal
 from rasterio.enums import Resampling
-from rasterio.errors import RasterioIOError
+from rasterio.errors import RasterioIOError, WindowError
 from rasterio.features import geometry_mask
 from rasterio.vrt import WarpedVRT
 from rasterio.warp import calculate_default_transform, transform_bounds, transform_geom
-from rasterio.windows import from_bounds
+from rasterio.windows import Window, from_bounds
 from scipy import ndimage
 
 from ..depstor import select_connected_waterbodies
@@ -214,6 +214,54 @@ TILE1M_HTTPS_TEMPLATE = (
     "USGS_1M_{zone:02d}_x{x}y{y}_{project}.tif"
 )
 
+# One GDAL/rasterio env for every anonymous 3DEP read. The HTTP timeout/retry
+# settings exist because a stalled socket otherwise blocks forever: on
+# 2026-09-18 seven array tasks on node cn132 sat ~6.9 h on one (#223).
+GDAL_HTTP_ENV = {
+    "AWS_NO_SIGN_REQUEST": "YES",
+    "GDAL_DISABLE_READDIR_ON_OPEN": "EMPTY_DIR",
+    "GDAL_HTTP_TIMEOUT": "60",
+    "GDAL_HTTP_MAX_RETRY": "5",
+    "GDAL_HTTP_RETRY_DELAY": "2",
+}
+
+
+def read_padded(src, bounds, sentinel: float = -9999.0):
+    """Windowed read of `bounds` whose array ALWAYS matches the returned transform.
+
+    rasterio silently clips a non-boundless read to the dataset, while
+    `window_transform(window)` describes the UNCLIPPED window, so a window
+    overhanging the left/top edge came back shifted by the overhang (#223),
+    and one wholly outside came back empty. `WarpedVRT` forbids
+    `boundless=True`, so pad by hand: read the intersection and place it in
+    a sentinel-filled array of the requested size.
+
+    A window wholly inside the dataset takes the original float-window path
+    unchanged, so in-bounds reads stay bit-identical to the pre-#223 code.
+    """
+    window = from_bounds(*bounds, transform=src.transform)
+    inside = (
+        window.col_off >= 0 and window.row_off >= 0
+        and window.col_off + window.width <= src.width
+        and window.row_off + window.height <= src.height
+    )
+    if inside:
+        dem = src.read(1, window=window).astype(np.float32)
+        return _normalize_nodata(dem, src.nodata, sentinel), src.window_transform(window)
+
+    snapped = window.round_offsets().round_lengths()
+    out = np.full((int(snapped.height), int(snapped.width)), sentinel, dtype=np.float32)
+    transform = src.window_transform(snapped)
+    try:
+        inter = snapped.intersection(Window(0, 0, src.width, src.height))
+    except WindowError:
+        return out, transform
+    part = _normalize_nodata(src.read(1, window=inter).astype(np.float32), src.nodata, sentinel)
+    r0 = int(inter.row_off - snapped.row_off)
+    c0 = int(inter.col_off - snapped.col_off)
+    out[r0:r0 + part.shape[0], c0:c0 + part.shape[1]] = part
+    return out, transform
+
 
 def _normalize_nodata(
     arr: np.ndarray, src_nodata: float | None, sentinel: float = -9999.0
@@ -309,6 +357,10 @@ def lake_max_depth(dem: np.ndarray, polygon_mask: np.ndarray, transform) -> floa
     # mean terrain slope in a shoreline ring just outside the lake
     ring = ndimage.binary_dilation(polygon_mask, iterations=2) & ~polygon_mask
     dem_arr = np.asarray(dem, float)
+    if min(dem_arr.shape) < 2:
+        # np.gradient needs >=2 cells per axis. A degenerate window is a
+        # geometry fact, not a code error -- report no slope (#223).
+        return 0.0
     void = (dem_arr == sentinel) | ~np.isfinite(dem_arr)
     ring = ring & ~void
     dem_clean = np.where(void, np.nan, dem_arr)
@@ -531,10 +583,7 @@ def read_window(geom, best_topo: str, wesm_row=None, rim_buffer_m: float = 200.0
     maxx += rim_buffer_m
     maxy += rim_buffer_m
 
-    env_opts = {
-        "AWS_NO_SIGN_REQUEST": "YES",
-        "GDAL_DISABLE_READDIR_ON_OPEN": "EMPTY_DIR",
-    }
+    env_opts = GDAL_HTTP_ENV
 
     with rasterio.Env(**env_opts):
         resolution_used = best_topo
@@ -568,16 +617,11 @@ def read_window(geom, best_topo: str, wesm_row=None, rim_buffer_m: float = 200.0
                 with WarpedVRT(
                     src, crs="EPSG:5070", resampling=Resampling.nearest, resolution=resolution,
                 ) as vrt:
-                    window = from_bounds(minx, miny, maxx, maxy, transform=vrt.transform)
-                    dem = vrt.read(1, window=window).astype(np.float32)
-                    transform = vrt.window_transform(window)
+                    dem, transform = read_padded(vrt, (minx, miny, maxx, maxy))
                     crs = vrt.crs
-                    nodata = vrt.nodata
         finally:
             if vsimem_vrt is not None:
                 gdal.Unlink(vsimem_vrt)
-
-    dem = _normalize_nodata(dem, nodata)
 
     source = {"requested": best_topo, "resolution": resolution_used, "paths": paths}
     return dem, transform, crs, source
