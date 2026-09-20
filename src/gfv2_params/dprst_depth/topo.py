@@ -217,13 +217,26 @@ TILE1M_HTTPS_TEMPLATE = (
 
 # One GDAL/rasterio env for every anonymous 3DEP read. The HTTP timeout/retry
 # settings exist because a stalled socket otherwise blocks forever: on
-# 2026-09-18 seven array tasks on node cn132 sat ~6.9 h on one (#223).
+# 2026-09-18 seven array tasks on node cn132 each sat ~6.9 h on a stalled
+# socket (#223). GDAL_HTTP_TIMEOUT bounds each individual HTTP request, NOT
+# the whole windowed read: GDAL maps it to libcurl's CURLOPT_TIMEOUT, which
+# times a single curl_easy_perform() call, and /vsicurl/ issues one such call
+# per chunk (16 KB granularity by default, adaptively up to 2 MB for
+# sequential access -- see GDAL's virtual file systems docs), so a windowed
+# COG read fans out into many independently-timed chunk requests rather than
+# one that must finish inside 60 s. GDAL_HTTP_CONNECTTIMEOUT bounds the
+# initial TCP/TLS handshake; the LOW_SPEED pair is what actually aborts a
+# socket that connected but then stopped delivering bytes (< 1000 B/s for
+# 60 s) -- the specific "stalled socket" failure mode the cn132 incident was.
 GDAL_HTTP_ENV = {
     "AWS_NO_SIGN_REQUEST": "YES",
     "GDAL_DISABLE_READDIR_ON_OPEN": "EMPTY_DIR",
     "GDAL_HTTP_TIMEOUT": "60",
     "GDAL_HTTP_MAX_RETRY": "5",
     "GDAL_HTTP_RETRY_DELAY": "2",
+    "GDAL_HTTP_CONNECTTIMEOUT": "30",
+    "GDAL_HTTP_LOW_SPEED_TIME": "60",
+    "GDAL_HTTP_LOW_SPEED_LIMIT": "1000",
 }
 
 

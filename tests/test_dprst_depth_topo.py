@@ -376,3 +376,10 @@ def test_gdal_http_env_sets_timeouts():
     assert topo.GDAL_HTTP_ENV["GDAL_HTTP_MAX_RETRY"] == "5"
     assert topo.GDAL_HTTP_ENV["GDAL_HTTP_RETRY_DELAY"] == "2"
     assert topo.GDAL_HTTP_ENV["AWS_NO_SIGN_REQUEST"] == "YES"
+    # (#223 toolkit-review finding 2) GDAL_HTTP_TIMEOUT bounds each request,
+    # not a whole windowed read -- these are what actually abort a stalled
+    # socket: a bounded connect phase, plus a minimum-throughput floor that
+    # cancels a connection which stopped delivering bytes.
+    assert topo.GDAL_HTTP_ENV["GDAL_HTTP_CONNECTTIMEOUT"] == "30"
+    assert topo.GDAL_HTTP_ENV["GDAL_HTTP_LOW_SPEED_TIME"] == "60"
+    assert topo.GDAL_HTTP_ENV["GDAL_HTTP_LOW_SPEED_LIMIT"] == "1000"
