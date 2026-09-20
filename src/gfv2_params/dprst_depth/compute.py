@@ -1,11 +1,19 @@
-"""Per-tile compute of per-polygon `dprst_depth_avg` (issue #173 Task 4).
+"""Per-tile-SET compute of per-polygon `dprst_depth_avg` (issue #173 Task 4;
+tile-set batching + threading, issue #223 part 2).
 
-This is the compute core the SLURM array (Task 9) fans out over: read each
-elevation tile ONCE and run the depth math for every dprst polygon whose
-window falls in it, rather than opening a raster once per polygon (see
-`tiling.py`'s module docstring for the compute-budget rationale).
+This is the compute core the SLURM array fans out over: open each of this
+batch's real 3DEP tile SETS (`sources.TileSet` -- one project, one UTM zone,
+`sources.tag_and_assign`'s ranked candidate list) ONCE and run the depth math
+for every polygon whose PRIMARY set that is, rather than opening a fresh
+source per polygon. Measured on the gfv2r2 CONUS run: 51.6% of polygons
+(202,680 of 392,672) took a per-polygon fallback that opened a fresh remote
+source for each one -- 73% of that time was `vrt.read` (network I/O + warp),
+only 24% arithmetic, and tasks ran at ~55% of one core. Opening each set once
+and running sets CONCURRENTLY on threads is the fix: the work is I/O-bound
+(waiting on remote reads), so Python's GIL release during `vrt.read` lets
+`n_threads` windows actually overlap.
 
-Three layers, ordered by how much I/O they touch:
+Four layers, ordered by how much I/O they touch:
 
 - `_polygon_depth_from_dem` — pure numpy-in/dict-out core (unit-tested
   offline, no S3). Given a DEM window + the polygon's interior mask,
@@ -14,24 +22,31 @@ Three layers, ordered by how much I/O they touch:
 - `compute_polygon` — the single-polygon, always-correct path: wraps
   `topo.read_window` (which resolves + mosaics whatever 1 m/10 m source(s)
   cover the polygon) and `topo._interior_mask`, then calls
-  `_polygon_depth_from_dem`. Used directly for a lone polygon (e.g. a
-  multi-tile straggler, or a live smoke test) and by `run_batch` as the
-  fallback path below.
-- `run_batch` — the batch driver: opens each of this batch's tile keys
-  ONCE as a `WarpedVRT` and windows every SINGLE-tile polygon assigned to
-  it against that one open VRT (no re-open per polygon); polygons whose
-  buffered window spans more than one of this batch's tiles fall back to
-  `compute_polygon` (which mosaics correctly via `read_window`), computed
-  once each — see `_read_tile_window`/`_open_tile_vrt` below for why this
-  needs its own thin windowed-read glue instead of calling `read_window`
-  per polygon (that would defeat the whole point: a fresh
-  `rasterio.open` + fresh HTTP range reads for every polygon sharing a
-  tile).
+  `_polygon_depth_from_dem`. Kept for a lone polygon (e.g. a live smoke
+  test) — `run_batch` no longer calls it (a tile SET's `open_tile_set`
+  already yields a single mosaicked/warped source, so there is no separate
+  "spans more than one source" case left to fall back for).
+- `open_tile_set`/`_compute_one` — the per-set primitives `run_batch` calls:
+  `open_tile_set` opens ONE `TileSet` (a single tile, or an in-memory
+  `gdal.BuildVRT` mosaic of one project's same-zone tiles) as a warped
+  EPSG:5070 VRT; `_compute_one` windows one polygon against an already-open
+  set and returns `None` (never raises) if the interior came back with no
+  valid cells there, so the caller can try the polygon's next ranked
+  candidate instead of shipping a false measurement.
+- `run_batch` — the batch driver: groups this batch's polygons by their
+  PRIMARY tile set (`source_tiles`), opens each set once, and runs sets
+  CONCURRENTLY on `n_threads` threads. A polygon whose primary set yields no
+  usable interior (or fails to open/read) walks its remaining ranked
+  `candidates` in a second pass, ending at the always-present 10 m seamless
+  tile — see `run_batch`'s own docstring for the counter/logging contract
+  this candidate-recovery path preserves from the pre-#223 per-tile design.
 """
 from __future__ import annotations
 
 import logging
-from collections import defaultdict
+import threading
+import uuid
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -39,11 +54,13 @@ import geopandas as gpd
 import numpy as np
 import pandas as pd
 import rasterio
+from osgeo import gdal
 from rasterio.enums import Resampling
 from rasterio.errors import RasterioIOError
+from rasterio.features import geometry_mask
 from rasterio.vrt import WarpedVRT
 
-from .tiling import group_by_tile
+from .sources import decode
 from .topo import (
     GDAL_HTTP_ENV,
     _interior_mask,
@@ -56,7 +73,7 @@ from .topo import (
     volume_mean_depth,
 )
 
-__all__ = ["_polygon_depth_from_dem", "compute_polygon", "run_batch"]
+__all__ = ["_polygon_depth_from_dem", "compute_polygon", "open_tile_set", "run_batch"]
 
 # GDAL/rasterio env for anonymous public-bucket HTTPS reads — a COPY of
 # `topo.GDAL_HTTP_ENV` (see topo.py's module notes on /vsicurl/ vs /vsis3/
@@ -67,8 +84,14 @@ __all__ = ["_polygon_depth_from_dem", "compute_polygon", "run_batch"]
 _ENV_OPTS = dict(GDAL_HTTP_ENV)
 
 # Output columns of `run_batch`'s parquet, fixed so an empty batch (a
-# SLURM array task with 0 assigned tiles) still writes a well-formed,
-# concat-able parquet rather than a columnless one.
+# SLURM array task with 0 assigned tile sets) still writes a well-formed,
+# concat-able parquet rather than a columnless one. `source` is the winning
+# tile set's `project` (or `"10m"` on the seamless fallback); `interior_coverage`
+# is the fraction of the polygon's TRUE interior footprint whose cells were
+# real, not `read_padded` sentinel padding -- a diagnostic, never a gate at
+# write time (toolkit review round 4, finding 6a/7, issue #223): a partially-
+# covered polygon still ships as `method="measured"`, and this column is what
+# lets a later donor-filter (next task) exclude it from regional calibration.
 _OUTPUT_COLUMNS = [
     "COMID",
     "dprst_depth_m",
@@ -77,6 +100,8 @@ _OUTPUT_COLUMNS = [
     "flat",
     "resolution",
     "method",
+    "source",
+    "interior_coverage",
 ]
 
 
@@ -165,24 +190,28 @@ def compute_polygon(geom, best_topo: str, wesm_row=None) -> dict:
 
 
 @contextmanager
-def _open_tile_vrt(tile_key: str):
-    """Open one elevation tile ONCE as a `WarpedVRT`, for many windowed reads.
-
-    Mirrors `read_window`'s per-source `WarpedVRT` setup exactly (native
-    GSD via `_native_resolution`, nearest resampling so a hydro-flattened
-    breakline's exact constancy survives the read — see `read_window`'s
-    docstring) but yields the open VRT to the caller instead of reading a
-    single window and closing: `run_batch` issues one windowed read per
-    polygon assigned to this tile against the SAME open VRT, so GDAL's
-    per-dataset block cache stays warm across them and the tile's
-    COG header/IFD is only fetched once.
-    """
-    with rasterio.open(tile_key) as src:
-        resolution = _native_resolution(src, "EPSG:5070")
-        with WarpedVRT(
-            src, crs="EPSG:5070", resampling=Resampling.nearest, resolution=resolution
-        ) as vrt:
-            yield vrt
+def open_tile_set(ts):
+    """ONE open per tile set: a single tile, or an in-memory mosaic of one
+    project's same-zone tiles (BuildVRT cannot mix CRSs, which is why a set
+    is single-zone -- see sources.rank_candidates). Warped to EPSG:5070 at
+    native GSD with nearest resampling, exactly as the per-tile path always
+    did, so in-bounds single-tile reads stay bit-identical."""
+    vsimem = None
+    path = ts.keys[0]
+    if len(ts.keys) > 1:
+        vsimem = f"/vsimem/dprst_depth_set_{uuid.uuid4().hex}.vrt"
+        gdal.BuildVRT(vsimem, list(ts.keys))
+        path = vsimem
+    try:
+        with rasterio.open(path) as src:
+            resolution = _native_resolution(src, "EPSG:5070")
+            with WarpedVRT(
+                src, crs="EPSG:5070", resampling=Resampling.nearest, resolution=resolution
+            ) as vrt:
+                yield vrt
+    finally:
+        if vsimem is not None:
+            gdal.Unlink(vsimem)
 
 
 def _read_tile_window(vrt, geom, rim_buffer_m: float = 200.0) -> tuple[np.ndarray, object]:
@@ -205,29 +234,34 @@ def _read_tile_window(vrt, geom, rim_buffer_m: float = 200.0) -> tuple[np.ndarra
     )
 
 
-def _resolution_from_tile_key(tile_key: str) -> str:
-    """`"1m"`/`"10m"` from a tile key's filename convention (Task 3's `tiling.py`)."""
-    return "1m" if "USGS_1M_" in tile_key else "10m"
+def _compute_one(vrt, geom) -> dict | None:
+    """Depth stats for one polygon against an open set, or `None` if its
+    interior has no valid cells there (so the caller tries the next
+    candidate).
 
-
-def _project_lookup(dprst_gdf: gpd.GeoDataFrame, wesm_gdf: gpd.GeoDataFrame) -> pd.Series:
-    """`dprst_gdf` index -> covering WESM `project` string (centroid-in-footprint).
-
-    Same sjoin idiom as `topo.resolution_class` (a single vectorized join,
-    not one per polygon). Only needed for the multi-tile fallback path in
-    `run_batch`: those polygons call `compute_polygon` -> `read_window`
-    directly, which for `best_topo == "1m"` requires a `wesm_row` with a
-    `project` to resolve its covering 3DEP 1 m tile(s) (single-tile
-    polygons never need this — their tile key, already a resolved
-    `/vsicurl/` path, is opened directly by `_open_tile_vrt`). Returns an
-    empty Series if `wesm_gdf` carries no usable `project` index.
+    Also reports `interior_coverage`: the fraction of the polygon's TRUE
+    interior footprint (before the `dem != sentinel` exclusion `_interior_mask`
+    applies inline) whose cells were real, not `read_padded` sentinel
+    padding. `_interior_mask` returns only the post-exclusion mask and
+    `topo.py` is out of scope for this task, so the footprint is rasterized a
+    SECOND time here rather than splitting `_interior_mask` into two return
+    values (toolkit review round 4, findings 6a/7, issue #223) -- `geom` is
+    guaranteed non-degenerate here (`interior.any()` already returned True),
+    so `footprint.sum()` is always >= 1. A low-but-nonzero coverage still
+    ships as `method="measured"` with no gate at write time -- this figure is
+    what lets a later donor-filter (next task) exclude it from regional
+    calibration; see docs/dprst_depth_avg_reference.md's "coverage loss"
+    paragraph.
     """
-    if wesm_gdf is None or len(wesm_gdf) == 0 or "project" not in wesm_gdf.columns:
-        return pd.Series(dtype=object)
-    pts = dprst_gdf.set_geometry(dprst_gdf.geometry.centroid)
-    wesm = wesm_gdf.to_crs(dprst_gdf.crs)[["project", "geometry"]]
-    hit = gpd.sjoin(pts, wesm, how="left", predicate="within")
-    return hit.groupby(level=0)["project"].first()
+    dem, transform = _read_tile_window(vrt, geom)
+    interior = _interior_mask(dem, transform, geom)
+    if not interior.any():
+        return None
+    footprint = geometry_mask([geom], out_shape=dem.shape, transform=transform, invert=True)
+    result = _polygon_depth_from_dem(dem, interior, transform)
+    result["resolution"] = "1m" if abs(transform.a) < 5.0 else "10m"
+    result["interior_coverage"] = float(interior.sum()) / max(int(footprint.sum()), 1)
+    return result
 
 
 def _empty_batch_frame() -> pd.DataFrame:
@@ -236,230 +270,107 @@ def _empty_batch_frame() -> pd.DataFrame:
 
 def run_batch(
     dprst_gdf: gpd.GeoDataFrame,
-    tile_keys: list[str],
-    wesm_gdf: gpd.GeoDataFrame,
+    tile_sets: list[str],
     out_parquet: str | Path,
     logger: logging.Logger,
+    n_threads: int = 1,
 ) -> pd.DataFrame:
-    """Compute `_polygon_depth_from_dem` for every polygon covered by `tile_keys`.
+    """Compute every polygon whose PRIMARY tile set is in `tile_sets`.
 
-    `dprst_gdf` is the FULL dprst polygon set (already tagged with
-    `best_topo` by `topo.resolution_class`, indexed as `tiling.group_by_tile`
-    expects); `tile_keys` is ONE SLURM array task's slice of
-    `tiling.tile_batches`'s output. `group_by_tile` is recomputed here (pure
-    geometry, no I/O — see `tiling.py`'s module docstring) and restricted to
-    `tile_keys` so `run_batch` only needs the batch's tile-key list, not the
-    full CONUS tile->polygon dict, as its SLURM-array argument.
-
-    Each tile in `tile_keys` is opened ONCE (`_open_tile_vrt`) and every
-    polygon assigned ONLY to that tile within this batch is windowed
-    against the same open VRT (`_read_tile_window`) — the whole point of
-    the tile-grouped work-list (Task 3). A polygon whose buffered window
-    spans MORE THAN ONE of this batch's tiles cannot be correctly read
-    from a single tile's VRT (it may need a multi-tile mosaic), so it is
-    computed exactly once via `compute_polygon` (full `read_window`) after
-    the tile loop — this is the "dedup polygons that span multiple tiles"
-    requirement: each polygon index is computed at most once PER BATCH.
-    (A polygon whose covering tiles are split ACROSS batches by
-    `tiling.tile_batches`'s bin-packing is out of scope here — `run_batch`
-    only sees one batch's tile keys; CONUS-wide de-duplication across
-    batch parquets, if any, is a Task 9 concatenation concern.)
-
-    Writes `out_parquet` (one row per computed polygon: `COMID`,
-    `dprst_depth_m`, `measured_max_m`, `hollister_max_m`, `flat`,
-    `resolution`, `method`) and returns the same DataFrame.
-
-    Failures are counted in two SEPARATE buckets so a systematic code bug
-    can't hide behind the expected rate of routine tile gaps (#173 PR#177
-    review FIX 2):
-      - `n_read_failure` — `RasterioIOError` (the documented "tile/window
-        absent" signal, see `topo.py`'s `_existing_paths`/`read_window`
-        notes) at either the tile-open or the windowed-read/compute site,
-        OR a single-tile read that returned WITHOUT raising but whose
-        interior_mask came back empty (`read_padded`'s all-sentinel window,
-        #223) -- that case defers the polygon to the multi-tile fallback
-        instead of emitting a nan/flat_pending row, and is counted here
-        alongside the exception-raising cases because it is the same
-        underlying signal: this tile/window did not have the polygon's
-        data. Logged at WARNING; expected at some baseline rate at CONUS
-        scale.
-      - `n_compute_error` — anything else (`MemoryError`, `TypeError`,
-        `ValueError`, `AttributeError`, a pyproj/CRS error, ...). Logged at
-        ERROR with the offending tile/polygon id so a real bug is loud and
-        distinct from a routine read gap. Still `continue`s (one bad
-        polygon/tile must not abort a 1000-polygon batch), but the ERROR
-        log + the `n_compute_error` count in the final summary make it
-        visible — `n_compute_error` should be ~0 in a healthy run.
+    Each set is opened once (`open_tile_set`) and all its member polygons are
+    windowed against it; sets run concurrently on `n_threads` threads (the work
+    is remote-read bound: 73% of time in `vrt.read` on gfv2r2). A polygon whose
+    primary yields no valid interior (or fails to read) walks its remaining
+    ranked `candidates`, ending at the 10 m seamless tile. Counters stay split
+    (#173 PR#177 FIX 2): read failures (expected, WARNING) vs compute errors
+    (bugs, ERROR) vs polygons with no usable source at all.
     """
-    if "best_topo" not in dprst_gdf.columns:
-        raise KeyError(
-            "dprst_gdf must be tagged by topo.resolution_class() first (missing 'best_topo')"
-        )
-    id_col = "COMID" if "COMID" in dprst_gdf.columns else None
+    for col in ("source_tiles", "candidates", "COMID"):
+        if col not in dprst_gdf.columns:
+            raise KeyError(f"run_batch needs '{col}' (plan with sources.tag_and_assign first)")
+    wanted = set(tile_sets)
+    members = {s: list(g.index) for s, g in dprst_gdf.groupby("source_tiles") if s in wanted}
+    counts = {"n_read_failure": 0, "n_compute_error": 0, "n_recovered": 0, "n_no_source": 0}
+    lock = threading.Lock()
 
-    if not tile_keys:
-        logger.info("run_batch: 0 tile keys assigned — writing empty parquet %s", out_parquet)
-        empty = _empty_batch_frame()
-        empty.to_parquet(out_parquet, index=False)
-        return empty
+    def _bump(key):
+        with lock:
+            counts[key] += 1
 
-    groups = group_by_tile(dprst_gdf, wesm_gdf)
-    batch_tile_set = set(tile_keys)
-    batch_groups = {k: v for k, v in groups.items() if k in batch_tile_set}
-
-    tiles_per_polygon: dict[int, list[str]] = defaultdict(list)
-    for tk, idxs in batch_groups.items():
-        for idx in idxs:
-            tiles_per_polygon[idx].append(tk)
-    n_polygons = len(tiles_per_polygon)
-
-    rows: list[dict] = []
-    done: set = set()
-    n_tile_reads = 0
-    n_fallback = 0
-    n_read_failure = 0
-    n_compute_error = 0
-
-    def _emit(idx, result: dict) -> None:
-        if id_col is not None:
-            result[id_col] = dprst_gdf.loc[idx, id_col]
-        rows.append(result)
-        done.add(idx)
-
-    with rasterio.Env(**_ENV_OPTS):
-        for tile_key in tile_keys:
-            idxs = batch_groups.get(tile_key, [])
-            single_tile_idxs = [
-                idx for idx in idxs if idx not in done and len(tiles_per_polygon[idx]) == 1
-            ]
-            if not single_tile_idxs:
-                continue
-            try:
-                with _open_tile_vrt(tile_key) as vrt:
-                    n_tile_reads += 1
-                    resolution = _resolution_from_tile_key(tile_key)
-                    for idx in single_tile_idxs:
-                        geom = dprst_gdf.geometry.loc[idx]
-                        try:
-                            dem, transform = _read_tile_window(vrt, geom)
-                            interior_mask = _interior_mask(dem, transform, geom)
-                            if not interior_mask.any():
-                                # The window landed wholly off this tile (or on nothing but
-                                # nodata): before #223's clip-and-pad this raised in
-                                # np.gradient and fell through to the multi-tile fallback,
-                                # which resolves 1 m tiles independently and often rescues
-                                # the polygon. read_padded no longer raises, so skip WITHOUT
-                                # done.add() to keep that rescue — and count it in the
-                                # documented read-failure bucket so a broken tile assignment
-                                # stays visible (#223).
-                                n_read_failure += 1
-                                logger.warning(
-                                    "  tile=%s idx=%s: window has no valid interior on this "
-                                    "tile — deferring to the multi-tile fallback",
-                                    tile_key, idx,
-                                )
-                                continue
-                            result = _polygon_depth_from_dem(dem, interior_mask, transform)
-                        except RasterioIOError as exc:
-                            # Expected: the polygon's window falls outside
-                            # what this tile actually publishes (a routine
-                            # read gap), not a code bug.
-                            n_read_failure += 1
+    def _attempt(ts_str, idxs):
+        """Run `idxs` against one set. Returns ({idx: result}, [unresolved idx])."""
+        ts = decode(ts_str)
+        done, pending = {}, []
+        try:
+            with rasterio.Env(**_ENV_OPTS), open_tile_set(ts) as vrt:
+                for idx in idxs:
+                    try:
+                        r = _compute_one(vrt, dprst_gdf.geometry.loc[idx])
+                    except RasterioIOError as exc:
+                        _bump("n_read_failure")
+                        logger.warning("  set=%s idx=%s: read failure (%s)", ts.project, idx, exc)
+                        r = None
+                    except Exception as exc:  # noqa: BLE001 - loud, isolated, never aborts the batch
+                        _bump("n_compute_error")
+                        logger.error("  set=%s idx=%s: UNEXPECTED compute error (%s: %s)",
+                                     ts.project, idx, type(exc).__name__, exc)
+                        r = None
+                    else:
+                        if r is None:
+                            # `_compute_one` returned None WITHOUT raising: an empty
+                            # interior on this set, not an exception. This is the
+                            # read-failure COUNT + WARNING from round-4's run_batch
+                            # fix (#223) -- carry it forward here too, or the
+                            # candidate-recovery rewrite silently drops the only
+                            # operator-visible signal that a set's window missed.
+                            _bump("n_read_failure")
                             logger.warning(
-                                "  tile=%s idx=%s: read failure (%s) — skipped",
-                                tile_key, idx, exc,
+                                "  set=%s idx=%s: window has no valid interior on "
+                                "this set — trying next candidate", ts.project, idx,
                             )
-                            continue
-                        except Exception as exc:  # noqa: BLE001 - log loud, skip, never abort the batch
-                            # Unexpected: MemoryError/TypeError/ValueError/
-                            # AttributeError/pyproj-CRS-error/etc — a real
-                            # code bug, not a routine tile gap. ERROR (not
-                            # WARNING) so it can't hide behind the expected
-                            # read-failure rate.
-                            n_compute_error += 1
-                            logger.error(
-                                "  tile=%s idx=%s: UNEXPECTED compute error (%s: %s) — skipped",
-                                tile_key, idx, type(exc).__name__, exc,
-                            )
-                            continue
-                        result["resolution"] = resolution
-                        result["method"] = "flat_pending" if result["flat"] else "measured"
-                        _emit(idx, result)
-            except RasterioIOError as exc:
-                # Expected: the tile key doesn't exist (a routine 404/read
-                # gap) — its polygons still get a chance via the multi-tile
-                # fallback below.
-                n_read_failure += 1
-                logger.warning(
-                    "  tile=%s: read failure opening tile (%s) — its %d single-tile "
-                    "polygon(s) skipped this batch",
-                    tile_key, exc, len(single_tile_idxs),
-                )
-                continue
-            except Exception as exc:  # noqa: BLE001 - log loud, skip the tile, never abort the batch
-                # Unexpected: a corrupt COG, bad CRS, MemoryError, etc — a
-                # real code/data bug distinct from a routine tile-absent
-                # read failure. ERROR so it's loud.
-                n_compute_error += 1
-                logger.error(
-                    "  tile=%s: UNEXPECTED error opening tile (%s: %s) — its %d single-tile "
-                    "polygon(s) skipped this batch",
-                    tile_key, type(exc).__name__, exc, len(single_tile_idxs),
-                )
-                continue
-            if n_tile_reads % 25 == 0:
-                logger.info(
-                    "  [%d polygons / %d tiles read] tile=%s (%d polygons)",
-                    len(rows), n_tile_reads, tile_key, len(single_tile_idxs),
-                )
+                    if r is None:
+                        pending.append(idx)
+                    else:
+                        r["source"] = ts.project
+                        done[idx] = r
+        except RasterioIOError as exc:
+            _bump("n_read_failure")
+            logger.warning("  set=%s: open failed (%s) — %d polygon(s) to recovery", ts.project, exc, len(idxs))
+            pending = list(idxs)
+        return done, pending
 
-        remaining = [idx for idx in tiles_per_polygon if idx not in done]
-        project_lookup = _project_lookup(dprst_gdf, wesm_gdf) if remaining else pd.Series(dtype=object)
-        for idx in remaining:
-            row = dprst_gdf.loc[idx]
-            project = project_lookup.get(idx)
-            wesm_row = {"project": project} if pd.notna(project) else None
-            try:
-                result = compute_polygon(row.geometry, row["best_topo"], wesm_row=wesm_row)
-            except RasterioIOError as exc:
-                n_read_failure += 1
-                logger.warning(
-                    "  idx=%s: multi-tile fallback read failure (%s) — skipped",
-                    idx, exc,
-                )
-                continue
-            except Exception as exc:  # noqa: BLE001 - log loud, skip, never abort the batch
-                n_compute_error += 1
-                logger.error(
-                    "  idx=%s: multi-tile fallback UNEXPECTED compute error (%s: %s) — skipped",
-                    idx, type(exc).__name__, exc,
-                )
-                continue
-            n_fallback += 1
-            _emit(idx, result)
+    results, to_recover = {}, []
+    with ThreadPoolExecutor(max(1, n_threads)) as ex:
+        for i, (done, pending) in enumerate(ex.map(lambda kv: _attempt(*kv), sorted(members.items())), 1):
+            results.update(done)
+            to_recover += pending
+            if i % 25 == 0:
+                logger.info("  [%d/%d tile sets] %d polygons done", i, len(members), len(results))
 
-    out_df = pd.DataFrame(rows)
-    if out_df.empty:
-        out_df = _empty_batch_frame()
-    out_df.to_parquet(out_parquet, index=False)
+    def _recover(idx):
+        for ts_str in dprst_gdf.at[idx, "candidates"][1:]:
+            done, _ = _attempt(ts_str, [idx])
+            if idx in done:
+                return idx, done[idx]
+        return idx, None
 
-    success_fraction = len(out_df) / n_polygons if n_polygons else 1.0
-    summary_args = (
-        len(out_df), n_polygons, n_tile_reads, n_fallback,
-        n_read_failure, n_compute_error, out_parquet,
-    )
-    summary_fmt = (
-        "run_batch: %d/%d polygons written (%d tile reads, %d multi-tile fallback, "
-        "n_read_failure=%d, n_compute_error=%d) -> %s"
-    )
-    # (#173 FIX 3) Completeness gate: a mass read-failure (S3 outage / HPC
-    # firewall regression) or ANY unexpected compute error must not ship
-    # silently at INFO — escalate the whole summary line so it's visible in
-    # a normal log scan.
-    if n_compute_error > 0:
-        logger.error(summary_fmt, *summary_args)
-    elif success_fraction < 0.90:
-        logger.warning(summary_fmt, *summary_args)
-    else:
-        logger.info(summary_fmt, *summary_args)
-    return out_df
+    with ThreadPoolExecutor(max(1, n_threads)) as ex:
+        for idx, r in ex.map(_recover, sorted(to_recover)):
+            if r is None:
+                counts["n_no_source"] += 1
+            else:
+                counts["n_recovered"] += 1
+                results[idx] = r
+
+    rows = []
+    for idx, r in results.items():
+        r["COMID"] = dprst_gdf.at[idx, "COMID"]
+        r["method"] = "flat_pending" if r["flat"] else "measured"
+        rows.append(r)
+    out = pd.DataFrame(rows, columns=_OUTPUT_COLUMNS)
+    out = out.sort_values("COMID").reset_index(drop=True) if len(out) else _empty_batch_frame()
+    out.to_parquet(out_parquet, index=False)
+    logger.info("run_batch: %d/%d polygons written (%d tile sets, %s) -> %s",
+                len(out), sum(len(v) for v in members.values()), len(members),
+                ", ".join(f"{k}={v}" for k, v in counts.items()), out_parquet)
+    return out
