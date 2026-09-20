@@ -60,13 +60,19 @@ class BuildContext:
     twi_raster: Path | None = None
     vpu: str | None = None  # single-VPU fabric's VPU label (e.g. "17"); None = use fabric `vpu` attr
     imperv_source: Path | None = None
-    # --- dprst_depth (#173) inputs -----------------------------------------
-    # Pre-staged, already 1m/QL1/QL2-filtered WESM workunit footprint index
-    # (columns: at least "project" + geometry) — see
-    # gfv2_params.dprst_depth.wesm_io's `ensure_wesm_local` /
-    # `load_wesm_1m_footprints` for the download + filtering this path is
-    # expected to already reflect. `topo.resolution_class` reads it directly.
-    wesm_index: Path | None = None
+    # --- dprst_depth (#173/#223) inputs -------------------------------------
+    # Staged real 3DEP 1 m tile inventory (gfv2_params.dprst_depth.inventory,
+    # issue #223) — replaces the convex-hull `wesm_index` footprint index. A
+    # hull claims ground a project never flew (see `dprst_depth/sources.py`'s
+    # module docstring for the measured fallout); `sources.tag_and_assign`
+    # reads this directly to tag `best_topo` and rank real tile-set
+    # candidates. Stage via `sbatch slurm_batch/stage_dem_1m_inventory.batch`.
+    dem_1m_inventory: Path | None = None
+    # WESM project QUALITY/DATE attributes, read geometry-free (see
+    # `inventory.project_attrs`/`load_project_attrs`) — joined by S3 project
+    # directory name to rank `dem_1m_inventory` candidates. Staged by the
+    # same `stage_dem_1m_inventory.batch` job as `dem_1m_inventory`.
+    wesm_project_attrs: Path | None = None
     # EPA Level III Ecoregions (see gfv2_params.download.epa_ecoregions) —
     # already staged in every fabric profile in base_config.yml.
     ecoregions_gpkg: Path | None = None
