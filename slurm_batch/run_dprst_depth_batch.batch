@@ -7,7 +7,7 @@
 #SBATCH --time=12:00:00
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=8
-#SBATCH --mem=64G
+#SBATCH --mem=96G
 #
 # Stage 2 of the dprst_depth pipeline (issue #173 Task 9; tile-set batching +
 # threading, issue #223 part 2): ONE array task computes dprst_depth for ONE
@@ -21,16 +21,26 @@
 # sets CONCURRENTLY on threads (the work is remote-read bound, not CPU
 # bound: 73% measured in vrt.read on gfv2r2 -- see compute.py's module
 # docstring for the 51.6%-of-polygons-on-the-slow-path regression this
-# fixes). --cpus-per-task=8 (was 2): 8 concurrent windows fit comfortably
-# under --mem=64G because `guard_oversized_windows` caps a 1 m window at
-# 200M cells (~4.8 GB working set) and nearly all windows are orders of
-# magnitude smaller -- every task still holds the FULL CONUS dprst polygon
-# set in memory (a vector GeoDataFrame, not CONUS-grid-scale; contrast the
-# 384G full-grid depstor builders) plus up to 8 open tile-set VRT windows at
-# once. --time=12:00:00 (the pothole-belt mega-component batch runs >4h; a
-# few long-pole batches need the headroom — the guard fixed OOM but not the
-# intrinsic long-pole) leaves margin under the 5 hr target even at 2x the
-# per-batch estimate.
+# fixes). --cpus-per-task=8 (was 2): `guard_oversized_windows` caps any
+# single 1 m window at 200M cells, budgeted in tiling.py at ~4 GiB/window
+# (20 bytes/cell); 8 concurrent windows at that cap is ~32-38 GB, and this
+# task's own second full-footprint boolean rasterization
+# (`interior_coverage`) roughly doubles the mask memory per window on top
+# of that. --mem=96G (was 64G) is a BOUND against that worst case, not a
+# measurement of one -- `tile_batches` balances each batch's TOTAL
+# estimated cost, not peak concurrency, so nothing guarantees a batch's 8
+# largest windows don't land on 8 different sets that all get scheduled at
+# once; nearly all real windows are orders of magnitude below the cap, but
+# a semaphore keyed on window cost (to bound peak concurrency tightly) is a
+# change deliberately left for a later PR, not this one -- this repo's
+# standing guidance for a CONUS-scale memory question is to bump --mem
+# rather than add a tuning knob. every task still holds the FULL CONUS
+# dprst polygon set in memory (a vector GeoDataFrame, not CONUS-grid-scale;
+# contrast the 384G full-grid depstor builders) on top of the window
+# budget above. --time=12:00:00 (the pothole-belt mega-component batch
+# runs >4h; a few long-pole batches need the headroom — the guard fixed
+# OOM but not the intrinsic long-pole) leaves margin under the 5 hr target
+# even at 2x the per-batch estimate.
 #
 # Submitted by slurm_batch/submit_dprst_depth.sh (afterok the plan job,
 # stage 1). Array size ($N_TILE_BATCHES) MUST match the plan step's
