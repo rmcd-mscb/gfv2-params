@@ -1222,7 +1222,7 @@ def run_batch(dprst_gdf, tile_sets, out_parquet, logger, n_threads: int = 1) -> 
     return out
 ```
 
-Set `_OUTPUT_COLUMNS = ["COMID", "dprst_depth_m", "measured_max_m", "hollister_max_m", "flat", "resolution", "method", "source", "interior_coverage"]` (see the ADDENDUM above for `interior_coverage`'s definition). The worker-thread counters must not race: `+=` on a dict int isn't atomic under free-threading, so they go through a `threading.Lock()`, which the code above already does via `_bump`. The recovery-phase counters are updated only on the main thread, as `ex.map` results are consumed.
+Set `_OUTPUT_COLUMNS = ["COMID", "dprst_depth_m", "measured_max_m", "hollister_max_m", "flat", "resolution", "method", "source", "interior_coverage"]` (see the ADDENDUM below for `interior_coverage`'s definition). The worker-thread counters must not race: `+=` on a dict int isn't atomic under free-threading, so they go through a `threading.Lock()`, which the code above already does via `_bump`. The recovery-phase counters are updated only on the main thread, as `ex.map` results are consumed.
 
 `_compute_one` calls `_read_tile_window(vrt, geom)`, which is now `read_padded` (Task 1).
 
