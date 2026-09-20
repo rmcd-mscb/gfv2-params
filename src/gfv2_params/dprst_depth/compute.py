@@ -329,6 +329,22 @@ def run_batch(
                         try:
                             dem, transform = _read_tile_window(vrt, geom)
                             interior_mask = _interior_mask(dem, transform, geom)
+                            if not interior_mask.any():
+                                # The window landed wholly off this tile (or on nothing but
+                                # nodata): before #223's clip-and-pad this raised in
+                                # np.gradient and fell through to the multi-tile fallback,
+                                # which resolves 1 m tiles independently and often rescues
+                                # the polygon. read_padded no longer raises, so skip WITHOUT
+                                # done.add() to keep that rescue — and count it in the
+                                # documented read-failure bucket so a broken tile assignment
+                                # stays visible (#223).
+                                n_read_failure += 1
+                                logger.warning(
+                                    "  tile=%s idx=%s: window has no valid interior on this "
+                                    "tile — deferring to the multi-tile fallback",
+                                    tile_key, idx,
+                                )
+                                continue
                             result = _polygon_depth_from_dem(dem, interior_mask, transform)
                         except RasterioIOError as exc:
                             # Expected: the polygon's window falls outside

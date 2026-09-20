@@ -136,7 +136,11 @@ def test_run_batch_skips_failed_tile_without_aborting_batch(tmp_path, monkeypatc
     separate failure counters)."""
     dprst_gdf = gpd.GeoDataFrame(
         {"COMID": [100, 200], "best_topo": ["10m", "10m"]},
-        geometry=[box(0, 0, 1, 1), box(50, 50, 51, 51)],
+        # idx 1's geometry (1,1)-(3,3) overlaps `_dummy_dem_transform`'s
+        # identity-transform (5,5) window, so its interior_mask is genuinely
+        # non-empty and it takes the tile-loop's measured path rather than
+        # tripping the #223 empty-interior deferral this test predates.
+        geometry=[box(0, 0, 1, 1), box(1, 1, 3, 3)],
         crs="EPSG:5070",
     )
     # idx 0 -> COMID 100 lives ONLY on the bad tile; idx 1 -> COMID 200 lives
@@ -193,8 +197,12 @@ def test_run_batch_counts_compute_error_separately(tmp_path, monkeypatch, caplog
     dprst_gdf = gpd.GeoDataFrame(
         {"COMID": [100, 200], "best_topo": ["10m", "10m"]},
         # idx 0's geometry is the sentinel the fake _read_tile_window keys
-        # its ValueError off of; idx 1 is any other geometry.
-        geometry=[box(0, 0, 1, 1), box(50, 50, 51, 51)],
+        # its ValueError off of; idx 1's geometry (1,1)-(3,3) overlaps
+        # `_dummy_dem_transform`'s identity-transform (5,5) window, so its
+        # interior_mask is genuinely non-empty and it takes the tile-loop's
+        # measured path rather than tripping the #223 empty-interior
+        # deferral this test predates.
+        geometry=[box(0, 0, 1, 1), box(1, 1, 3, 3)],
         crs="EPSG:5070",
     )
     monkeypatch.setattr(
@@ -290,3 +298,75 @@ def test_run_batch_dedupes_multi_tile_polygon(tmp_path, monkeypatch):
 
     written = pd.read_parquet(out_parquet)
     assert (written["COMID"] == 200).sum() == 1
+
+
+def test_run_batch_defers_empty_interior_to_multi_tile_fallback(tmp_path, monkeypatch, caplog):
+    """(#223 toolkit-review CRITICAL) `read_padded` never raises on a window
+    that misses its tile -- it returns an all-sentinel array of the requested
+    size. Pre-#223, that same miss produced a degenerate array that raised in
+    `lake_max_depth`'s `np.gradient` call, which the tile loop's broad
+    `except Exception` caught WITHOUT `done.add(idx)`, so the polygon fell
+    through to the multi-tile fallback (`compute_polygon` -> `read_window`,
+    an independent tile-resolution mechanism that often rescues it with a
+    real measurement). Without an explicit empty-interior check, the fixed
+    `read_padded` path emits a flat/nan row straight from the tile loop and
+    marks the polygon `done`, so the fallback rescue never runs -- a silent
+    product regression. idx 0's tile read comes back all-sentinel
+    (interior_mask.any() is False); idx 1's is a normal, valid single-tile
+    read for contrast."""
+    dprst_gdf = gpd.GeoDataFrame(
+        {"COMID": [100, 200], "best_topo": ["10m", "10m"]},
+        geometry=[box(0, 0, 1, 1), box(1, 1, 3, 3)],
+        crs="EPSG:5070",
+    )
+    monkeypatch.setattr(
+        compute_mod, "group_by_tile", lambda dprst, wesm: {"tile1": [0, 1]},
+    )
+    monkeypatch.setattr(compute_mod, "_open_tile_vrt", _fake_open_tile_vrt_factory())
+
+    def _fake_read_tile_window(vrt, geom, rim_buffer_m=200.0):
+        if tuple(geom.bounds) == (0.0, 0.0, 1.0, 1.0):
+            # window missed the tile entirely -- read_padded's all-sentinel
+            # return, never raises.
+            return np.full((5, 5), -9999.0, dtype=np.float32), Affine.identity()
+        return _dummy_dem_transform()
+
+    monkeypatch.setattr(compute_mod, "_read_tile_window", _fake_read_tile_window)
+
+    fallback_calls: list[tuple] = []
+
+    def _fake_compute_polygon(geom, best_topo, wesm_row=None):
+        fallback_calls.append(geom.bounds)
+        return {
+            "dprst_depth_m": 3.5, "measured_max_m": 4.0, "hollister_max_m": 4.2,
+            "flat": False, "resolution": "1m", "method": "measured",
+        }
+
+    monkeypatch.setattr(compute_mod, "compute_polygon", _fake_compute_polygon)
+
+    out_parquet = tmp_path / "batch.parquet"
+    caplog.set_level(logging.INFO, logger="empty_interior_fallback")
+
+    out_df = run_batch(dprst_gdf, ["tile1"], wesm_gdf=None,
+                        out_parquet=out_parquet, logger=_L("empty_interior_fallback"))
+
+    # (b) the fallback was actually called, and ONLY for idx 0.
+    assert fallback_calls == [(0.0, 0.0, 1.0, 1.0)]
+
+    # (a) + (c) idx 0 (COMID 100) does not appear as a flat/nan row from the
+    # tile loop -- it carries the FALLBACK's result.
+    row100 = out_df[out_df["COMID"] == 100].iloc[0]
+    assert row100["method"] == "measured"
+    assert row100["dprst_depth_m"] == 3.5
+    assert row100["resolution"] == "1m"  # the fallback's resolution, not the tile's "10m"
+
+    # idx 1 (COMID 200) took the normal tile-loop path and never touched the
+    # fallback (resolution comes from the tile key, not the fallback).
+    row200 = out_df[out_df["COMID"] == 200].iloc[0]
+    assert row200["resolution"] == "10m"
+
+    warnings = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
+    assert any("deferring to the multi-tile fallback" in m for m in warnings)
+
+    summaries = [r.getMessage() for r in caplog.records if "run_batch:" in r.getMessage()]
+    assert summaries and "n_read_failure=1" in summaries[-1]
