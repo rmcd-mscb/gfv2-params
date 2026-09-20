@@ -82,6 +82,12 @@ def _fake_open_tile_set_and_compute_one(monkeypatch):
     fixture's two cases: polygon A (COMID 101, bounds minx=280) is a real,
     non-flat depression; polygon B (COMID 102, bounds minx=680) is
     hydro-flattened and must fall through `fill.py`'s ladder.
+
+    `interior_coverage` is DELIBERATELY distinctive per polygon (0.83 / 0.55,
+    neither of which is 1.0 or any other value a silently-dropped/defaulted
+    column could plausibly produce) so a test asserting on it cannot pass by
+    accident — see `test_dprst_depth_build_end_to_end`'s provenance-parquet
+    assertions.
     """
     from contextlib import contextmanager
 
@@ -93,11 +99,11 @@ def _fake_open_tile_set_and_compute_one(monkeypatch):
         if geom.bounds[0] < 500:  # polygon A
             return {
                 "dprst_depth_m": 2.5, "measured_max_m": 5.0, "hollister_max_m": 3.0,
-                "flat": False, "resolution": "10m", "interior_coverage": 1.0,
+                "flat": False, "resolution": "10m", "interior_coverage": 0.83,
             }
         return {  # polygon B: hydro-flattened
             "dprst_depth_m": float("nan"), "measured_max_m": float("nan"),
-            "hollister_max_m": 3.0, "flat": True, "resolution": "10m", "interior_coverage": 1.0,
+            "hollister_max_m": 3.0, "flat": True, "resolution": "10m", "interior_coverage": 0.55,
         }
 
     monkeypatch.setattr(compute_mod, "open_tile_set", _fake_open_tile_set)
@@ -378,6 +384,27 @@ def test_dprst_depth_build_end_to_end(tmp_path, monkeypatch):
     assert prov_gdf["dprst_depth_m"].notna().all()
     assert (prov_gdf["dprst_depth_m"] > 0).all()
 
+    # issue #223 fix round 1: the static column-membership check
+    # (test_provenance_carries_the_winning_source below) would still pass if
+    # `_fill_and_join`'s keep_cols filter -- or a future name collision --
+    # silently dropped `source`/`interior_coverage` before the parquet write
+    # (`_write_polygon_provenance` only WARNs on a missing diagnostic column,
+    # it doesn't raise). Assert the columns actually round-trip on disk, with
+    # the DISTINCTIVE values `_fake_open_tile_set_and_compute_one` produced --
+    # both polygons resolve to the real "test_project" tile assigned by
+    # `sources.tag_and_assign` (never the "10m" last-resort fallback, since
+    # `_write_inventory`'s tile covers both fixtures), and their
+    # `interior_coverage` values (0.83 / 0.55) cannot arise from a dropped
+    # column silently defaulting to NaN or 1.0.
+    assert "source" in prov_gdf.columns
+    assert "interior_coverage" in prov_gdf.columns
+    sources = prov_gdf.set_index("COMID")["source"]
+    assert sources.loc[101] == "test_project"
+    assert sources.loc[102] == "test_project"
+    coverage = prov_gdf.set_index("COMID")["interior_coverage"]
+    assert coverage.loc[101] == pytest.approx(0.83)
+    assert coverage.loc[102] == pytest.approx(0.55)
+
 
 def test_provenance_carries_the_winning_source(tmp_path, monkeypatch):
     """The re-run validation (Task 11) needs to know WHICH project each depth came from."""
@@ -395,6 +422,22 @@ def test_tag_polygons_requires_the_inventory_keys(tmp_path):
     )
     dprst = _make_dprst_gdf([1, 2])  # existing helper in this file
     with pytest.raises(KeyError, match="dem_1m_inventory"):
+        b._tag_polygons(dprst, ctx, _L())
+
+
+def test_tag_polygons_requires_the_inventory_files_to_exist(tmp_path):
+    """The mirrored branch of the guard above: the key IS set but the staged
+    file is absent -- the path an operator actually hits when they haven't
+    run `sbatch slurm_batch/stage_dem_1m_inventory.batch` yet."""
+    from gfv2_params.depstor_builders import dprst_depth as b
+    ctx = BuildContext(
+        fabric="t", template_path=Path("unused"), output_dir=tmp_path,
+        hru_gpkg=tmp_path / "hru.gpkg", hru_layer="nhru",
+        dem_1m_inventory=tmp_path / "does_not_exist.parquet",
+        wesm_project_attrs=tmp_path / "attrs.parquet",
+    )
+    dprst = _make_dprst_gdf([1, 2])
+    with pytest.raises(FileNotFoundError, match="dem_1m_inventory"):
         b._tag_polygons(dprst, ctx, _L())
 
 
