@@ -1,5 +1,8 @@
+import logging
+
 import geopandas as gpd
 import pandas as pd
+import pytest
 from shapely.geometry import box
 
 from gfv2_params.dprst_depth import sources as S
@@ -64,3 +67,103 @@ def test_assign_sources_always_ends_with_the_10m_last_resort(monkeypatch):
     assert S.decode(one[0]).project == "P" and S.decode(one[-1]).project == "10m"
     assert len(ten) == 1 and S.decode(ten[0]).project == "10m"
     assert out.loc[0, "source_tiles"] == one[0]
+
+
+# --- tag_and_assign's consuming-end inventory/attrs floor (issue #223 review round 2) ---
+# See CLAUDE.md's `min_onstream_comids`/`min_endorheic_comids` floor discussion and
+# `sources.DEFAULT_MIN_INVENTORY_TILES`'s module comment for the doctrine: the floor
+# belongs at this shared entry point, not only in the producer that writes the table.
+
+
+def _write_inventory_rows(tmp_path, n_tiles: int, n_projects: int, name: str = "inventory.parquet"):
+    """`n_tiles` real, well-formed rows spread round-robin across `n_projects`
+    distinct project names -- lets a test hold one axis fixed (e.g. plenty of
+    tiles, too few projects) without generating anywhere near CONUS scale."""
+    from gfv2_params.dprst_depth.inventory import INVENTORY_COLUMNS
+
+    rows = [
+        [f"P{i % n_projects}", f"/vsicurl/https://example/P{i % n_projects}_{i}.tif", 15,
+         "EPSG:26915", 100, 100, float(i), float(i), float(i) + 1, float(i) + 1]
+        for i in range(n_tiles)
+    ]
+    path = tmp_path / name
+    pd.DataFrame(rows, columns=INVENTORY_COLUMNS).to_parquet(path)
+    return path
+
+
+def _write_attrs_rows(tmp_path, n_rows: int, name: str = "attrs.parquet"):
+    path = tmp_path / name
+    pd.DataFrame(
+        {"ql_rank": [1] * n_rows, "collect_end": [pd.Timestamp("2020-01-01")] * n_rows,
+         "matched_by": ["project"] * n_rows},
+        index=pd.Index([f"P{i}" for i in range(n_rows)], name="project"),
+    ).to_parquet(path)
+    return path
+
+
+def _tiny_dprst():
+    return gpd.GeoDataFrame({"COMID": [1]}, geometry=[box(0, 0, 10, 10)], crs="EPSG:5070")
+
+
+def test_tag_and_assign_raises_on_empty_inventory(tmp_path):
+    from gfv2_params.dprst_depth.inventory import INVENTORY_COLUMNS
+
+    inv_path = tmp_path / "inventory.parquet"
+    pd.DataFrame(columns=INVENTORY_COLUMNS).to_parquet(inv_path)
+    attrs_path = _write_attrs_rows(tmp_path, 5)
+    with pytest.raises(RuntimeError, match="dem_1m_inventory is empty"):
+        S.tag_and_assign(_tiny_dprst(), inv_path, attrs_path, logging.getLogger("t"))
+
+
+def test_tag_and_assign_raises_below_tile_floor(tmp_path):
+    # 10 tiles/10 projects: both axes are under the module defaults
+    # (DEFAULT_MIN_INVENTORY_TILES=50,000 / DEFAULT_MIN_INVENTORY_PROJECTS=500) --
+    # the tile-count check is the first one `tag_and_assign` runs, so it fires here.
+    inv_path = _write_inventory_rows(tmp_path, n_tiles=10, n_projects=10)
+    attrs_path = _write_attrs_rows(tmp_path, 10)
+    with pytest.raises(RuntimeError, match=r"dem_1m_inventory carries 10 tiles, below its floor of 50,000"):
+        S.tag_and_assign(_tiny_dprst(), inv_path, attrs_path, logging.getLogger("t"))
+
+
+def test_tag_and_assign_raises_below_project_floor(tmp_path):
+    # Override the tile floor down so ONLY the distinct-project-count check can fire --
+    # isolates it from the tile-count check without generating 50,000 synthetic rows.
+    inv_path = _write_inventory_rows(tmp_path, n_tiles=20, n_projects=3)
+    attrs_path = _write_attrs_rows(tmp_path, 3)
+    with pytest.raises(RuntimeError, match=r"dem_1m_inventory spans 3 distinct projects, below its floor of 500"):
+        S.tag_and_assign(
+            _tiny_dprst(), inv_path, attrs_path, logging.getLogger("t"), min_inventory_tiles=5,
+        )
+
+
+def test_tag_and_assign_raises_on_empty_attrs(tmp_path):
+    # Satisfy both inventory floors via override so only the attrs check can fire.
+    inv_path = _write_inventory_rows(tmp_path, n_tiles=20, n_projects=3)
+    attrs_path = tmp_path / "attrs.parquet"
+    pd.DataFrame(columns=["ql_rank", "collect_end", "matched_by"]).to_parquet(attrs_path)
+    with pytest.raises(RuntimeError, match="wesm_project_attrs is empty"):
+        S.tag_and_assign(
+            _tiny_dprst(), inv_path, attrs_path, logging.getLogger("t"),
+            min_inventory_tiles=5, min_inventory_projects=1,
+        )
+
+
+def test_tag_and_assign_raises_below_attrs_floor(tmp_path):
+    inv_path = _write_inventory_rows(tmp_path, n_tiles=20, n_projects=3)
+    attrs_path = _write_attrs_rows(tmp_path, 3)
+    with pytest.raises(RuntimeError, match=r"wesm_project_attrs carries 3 rows, below its floor of 500"):
+        S.tag_and_assign(
+            _tiny_dprst(), inv_path, attrs_path, logging.getLogger("t"),
+            min_inventory_tiles=5, min_inventory_projects=1,
+        )
+
+
+def test_tag_and_assign_floor_override_of_zero_disables_the_check(monkeypatch, tmp_path):
+    monkeypatch.setattr(S, "_tile13_key", lambda geom, crs: "/vsicurl/10m.tif")
+    inv_path = _write_inventory_rows(tmp_path, n_tiles=1, n_projects=1)
+    attrs_path = _write_attrs_rows(tmp_path, 1)
+    out = S.tag_and_assign(
+        _tiny_dprst(), inv_path, attrs_path, logging.getLogger("t"),
+        min_inventory_tiles=0, min_inventory_projects=0, min_attrs_rows=0,
+    )
+    assert "source_tiles" in out.columns

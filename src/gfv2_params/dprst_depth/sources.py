@@ -41,6 +41,105 @@ TEN_M = "10m"
 _UNKNOWN_QL = 9
 _NO_DATE = pd.Timestamp("1900-01-01")
 
+# Floors on the staged inputs, enforced in `tag_and_assign` -- the ONE shared
+# entry point -- so both the SLURM planner (`tiling._load_and_tag_for_plan`)
+# and the in-process builder (`depstor_builders/dprst_depth.py::_tag_polygons`)
+# are covered without either needing its own copy of the check. Same doctrine
+# CLAUDE.md already states for `min_onstream_comids`/`min_endorheic_comids`:
+# the floor must live at the CONSUMING end, not only in the producer
+# (`inventory.build_inventory`) that writes the table, because `--plan` is a
+# documented operator route that bypasses the orchestrator entirely.
+#
+# Verified, not hypothetical: running `tag_and_assign` against a 0-row
+# inventory returns normally, tags every polygon `"10m"`, gives each one the
+# seamless-tile candidate, and ships a complete all-10m product at exit code
+# 0 -- `depstor_builders/dprst_depth.py::_log_achieved_resolution`'s all-10m
+# tripwire structurally CANNOT fire here, because an inventory-side failure
+# zeroes both the tagged-1m and achieved-1m sides it compares. Nor is a
+# non-empty but partial inventory hypothetical: this same branch staged two
+# of exactly that shape during development, both well-formed, non-empty, and
+# atomically written into the shared data root -- 88,403 tiles across 357 of
+# 967 project directories, then 121,849 across 875 -- either of which would
+# have shipped a CONUS product with two thirds, then 9%, of projects
+# silently downgraded to the 10 m seamless fallback, caught only by a manual
+# probe. The measured full CONUS inventory (2026-09-20) is 125,627 tiles
+# across 939 distinct projects; these defaults sit well under that so normal
+# day-to-day tile-count drift never trips them. `min_inventory_tiles`/
+# `min_inventory_projects`/`min_attrs_rows` (all `tag_and_assign` kwargs,
+# threaded from a `min_dem_1m_tiles`/`min_dem_1m_projects`/
+# `min_wesm_project_attrs_rows` fabric-profile override, in the style of
+# `min_onstream_comids`) let a fabric raise or lower them; 0 or a negative
+# value disables that one check. Every fabric profile today points at the
+# SAME staged inventory file, so there is no legitimate reason to lower them
+# -- they are an escape hatch, not a dial anyone should need to turn.
+DEFAULT_MIN_INVENTORY_TILES = 50_000
+DEFAULT_MIN_INVENTORY_PROJECTS = 500
+DEFAULT_MIN_PROJECT_ATTRS_ROWS = 500
+
+
+def _check_inventory_floor(
+    inventory: pd.DataFrame, *, min_tiles: int | None, min_projects: int | None
+) -> None:
+    """Raise on an empty or collapsed `dem_1m_inventory` (see the module comment above)."""
+    n_tiles = len(inventory)
+    if n_tiles == 0:
+        raise RuntimeError(
+            "dem_1m_inventory is empty (0 tiles). tag_and_assign would silently tag "
+            "every polygon '10m' and ship a complete all-10m product at exit code 0 "
+            "with no other signal -- the all-10m tripwire in "
+            "_log_achieved_resolution cannot fire, since an inventory-side failure "
+            "zeroes both sides of its comparison. Re-stage: sbatch "
+            "slurm_batch/stage_dem_1m_inventory.batch."
+        )
+    n_projects = int(inventory["project"].nunique())
+    floor_tiles = DEFAULT_MIN_INVENTORY_TILES if min_tiles is None else min_tiles
+    floor_projects = DEFAULT_MIN_INVENTORY_PROJECTS if min_projects is None else min_projects
+    if floor_tiles > 0 and n_tiles < floor_tiles:
+        raise RuntimeError(
+            f"dem_1m_inventory carries {n_tiles:,} tiles, below its floor of "
+            f"{floor_tiles:,} (measured full CONUS inventory, 2026-09-20: 125,627 "
+            f"tiles / 939 projects). That is a collapsed or partial listing, not real "
+            f"coverage loss -- this branch shipped two well-formed inventories of "
+            f"exactly this shape during development (88,403 tiles/357 projects, then "
+            f"121,849/875), each silently downgrading most polygons to the 10 m "
+            f"seamless fallback. Re-stage: sbatch slurm_batch/stage_dem_1m_inventory.batch. "
+            f"Lower `min_dem_1m_tiles` in the fabric profile ONLY if this inventory is "
+            f"deliberately regional/test-scale."
+        )
+    if floor_projects > 0 and n_projects < floor_projects:
+        raise RuntimeError(
+            f"dem_1m_inventory spans {n_projects:,} distinct projects, below its floor "
+            f"of {floor_projects:,} (measured full CONUS inventory, 2026-09-20: 125,627 "
+            f"tiles / 939 projects). Same failure mode as the tile-count floor -- a "
+            f"collapsed/partial listing, not real coverage loss. Re-stage: sbatch "
+            f"slurm_batch/stage_dem_1m_inventory.batch. Lower `min_dem_1m_projects` in "
+            f"the fabric profile ONLY if this inventory is deliberately "
+            f"regional/test-scale."
+        )
+
+
+def _check_project_attrs_floor(attrs: pd.DataFrame, *, min_rows: int | None) -> None:
+    """Raise on an empty or collapsed `wesm_project_attrs` (see the module comment above)."""
+    n = len(attrs)
+    if n == 0:
+        raise RuntimeError(
+            "wesm_project_attrs is empty (0 rows). Every project would rank as "
+            "_UNKNOWN_QL with no date (rank_candidates), silently degrading ranking "
+            "to (covers, name) with no real quality/date signal at all across the "
+            "whole inventory. Re-stage: sbatch slurm_batch/stage_dem_1m_inventory.batch."
+        )
+    floor = DEFAULT_MIN_PROJECT_ATTRS_ROWS if min_rows is None else min_rows
+    if floor > 0 and n < floor:
+        raise RuntimeError(
+            f"wesm_project_attrs carries {n:,} rows, below its floor of {floor:,} "
+            f"(measured full CONUS inventory, 2026-09-20: 939 projects). That is a "
+            f"collapsed or partial WESM join, degrading most projects' ranking to "
+            f"(covers, name) with no real quality/date signal. Re-stage: sbatch "
+            f"slurm_batch/stage_dem_1m_inventory.batch. Lower "
+            f"`min_wesm_project_attrs_rows` in the fabric profile ONLY if this "
+            f"inventory is deliberately regional/test-scale."
+        )
+
 
 @dataclass(frozen=True)
 class TileSet:
@@ -174,7 +273,16 @@ def assign_sources(dprst: gpd.GeoDataFrame, inventory: gpd.GeoDataFrame, attrs: 
     return out
 
 
-def tag_and_assign(dprst: gpd.GeoDataFrame, inventory_path, attrs_path, logger) -> gpd.GeoDataFrame:
+def tag_and_assign(
+    dprst: gpd.GeoDataFrame,
+    inventory_path,
+    attrs_path,
+    logger,
+    *,
+    min_inventory_tiles: int | None = None,
+    min_inventory_projects: int | None = None,
+    min_attrs_rows: int | None = None,
+) -> gpd.GeoDataFrame:
     """Tag + assign, in the fixed order both the builder and the planner must use.
 
     Order is load-bearing: `guard_oversized_windows` must run BETWEEN
@@ -183,12 +291,20 @@ def tag_and_assign(dprst: gpd.GeoDataFrame, inventory_path, attrs_path, logger) 
     POST-guard `best_topo`). This is the ONE function both the in-process
     builder and the SLURM `--plan` path call, mirroring
     `topo.load_fabric_dprst_polygons`'s shared-entry-point doctrine so the
-    two paths cannot silently diverge on which polygons get downgraded.
+    two paths cannot silently diverge on which polygons get downgraded --
+    and, since issue #223 review round 2, so the consuming-end floor on the
+    staged inventory/attrs (see the module comment above
+    `DEFAULT_MIN_INVENTORY_TILES`) covers both paths too, not just whichever
+    one a producer-side guard happens to run against.
     """
     from .inventory import load_inventory, load_project_attrs
 
     inventory = load_inventory(inventory_path)
+    _check_inventory_floor(
+        inventory, min_tiles=min_inventory_tiles, min_projects=min_inventory_projects
+    )
     attrs = load_project_attrs(attrs_path)
+    _check_project_attrs_floor(attrs, min_rows=min_attrs_rows)
     out = tag_best_topo(dprst, inventory)
     logger.info(
         "  best_topo: %d/%d polygons inside a real 1m tile", int((out["best_topo"] == "1m").sum()), len(out)

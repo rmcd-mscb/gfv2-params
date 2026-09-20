@@ -333,7 +333,20 @@ These are hard-won; violating them silently corrupts outputs.
   interior is COVERAGE LOSS, not fill corruption — richdem excludes interior
   nodata cells) but nothing downstream FILTERS on it yet — the donor filter
   that would exclude low-coverage polygons from the regional calibration is
-  not built.
+  not built. `sources.tag_and_assign` (the shared entry point for both the
+  planner and the builder) enforces a consuming-end floor on the staged
+  `dem_1m_inventory`/`wesm_project_attrs` themselves — an empty or
+  well-formed-but-partial inventory otherwise ships a complete all-10m
+  product at exit code 0 with no other signal, exactly as a producer-side
+  bug on this branch twice did during development (88,403 tiles/357 of 967
+  projects, then 121,849/875 — the measured full CONUS inventory, 2026-09-20,
+  is 125,627 tiles/939 projects). Same doctrine as `min_onstream_comids`/
+  `min_endorheic_comids`: default floors are module constants in `sources.py`
+  (`DEFAULT_MIN_INVENTORY_TILES`/`_PROJECTS`/`DEFAULT_MIN_PROJECT_ATTRS_ROWS`),
+  overridable per fabric (`min_dem_1m_tiles`/`min_dem_1m_projects`/
+  `min_wesm_project_attrs_rows`) but with no legitimate reason to lower them
+  today, since every fabric profile points at the same shared, CONUS-wide
+  staged file.
 - **`sources.assign_sources`'s per-polygon loop is slow enough to size SLURM
   jobs around.** Measured against the real staged inventory: ~9.97-15 ms per
   1m-tagged polygon (`rank_candidates`'s per-polygon `gpd.GeoDataFrame(...)`

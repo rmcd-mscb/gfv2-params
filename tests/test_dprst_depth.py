@@ -303,6 +303,11 @@ def test_builder_and_plan_paths_resolve_the_same_onstream_set(tmp_path):
         "waterbody_gpkg": str(waterbody_gpkg), "waterbody_layer": "waterbodies",
         "output_dir": str(tmp_path),
         "dem_1m_inventory": str(dem_1m_inventory), "wesm_project_attrs": str(wesm_project_attrs),
+        # _write_inventory's fixture is a single tile/project, well under
+        # sources.tag_and_assign's default floors (issue #223 review round 2) --
+        # disabled here since this test is about the builder/plan on-stream
+        # reconstruction agreeing, not the inventory floor.
+        "min_dem_1m_tiles": 0, "min_dem_1m_projects": 0, "min_wesm_project_attrs_rows": 0,
         "ecoregions_gpkg": str(ecoregions_gpkg),
         "hru_gpkg": str(hru_gpkg), "hru_layer": "nhru",
     }
@@ -332,6 +337,10 @@ def test_dprst_depth_build_end_to_end(tmp_path, monkeypatch):
         waterbody_gpkg=waterbody_gpkg, waterbody_layer="waterbodies",
         dem_1m_inventory=dem_1m_inventory, wesm_project_attrs=wesm_project_attrs,
         ecoregions_gpkg=ecoregions_gpkg,
+        # _write_inventory's fixture is a single tile/project, well under
+        # sources.tag_and_assign's default floors (issue #223 review round 2) --
+        # disabled here since this test is an end-to-end build, not the floor.
+        min_dem_1m_tiles=0, min_dem_1m_projects=0, min_wesm_project_attrs_rows=0,
     )
     ctx.paths["landmask"] = lm
     ctx.paths["dprst"] = dm

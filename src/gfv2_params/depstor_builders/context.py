@@ -76,6 +76,18 @@ class BuildContext:
     # EPA Level III Ecoregions (see gfv2_params.download.epa_ecoregions) —
     # already staged in every fabric profile in base_config.yml.
     ecoregions_gpkg: Path | None = None
+    # Optional per-fabric override of `sources.tag_and_assign`'s consuming-end
+    # floors on the staged 3DEP inventory / WESM project attrs (issue #223 review
+    # round 2) — same opt-in-override contract as `min_onstream_comids`: absent
+    # means "use the module default" (`sources.DEFAULT_MIN_INVENTORY_TILES` /
+    # `DEFAULT_MIN_INVENTORY_PROJECTS` / `DEFAULT_MIN_PROJECT_ATTRS_ROWS`), and 0
+    # or negative disables that one check. Every fabric profile today points at
+    # the SAME staged inventory file, so there is no legitimate reason any of
+    # them would need to lower these — they exist as an escape hatch for a
+    # deliberately regional/test-scale inventory, not a dial to turn.
+    min_dem_1m_tiles: int | None = None
+    min_dem_1m_projects: int | None = None
+    min_wesm_project_attrs_rows: int | None = None
     # Constant-floor fallback for a flat/degenerate dprst polygon with no
     # trustworthy donor group (fill.fill_flat's floor_in, inches — 49 in is
     # the NHM calibrated dprst_depth_avg median).

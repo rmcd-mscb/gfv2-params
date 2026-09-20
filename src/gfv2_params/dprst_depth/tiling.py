@@ -328,7 +328,11 @@ def _load_and_tag_for_plan(config: dict, logger) -> gpd.GeoDataFrame:
     an existence check, and `submit_dprst_depth.sh` is a documented operator
     route that bypasses the orchestrator entirely. A collapsed or stale table
     would otherwise silently reconstruct the wrong dprst polygon set for the
-    whole SLURM array.
+    whole SLURM array. The call into `sources.tag_and_assign` below applies the
+    SAME doctrine to the staged 3DEP inventory / WESM attrs (issue #223 review
+    round 2) — `min_dem_1m_tiles`/`min_dem_1m_projects`/
+    `min_wesm_project_attrs_rows` read straight off this `config` dict, exactly
+    like `min_onstream_comids` above.
     """
     from ..download.epa_ecoregions import ECO_ID_FIELD, ecoregion_of
     from ..endorheic import check_endorheic_floor, load_endorheic_comids, read_signal_counts
@@ -396,7 +400,12 @@ def _load_and_tag_for_plan(config: dict, logger) -> gpd.GeoDataFrame:
         logger=logger,
     )
 
-    dprst = tag_and_assign(dprst, dem_1m_inventory, wesm_project_attrs, logger)
+    dprst = tag_and_assign(
+        dprst, dem_1m_inventory, wesm_project_attrs, logger,
+        min_inventory_tiles=config.get("min_dem_1m_tiles"),
+        min_inventory_projects=config.get("min_dem_1m_projects"),
+        min_attrs_rows=config.get("min_wesm_project_attrs_rows"),
+    )
 
     eco_gdf = gpd.read_file(ecoregions_gpkg)
     dprst["ecoregion"] = ecoregion_of(dprst, eco_gdf, id_field=ECO_ID_FIELD)

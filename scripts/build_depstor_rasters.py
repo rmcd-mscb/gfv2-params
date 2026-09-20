@@ -143,6 +143,16 @@ def _build_context(config: dict, force: bool) -> BuildContext:
         dem_1m_inventory=Path(config["dem_1m_inventory"]) if config.get("dem_1m_inventory") else None,
         wesm_project_attrs=Path(config["wesm_project_attrs"]) if config.get("wesm_project_attrs") else None,
         ecoregions_gpkg=Path(config["ecoregions_gpkg"]) if config.get("ecoregions_gpkg") else None,
+        min_dem_1m_tiles=(
+            int(config["min_dem_1m_tiles"]) if config.get("min_dem_1m_tiles") is not None else None
+        ),
+        min_dem_1m_projects=(
+            int(config["min_dem_1m_projects"]) if config.get("min_dem_1m_projects") is not None else None
+        ),
+        min_wesm_project_attrs_rows=(
+            int(config["min_wesm_project_attrs_rows"])
+            if config.get("min_wesm_project_attrs_rows") is not None else None
+        ),
         dprst_depth_floor_in=float(config.get("dprst_depth_floor_in", 49.0)),
         dprst_hollister_n_min=int(config.get("dprst_hollister_n_min", 5)),
         dprst_depth_min_measured_frac=float(config.get("dprst_depth_min_measured_frac", 0.5)),

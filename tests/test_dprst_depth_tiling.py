@@ -215,6 +215,11 @@ def test_load_and_tag_for_plan_resolves_segment_and_endorheic_from_output_dir(tm
         "waterbody_gpkg": str(waterbody_gpkg), "waterbody_layer": "waterbodies",
         "output_dir": str(tmp_path),
         "dem_1m_inventory": str(dem_1m_inventory), "wesm_project_attrs": str(wesm_project_attrs),
+        # This fixture's inventory/attrs are a single tile/project, well under
+        # sources.tag_and_assign's default floors (issue #223 review round 2) --
+        # disable them here since this test is about the segment/endorheic
+        # resolution, not the inventory floor (covered in test_dprst_depth_sources.py).
+        "min_dem_1m_tiles": 0, "min_dem_1m_projects": 0, "min_wesm_project_attrs_rows": 0,
         "ecoregions_gpkg": str(ecoregions_gpkg),
         "hru_gpkg": str(hru_gpkg), "hru_layer": "nhru",
     }
@@ -274,7 +279,13 @@ def test_tag_and_assign_runs_the_guard_between_tagging_and_assignment(tmp_path):
         index=pd.Index(["P22"], name="project"),
     ).to_parquet(attrs_path)
 
-    out = tag_and_assign(dprst, inventory_path, attrs_path, logging.getLogger("t"))
+    # This fixture is a single tile/project, well under the default inventory/attrs
+    # floors (issue #223 review round 2) -- disabled here since this test is about
+    # the tag/guard/assign ordering, not the floor (covered in test_dprst_depth_sources.py).
+    out = tag_and_assign(
+        dprst, inventory_path, attrs_path, logging.getLogger("t"),
+        min_inventory_tiles=0, min_inventory_projects=0, min_attrs_rows=0,
+    )
 
     assert out["best_topo"].iloc[0] == "10m"
     assert bool(out["oversized_1m"].iloc[0]) is True

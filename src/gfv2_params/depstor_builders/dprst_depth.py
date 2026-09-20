@@ -228,7 +228,12 @@ def _tag_polygons(dprst: gpd.GeoDataFrame, ctx: BuildContext, logger) -> gpd.Geo
                 f"{key} not found: {path}. Stage it: "
                 "`sbatch slurm_batch/stage_dem_1m_inventory.batch`."
             )
-    dprst = tag_and_assign(dprst, ctx.dem_1m_inventory, ctx.wesm_project_attrs, logger)
+    dprst = tag_and_assign(
+        dprst, ctx.dem_1m_inventory, ctx.wesm_project_attrs, logger,
+        min_inventory_tiles=ctx.min_dem_1m_tiles,
+        min_inventory_projects=ctx.min_dem_1m_projects,
+        min_attrs_rows=ctx.min_wesm_project_attrs_rows,
+    )
 
     if ctx.ecoregions_gpkg is None:
         raise KeyError(
