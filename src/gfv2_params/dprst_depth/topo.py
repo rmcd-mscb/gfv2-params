@@ -380,8 +380,14 @@ def lake_max_depth(dem: np.ndarray, polygon_mask: np.ndarray, transform) -> floa
     ring = ndimage.binary_dilation(polygon_mask, iterations=2) & ~polygon_mask
     dem_arr = np.asarray(dem, float)
     if min(dem_arr.shape) < 2:
-        # np.gradient needs >=2 cells per axis. A degenerate window is a
-        # geometry fact, not a code error -- report no slope (#223).
+        # np.gradient needs >=2 cells per axis. Unreachable defence-in-depth
+        # for every pipeline path today: every caller buffers by
+        # rim_buffer_m=200 and read_padded (#223) always returns the full
+        # requested window size (sentinel-filled, never truncated), so a
+        # <2-cell array can no longer arise from geom.bounds +/- 200 m. If
+        # this ever fires, it means a caller passed a near-zero/negative
+        # buffer or a degenerate transform directly -- report no slope
+        # rather than let np.gradient raise.
         return 0.0
     void = (dem_arr == sentinel) | ~np.isfinite(dem_arr)
     ring = ring & ~void

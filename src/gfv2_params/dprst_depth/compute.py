@@ -58,9 +58,13 @@ from .topo import (
 
 __all__ = ["_polygon_depth_from_dem", "compute_polygon", "run_batch"]
 
-# GDAL/rasterio env for anonymous public-bucket HTTPS reads — identical to
-# `read_window`'s (see topo.py's module notes on /vsicurl/ vs /vsis3/).
-_ENV_OPTS = GDAL_HTTP_ENV
+# GDAL/rasterio env for anonymous public-bucket HTTPS reads — a COPY of
+# `topo.GDAL_HTTP_ENV` (see topo.py's module notes on /vsicurl/ vs /vsis3/
+# and its HTTP timeout rationale). Copied, not aliased: `rasterio.Env(**...)`
+# never mutates its kwargs, but sharing one mutable dict between two modules
+# would make an in-place edit to either module's "own" copy silently change
+# the other's env too.
+_ENV_OPTS = dict(GDAL_HTTP_ENV)
 
 # Output columns of `run_batch`'s parquet, fixed so an empty batch (a
 # SLURM array task with 0 assigned tiles) still writes a well-formed,
@@ -85,8 +89,11 @@ def _polygon_depth_from_dem(
     breakline elevation (USGS Lidar Base Spec): the Phase 0 spike validated
     that the flatness verdict must be read off the POLYGON INTERIOR alone
     (`interior_mask`-selected cells) — that's what produced the trustworthy
-    SwampMarsh 21.7% / LakePond 11% flattened fractions (a hydro-flattened
-    lake's interior reads EXACTLY 0.000 m range). Running the gate over the
+    SwampMarsh 21.7% / LakePond 11% flattened fractions (pre-#223
+    measurement — the probe's reads predate `read_padded` and were subject
+    to the same misregistration/empty-window bug it fixes, so re-measure
+    rather than re-cite per this repo's rule) (a hydro-flattened lake's
+    interior reads EXACTLY 0.000 m range). Running the gate over the
     rim-inclusive window instead is wrong: a real hydro-flattened lake
     sitting in terrain with any surrounding relief would have a
     window-range > tol and be misclassified non-flat, and we'd then
