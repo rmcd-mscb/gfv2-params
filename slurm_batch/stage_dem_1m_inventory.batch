@@ -10,6 +10,14 @@
 #SBATCH --mem=16G
 # Shared input (issue #223): real 3DEP 1 m tile extents + WESM project QL/dates.
 # Re-staging obliges a dprst_depth re-run of EVERY fabric. Pass FORCE=1 to refresh.
+#
+# Sizing: measured ~30-35 min wall-clock end to end (listing all S3 project
+# directories, then a HEAD-equivalent COG-header read per published tile).
+# --cpus-per-task=8 / --threads 32 (4x oversubscribed): this is I/O-bound
+# (remote S3 listing + header reads, not CPU), so more threads than cores is
+# the right ratio, the same reasoning as dprst_depth's own tile-set reads
+# (compute.py's module docstring). --time=03:00:00 leaves comfortable margin
+# over the measured run.
 set -euo pipefail
 cd "$SLURM_SUBMIT_DIR" || exit 1
 pixi run --as-is python -m gfv2_params.download.dem_1m_inventory \

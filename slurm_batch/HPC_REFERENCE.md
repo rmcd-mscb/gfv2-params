@@ -662,7 +662,11 @@ already staged for `gfv2`/`gfv2_dev`/`oregon`/`tjc` in
 `configs/base_config.yml`; `gfv2_vpu01` has none of them (its `wbs` waterbody layer
 has no COMID). The inventory is a SNAPSHOT of what USGS publishes — re-staging
 (`FORCE=1`) obliges a `dprst_depth` re-run for every fabric, the same obligation
-a `shared_rasters` rebuild carries.
+a `shared_rasters` rebuild carries. `sources.tag_and_assign` enforces a
+consuming-end floor on `dem_1m_inventory`/`wesm_project_attrs` themselves
+(`min_dem_1m_tiles`/`min_dem_1m_projects`/`min_wesm_project_attrs_rows` in the
+per-fabric key table, `docs/ARCHITECTURE.md`) — an empty or well-formed-but-
+partial re-stage otherwise ships a complete all-10m product with no signal.
 
 **On-disk prerequisite.** The Plan stage reconstructs the dprst polygon set
 against the REAL on-stream classifier, not NHD: it needs
