@@ -58,8 +58,10 @@ from __future__ import annotations
 
 import logging
 import re
+import time
 import urllib.parse
 import urllib.request
+from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 
 import geopandas as gpd
@@ -101,8 +103,23 @@ _KEY_RE = re.compile(r"<Key>([^<]*)</Key>")
 _PREFIX_RE = re.compile(r"<Prefix>([^<]*)</Prefix>")
 _TOKEN_RE = re.compile(r"<NextContinuationToken>([^<]*)</NextContinuationToken>")
 # NAD83 UTM north is EPSG 269xx (zone = code - 26900); WGS84 UTM north/south
-# is 326xx/327xx. Tried in this order in `zone_from_crs`.
-_UTM_ZONE_EPSG_OFFSETS = (26900, 32600, 32700)
+# is 326xx/327xx. Tried in this order in `zone_from_crs`. Each offset's zone
+# range is bounded to the real UTM family it covers, NOT 1-60 uniformly: the
+# NAD83 UTM north family is ONLY 26901-26923 (zones 1-23) -- EPSG 26924 and up
+# are NAD83 STATE PLANE codes, not UTM (e.g. EPSG:26943 is California zone 3
+# state plane, EPSG:26929 is Michigan Central state plane). An unbounded
+# `1 <= zone <= 60` range silently accepted those and returned a fabricated
+# zone (43, 29) instead of raising -- so two projects publishing in different
+# CRSs that happen to map to the SAME zone number (e.g. EPSG:26911 and
+# EPSG:32611 both -> 11) could land in one tile SET and die in
+# `gdal.BuildVRT` (which cannot mosaic mixed CRSs). WGS84 UTM north/south
+# genuinely do span the full 1-60 zone range (326xx/327xx), so only the NAD83
+# offset needs the narrower bound.
+_UTM_ZONE_EPSG_RANGES = (
+    (26900, 1, 23),  # NAD83 UTM north: EPSG 26901-26923 only
+    (32600, 1, 60),  # WGS84 UTM north: EPSG 32601-32660
+    (32700, 1, 60),  # WGS84 UTM south: EPSG 32701-32760
+)
 
 
 def zone_from_crs(crs: str) -> int:
@@ -115,21 +132,42 @@ def zone_from_crs(crs: str) -> int:
     on any CRS this repo doesn't recognise as a UTM zone rather than guessing
     -- `build_inventory` counts that like any other header-read failure
     against `max_fail_frac`, so a systemic CRS surprise fails loud instead of
-    silently writing a fabricated `zone`.
+    silently writing a fabricated `zone`. Also raises on a NAD83 STATE PLANE
+    code (e.g. EPSG:26943, EPSG:26929) that a naive `code - 26900` would
+    otherwise silently accept as a UTM zone -- see `_UTM_ZONE_EPSG_RANGES`.
     """
     m = re.fullmatch(r"EPSG:(\d+)", crs)
     if m:
         code = int(m.group(1))
-        for offset in _UTM_ZONE_EPSG_OFFSETS:
+        for offset, lo, hi in _UTM_ZONE_EPSG_RANGES:
             zone = code - offset
-            if 1 <= zone <= 60:
+            if lo <= zone <= hi:
                 return zone
     raise ValueError(f"tile CRS {crs!r} is not a recognised UTM-zone EPSG code")
 
 
-def http_get(url: str, timeout: float = 60.0) -> str:
-    with urllib.request.urlopen(url, timeout=timeout) as r:
-        return r.read().decode()
+def http_get(url: str, timeout: float = 60.0, *, max_attempts: int = 5, backoff_s: float = 1.0) -> str:
+    """GET `url` with a small bounded retry + exponential backoff.
+
+    Every GDAL raster read in this pipeline already retries transient failures
+    (`topo.GDAL_HTTP_ENV` sets `GDAL_HTTP_MAX_RETRY=5`), but this plain
+    `urllib` S3-listing request had none -- one transient failure among the
+    thousands of `list_s3` requests a full CONUS staging run makes could abort
+    the whole ~30-minute run for a routine blip. `max_attempts` total attempts
+    (not retries ON TOP of one), doubling `backoff_s` each time (1s, 2s, 4s, 8s
+    before the 5th and final attempt, at the defaults).
+    """
+    last_exc: OSError | None = None
+    for attempt in range(max_attempts):
+        try:
+            with urllib.request.urlopen(url, timeout=timeout) as r:
+                return r.read().decode()
+        except OSError as exc:  # URLError/HTTPError/socket.timeout are all OSError subclasses
+            last_exc = exc
+            if attempt == max_attempts - 1:
+                raise
+            time.sleep(backoff_s * (2**attempt))
+    raise last_exc  # pragma: no cover - unreachable (the loop always returns or raises)
 
 
 def parse_list_response(xml: str) -> tuple[list[str], list[str], str | None]:
@@ -255,6 +293,25 @@ def build_inventory(projects, *, n_threads: int = 32, lister=list_project_tiles,
     failures = [e for _, e in results if e]
     for e in failures[:20]:
         logger.warning("  header read failed: %s", e)
+    if failures:
+        # The per-failure lines above are capped at 20 -- at today's scale (up to
+        # 1,256 tiles per project) an entire project or CRS family can vanish under
+        # the 1% gate with the only evidence being the arithmetic gap between the
+        # "listed" INFO line above and the final row count, which nothing prints.
+        # Report the total, and the worst-hit project(s) (cheap: `_project_from_key`
+        # on each failure's own key -- no extra I/O), so a WARNING-level log scan
+        # catches it without an operator having to diff tile counts by hand.
+        worst = Counter()
+        for e in failures:
+            try:
+                worst[_project_from_key(e.split(": ", 1)[0])] += 1
+            except ValueError:
+                continue
+        top = ", ".join(f"{p}={n}" for p, n in worst.most_common(5)) or "<unresolvable>"
+        logger.warning(
+            "  %d/%d tile header read(s) failed in total (first 20 shown above); "
+            "worst-hit project(s): %s", len(failures), len(keys), top,
+        )
     if keys and len(failures) / len(keys) > max_fail_frac:
         raise RuntimeError(
             f"{len(failures)} of {len(keys)} tile header reads failed "

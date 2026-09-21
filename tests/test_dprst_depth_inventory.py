@@ -20,6 +20,44 @@ PREFIXES = """<?xml version="1.0" encoding="UTF-8"?><ListBucketResult>
 <IsTruncated>false</IsTruncated></ListBucketResult>"""
 
 
+def test_http_get_retries_a_transient_failure_then_succeeds(monkeypatch):
+    # Every GDAL raster read already retries (GDAL_HTTP_MAX_RETRY=5); this plain
+    # urllib listing request had none -- one transient failure among thousands of
+    # list_s3 requests could abort a whole ~30-minute staging run for a routine blip.
+    calls = {"n": 0}
+
+    class _Resp:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def read(self):
+            return b"ok"
+
+    def fake_urlopen(url, timeout=None):
+        calls["n"] += 1
+        if calls["n"] < 3:
+            raise OSError("synthetic transient failure")
+        return _Resp()
+
+    monkeypatch.setattr(inv.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(inv.time, "sleep", lambda s: None)  # don't actually wait in tests
+    assert inv.http_get("http://example", max_attempts=5, backoff_s=0.01) == "ok"
+    assert calls["n"] == 3
+
+
+def test_http_get_raises_after_exhausting_all_retries(monkeypatch):
+    def fake_urlopen(url, timeout=None):
+        raise OSError("synthetic permanent failure")
+
+    monkeypatch.setattr(inv.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(inv.time, "sleep", lambda s: None)
+    with pytest.raises(OSError, match="synthetic permanent failure"):
+        inv.http_get("http://example", max_attempts=3, backoff_s=0.01)
+
+
 def test_parse_list_response_reads_keys_prefixes_and_token():
     keys, prefixes, token = inv.parse_list_response(PAGE1)
     assert len(keys) == 2 and prefixes == [] and token == "tok/2+="
@@ -209,6 +247,29 @@ def test_zone_from_crs_raises_on_a_non_utm_crs():
         inv.zone_from_crs("EPSG:4326")
 
 
+@pytest.mark.parametrize("crs", ["EPSG:26943", "EPSG:26929"])
+def test_zone_from_crs_raises_on_a_nad83_state_plane_code(crs):
+    # EPSG 26924+ is the NAD83 STATE PLANE family, not UTM -- 26943 is California
+    # zone 3, 26929 is Michigan Central. An unbounded `code - 26900` in [1, 60]
+    # would silently accept these and fabricate zone 43/29; two projects in
+    # different CRSs that happen to map to the same zone number would then land
+    # in one tile set and die in gdal.BuildVRT (mixed CRS).
+    with pytest.raises(ValueError, match=crs):
+        inv.zone_from_crs(crs)
+
+
+def test_zone_from_crs_accepts_the_full_nad83_utm_range():
+    assert inv.zone_from_crs("EPSG:26901") == 1
+    assert inv.zone_from_crs("EPSG:26923") == 23
+
+
+def test_zone_from_crs_accepts_the_full_wgs84_utm_range():
+    assert inv.zone_from_crs("EPSG:32601") == 1
+    assert inv.zone_from_crs("EPSG:32660") == 60
+    assert inv.zone_from_crs("EPSG:32701") == 1
+    assert inv.zone_from_crs("EPSG:32760") == 60
+
+
 def test_build_inventory_counts_failures_and_raises_above_threshold():
     keys = [f"/vsicurl/https://x/Projects/P1/TIFF/USGS_1M_15_x{i}y500_P1.tif" for i in range(10)]
     ok = {"crs": "EPSG:26915", "width": 10012, "height": 10012,
@@ -226,6 +287,34 @@ def test_build_inventory_counts_failures_and_raises_above_threshold():
                              logger=logging.getLogger("t"), n_threads=4, max_fail_frac=0.2)
     assert len(df) == 9 and list(df.columns) == inv.INVENTORY_COLUMNS
     assert df["key"].is_unique and df["key"].is_monotonic_increasing  # deterministic order
+
+
+def test_build_inventory_logs_the_total_failure_count_and_worst_projects(caplog):
+    # Only the first 20 per-failure lines are logged individually -- at real scale
+    # (up to 1,256 tiles/project) a whole project can vanish under the 1% gate with
+    # nothing but the arithmetic gap between two INFO lines as evidence. There must
+    # be a WARNING that states the total and names the worst-hit project(s).
+    keys = (
+        [f"/vsicurl/https://x/Projects/BAD_PROJECT/TIFF/USGS_1M_15_x{i}y500_BAD_PROJECT.tif" for i in range(25)]
+        + [f"/vsicurl/https://x/Projects/GOOD_PROJECT/TIFF/USGS_1M_15_x{i}y500_GOOD_PROJECT.tif" for i in range(75)]
+    )
+    ok = {"crs": "EPSG:26915", "width": 10012, "height": 10012,
+          "bounds": (499994.0, 4990006.0, 510006.0, 5000018.0)}
+
+    def reader(key):
+        if "BAD_PROJECT" in key:
+            raise OSError("synthetic 503")
+        return ok
+
+    with caplog.at_level(logging.WARNING, logger="t"):
+        df = inv.build_inventory(
+            ["BAD_PROJECT", "GOOD_PROJECT"], lister=lambda p: [k for k in keys if p in k],
+            header_reader=reader, logger=logging.getLogger("t"),
+            n_threads=4, max_fail_frac=0.3,
+        )
+    assert len(df) == 75
+    assert "25/100 tile header read(s) failed in total" in caplog.text
+    assert "BAD_PROJECT=25" in caplog.text
 
 
 def test_build_inventory_counts_an_unrecognised_crs_as_a_header_failure():
