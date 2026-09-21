@@ -55,6 +55,16 @@
 # See slurm_batch/RUNME.md and slurm_batch/HPC_REFERENCE.md for detail +
 # recovery (a failed/timed-out array task can be resubmitted individually --
 # it only (re)writes its own batch_XXXX.parquet).
+#
+# --threads is passed explicitly below (issue #223 review round 2, finding 6):
+# scripts/run_dprst_depth_batch.py's own --threads default reads
+# $SLURM_CPUS_PER_TASK, and this batch is the repo's ONLY use of that variable, so
+# nothing here actually proved it is exported into the task's environment. If it
+# were ever absent, every 8-way task would silently run its tile sets SERIALLY --
+# exactly the regression this branch's threading fix (compute.py's module
+# docstring) exists to remove -- with no error, just a slower run. Pass it
+# explicitly with the same fallback (8, matching --cpus-per-task above) so the
+# concurrency is never silently unproven.
 
 cd "$SLURM_SUBMIT_DIR" || exit 1
 BASE_CONFIG=${BASE_CONFIG:-configs/base_config.yml}
@@ -64,4 +74,5 @@ pixi run --as-is python scripts/run_dprst_depth_batch.py \
     --config configs/depstor/depstor_rasters.yml \
     --base_config "$BASE_CONFIG" \
     --fabric "$FABRIC" \
-    --batch_id "$SLURM_ARRAY_TASK_ID"
+    --batch_id "$SLURM_ARRAY_TASK_ID" \
+    --threads "${SLURM_CPUS_PER_TASK:-8}"
