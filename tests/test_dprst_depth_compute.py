@@ -476,3 +476,42 @@ def test_run_batch_runs_the_real_numeric_stack_correctly_under_threads(tmp_path,
     pd.testing.assert_frame_equal(serial, threaded)
     assert len(serial) == 16
     assert (serial["interior_coverage"] == 1.0).all()
+
+
+def test_run_batch_reports_partial_coverage_as_measured_not_flat(tmp_path, monkeypatch):
+    """(#223 review round 3, test gap 6a) A partial-coverage, NON-FLAT polygon
+    driven through `run_batch` with the REAL numeric stack, asserting
+    `interior_coverage` strictly between 0 and 1 AND `method == "measured"` --
+    the documented "still ships" invariant (`compute.py`'s `_OUTPUT_COLUMNS`
+    comment: "a low-but-nonzero coverage still ships as method='measured' with
+    no gate at write time") was proven NOWHERE: the closest existing test
+    (`_compute_one_reports_interior_coverage_fraction`) hand-feeds a constant
+    DEM, which reads flat, and the real-numeric-stack test above keeps every
+    polygon fully inside real coverage on purpose (`interior_coverage == 1.0`
+    there BY DESIGN). Straddle the ramp dataset's real x-extent edge (x=5040,
+    origin (5000,8000), 40x30): the polygon's own interior is half inside real
+    coverage, half beyond it (padded to the sentinel by `read_padded`), so the
+    covered half's genuine ramp relief must read non-flat/measured with a
+    partial coverage fraction, not fall back to flat/nodata handling."""
+
+    @contextmanager
+    def _fake_open(ts):
+        with MemoryFile() as mf, _ramp_dataset(mf) as ds:
+            yield ds
+
+    monkeypatch.setattr(compute_mod, "open_tile_set", _fake_open)
+
+    ts = encode(TileSet("RP", ("k",), True))
+    geom = box(5035.0, 7975.0, 5045.0, 7985.0)  # straddles the real x=5040 edge
+    gdf = gpd.GeoDataFrame(
+        {"COMID": [1], "source_tiles": [ts], "candidates": [[ts, TEN]]},
+        geometry=[geom], crs="EPSG:5070",
+    )
+
+    out = run_batch(gdf, [ts], tmp_path / "partial.parquet", _L())
+
+    assert len(out) == 1
+    row = out.iloc[0]
+    assert row["method"] == "measured"
+    assert not row["flat"]
+    assert 0.0 < row["interior_coverage"] < 1.0
