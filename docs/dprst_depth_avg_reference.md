@@ -30,7 +30,7 @@ storage*, this decides *how deep each one is* — it runs **after** `dprst`
 
 | File | Declares (for depth) | Read by |
 |---|---|---|
-| [`base_config.yml`](../configs/base_config.yml) | the `gfv2` profile keys the builder reads: `waterbody_gpkg`, `segments_gpkg`/`segments_layer` (via `segment_wbody_comids`), `hru_gpkg`, `wesm_index`, `ecoregions_gpkg`, `template_raster` | the builder |
+| [`base_config.yml`](../configs/base_config.yml) | the `gfv2` profile keys the builder reads: `waterbody_gpkg`, `segments_gpkg`/`segments_layer` (via `segment_wbody_comids`), `hru_gpkg`, `dem_1m_inventory`, `wesm_project_attrs`, `ecoregions_gpkg`, `template_raster` | the builder |
 | [`depstor/depstor_rasters.yml`](../configs/depstor/depstor_rasters.yml) | the `dprst_depth` **step** (`batch_dir`, outputs) + three top-level knobs: `dprst_depth_floor_in: 49.0` ([:25](../configs/depstor/depstor_rasters.yml#L25)), `dprst_hollister_n_min: 5` ([:26](../configs/depstor/depstor_rasters.yml#L26)), and `dprst_depth_min_measured_frac: 0.5` ([:27](../configs/depstor/depstor_rasters.yml#L27)) | `build_depstor_rasters.py` |
 | [`depstor/depstor_params.yml`](../configs/depstor/depstor_params.yml) | the `means:` `dprst_depth_avg` entry — `source_raster` (`dprst_depth.tif`), `provenance_source` (`dprst_depth_polygons.parquet`), `floor_in: 49.0` ([:109](../configs/depstor/depstor_params.yml#L109)) | `derive_depstor_params.py` |
 
@@ -45,7 +45,8 @@ params. That difference is the whole of [§3](#3-product--parameter).
 | Source | `gfv2` profile key | Resolves to | Read by | Role |
 |---|---|---|---|---|
 | **3DEP elevation (live)** | *(no key — hardcoded S3 URL templates)* | `/vsicurl` → `prd-tnm.s3.amazonaws.com` 1 m project tiles / 10 m seamless | `topo.read_window`, `topo.depth_to_spill` | **The depth itself.** Windowed to each polygon's bbox + 200 m rim, reprojected on read to EPSG:5070. |
-| WESM 1 m footprint index | `wesm_index` | `input/wesm/wesm_1m_footprints.gpkg` | `topo.resolution_class`, `compute._project_lookup` | Decides each polygon's resolution class (1 m vs 10 m) and which 1 m project tiles cover it. |
+| Real 3DEP 1 m tile inventory | `dem_1m_inventory` | `input/3dep/dem_1m_tile_inventory.parquet` | `sources.tag_and_assign`/`sources.rank_candidates` | Every published 1 m tile with its real, possibly-cropped, per-tile extent (read from each tile's own COG header). Decides each polygon's `best_topo` (1 m vs 10 m) and its ranked candidate tile SETS — replaces the retired convex-hull `wesm_index`, which invented coverage a project never flew. |
+| WESM project attributes | `wesm_project_attrs` | `input/wesm/wesm_project_attrs.parquet` | `sources.rank_candidates` | WESM read **geometry-free** — quality (`ql`) and collection date (`collect_end`) per project, used only to break ties among real covering tile sets. Never a footprint/geometry source any more. |
 | Waterbody polygons | `waterbody_gpkg` / `waterbody_layer` | `input/nhd/nhd_waterbodies.gpkg` | `topo.load_fabric_dprst_polygons` | The polygon universe; the dprst set is rebuilt from it (drop on-stream, force Playa, exclude Ice Mass). The geometry each depth is measured on. |
 | On-stream COMIDs | `segment_wbody_comids` (from the `segment_wbody` step) minus `endorheic_comids` (from `endorheic`) | `segment_waterbody_comids.parquet` − `endorheic_waterbody_comids.parquet` | `topo.load_fabric_dprst_polygons(onstream_comids=...)`, both the in-process `build()` path and the SLURM `--plan` path (`tiling.py`) | Which waterbodies are on-stream (excluded from the depth set) — the SAME on-stream definition `dprst_binary.tif` uses, so the depth polygon set no longer diverges from the dprst raster (a ~769-waterbody divergence measured on `oregon` before this fix). `connected_comids_table`/`flowthrough_comids_table` are no longer read here; they're the classifier's opt-in NHD comparison inputs (see `depstor_classification_reference.md`), not part of `dprst_depth`'s input set at all. |
 | Ecoregions (EPA L3) | `ecoregions_gpkg` | `input/ecoregions/us_eco_l3.gpkg` | `epa_ecoregions.ecoregion_of` | Tags each polygon's ecoregion — the grouping key for the regional fill. |
@@ -55,15 +56,31 @@ params. That difference is the whole of [§3](#3-product--parameter).
 
 ### The elevation provenance — the crux
 
-A depth physically comes from one of two 3DEP products, chosen per polygon:
+A depth physically comes from one of two 3DEP products, chosen per polygon by
+`sources.tag_and_assign` against the **real, staged tile inventory** (issue
+#223 part 2 — the old `topo.resolution_class`/WESM-hull path is retired from
+production; it stays only as a Phase-0 audit function):
 
-- **1 m project tiles** if the polygon's **centroid falls inside a WESM 1 m
-  footprint** (`topo.resolution_class`), *and* a 1 m tile actually covers the
-  window. If no covering 1 m tile is found, it **silently falls back to 10 m**.
-- **10 m seamless (1/3 arc-second)** otherwise.
+- **1 m project tiles**, ranked candidate tile SETS (one project, one UTM
+  zone) that intersect the polygon's rim-buffered window, ordered by (covers
+  the whole window, best quality level, newest collection date, project
+  name). The primary (highest-ranked) set is what `compute.run_batch` reads
+  first; if its interior yields no valid cells it walks the remaining ranked
+  candidates rather than falling back immediately.
+- **10 m seamless (1/3 arc-second)** — always appended as the LAST candidate,
+  read only if every real 1 m candidate failed.
+
+This replaces a convex-HULL footprint test that invented coverage: measured
+on the gfv2r2 CONUS run, 51.6% of polygons took the old per-polygon
+existence-probe fallback, 67.8% of those only because two or more project
+hulls overlapped one tile cell, and a probe of 300 such polygons found 61%
+had exactly ONE real covering tile, 15% had NONE, and only 24% genuinely had
+2+. The real inventory (every published tile's own COG-header extent) makes
+the ranking reflect what actually exists, not hull overlap.
 
 There is **no staged DEM and no elevation config key** — all elevation is live
-`/vsicurl` S3. Consequences the doc calls out under [§4](#4-staleness--maintenance):
+`/vsicurl` S3; only the tile *inventory* (existence + extent) is staged.
+Consequences the doc calls out under [§4](#4-staleness--maintenance):
 a network/firewall regression no longer produces a silently **mass-floored**
 product — `_fill_and_join` **raises `RuntimeError`** when under
 `dprst_depth_min_measured_frac` (default 0.5, `depstor_rasters.yml`) of
@@ -125,15 +142,19 @@ only part of a non-flat depression's interior (e.g. because the tile edge
 cut straight through one side of it) drops those cells from the average
 without necessarily emptying it, so the mean is still finite, still
 positive, and ships straight through as `method="measured"` with no flag at
-all, until the tile-assignment half of #223 lands. A reviewer traced the
-consequence: such a row also carries a finite `hollister_max_m` (computed
-from the shoreline ring, not the interior fill, so the void doesn't touch
-it), so it stays eligible as a DONOR in `fit_ecoregion_models` and biases
-every OTHER polygon filled from its `(ecoregion, FTYPE)` group, not just
-itself. A coverage-based donor filter (excluding a low-real-data-fraction
-row from the donor pool) is part 2's job, not this one's. That is better
-than the old silent misregistration but it is not "correct," and nothing
-currently flags the partial case.
+all. A reviewer traced the consequence: such a row also carries a finite
+`hollister_max_m` (computed from the shoreline ring, not the interior fill,
+so the void doesn't touch it), so it stays eligible as a DONOR in
+`fit_ecoregion_models` and biases every OTHER polygon filled from its
+`(ecoregion, FTYPE)` group, not just itself. Issue #223 part 2 (the real
+3DEP tile inventory, see CLAUDE.md's "dprst_depth sources come from the
+staged real 3DEP tile inventory" gotcha) added the `interior_coverage`
+column to every polygon's compute output for exactly this case — but nothing
+downstream reads it yet: there is no coverage-based donor filter today, so
+a low-real-data-fraction row still stays eligible as a donor. Building that
+filter is future work, not something either part of #223 has done. That is
+better than the old silent misregistration but it is not "correct," and
+nothing currently flags the partial case.
 Separately, "nothing changes for a window wholly inside its tile" is true
 of the *computation* only, not the read: the same change adds an HTTP
 timeout/retry policy (`topo.GDAL_HTTP_ENV`) to that identical path, so a
@@ -263,23 +284,34 @@ count/count **ratios**.)
 
 ### 3c. CONUS execution
 
-The **unit of work is the elevation tile, not the polygon.** CONUS has ~286k
-dprst polygons; reading a 3DEP raster once per polygon is too slow, so
-`tiling.group_by_tile` maps each covering ~10 km tile to the polygons that need
-it, and `tiling._plan` bin-packs tiles into a fixed SLURM array (default 150
-batches):
+The **unit of work is the assigned tile SET, not the polygon.** CONUS has
+~286k dprst polygons; `sources.tag_and_assign` gives each one a ranked list
+of candidate tile sets (one project, one UTM zone) from the real inventory,
+and `tiling.tile_set_groups` groups polygons by their **primary** set — each
+polygon belongs to exactly ONE set, so no cross-polygon component-chaining is
+needed. `tiling._plan`/`tile_batches` then bin-packs those groups into a
+fixed SLURM array (default 150 batches):
 
 - Packing is **cost-weighted by estimated window-read cells** (a few giant-lake
-  windows dominate wall-clock and OOM'd under naive count-packing), via greedy
-  LPT over **connected components** of tiles (so a polygon straddling a tile
-  boundary is never split across batches and double-computed).
+  windows dominate wall-clock), via greedy LPT over tile-set groups.
 - A **giant-window guard** downgrades any 1 m polygon whose window exceeds
   `MAX_1M_WINDOW_CELLS` (200 M cells, ~14 km/side) to 10 m — a mean depth doesn't
   need 1 m detail.
+- `compute.run_batch` opens each tile set ONCE and runs sets concurrently on a
+  thread pool (`--threads`) because the work is remote-read bound — on the
+  OLD pre-#223-part-2 per-polygon path, which 51.6% of gfv2r2 polygons took,
+  73% of the FALLBACK time (not overall pipeline time) was spent in
+  `vrt.read`, not arithmetic. A polygon whose primary set yields no valid
+  interior walks its remaining ranked candidates, ending at the 10 m
+  seamless tile.
 - Budget: ~**250–500 core-hours** at CONUS scale, ~**5 h** wall-clock, ~**4 GiB**
   per window (float32 DEM + richdem float64 fill copies). The prairie-pothole
-  belt is the largest component and the load-balance long pole. The single
+  belt is the largest single batch and the load-balance long pole. The single
   `--mem`/`--time` values live in `submit_dprst_depth.sh`.
+- This replaces the pre-#223-part-2 hull-driven grouping, whose transitive
+  tile-key chaining produced components spanning **over 4,000 tiles** and left
+  two array tasks with **~16,000 and ~12,000** fallback polygons each, running
+  **past 24 h** against a **34-minute** median task time.
 
 ---
 
@@ -291,10 +323,13 @@ Each of these reads like dead code at a glance; each is actually live or
 by-design. Recorded so a future cleanup doesn't remove them by mistake.
 
 - **`tile_batches`** (`tiling.py`) — looks like a lone, heavily-tested primitive
-  with no production caller, but `component_tile_batches` (the production packer)
-  calls it internally (`tiling.py`, in `component_tile_batches`) to pack each
-  connected component's tiles. It is the inner bin-packing step, not a
-  test-only relic. **Removing it breaks the production plan.**
+  with no production caller, but `_plan` calls it directly on the groups
+  `tile_set_groups` builds from each polygon's assigned primary tile set. It is
+  the production bin-packing step, not a test-only relic. **Removing it breaks
+  the production plan.** (Its former caller, `component_tile_batches`, and the
+  connected-component chaining it did over hull-derived tile keys, were deleted
+  in issue #223 part 2 — a polygon now belongs to exactly one tile set, so no
+  component ever needs to be assembled.)
 - **The `DEPTH_CAP` over-cap clamp in `finalize_depth_params`** — looks
   unreachable, since per-polygon capping in `fill.fill_flat` already bounds every
   depth. But it still fires on **float32 rounding noise just past the cap** (e.g.
@@ -365,7 +400,7 @@ per-HRU **mean** (not a ratio) is `dprst_depth_avg`.
 flowchart TD
     subgraph SRC["1. Data sources"]
       DEP["3DEP elevation, live /vsicurl S3<br/>1 m project tiles or 10 m seamless"]
-      WESM["WESM 1 m footprints (resolution class)"]
+      INV["real 3DEP 1 m tile inventory<br/>+ WESM project attrs (ranked tile-set candidates)"]
       POLY["dprst polygons (from waterbody_gpkg, minus on-stream)"]
       ECO["EPA L3 ecoregions (fill grouping)"]
       MASK["land_mask + dprst_binary (burn gates)"]
@@ -390,7 +425,7 @@ flowchart TD
     end
 
     DEP --> FLAT
-    WESM --> DEP
+    INV --> DEP
     POLY --> FLAT
     ECO --> REG
     MEAS --> TIF

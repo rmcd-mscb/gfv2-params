@@ -56,7 +56,7 @@ srun -p cpu -A impd --time=02:00:00 --ntasks=1 --cpus-per-task=4 --mem=48G \
   pixi run --as-is python -m gfv2_params.download.nhd_waterbodies
 pixi run --as-is python -m gfv2_params.download.nhd_burn_components
 pixi run --as-is python -m gfv2_params.download.wbd_huc12
-pixi run --as-is python -m gfv2_params.download.wesm
+sbatch slurm_batch/stage_dem_1m_inventory.batch  # ~30-35 min; must COMPLETE before submit_dprst_depth.sh below
 pixi run --as-is python scripts/clip_shared_to_fabric.py --fabric gfv2
 #     Depstor raster stack — run in this order, waiting for each to COMPLETE:
 sbatch slurm_batch/build_depstor_rasters.batch --step landmask
@@ -261,7 +261,7 @@ sbatch --export=ALL,BASE_CONFIG={base_config},FABRIC={fabric} slurm_batch/build_
 
 | | |
 |---|---|
-| Consumes | {fabric}/depstor_rasters/dprst_binary.tif, 3DEP elevation, WESM |
+| Consumes | {fabric}/depstor_rasters/dprst_binary.tif, 3DEP elevation, 3DEP 1m tile inventory |
 | Produces | dprst_depth.tif, op_flow_thres_params.csv, merged/nhm_dprst_depth_avg_params.csv |
 | Resources | chained: plan -> tile array -> build -> HRU array -> mean_finalize |
 | `--force` | not accepted (the driver does not pass it) |
@@ -418,10 +418,19 @@ srun -p cpu -A impd --time=02:00:00 --ntasks=1 --cpus-per-task=4 --mem=48G \
 # Endorheic classifier inputs (run once; CONUS-shared, fabric-independent):
 pixi run --as-is python -m gfv2_params.download.nhd_burn_components   # Sink.shp + BurnAddWaterbody
 pixi run --as-is python -m gfv2_params.download.wbd_huc12             # full WBD (type-C closed basins)
-# Stage WESM 1m footprints (one-time, CONUS; dprst_depth's best-available-topo tagging):
-pixi run --as-is python -m gfv2_params.download.wesm
+# Stage the real 3DEP 1 m tile inventory (one-time, CONUS-shared, fabric-
+# independent; ~30-35 min; issue #223 part 2 -- dprst_depth's per-polygon
+# elevation-source assignment, replacing the retired convex-hull WESM index):
+sbatch slurm_batch/stage_dem_1m_inventory.batch
 pixi run --as-is python scripts/clip_shared_to_fabric.py --fabric gfv2   # tiny VRT (login OK)
 ```
+
+**The 3DEP tile inventory is a SNAPSHOT** of what USGS has published on the day
+it's staged, not a live index — new tiles a project publishes later are invisible
+until the next stage. Pass `FORCE=1` to `sbatch slurm_batch/stage_dem_1m_inventory.batch`
+to refresh it, and note that re-staging obliges a `dprst_depth` re-run for
+**every** fabric, the same obligation a `shared_rasters` rebuild carries (see
+`CLAUDE.md`).
 
 > **Optional — NHD segment classifier A/B comparison only.** Not needed for a
 > normal depstor run. On-stream classification comes from `segment_wbody` (the
@@ -497,8 +506,8 @@ carea_map`). `segment_wbody` is the on-stream classifier's PRIMARY source: a
 waterbody is on-stream iff a model `nsegment` (the fabric's `segments_gpkg`)
 intersects it with positive length — see CLAUDE.md's "MODEL's own segment
 network" bullet. It's cheap (42 s / 2.0 GB at CONUS), so it doesn't affect this
-job's `--mem` sizing. `nhd_waterbodies` and the WESM stage above are the only
-one-time CONUS staging runs a normal build needs; the NHD topology/flowlines/
+job's `--mem` sizing. `nhd_waterbodies` and the 3DEP tile-inventory stage above
+are the only one-time CONUS staging runs a normal build needs; the NHD topology/flowlines/
 flowthrough steps are opt-in comparison only (see the block above) and are
 NOT needed here.
 

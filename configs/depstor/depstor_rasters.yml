@@ -20,8 +20,8 @@ output_dir: "{data_root}/{fabric}/depstor_rasters"
 imperv_source: "{data_root}/input/lulc/nlcd_annual_imperv/Annual_NLCD_FctImp_2015_CU_C1V1.tif"
 
 # dprst_depth (#173) compute knobs — generic tuning, not per-fabric inputs
-# (those, wesm_index/ecoregions_gpkg, live in the fabric profile in
-# base_config.yml alongside waterbody_gpkg/connected_comids_table).
+# (those, dem_1m_inventory/wesm_project_attrs/ecoregions_gpkg, live in the
+# fabric profile in base_config.yml alongside waterbody_gpkg/connected_comids_table).
 dprst_depth_floor_in: 49.0 # NHM calibrated dprst_depth_avg median fallback (in)
 dprst_hollister_n_min: 5 # min donors/group before a calibrated-Hollister fit is attempted
 dprst_depth_min_measured_frac: 0.5 # measured_fraction floor below which a mass read-failure RAISEs; 0 disables

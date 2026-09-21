@@ -190,7 +190,38 @@ sbatch slurm_batch/download_nalcms.batch         # NALCMS 2020 land cover (~2 GB
 sbatch slurm_batch/download_nhm_v11.batch        # NHM v1.1 LULC rasters
 srun -p cpu -A impd --time=02:00:00 --ntasks=1 --cpus-per-task=4 --mem=48G \
   pixi run --as-is python -m gfv2_params.download.nhd_waterbodies  # waterbody source (one-time, CONUS; required)
+sbatch slurm_batch/stage_dem_1m_inventory.batch  # real 3DEP 1m tile inventory + WESM project attrs (one-time, CONUS; required by dprst_depth, see Stage 2d')
 ```
+
+`stage_dem_1m_inventory.batch` (`--cpus-per-task=8 --mem=16G --time=03:00:00`,
+though a real CONUS staging run has measured ~30-35 min) lists every S3 1 m
+project directory, reads each published tile's own COG header for its true
+(often-cropped) extent, and reads WESM geometry-free for quality/date
+attributes only — see Stage 2d' below for what consumes the two files it
+writes (`input/3dep/dem_1m_tile_inventory.parquet`,
+`input/wesm/wesm_project_attrs.parquet`). Exists-skips like the other
+one-time downloads; pass `FORCE=1` to refresh (`FORCE=1 sbatch
+slurm_batch/stage_dem_1m_inventory.batch`) — the inventory is a SNAPSHOT of
+what USGS has published, so re-staging obliges a `dprst_depth` re-run of
+**every** fabric, the same obligation a `shared_rasters` rebuild carries. If
+the staged S3-project-directory-to-WESM match rate ever drops below 90%
+(96.4% measured 2026-09-19), staging **raises** rather than silently staging
+a degraded inventory — that signals the WESM schema or S3 naming has
+changed and needs investigation, not a re-run.
+
+**Scale (measured on the third, final staging run, 2026-09-19):
+125,627 tiles across 939 of the 967 listed project directories** (the other
+28 publish no `TIFF/` prefix at all — nothing to list) **and 567 tiles
+cropped at a project edge.** By filename convention: 88,762 modern
+`USGS_1M_<zone>_x<X>y<Y>_<project>.tif`, 33,448 legacy
+`USGS_one_meter_x<X>y<Y>_<project>.tif`, and 3,417 lowercase, zone-less
+`USGS_1m_x<X>y<Y>_<project>.tif`. Those last two conventions — ~36,865 tiles,
+29% of the corpus — are exactly what the retired hull-based code could never
+address (it filtered on the modern pattern alone), which is the single most
+useful number here for deciding whether a re-run matters. (Earlier
+intermediate totals of 88,403 tiles/357 dirs and 121,849/875 dirs, from
+partway through staging before every filename convention was matched, are
+superseded by the figures above — don't quote them.)
 
 OPT-IN comparison staging (NOT required for a normal build — see "On-stream
 staging" in Stage 2d below):
@@ -620,13 +651,22 @@ Run **before** `build_depstor_rasters.batch`'s unfiltered walk reaches
 in-process fallback, which for CONUS is effectively unbounded wall-clock on
 one core.
 
-**Inputs (per-fabric profile, in addition to Stage 2d's):** `wesm_index`
-(pre-staged 1m/QL1/QL2 WESM workunit footprints — `pixi run python -m
-gfv2_params.download.wesm`) and `ecoregions_gpkg` (EPA L3 Ecoregions —
-`pixi run python -m gfv2_params.download.epa_ecoregions`, Stage 0). Both are
+**Inputs (per-fabric profile, in addition to Stage 2d's):** `dem_1m_inventory`
+(the real, staged 3DEP 1 m tile inventory — every published tile's own COG-header
+extent — `sbatch slurm_batch/stage_dem_1m_inventory.batch`; issue #223 part 2,
+replaces the retired convex-hull `wesm_index`), `wesm_project_attrs` (WESM read
+geometry-free for quality/date only, staged by the same batch), and
+`ecoregions_gpkg` (EPA L3 Ecoregions — `pixi run python -m
+gfv2_params.download.epa_ecoregions`, Stage 0). All three are
 already staged for `gfv2`/`gfv2_dev`/`oregon`/`tjc` in
-`configs/base_config.yml`; `gfv2_vpu01` has neither (its `wbs` waterbody layer
-has no COMID).
+`configs/base_config.yml`; `gfv2_vpu01` has none of them (its `wbs` waterbody layer
+has no COMID). The inventory is a SNAPSHOT of what USGS publishes — re-staging
+(`FORCE=1`) obliges a `dprst_depth` re-run for every fabric, the same obligation
+a `shared_rasters` rebuild carries. `sources.tag_and_assign` enforces a
+consuming-end floor on `dem_1m_inventory`/`wesm_project_attrs` themselves
+(`min_dem_1m_tiles`/`min_dem_1m_projects`/`min_wesm_project_attrs_rows` in the
+per-fabric key table, `docs/ARCHITECTURE.md`) — an empty or well-formed-but-
+partial re-stage otherwise ships a complete all-10m product with no signal.
 
 **On-disk prerequisite.** The Plan stage reconstructs the dprst polygon set
 against the REAL on-stream classifier, not NHD: it needs
@@ -668,29 +708,45 @@ existing data_root, or a hard `ctx.require` failure on a from-scratch one.
    read from `{fabric}/depstor_rasters/` — see "On-disk prerequisite" above),
    **clips it to the fabric's HRU extent** (same
    shared `topo.load_fabric_dprst_polygons` the builder uses — see the
-   "Fabric clip" note below), tags it (`best_topo` via WESM, `ecoregion`
-   via EPA L3), builds the tile → polygon work-list
-   (`tiling.group_by_tile`), and bins it into `N_TILE_BATCHES`
-   SLURM-array batches (`tiling.component_tile_batches` — greedy
+   "Fabric clip" note below), tags and ranks each polygon's candidate tile SETS
+   (`sources.tag_and_assign` against the staged 3DEP inventory + WESM project
+   attrs — one project, one UTM zone per set, ranked by covers-window/QL/
+   newest-collection/project-name, `ecoregion` via EPA L3), groups polygons by
+   their assigned PRIMARY tile set (`tiling.tile_set_groups` — one polygon,
+   exactly one set, no cross-polygon chaining needed), and bins those groups
+   into `N_TILE_BATCHES` SLURM-array batches (`tiling.tile_batches` — greedy
    longest-processing-time bin-packing by estimated DEM-window-read COST
    (`tiling.polygon_window_cost`/`MAX_1M_WINDOW_CELLS`, ~100x weight for 1m
-   vs 10m polygons), not raw polygon count, connected-component safe so a
-   polygon spanning >1 tile is never split across batches).
+   vs 10m polygons), not raw polygon count).
    Writes `{fabric}/depstor_rasters/dprst_depth_batches/_plan/
    {dprst_polygons_tagged.parquet, batch_manifest.json}`, after first
    **deleting the previous plan's `batch_*.parquet`** (#221): a plan owns its
-   batches. Pure geometry + local vector reads — no live S3/vsicurl.
+   batches. Pure geometry + local vector/parquet reads — no live S3/vsicurl;
+   tile existence and extent are already resolved in the staged inventory.
 2. **Array** (`run_dprst_depth_batch.batch`, `0..N_TILE_BATCHES-1`, afterok
-   the plan) — one array task computes `dprst_depth` for ONE tile-batch
+   the plan, `--cpus-per-task=8 --mem=96G`) — one array task computes
+   `dprst_depth` for ONE batch of tile SETS
    (`scripts/run_dprst_depth_batch.py` → `dprst_depth.compute.run_batch`),
-   writing `dprst_depth_batches/batch_XXXX.parquet`. **Deliberately not
-   concurrency-throttled** — the ≤5 hr CONUS target only holds if
-   `N_TILE_BATCHES` tasks actually run concurrently (see sizing below).
+   opening each of its tile sets ONCE and running them CONCURRENTLY on 8
+   threads because the work is remote-read bound, not CPU-bound — on the OLD
+   pre-#223-part-2 per-polygon path, which 51.6% of gfv2r2 polygons took, 73%
+   of the FALLBACK time (not overall pipeline time) was `vrt.read`. A polygon
+   whose primary tile set yields no valid
+   interior walks its remaining ranked candidates (from `sources.tag_and_assign`),
+   ending at the 10 m seamless tile if every 1 m candidate fails. Writes
+   `dprst_depth_batches/batch_XXXX.parquet` with two provenance columns,
+   `source` and `interior_coverage`, alongside the existing depth/method
+   columns. **Deliberately not concurrency-throttled** — the ≤5 hr CONUS
+   target only holds if `N_TILE_BATCHES` tasks actually run concurrently
+   (see sizing below).
 3. **Build** (reuses `build_depstor_rasters.batch --step dprst_depth`,
-   afterok the array, `--mem=64G --time=02:00:00` override — dprst_depth's
+   afterok the array, `--mem=64G --time=04:00:00` override — dprst_depth's
    own compute is vector-scale + a streamed row-strip burn, not a
    full-CONUS-grid materialization, so it doesn't need the 384G/18h whole-DAG
-   default) — finds the populated `dprst_depth_batches/*.parquet`, verifies
+   default; the 4 h (was 2 h) accounts for this stage re-tagging the whole
+   polygon set through `sources.tag_and_assign` a second time — measured
+   ~10 ms/1m-tagged polygon, 33-65 min at CONUS scale, see the plan stage's
+   sizing note below) — finds the populated `dprst_depth_batches/*.parquet`, verifies
    them against `_plan/` (exactly `batch_0000..N-1`, planned polygon set ==
    current one — else it raises), fills
    every flat/degenerate polygon (`fit_ecoregion_models`/`fill_flat`), burns
@@ -716,9 +772,18 @@ slurm_batch/submit_dprst_depth.sh "$BATCHES" gfv2 configs/base_config.yml 150
 arg, default 150) trades array width for wall-clock:
 `wall-clock ≈ (250-500 core-hours) / N_TILE_BATCHES` — 150 batches ≈
 1.7-3.3 hr, comfortable margin under 5 hr even with imperfect load balance.
-Dry-run the exact per-batch balance and projected wall-clock for a candidate
-`N_TILE_BATCHES` before submitting (pure geometry — no live S3; safe on the
-head node for a small fabric, but see the note below about `oregon`):
+This is stage 2's (the array's) wall-clock — it does NOT include stage 1
+(the plan job) itself: `sources.tag_and_assign`'s per-polygon
+`assign_sources`/`rank_candidates` loop (called once by the plan job, and
+again by stage 3's builder) measures ~9.97-15 ms per 1m-tagged polygon
+(0.43 ms per 10m polygon), extrapolating to 33-65 minutes at CONUS scale on
+top of the plan's other vector/parquet work — hence `plan_dprst_depth_
+batches.batch`'s `--time=04:00:00` and stage 3's matching override (see the
+DAG description above). Dry-run the exact per-batch balance and projected
+array wall-clock for a candidate `N_TILE_BATCHES` before submitting (pure
+geometry — no live S3; safe on the head node for a small fabric, but see the
+note below about `oregon`; CONUS-scale should go through `sbatch` given the
+assign_sources cost above):
 
 ```bash
 pixi run python -m gfv2_params.dprst_depth.tiling --plan \
@@ -752,7 +817,7 @@ pixi run python -m gfv2_params.dprst_depth.tiling --plan \
   nothing could tell. A lone re-plan followed by the build now fails loud
   (`Missing: batch_0000 …`) — it costs recompute time, never a wrong product.
 - If `dprst_depth.tif`/`op_flow_thres_params.csv` need a full rebuild (e.g.
-  after a WESM/ecoregion re-stage), pass `--force`:
+  after a 3DEP tile-inventory/ecoregion re-stage), pass `--force`:
   `sbatch slurm_batch/build_depstor_rasters.batch --step dprst_depth --force`
   (re-run stages 1-2 first if the polygon set itself changed).
 - `mean_zonal`/`mean_finalize` (stage 4) only depend on `dprst_depth.tif`
@@ -1413,6 +1478,7 @@ sacct -j <JOBID> -o JobID,State,Elapsed,MaxRSS
 | `slurm_batch/download_nalcms.batch` | `configs/base_config.yml` | `gfv2_params.download.nalcms_lulc` |
 | `slurm_batch/download_nhm_v11.batch` | `configs/base_config.yml` | `gfv2_params.download.nhm_v11_lulc` |
 | (run directly, via `srun`) | `configs/base_config.yml` | `gfv2_params.download.nhd_waterbodies` — downloads per-VPU NHDWaterbody polygons from the same `NHDSnapshot` archives `nhd_flowlines` uses, staging the required, source-derived `input/nhd/nhd_waterbodies.gpkg` every CONUS fabric's `waterbody_gpkg` now points at (supersedes the retired hand-made `conus_waterbodies.gpkg`) (one-time, CONUS) |
+| `slurm_batch/stage_dem_1m_inventory.batch` | `configs/base_config.yml` | `gfv2_params.download.dem_1m_inventory` — lists every S3 3DEP 1 m project directory, reads each published tile's own COG header for its real extent, and reads WESM geometry-free for quality/date attributes only; writes `input/3dep/dem_1m_tile_inventory.parquet` + `input/wesm/wesm_project_attrs.parquet` (required by `dprst_depth`'s `sources.tag_and_assign`, issue #223 part 2 — replaces the retired convex-hull `wesm_index`; one-time, CONUS-shared, fabric-independent; a SNAPSHOT — `FORCE=1` to refresh, which obliges a `dprst_depth` re-run of every fabric) |
 | `slurm_batch/download_nhd_flowlines.batch` | `configs/base_config.yml` | **OPT-IN comparison only** (see "On-stream staging" in Stage 2d) — `gfv2_params.download.nhd_flowlines` downloads per-VPU NHDPlusV2 `NHDFlowline` attributes and distills distinct non-zero `WBAREACOMI` values to `input/nhd/connected_waterbody_comids.parquet`, keeping only WBAREACOMI carried by a **Network Flowline** (requires `flowline_topology.parquet`; issue #161) (one-time, CONUS) |
 | (run directly) | `configs/base_config.yml` | **OPT-IN comparison only** — `gfv2_params.download.nhd_topology` downloads per-VPU NHDPlusV2 `PlusFlowlineVAA` attributes and distills COMID/DnHydroseq/Hydroseq/TerminalFl/StartFlag/StreamOrde/FromNode/ToNode to `input/nhd/flowline_topology.parquet` (one-time, CONUS); must run before **both** `download_nhd_flowlines.batch` and `stage_nhd_flowthrough.batch` on that comparison path |
 | `stage_nhd_flowthrough.batch` | `configs/base_config.yml` | **OPT-IN comparison only** — `gfv2_params.download.nhd_flowthrough` per-VPU vector spatial join; classifies flow-through NHDWaterbody polygons (T1: boundary crossings ≥2; D1: routed-network upstream endpoint inside the waterbody, from `flowline_topology.parquet`; T3: NHDArea overlap) — T1/D1 candidates are gated to **Network Flowlines** (in `flowline_topology.parquet`) so Non-Network closed-basin lines can't promote endorheic lakes (issue #161); Playa/Ice Mass dropped up front; writes `input/nhd/flowthrough_waterbody_comids.parquet` (one-time, CONUS; no CONUS-grid array) |

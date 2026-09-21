@@ -30,21 +30,25 @@ design doc:
      real runtime data dependency for the whole step, not just convention —
      step 5's burn reads `dprst_binary.tif` directly (`ctx.require("dprst")`)
      as a mask.
-  2. Tag `best_topo` (`topo.resolution_class`, needs `wesm_index`), then
-     retag any oversized 1m polygon to 10m (`tiling.guard_oversized_windows`
+  2. Tag `best_topo` + rank real tile-set candidates (`sources.tag_and_assign`,
+     issue #223, needs `dem_1m_inventory`/`wesm_project_attrs`) — replaces the
+     retired convex-hull `topo.resolution_class`/`wesm_index` path. Internally
+     also retags any oversized 1m polygon to 10m (`tiling.guard_oversized_windows`
      — a polygon whose 1m rim-buffered window would be enormous, e.g. a
      giant lake's bbox, is downgraded before anything downstream ever reads
-     its window; the CONUS load-balance/OOM fix), then tag `ecoregion`
+     its window; the CONUS load-balance/OOM fix) BETWEEN tagging and
+     assignment. Then tag `ecoregion`
      (`download.epa_ecoregions.ecoregion_of`, needs `ecoregions_gpkg`), and
      `ftype` (the `FTYPE` column, aliased lowercase to match `fill.py`'s
      column convention).
   3. Compute per-polygon depth stats — TWO paths, chosen by whether a
      per-batch parquet dir exists and is non-empty:
        - CONUS: load + concat the SLURM array's per-tile-batch parquets
-         (Task 9, not yet built — this path activates automatically once
-         that array populates `batch_dir`).
-       - small/test fabrics: run `tiling.group_by_tile` +
-         `compute.run_batch` in-process (one "batch" covering every tile).
+         (the tiled `submit_dprst_depth.sh` array — this path activates
+         automatically once that array populates `batch_dir`).
+       - small/test fabrics: run `tiling.tile_set_groups` +
+         `compute.run_batch` in-process (one call per real tile SET, as
+         assigned by `sources.tag_and_assign`).
   4. Fill every flat/degenerate row (`fill.fit_ecoregion_models` +
      `fill.fill_flat`) so every polygon has a finite, positive
      `dprst_depth_m`.
@@ -92,8 +96,9 @@ from ..download.epa_ecoregions import ECO_ID_FIELD, ecoregion_of
 from ..dprst_depth.burn import burn_depth
 from ..dprst_depth.compute import run_batch
 from ..dprst_depth.fill import fill_flat, fit_ecoregion_models
-from ..dprst_depth.tiling import group_by_tile, guard_oversized_windows
-from ..dprst_depth.topo import load_fabric_dprst_polygons, resolution_class
+from ..dprst_depth.sources import tag_and_assign
+from ..dprst_depth.tiling import tile_set_groups
+from ..dprst_depth.topo import load_fabric_dprst_polygons
 from ..endorheic import load_endorheic_comids
 from ..segment_wbody import load_segment_comids
 from .context import BuildContext
@@ -101,9 +106,16 @@ from .context import BuildContext
 # Columns computed by compute.run_batch/compute_polygon that survive the
 # join back onto the dprst polygon set. Fixed list so an empty batch (all
 # columns present, 0 rows — compute._empty_batch_frame's convention) still
-# merges cleanly.
+# merges cleanly. `source` (the winning tile set's project, or "10m" on the
+# seamless fallback) and `interior_coverage` (the fraction of the polygon's
+# true interior footprint that was real, not read_padded sentinel padding)
+# are issue #223's per-polygon provenance additions — see compute.py's
+# `_OUTPUT_COLUMNS` docstring. Both must survive this join so the re-run
+# validation (which project a depth came from) and a future donor-pool
+# coverage filter (fill.py, out of scope for this plan) can read them back.
 _DEPTH_COLUMNS = [
     "COMID", "dprst_depth_m", "measured_max_m", "hollister_max_m", "flat", "resolution", "method",
+    "source", "interior_coverage",
 ]
 
 # PRMS op_flow_thres is a fixed constant in the legacy ArcPy source
@@ -191,36 +203,37 @@ def _load_dprst_polygons(ctx: BuildContext, logger) -> gpd.GeoDataFrame:
     )
 
 
-def _tag_polygons(dprst: gpd.GeoDataFrame, ctx: BuildContext, logger) -> tuple[gpd.GeoDataFrame, gpd.GeoDataFrame]:
-    """Tag `best_topo` (WESM), `ecoregion` (EPA L3), and `ftype` (FTYPE alias).
+def _tag_polygons(dprst: gpd.GeoDataFrame, ctx: BuildContext, logger) -> gpd.GeoDataFrame:
+    """Tag `best_topo` + ranked real tile-set candidates (issue #223), `ecoregion`
+    (EPA L3), and `ftype` (FTYPE alias).
 
-    `best_topo` also passes through `tiling.guard_oversized_windows` right
-    after `resolution_class` (issue #173 CONUS load-balance/OOM fix): a
-    polygon whose 1 m rim-buffered window would be enormous (a giant lake's
-    bbox) is retagged to 10 m before anything downstream (`group_by_tile`,
-    `compute.run_batch`'s actual `topo.read_window` call) ever sees it — the
-    SAME guard call the SLURM `--plan` hook makes
-    (`tiling.py::_load_and_tag_for_plan`), so the in-process builder path
-    and the array/plan path can't diverge on which polygons get downgraded.
+    `sources.tag_and_assign` is the ONE entry point shared by this in-process
+    builder path and the SLURM `--plan` hook
+    (`tiling.py::_load_and_tag_for_plan`), so the two paths cannot diverge on
+    which real 3DEP tile set(s) a polygon is assigned — including the
+    oversized-window 1m->10m guard it runs internally between tagging and
+    assignment. Replaces the retired convex-hull `topo.resolution_class` +
+    `tiling.guard_oversized_windows` two-step (a hull claims ground a project
+    never flew; see `dprst_depth/sources.py`'s module docstring).
     """
-    if ctx.wesm_index is None:
-        raise KeyError(
-            "dprst_depth step needs `wesm_index` in the fabric profile: a "
-            "pre-staged, 1m/QL1/QL2-filtered WESM workunit footprint index "
-            "(a 'project' column + geometry). Stage it first: "
-            "`pixi run python -m gfv2_params.download.wesm`."
-        )
-    if not ctx.wesm_index.exists():
-        raise FileNotFoundError(
-            f"WESM index not found: {ctx.wesm_index}. Stage it first: "
-            "`pixi run python -m gfv2_params.download.wesm`."
-        )
-    wesm_gdf = gpd.read_file(ctx.wesm_index)
-
-    dprst = resolution_class(dprst, wesm_gdf)
-    n_1m = int((dprst["best_topo"] == "1m").sum())
-    logger.info("  best_topo: %d/%d polygons tagged 1m (rest 10m)", n_1m, len(dprst))
-    dprst = guard_oversized_windows(dprst, logger=logger)
+    for key in ("dem_1m_inventory", "wesm_project_attrs"):
+        path = getattr(ctx, key)
+        if path is None:
+            raise KeyError(
+                f"dprst_depth step needs `{key}` in the fabric profile. Stage it: "
+                "`sbatch slurm_batch/stage_dem_1m_inventory.batch`."
+            )
+        if not path.exists():
+            raise FileNotFoundError(
+                f"{key} not found: {path}. Stage it: "
+                "`sbatch slurm_batch/stage_dem_1m_inventory.batch`."
+            )
+    dprst = tag_and_assign(
+        dprst, ctx.dem_1m_inventory, ctx.wesm_project_attrs, logger,
+        min_inventory_tiles=ctx.min_dem_1m_tiles,
+        min_inventory_projects=ctx.min_dem_1m_projects,
+        min_attrs_rows=ctx.min_wesm_project_attrs_rows,
+    )
 
     if ctx.ecoregions_gpkg is None:
         raise KeyError(
@@ -240,7 +253,7 @@ def _tag_polygons(dprst: gpd.GeoDataFrame, ctx: BuildContext, logger) -> tuple[g
         dprst["ecoregion"] = dprst["ecoregion"].fillna("unassigned")
 
     dprst["ftype"] = dprst["FTYPE"]
-    return dprst, wesm_gdf
+    return dprst
 
 
 def _first_few(names: list[str], n: int = 5) -> str:
@@ -302,15 +315,16 @@ def _verify_batches_match_plan(batch_dir: Path, parquet_files: list[Path], dprst
 
 
 def _compute_depths(
-    dprst: gpd.GeoDataFrame, wesm_gdf: gpd.GeoDataFrame, ctx: BuildContext, step_cfg: dict, logger,
+    dprst: gpd.GeoDataFrame, ctx: BuildContext, step_cfg: dict, logger,
 ) -> pd.DataFrame:
     """Per-polygon depth stats — SLURM per-batch parquet if present, else in-process.
 
-    `batch_dir` (Task 9's SLURM array output) is a `step_cfg` key so
+    `batch_dir` (the tiled SLURM array's output) is a `step_cfg` key so
     per-fabric orchestration (CONUS vs a small/test fabric) doesn't require
     a code change — only a config value. Absent/empty -> in-process
-    `tiling.group_by_tile` + `compute.run_batch` (correct, just not the
-    CONUS-scale fan-out).
+    `tiling.tile_set_groups` + `compute.run_batch` (correct, just not the
+    CONUS-scale fan-out) — `dprst` must already carry `source_tiles`/
+    `candidates` (`sources.tag_and_assign`, via `_tag_polygons`).
     """
     batch_dir = Path(step_cfg.get("batch_dir", ctx.output_dir / "dprst_depth_batches"))
     parquet_files = sorted(batch_dir.glob("*.parquet")) if batch_dir.exists() else []
@@ -323,6 +337,32 @@ def _compute_depths(
             len(parquet_files), batch_dir,
         )
         depth_df = pd.concat([pd.read_parquet(f) for f in parquet_files], ignore_index=True)
+        # `_fill_and_join`'s `keep_cols = [c for c in _DEPTH_COLUMNS if c in
+        # depth_df.columns]` silently drops whatever's missing -- fine for a
+        # legitimately EMPTY batch (`compute._empty_batch_frame` guarantees every
+        # column, just 0 rows), but a NON-empty concatenated frame missing one is
+        # exactly what a `--from`/`--force` re-run against PRE-#223 batch parquets
+        # looks like (written before `source`/`interior_coverage` existed).
+        # `_verify_batches_match_plan` only checks `n_batches` and the COMID set,
+        # not the schema, so a stale batch dir passes that check silently and this
+        # join would too -- the provenance parquet is exactly what the re-run
+        # validation (scripts/diagnose/compare_dprst_depth_runs.py) diffs. Scoped to
+        # THIS branch only (loaded-from-disk parquets), not the in-process
+        # `run_batch` call below, whose real output always carries every
+        # `_OUTPUT_COLUMNS` member by construction (compute.py) -- so a test double
+        # standing in for it doesn't need to replicate that schema too.
+        if len(depth_df) > 0:
+            missing = [c for c in _DEPTH_COLUMNS if c not in depth_df.columns]
+            if missing:
+                raise RuntimeError(
+                    f"dprst_depth: {len(depth_df):,} non-empty per-polygon depth row(s) "
+                    f"loaded from {batch_dir} are missing column(s) {missing} that "
+                    f"_DEPTH_COLUMNS declares. This is what loading PRE-#223 "
+                    f"batch_*.parquet files (written before source/interior_coverage "
+                    f"existed) looks like. Re-run the tiled stage "
+                    f"(slurm_batch/submit_dprst_depth.sh) to regenerate them with the "
+                    f"current schema before building this step."
+                )
     else:
         # Refuse CONUS-scale work BEFORE starting it (#221). This branch used to accept any
         # size and say so only at INFO: gfv2r2's first run reached it with 392,672
@@ -349,11 +389,10 @@ def _compute_depths(
         # defaults (Phase 0/1) and are currently fixed at their function
         # defaults; expose as config only when a task threads them through
         # compute.run_batch/topo.read_window/topo.is_hydroflattened.
-        groups = group_by_tile(dprst, wesm_gdf)
-        tile_keys = list(groups.keys())
-        logger.info("  %d elevation tile(s) to read for %d polygons", len(tile_keys), len(dprst))
+        groups = tile_set_groups(dprst)
+        logger.info("  %d real tile set(s) to read for %d polygons", len(groups), len(dprst))
         tmp_parquet = ctx.output_dir / "_dprst_depth_inprocess.parquet"
-        depth_df = run_batch(dprst, tile_keys, wesm_gdf, tmp_parquet, logger)
+        depth_df = run_batch(dprst, list(groups), tmp_parquet, logger, n_threads=1)
 
     if "COMID" in depth_df.columns:
         n_before = len(depth_df)
@@ -478,7 +517,16 @@ def _write_op_flow_thres(ctx: BuildContext, out_path: Path, logger) -> Path:
 # after `_tag_polygons` (ftype/ecoregion) + `_compute_depths`/`_fill_and_join`
 # (resolution/measured_max_m/hollister_max_m via `_DEPTH_COLUMNS`), so no
 # extra computation is needed here — just don't drop them on the way out.
-_PROVENANCE_DIAGNOSTIC_COLUMNS = ["resolution", "ftype", "ecoregion", "measured_max_m", "hollister_max_m"]
+# `source`/`interior_coverage` (issue #223) are provenance, not PRMS
+# parameters (this repo's `prms.provenance` convention, CLAUDE.md) — `source`
+# is what the re-run validation diffs to know which project each depth came
+# from, and `interior_coverage` is the prerequisite a future fill.py donor
+# filter needs (see `_DEPTH_COLUMNS`'s comment); adding that filter itself is
+# out of scope here.
+_PROVENANCE_DIAGNOSTIC_COLUMNS = [
+    "resolution", "ftype", "ecoregion", "measured_max_m", "hollister_max_m",
+    "source", "interior_coverage",
+]
 
 
 def _write_polygon_provenance(filled: gpd.GeoDataFrame, depth_path: Path, logger) -> Path:
@@ -531,8 +579,8 @@ def build(step_cfg: dict, ctx: BuildContext, logger) -> dict:
         return {"dprst_depth": depth_path, "op_flow_thres": op_flow_path}
 
     dprst = _load_dprst_polygons(ctx, logger)
-    dprst, wesm_gdf = _tag_polygons(dprst, ctx, logger)
-    depth_df = _compute_depths(dprst, wesm_gdf, ctx, step_cfg, logger)
+    dprst = _tag_polygons(dprst, ctx, logger)
+    depth_df = _compute_depths(dprst, ctx, step_cfg, logger)
     filled = _fill_and_join(dprst, depth_df, ctx, logger)
 
     burn_depth(filled, ctx.template_path, landmask_path, dprst_mask_path, depth_path, logger)

@@ -1,9 +1,14 @@
 """WESM (Work Extent Spatial Metadata) 3DEP workunit-footprint I/O.
 
 Promoted verbatim from the Phase 0 diagnostic probe
-(`scripts/diagnose/dprst_depth_probe.py`) so both the diagnostic and the
-`gfv2_params.download.wesm` staging module (issue #173 Task 7b) import a
-single validated copy — no duplicated download/filter logic.
+(`scripts/diagnose/dprst_depth_probe.py`), which remains its only consumer.
+`gfv2_params.download.wesm` (issue #173 Task 7b), the OTHER module this was
+originally shared with, was deleted by issue #223 part 2: the convex-hull
+WESM workunit-footprint index it staged is retired in favour of the real
+3DEP tile inventory (`gfv2_params.dprst_depth.inventory`/`download.
+dem_1m_inventory`), which reads WESM geometry-free (QL/date attributes
+only, via `inventory.project_attrs`) and does not need this module's
+footprint-geometry download/filter logic at all.
 
 WESM is the authoritative 3DEP workunit footprint index (~3,258 workunits,
 ~3.6 GB GeoPackage). The task brief points at the S3 object via

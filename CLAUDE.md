@@ -310,6 +310,60 @@ These are hard-won; violating them silently corrupts outputs.
   `logs/diag_gradient/` in the repo checkout (not the HPC data root); see
   `docs/superpowers/plans/2026-09-19-dprst-depth-real-tile-inventory.md` for
   the reproduction and the tile-inventory follow-on.
+- **dprst_depth sources come from the staged real 3DEP tile inventory, never
+  WESM footprints.** WESM workunit footprints were convex hulls (to fit login-
+  node memory) and hulls invent coverage: on gfv2r2, 67.8% of "multi-tile"
+  polygons were one tile cell under 2+ project hulls, and a HEAD probe found
+  61% of those had ONE real tile and 15% NONE. `input/3dep/dem_1m_tile_
+  inventory.parquet` holds every published tile with its header extent;
+  `sources.tag_and_assign` (shared by builder and planner) ranks per-polygon
+  tile sets by (covers window, QL, newest collect_end, project). WESM is read
+  geometry-free, for QL/dates only. The inventory is a SNAPSHOT: re-staging
+  obliges a dprst_depth re-run of every fabric. A tile set is one project in
+  ONE UTM zone, because BuildVRT cannot mosaic mixed CRSs. `tiling.tile_set_groups`
+  groups polygons by their assigned primary tile set (one polygon, exactly one
+  set — no cross-polygon component-chaining); `compute.run_batch` opens each
+  set ONCE and runs sets concurrently on a thread pool, walking a polygon's
+  remaining ranked candidates when its primary source yields no valid
+  interior, ending at the 10 m seamless tile. The old hull-driven transitive
+  tile-key chaining could span >4,000 tiles in one component and left two
+  array tasks with ~16,000/~12,000 fallback polygons each, running past 24 h
+  against a 34-minute median — gone now that each polygon resolves to exactly
+  one primary set. `interior_coverage` is written per polygon (a truncated
+  interior is COVERAGE LOSS, not fill corruption — richdem excludes interior
+  nodata cells) but nothing downstream FILTERS on it yet — the donor filter
+  that would exclude low-coverage polygons from the regional calibration is
+  not built. `sources.tag_and_assign` (the shared entry point for both the
+  planner and the builder) enforces a consuming-end floor on the staged
+  `dem_1m_inventory`/`wesm_project_attrs` themselves — an empty or
+  well-formed-but-partial inventory otherwise ships a complete all-10m
+  product at exit code 0 with no other signal, exactly as a producer-side
+  bug on this branch twice did during development (88,403 tiles/357 of 967
+  projects, then 121,849/875 — the measured full CONUS inventory, 2026-09-20,
+  is 125,627 tiles/939 projects; `wesm_project_attrs` measures 932 rows, a
+  close but NOT identical count). Same doctrine as `min_onstream_comids`/
+  `min_endorheic_comids`: default floors are module constants in `sources.py`
+  (`DEFAULT_MIN_INVENTORY_TILES=100_000`/`DEFAULT_MIN_INVENTORY_PROJECTS=900`/
+  `DEFAULT_MIN_PROJECT_ATTRS_ROWS=500`), overridable per fabric
+  (`min_dem_1m_tiles`/`min_dem_1m_projects`/`min_wesm_project_attrs_rows`) but
+  with no legitimate reason to lower them today, since every fabric profile
+  points at the same shared, CONUS-wide staged file. The two inventory floors
+  are NOT redundant against those two historical incidents: the tile floor
+  catches only the first (88,403 < 100,000; 121,849 is not below it), while
+  the project floor catches BOTH (357 and 875 are both < 900) — an earlier
+  400/500-range project floor would have let the second incident (875
+  projects) straight through, which is exactly what two independent review
+  passes caught.
+- **`sources.assign_sources`'s per-polygon loop is slow enough to size SLURM
+  jobs around.** Measured against the real staged inventory: ~9.97-15 ms per
+  1m-tagged polygon (`rank_candidates`'s per-polygon `gpd.GeoDataFrame(...)`
+  construction is 55% of it), 0.43 ms per 10m polygon — 33-65 minutes at CONUS
+  scale (286k-393k dprst polygons), paid once by the tiled pipeline's plan job
+  (`slurm_batch/plan_dprst_depth_batches.batch`) and again by the build stage's
+  re-tagging (`submit_dprst_depth.sh`'s stage-3 override) — both are sized to
+  `--time=04:00:00` for this. The optimisation itself (hoisting the
+  GeoDataFrame construction, or letting the builder tag without assigning) is
+  a deliberate follow-up, not a fix folded into a time-budget correction.
 - **CONUS-scale memory: stream/window, never hold a full-grid array.** The CONUS
   template is 153830×109901 ≈ 16.9 B cells — ~17 GB as uint8, ~68 GB as int32,
   ~135 GB as float64. Oregon (~0.56 B cells) hides this; CONUS OOMs any depstor

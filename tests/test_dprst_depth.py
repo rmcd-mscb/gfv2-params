@@ -1,22 +1,16 @@
-"""Integration test for the dprst_depth builder (issue #173 Task 7).
+"""Integration test for the dprst_depth builder (issue #173 Task 7; real
+tile-inventory wiring, issue #223).
 
 `test_dprst_depth_build_end_to_end` drives `build()` on a tiny synthetic
-fabric: a local 1000x1000 m / 1 m-cell DEM (in place of a real 3DEP tile),
-two dprst polygons (one real, non-flat depression; one hydro-flattened —
-`fill.py`'s fallback ladder must supply its depth), a tiny HRU/ecoregion/WESM
-footprint set, and no per-batch parquet dir (exercises the in-process
-`tiling.group_by_tile` + `compute.run_batch` path).
+fabric: two dprst polygons (one real, non-flat depression; one
+hydro-flattened — `fill.py`'s fallback ladder must supply its depth), a tiny
+HRU/ecoregion/3DEP-inventory/WESM-attrs set, and no per-batch parquet dir
+(exercises the in-process `tiling.tile_set_groups` + `compute.run_batch`
+path, sourced from `sources.tag_and_assign`'s real tile-set assignment).
 
-No live S3 read: `rasterio.open` is monkeypatched to redirect any
-`/vsicurl/`-or-`/vsis3/`-prefixed path to the local synthetic DEM. This is
-deliberately a broader interception point than the task brief's suggested
-`topo.read_window` patch: `compute.run_batch`'s single-tile fast path
-(`_open_tile_vrt`) calls `rasterio.open(tile_key)` directly and never goes
-through `read_window` at all, so patching only `read_window` would miss it.
-Patching `rasterio.open` (auto-reverted by `monkeypatch`) covers both the
-fast tile-cache path and the multi-tile `compute_polygon` fallback path
-uniformly, whichever one `group_by_tile`'s real geometry math happens to
-route each polygon through.
+No live S3 read: `compute.open_tile_set`/`compute._compute_one` — the two
+seams `run_batch` actually calls — are monkeypatched, exactly as
+`tests/test_dprst_depth_compute.py` does for `run_batch`'s own unit tests.
 """
 from __future__ import annotations
 
@@ -33,6 +27,7 @@ import yaml
 from rasterio.transform import from_origin
 from shapely.geometry import box
 
+import gfv2_params.dprst_depth.compute as compute_mod
 from gfv2_params.depstor_builders import BUILDERS, dprst_depth
 from gfv2_params.depstor_builders.context import BuildContext
 from gfv2_params.dprst_depth.aggregate import (
@@ -42,6 +37,7 @@ from gfv2_params.dprst_depth.aggregate import (
     finalize_depth_params,
 )
 from gfv2_params.dprst_depth.fill import M_TO_IN
+from gfv2_params.dprst_depth.inventory import INVENTORY_COLUMNS
 from gfv2_params.dprst_depth.tiling import _load_and_tag_for_plan
 
 _CRS = "EPSG:5070"
@@ -76,34 +72,42 @@ def test_dprst_depth_registered():
     assert BUILDERS["dprst_depth"] is dprst_depth.build
 
 
-def _write_dem(path):
-    """1000x1000 m, 1 m cells. Baseline 100.0 everywhere; two 40x40 m
-    features far enough apart that each one's 200 m rim-buffered read
-    window stays inside the raster (avoids an out-of-bounds windowed read).
+def _fake_open_tile_set_and_compute_one(monkeypatch):
+    """Stub `compute.run_batch`'s two actual seams (`open_tile_set`/
+    `_compute_one`) so `test_dprst_depth_build_end_to_end` never opens a real
+    (or even locally-fake) raster — mirrors `tests/test_dprst_depth_compute.py`'s
+    own `run_batch` unit tests.
 
-    Polygon A footprint (x,y in [280,320]): a real, non-flat depression —
-    a gradient pit (95.0 -> 90.0), interior range 5 m >> the 0.01 m
-    hydro-flattening tolerance -> `flat=False`, a genuine measured depth.
-    Polygon B footprint (x,y in [680,720]): a hydro-flattened surface — an
-    EXACTLY constant 95.0 -> interior range 0 -> `flat=True`, must go
-    through fill.py's fallback ladder.
+    Discriminates by geometry, not by tile set, matching the retired local-DEM
+    fixture's two cases: polygon A (COMID 101, bounds minx=280) is a real,
+    non-flat depression; polygon B (COMID 102, bounds minx=680) is
+    hydro-flattened and must fall through `fill.py`'s ladder.
+
+    `interior_coverage` is DELIBERATELY distinctive per polygon (0.83 / 0.55,
+    neither of which is 1.0 or any other value a silently-dropped/defaulted
+    column could plausibly produce) so a test asserting on it cannot pass by
+    accident — see `test_dprst_depth_build_end_to_end`'s provenance-parquet
+    assertions.
     """
-    n = 1000
-    dem = np.full((n, n), 100.0, dtype=np.float32)
-    transform = from_origin(0, n, 1, 1)  # row = n - y ; col = x
+    from contextlib import contextmanager
 
-    # A: rows 680:720 (y 280..320), cols 280:320 (x 280..320)
-    pit = np.linspace(95.0, 90.0, num=40)
-    dem[680:720, 280:320] = np.tile(pit, (40, 1))
+    @contextmanager
+    def _fake_open_tile_set(ts):
+        yield ts.project
 
-    # B: rows 680:720 (y 280..320), cols 680:720 (x 680..720)
-    dem[680:720, 680:720] = 95.0
+    def _fake_compute_one(vrt, geom):
+        if geom.bounds[0] < 500:  # polygon A
+            return {
+                "dprst_depth_m": 2.5, "measured_max_m": 5.0, "hollister_max_m": 3.0,
+                "flat": False, "resolution": "10m", "interior_coverage": 0.83,
+            }
+        return {  # polygon B: hydro-flattened
+            "dprst_depth_m": float("nan"), "measured_max_m": float("nan"),
+            "hollister_max_m": 3.0, "flat": True, "resolution": "10m", "interior_coverage": 0.55,
+        }
 
-    with rasterio.open(
-        path, "w", driver="GTiff", height=n, width=n, count=1,
-        dtype="float32", crs=_CRS, transform=transform, nodata=-999999.0,
-    ) as dst:
-        dst.write(dem, 1)
+    monkeypatch.setattr(compute_mod, "open_tile_set", _fake_open_tile_set)
+    monkeypatch.setattr(compute_mod, "_compute_one", _fake_compute_one)
 
 
 def _write_template_and_landmask(tmp_path):
@@ -187,15 +191,26 @@ def _write_ecoregions_gpkg(path):
     gdf.to_file(path, layer="ecoregions", driver="GPKG")
 
 
-def _write_wesm_gpkg(path):
-    # A footprint far from both dprst polygons -> resolution_class tags
-    # everything "10m" (no covering 1m project), keeping the compute path
-    # on the simple seamless-tile branch.
-    gdf = gpd.GeoDataFrame(
-        {"project": ["unused"], "geometry": [box(10_000_000, 10_000_000, 10_000_100, 10_000_100)]},
-        crs=_CRS,
-    )
-    gdf.to_file(path, layer="wesm", driver="GPKG")
+def _write_inventory(tmp_path):
+    """Real 3DEP tile inventory + WESM project attrs fixtures (issue #223) --
+    one project, one tile, covering both dprst polygon fixtures (x,y in
+    [0, 1000]) -- so `sources.tag_and_assign` tags both polygons `"1m"` and
+    assigns this tile as their primary `source_tiles`. `open_tile_set`/
+    `_compute_one` are monkeypatched in every test that actually computes a
+    depth, so this tile's `key` is never opened."""
+    dem_1m_inventory = tmp_path / "dem_1m_tile_inventory.parquet"
+    pd.DataFrame(
+        [["test_project", "/vsicurl/https://example/tile.tif", 13, "EPSG:26913",
+          1000, 1000, -500.0, -500.0, 1500.0, 1500.0]],
+        columns=INVENTORY_COLUMNS,
+    ).to_parquet(dem_1m_inventory)
+
+    wesm_project_attrs = tmp_path / "wesm_project_attrs.parquet"
+    pd.DataFrame(
+        {"ql_rank": [1], "collect_end": [pd.Timestamp("2020-01-01")], "matched_by": ["project"]},
+        index=pd.Index(["test_project"], name="project"),
+    ).to_parquet(wesm_project_attrs)
+    return dem_1m_inventory, wesm_project_attrs
 
 
 def _write_hru_gpkg(path):
@@ -265,8 +280,7 @@ def test_builder_and_plan_paths_resolve_the_same_onstream_set(tmp_path):
     _write_waterbody_gpkg(waterbody_gpkg)
     ecoregions_gpkg = tmp_path / "ecoregions.gpkg"
     _write_ecoregions_gpkg(ecoregions_gpkg)
-    wesm_index = tmp_path / "wesm.gpkg"
-    _write_wesm_gpkg(wesm_index)
+    dem_1m_inventory, wesm_project_attrs = _write_inventory(tmp_path)
     hru_gpkg = tmp_path / "hru.gpkg"
     _write_hru_gpkg(hru_gpkg)
 
@@ -288,10 +302,16 @@ def test_builder_and_plan_paths_resolve_the_same_onstream_set(tmp_path):
     config = {
         "waterbody_gpkg": str(waterbody_gpkg), "waterbody_layer": "waterbodies",
         "output_dir": str(tmp_path),
-        "wesm_index": str(wesm_index), "ecoregions_gpkg": str(ecoregions_gpkg),
+        "dem_1m_inventory": str(dem_1m_inventory), "wesm_project_attrs": str(wesm_project_attrs),
+        # _write_inventory's fixture is a single tile/project, well under
+        # sources.tag_and_assign's default floors (issue #223 review round 2) --
+        # disabled here since this test is about the builder/plan on-stream
+        # reconstruction agreeing, not the inventory floor.
+        "min_dem_1m_tiles": 0, "min_dem_1m_projects": 0, "min_wesm_project_attrs_rows": 0,
+        "ecoregions_gpkg": str(ecoregions_gpkg),
         "hru_gpkg": str(hru_gpkg), "hru_layer": "nhru",
     }
-    plan_dprst, _wesm_gdf = _load_and_tag_for_plan(config, _L())
+    plan_dprst = _load_and_tag_for_plan(config, _L())
 
     assert set(builder_dprst["COMID"]) == set(plan_dprst["COMID"])
     assert set(builder_dprst["COMID"]) == {101}
@@ -299,17 +319,7 @@ def test_builder_and_plan_paths_resolve_the_same_onstream_set(tmp_path):
 
 
 def test_dprst_depth_build_end_to_end(tmp_path, monkeypatch):
-    dem_path = tmp_path / "local_dem.tif"
-    _write_dem(dem_path)
-
-    real_open = rasterio.open
-
-    def _fake_open(path, *args, **kwargs):
-        if isinstance(path, str) and ("/vsicurl/" in path or "/vsis3/" in path):
-            return real_open(str(dem_path), *args, **kwargs)
-        return real_open(path, *args, **kwargs)
-
-    monkeypatch.setattr(rasterio, "open", _fake_open)
+    _fake_open_tile_set_and_compute_one(monkeypatch)
 
     tmpl, lm, dm = _write_template_and_landmask(tmp_path)
 
@@ -317,8 +327,7 @@ def test_dprst_depth_build_end_to_end(tmp_path, monkeypatch):
     _write_waterbody_gpkg(waterbody_gpkg)
     ecoregions_gpkg = tmp_path / "ecoregions.gpkg"
     _write_ecoregions_gpkg(ecoregions_gpkg)
-    wesm_index = tmp_path / "wesm.gpkg"
-    _write_wesm_gpkg(wesm_index)
+    dem_1m_inventory, wesm_project_attrs = _write_inventory(tmp_path)
     hru_gpkg = tmp_path / "hru.gpkg"
     _write_hru_gpkg(hru_gpkg)
 
@@ -326,7 +335,12 @@ def test_dprst_depth_build_end_to_end(tmp_path, monkeypatch):
         fabric="t", template_path=tmpl, output_dir=tmp_path,
         hru_gpkg=hru_gpkg, hru_layer="nhru", id_feature="hru_id",
         waterbody_gpkg=waterbody_gpkg, waterbody_layer="waterbodies",
-        wesm_index=wesm_index, ecoregions_gpkg=ecoregions_gpkg,
+        dem_1m_inventory=dem_1m_inventory, wesm_project_attrs=wesm_project_attrs,
+        ecoregions_gpkg=ecoregions_gpkg,
+        # _write_inventory's fixture is a single tile/project, well under
+        # sources.tag_and_assign's default floors (issue #223 review round 2) --
+        # disabled here since this test is an end-to-end build, not the floor.
+        min_dem_1m_tiles=0, min_dem_1m_projects=0, min_wesm_project_attrs_rows=0,
     )
     ctx.paths["landmask"] = lm
     ctx.paths["dprst"] = dm
@@ -378,6 +392,84 @@ def test_dprst_depth_build_end_to_end(tmp_path, monkeypatch):
     assert methods.loc[102] == "regional_fill"
     assert prov_gdf["dprst_depth_m"].notna().all()
     assert (prov_gdf["dprst_depth_m"] > 0).all()
+
+    # issue #223 fix round 1: the static column-membership check
+    # (test_provenance_carries_the_winning_source below) would still pass if
+    # `_fill_and_join`'s keep_cols filter -- or a future name collision --
+    # silently dropped `source`/`interior_coverage` before the parquet write
+    # (`_write_polygon_provenance` only WARNs on a missing diagnostic column,
+    # it doesn't raise). Assert the columns actually round-trip on disk, with
+    # the DISTINCTIVE values `_fake_open_tile_set_and_compute_one` produced --
+    # both polygons resolve to the real "test_project" tile assigned by
+    # `sources.tag_and_assign` (never the "10m" last-resort fallback, since
+    # `_write_inventory`'s tile covers both fixtures), and their
+    # `interior_coverage` values (0.83 / 0.55) cannot arise from a dropped
+    # column silently defaulting to NaN or 1.0.
+    assert "source" in prov_gdf.columns
+    assert "interior_coverage" in prov_gdf.columns
+    sources = prov_gdf.set_index("COMID")["source"]
+    assert sources.loc[101] == "test_project"
+    assert sources.loc[102] == "test_project"
+    coverage = prov_gdf.set_index("COMID")["interior_coverage"]
+    assert coverage.loc[101] == pytest.approx(0.83)
+    assert coverage.loc[102] == pytest.approx(0.55)
+
+
+def test_provenance_carries_the_winning_source(tmp_path, monkeypatch):
+    """The re-run validation (Task 11) needs to know WHICH project each depth came from."""
+    from gfv2_params.depstor_builders import dprst_depth as b
+    assert "source" in b._DEPTH_COLUMNS
+    assert "source" in b._PROVENANCE_DIAGNOSTIC_COLUMNS
+
+
+def test_tag_polygons_requires_the_inventory_keys(tmp_path):
+    from gfv2_params.depstor_builders import dprst_depth as b
+    ctx = BuildContext(
+        fabric="t", template_path=Path("unused"), output_dir=tmp_path,
+        hru_gpkg=tmp_path / "hru.gpkg", hru_layer="nhru",
+        dem_1m_inventory=None, wesm_project_attrs=tmp_path / "attrs.parquet",
+    )
+    dprst = _make_dprst_gdf([1, 2])  # existing helper in this file
+    with pytest.raises(KeyError, match="dem_1m_inventory"):
+        b._tag_polygons(dprst, ctx, _L())
+
+
+def test_tag_polygons_requires_the_inventory_files_to_exist(tmp_path):
+    """The mirrored branch of the guard above: the key IS set but the staged
+    file is absent -- the path an operator actually hits when they haven't
+    run `sbatch slurm_batch/stage_dem_1m_inventory.batch` yet."""
+    from gfv2_params.depstor_builders import dprst_depth as b
+    ctx = BuildContext(
+        fabric="t", template_path=Path("unused"), output_dir=tmp_path,
+        hru_gpkg=tmp_path / "hru.gpkg", hru_layer="nhru",
+        dem_1m_inventory=tmp_path / "does_not_exist.parquet",
+        wesm_project_attrs=tmp_path / "attrs.parquet",
+    )
+    dprst = _make_dprst_gdf([1, 2])
+    with pytest.raises(FileNotFoundError, match="dem_1m_inventory"):
+        b._tag_polygons(dprst, ctx, _L())
+
+
+def test_tag_polygons_threads_the_min_dem_1m_tiles_override_through_to_the_raise(tmp_path):
+    """(#223 review round 3, test gap 6d) Every existing test touching
+    `min_dem_1m_tiles`/`min_dem_1m_projects`/`min_wesm_project_attrs_rows` sets
+    them to 0 (disabling the floor) -- nothing proves the NON-zero override path,
+    `ctx.min_dem_1m_tiles` actually reaching `sources.tag_and_assign` through
+    `_tag_polygons`, works at all."""
+    from gfv2_params.depstor_builders import dprst_depth as b
+    dem_1m_inventory, wesm_project_attrs = _write_inventory(tmp_path)  # 1 tile/1 project
+    ecoregions_gpkg = tmp_path / "ecoregions.gpkg"
+    _write_ecoregions_gpkg(ecoregions_gpkg)
+    ctx = BuildContext(
+        fabric="t", template_path=Path("unused"), output_dir=tmp_path,
+        hru_gpkg=tmp_path / "hru.gpkg", hru_layer="nhru",
+        dem_1m_inventory=dem_1m_inventory, wesm_project_attrs=wesm_project_attrs,
+        ecoregions_gpkg=ecoregions_gpkg,
+        min_dem_1m_tiles=5,
+    )
+    dprst = _make_dprst_gdf([1, 2])
+    with pytest.raises(RuntimeError, match=r"dem_1m_inventory carries 1 tiles, below its floor of 5"):
+        b._tag_polygons(dprst, ctx, _L())
 
 
 # ---------------------------------------------------------------------------
@@ -745,6 +837,27 @@ def _write_plan(batch_dir, comids, n_batches):
 
 
 def _write_batch(batch_dir, i, comids, depths):
+    """Current-schema (post-#223) batch parquet -- carries `source`/`interior_coverage`.
+    See `_write_legacy_batch` for the PRE-#223 shape (issue #223 review round 2,
+    finding 3) some tests deliberately still need."""
+    n = len(comids)
+    pd.DataFrame({
+        "COMID": comids,
+        "dprst_depth_m": depths,
+        "measured_max_m": [d + 0.5 for d in depths],
+        "hollister_max_m": [d + 0.2 for d in depths],
+        "flat": [False] * n,
+        "resolution": ["10m"] * n,
+        "method": ["measured"] * n,
+        "source": ["10m"] * n,
+        "interior_coverage": [1.0] * n,
+    }).to_parquet(batch_dir / f"batch_{i:04d}.parquet", index=False)
+
+
+def _write_legacy_batch(batch_dir, i, comids, depths):
+    """PRE-#223 batch parquet shape -- no `source`/`interior_coverage` at all (those
+    columns didn't exist yet). Reproduces exactly what a `--from`/`--force` re-run
+    against an old, unregenerated batch dir looks like."""
     n = len(comids)
     pd.DataFrame({
         "COMID": comids,
@@ -784,13 +897,63 @@ def test_compute_depths_ingests_and_dedupes_batch_parquets(tmp_path):
     step_cfg = {"batch_dir": str(batch_dir)}
     dprst = _make_dprst_gdf([555, 600, 700])
 
-    out = dprst_depth._compute_depths(dprst, wesm_gdf=None, ctx=_parquet_ctx(tmp_path), step_cfg=step_cfg, logger=_L())
+    out = dprst_depth._compute_depths(dprst, ctx=_parquet_ctx(tmp_path), step_cfg=step_cfg, logger=_L())
 
     assert sorted(out["COMID"].tolist()) == [555, 600, 700]
     by_comid = out.set_index("COMID")
     assert by_comid.loc[555, "dprst_depth_m"] == pytest.approx(1.0)  # batch_000 kept (keep="first")
     assert by_comid.loc[600, "dprst_depth_m"] == pytest.approx(2.0)
     assert by_comid.loc[700, "dprst_depth_m"] == pytest.approx(3.0)
+
+
+def test_output_columns_and_depth_columns_declare_the_same_set():
+    """(#223 review round 3, also-fix 5) `_compute_depths`'s missing-column raise
+    (round 2, finding 3) is scoped to the loaded-from-disk `parquet_files` branch
+    ONLY, on the premise that the REAL `compute.run_batch`'s in-process output
+    always carries every `dprst_depth._DEPTH_COLUMNS` member by construction --
+    i.e. that `compute._OUTPUT_COLUMNS` and `dprst_depth._DEPTH_COLUMNS` name the
+    SAME set. Nothing pinned that equality; if the two lists ever diverge (a
+    column added to one but not the other), that premise silently breaks and the
+    in-process path could ship a frame missing a declared column with no raise
+    anywhere."""
+    assert set(compute_mod._OUTPUT_COLUMNS) == set(dprst_depth._DEPTH_COLUMNS)
+
+
+def test_compute_depths_raises_on_pre_223_batch_parquets_missing_source_columns(tmp_path):
+    """`_fill_and_join`'s `keep_cols` used to silently drop whatever `_DEPTH_COLUMNS`
+    member a loaded batch frame didn't have -- exactly what re-running against a
+    PRE-#223 batch dir (no `source`/`interior_coverage` at all) looks like.
+    `_verify_batches_match_plan` only checks `n_batches` and the COMID set, not the
+    schema, so a stale batch dir passes that check silently; `_compute_depths` must
+    catch it itself."""
+    batch_dir = tmp_path / "dprst_depth_batches"
+    batch_dir.mkdir()
+    _write_plan(batch_dir, [1, 2], n_batches=1)
+    _write_legacy_batch(batch_dir, 0, [1, 2], [1.0, 2.0])
+
+    with pytest.raises(RuntimeError, match=r"missing column\(s\).*source.*interior_coverage"):
+        dprst_depth._compute_depths(
+            _make_dprst_gdf([1, 2]), ctx=_parquet_ctx(tmp_path),
+            step_cfg={"batch_dir": str(batch_dir)}, logger=_L(),
+        )
+
+
+def test_compute_depths_does_not_raise_on_a_legitimately_empty_batch_set(tmp_path):
+    """`compute._empty_batch_frame` guarantees every `_DEPTH_COLUMNS` member for a
+    legitimately empty batch (a SLURM array task with 0 assigned tile sets) -- that
+    path must NOT trip the new missing-column raise, only a NON-empty frame missing
+    a column should."""
+    batch_dir = tmp_path / "dprst_depth_batches"
+    batch_dir.mkdir()
+    _write_plan(batch_dir, [], n_batches=1)
+    from gfv2_params.dprst_depth.compute import _empty_batch_frame
+    _empty_batch_frame().to_parquet(batch_dir / "batch_0000.parquet", index=False)
+
+    out = dprst_depth._compute_depths(
+        _make_dprst_gdf([]), ctx=_parquet_ctx(tmp_path),
+        step_cfg={"batch_dir": str(batch_dir)}, logger=_L(),
+    )
+    assert len(out) == 0
 
 
 # ---------------------------------------------------------------------------
@@ -821,12 +984,12 @@ def test_inprocess_fallback_refuses_more_polygons_than_the_ceiling(tmp_path, mon
     def _started(*a, **k):
         raise AssertionError("in-process compute STARTED despite exceeding the ceiling")
 
-    monkeypatch.setattr(dprst_depth, "group_by_tile", _started)
+    monkeypatch.setattr(dprst_depth, "tile_set_groups", _started)
     dprst = _make_dprst_gdf(list(range(1, 7)))  # 6 polygons
     step_cfg = {"batch_dir": missing, "max_inprocess_polygons": 5}
 
     with pytest.raises(RuntimeError, match="submit_dprst_depth.sh"):
-        dprst_depth._compute_depths(dprst, wesm_gdf=None, ctx=ctx, step_cfg=step_cfg, logger=_L())
+        dprst_depth._compute_depths(dprst, ctx=ctx, step_cfg=step_cfg, logger=_L())
 
 
 def test_inprocess_fallback_runs_at_or_under_the_ceiling(tmp_path, monkeypatch):
@@ -834,9 +997,9 @@ def test_inprocess_fallback_runs_at_or_under_the_ceiling(tmp_path, monkeypatch):
     ctx, missing = _no_batches_ctx(tmp_path)
     ran = {}
 
-    monkeypatch.setattr(dprst_depth, "group_by_tile", lambda d, w: {"k": list(d.index)})
+    monkeypatch.setattr(dprst_depth, "tile_set_groups", lambda d: {"k": list(d.index)})
 
-    def _fake_run(dprst, tile_keys, wesm, out, logger):
+    def _fake_run(dprst, tile_sets, out, logger, n_threads=1):
         ran["n"] = len(dprst)
         return _make_depth_df(dprst["COMID"].tolist())
 
@@ -844,7 +1007,7 @@ def test_inprocess_fallback_runs_at_or_under_the_ceiling(tmp_path, monkeypatch):
     dprst = _make_dprst_gdf(list(range(1, 6)))  # exactly 5
     step_cfg = {"batch_dir": missing, "max_inprocess_polygons": 5}
 
-    out = dprst_depth._compute_depths(dprst, wesm_gdf=None, ctx=ctx, step_cfg=step_cfg, logger=_L())
+    out = dprst_depth._compute_depths(dprst, ctx=ctx, step_cfg=step_cfg, logger=_L())
     assert ran["n"] == 5
     assert len(out) == 5
 
@@ -853,14 +1016,14 @@ def test_inprocess_ceiling_zero_is_the_escape_hatch(tmp_path, monkeypatch):
     """Same convention as `dprst_depth_min_measured_frac=0`: 0 disables the guard, for
     an operator who has decided the long in-process run is what they want."""
     ctx, missing = _no_batches_ctx(tmp_path)
-    monkeypatch.setattr(dprst_depth, "group_by_tile", lambda d, w: {"k": list(d.index)})
+    monkeypatch.setattr(dprst_depth, "tile_set_groups", lambda d: {"k": list(d.index)})
     monkeypatch.setattr(
-        dprst_depth, "run_batch", lambda d, t, w, o, lg: _make_depth_df(d["COMID"].tolist())
+        dprst_depth, "run_batch", lambda d, t, o, lg, n_threads=1: _make_depth_df(d["COMID"].tolist())
     )
     dprst = _make_dprst_gdf(list(range(1, 7)))
     step_cfg = {"batch_dir": missing, "max_inprocess_polygons": 0}
 
-    out = dprst_depth._compute_depths(dprst, wesm_gdf=None, ctx=ctx, step_cfg=step_cfg, logger=_L())
+    out = dprst_depth._compute_depths(dprst, ctx=ctx, step_cfg=step_cfg, logger=_L())
     assert len(out) == 6
 
 
@@ -901,7 +1064,7 @@ def test_parquets_planned_for_a_different_polygon_set_are_refused(tmp_path):
     current = _make_dprst_gdf([1, 2, 4, 5])  # 3 gone, 4 and 5 new
     with pytest.raises(RuntimeError, match="submit_dprst_depth.sh") as exc:
         dprst_depth._compute_depths(
-            current, wesm_gdf=None, ctx=_parquet_ctx(tmp_path),
+            current, ctx=_parquet_ctx(tmp_path),
             step_cfg={"batch_dir": str(batch_dir)}, logger=_L(),
         )
     msg = str(exc.value)
@@ -917,7 +1080,7 @@ def test_parquets_without_their_plan_are_refused(tmp_path):
 
     with pytest.raises(RuntimeError, match="_plan"):
         dprst_depth._compute_depths(
-            _make_dprst_gdf([1, 2]), wesm_gdf=None, ctx=_parquet_ctx(tmp_path),
+            _make_dprst_gdf([1, 2]), ctx=_parquet_ctx(tmp_path),
             step_cfg={"batch_dir": str(batch_dir)}, logger=_L(),
         )
 
@@ -934,7 +1097,7 @@ def test_a_missing_batch_file_is_refused(tmp_path):
 
     with pytest.raises(RuntimeError, match="batch_0001"):
         dprst_depth._compute_depths(
-            _make_dprst_gdf([1, 2, 3]), wesm_gdf=None, ctx=_parquet_ctx(tmp_path),
+            _make_dprst_gdf([1, 2, 3]), ctx=_parquet_ctx(tmp_path),
             step_cfg={"batch_dir": str(batch_dir)}, logger=_L(),
         )
 
@@ -951,6 +1114,6 @@ def test_a_stale_extra_batch_file_is_refused(tmp_path):
 
     with pytest.raises(RuntimeError, match="batch_0007"):
         dprst_depth._compute_depths(
-            _make_dprst_gdf([1, 2]), wesm_gdf=None, ctx=_parquet_ctx(tmp_path),
+            _make_dprst_gdf([1, 2]), ctx=_parquet_ctx(tmp_path),
             step_cfg={"batch_dir": str(batch_dir)}, logger=_L(),
         )

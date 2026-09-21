@@ -161,16 +161,24 @@ is available for sensitivity testing (finer regions → sparser donors). Staged 
 pixi run python -m gfv2_params.download.epa_ecoregions --dest "$DATA_ROOT/input/ecoregions"
 ```
 
-**Stage USGS 3DEP WESM 1m-footprint index** (~4 MB filtered) — the
-best-available-topography index the `dprst_depth` builder (issue #173) uses
-to pick 1 m vs. 10 m elevation source per dprst polygon. Downloads and
-caches the full WESM.gpkg (~3.6 GB) once, then filters to
-1m/QL1/QL2-qualifying workunit footprints and reprojects to EPSG:5070.
-Staged to `{data_root}/input/wesm/`:
+**Stage the real 3DEP 1 m tile inventory** (~30–35 min; shared, fabric-independent) —
+the `dprst_depth` builder (issue #223 part 2) picks each dprst polygon's
+elevation source from every published USGS 3DEP 1 m tile's own real
+(often-cropped) extent, not a convex-hull WESM footprint (a hull invents
+coverage a project never flew). Lists the S3 project directories, reads each
+tile's own COG header for its true bounds, and reads WESM geometry-free for
+quality/date attributes only. Writes
+`{data_root}/input/3dep/dem_1m_tile_inventory.parquet` and
+`{data_root}/input/wesm/wesm_project_attrs.parquet`:
 
 ```bash
-pixi run python -m gfv2_params.download.wesm --dest "$DATA_ROOT/input/wesm"
+sbatch slurm_batch/stage_dem_1m_inventory.batch
 ```
+
+The inventory is a **snapshot** of what USGS publishes on the day it's staged —
+re-staging (`FORCE=1 sbatch slurm_batch/stage_dem_1m_inventory.batch`) obliges
+a `dprst_depth` re-run for every fabric, the same obligation a `shared_rasters`
+rebuild carries.
 
 All download scripts are idempotent — already-downloaded files are skipped on resubmission.
 

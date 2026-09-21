@@ -1,9 +1,10 @@
 #!/bin/bash
 # Usage: ./submit_dprst_depth.sh <batches_dir> [fabric] [base_config] [n_tile_batches] [hru_max_concurrent]
 #
-# Drives the full dprst_depth_avg pipeline (issue #173) as a single afterok
+# Drives the full dprst_depth_avg pipeline (issue #173; real tile-inventory
+# planning + threaded tile-set compute, issue #223 part 2) as a single afterok
 # DAG, 4 stages:
-#   1. PLAN         (1 task)                        tiling.group_by_tile / component_tile_batches
+#   1. PLAN         (1 task)                        tiling.tile_set_groups / tile_batches
 #   2. ARRAY        (0..n_tile_batches-1, afterok:1) compute.run_batch per tile-batch
 #   3. BUILD        (1 task, afterok:2)              depstor_builders.dprst_depth fill+burn+op_flow_thres
 #   4a. MEAN_ZONAL  (0..n_hru_batches-1, afterok:3)  per-HRU exactextract mean of dprst_depth.tif
@@ -22,12 +23,17 @@
 # --- Compute-budget sizing (issue #173's <=5 hr target, stages 1-3) --------
 # CONUS has ~286k dprst polygons; reading a windowed DEM per polygon serially
 # costs ~250-500 core-hours (Task 3/9 design doc). The fan-out unit is the
-# elevation TILE, not the polygon: tiling.component_tile_batches bins the
-# tile -> polygon work-list into N_TILE_BATCHES roughly-equal-COST SLURM
-# array tasks (greedy LPT bin-packing weighted by estimated DEM-window-read
-# cost, not raw polygon count -- ~100x weight for 1m vs 10m polygons; see
-# tiling.polygon_window_cost / MAX_1M_WINDOW_CELLS -- connected-component-safe
-# so a polygon spanning >1 tile is never split across batches). With
+# assigned TILE SET (one project, one UTM zone -- `sources.tag_and_assign`
+# against the staged 3DEP inventory), not the polygon: tiling.tile_set_groups
+# groups polygons by their primary tile set and tiling.tile_batches bins those
+# groups into N_TILE_BATCHES roughly-equal-COST SLURM array tasks (greedy LPT
+# bin-packing weighted by estimated DEM-window-read cost, not raw polygon
+# count -- ~100x weight for 1m vs 10m polygons; see tiling.polygon_window_cost
+# / MAX_1M_WINDOW_CELLS). Each polygon belongs to exactly one tile set, so no
+# component-chaining is needed -- the old hull-driven transitive tile-key
+# chaining this replaced could span >4,000 tiles in one component and left
+# two array tasks with ~16,000/~12,000 fallback polygons each, running past
+# 24 h against a 34-minute median (#223 part 2). With
 # N_TILE_BATCHES array tasks running CONCURRENTLY:
 #
 #     wall-clock (stage 2) ~= (250-500 core-hours) / N_TILE_BATCHES
@@ -173,8 +179,15 @@ echo "--- stage 3: fill+burn+op_flow_thres (afterok:$ARRAY_JOB_ID) ---"
 # nhm_dprst_depth_avg_params.csv with every job reporting COMPLETED. Observed on the
 # oregon 2026-07-25 rebuild: 20/20 array tasks wrote fresh parquets, the build stage
 # skipped, and mean_zonal ran against a depth raster from the previous classifier.
+# --time=04:00:00 (was 02:00:00): this stage's builder re-tags the whole polygon
+# set (`depstor_builders/dprst_depth.py::_tag_polygons` -> `sources.tag_and_assign`),
+# paying `assign_sources`'s per-polygon cost a SECOND time (see
+# plan_dprst_depth_batches.batch's sizing note for the same arithmetic) --
+# measured 9.97 ms per 1m-tagged polygon (14-15 ms on a second sample), 0.43 ms per
+# 10m polygon, extrapolating to 33-65 minutes at CONUS scale (286k-393k polygons) on
+# top of the fill/burn/op_flow_thres work this stage otherwise budgeted 2 h for.
 BUILD_JOB_ID=$(sbatch --dependency=afterok:"$ARRAY_JOB_ID" \
-    --mem=64G --time=02:00:00 \
+    --mem=64G --time=04:00:00 \
     --export=ALL,BASE_CONFIG="$BASE_CONFIG",FABRIC="$FABRIC" \
     slurm_batch/build_depstor_rasters.batch --step dprst_depth --force | sed -n 's/^Submitted batch job \([0-9][0-9]*\).*/\1/p')
 echo "  build: $BUILD_JOB_ID"

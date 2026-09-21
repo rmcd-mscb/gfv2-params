@@ -110,7 +110,11 @@ stages:
     scope: fabric
     accepts_force: false
     consumes:
-      ["{fabric}/depstor_rasters/dprst_binary.tif", 3DEP elevation, WESM]
+      [
+        "{fabric}/depstor_rasters/dprst_binary.tif",
+        3DEP elevation,
+        3DEP 1m tile inventory,
+      ]
     produces: "dprst_depth.tif, op_flow_thres_params.csv, merged/nhm_dprst_depth_avg_params.csv"
     resources: "chained: plan -> tile array -> build -> HRU array -> mean_finalize"
     note: >-

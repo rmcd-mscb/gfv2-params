@@ -1,20 +1,23 @@
-"""SLURM array driver for the dprst_depth compute step (issue #173 Task 9).
+"""SLURM array driver for the dprst_depth compute step (issue #173 Task 9;
+tile-set batching + threading, issue #223 part 2).
 
-The fan-out unit is the 1 m elevation TILE, not the dprst polygon (Task 3's
-`tiling.group_by_tile` + `tiling.component_tile_batches`): reading each tile
-ONCE and computing every polygon whose window falls in it is what turns
-CONUS's ~286k-polygon, ~250-500 core-hour serial cost into a <=5 hr
-wall-clock array job. See slurm_batch/submit_dprst_depth.sh's header for the
-full sizing arithmetic.
+The fan-out unit is the real 3DEP tile SET (`sources.TileSet`; `tiling.
+tile_set_groups` + `tiling.tile_batches`), not the dprst polygon and not a
+raw elevation tile: opening each set ONCE and computing every polygon whose
+PRIMARY set (`source_tiles`) it is turns CONUS's ~392k-polygon serial cost
+into a <=5 hr wall-clock array job, and running a batch's sets CONCURRENTLY
+on threads (`--threads`) is what fixes the 51.6%-of-polygons-on-the-slow-path
+regression measured on gfv2r2 (see `compute.py`'s module docstring). See
+slurm_batch/submit_dprst_depth.sh's header for the full sizing arithmetic.
 
-One array task = one batch of tile keys, i.e. one entry of the plan step's
-persisted `tile_batches` list (`python -m gfv2_params.dprst_depth.tiling
+One array task = one batch of encoded tile sets, i.e. one entry of the plan
+step's persisted `tile_sets` list (`python -m gfv2_params.dprst_depth.tiling
 --plan`, Task 9's dry-run/work-list hook). This script does NOT re-derive
-the dprst polygon set or re-run `group_by_tile`/`component_tile_batches`
-itself -- it reads the plan's already-tagged polygon parquet + batch
-manifest (both written once, by the plan job, not by every array task) and
-calls Task 4's `compute.run_batch` for this task's batch only, writing one
-per-batch parquet directly into `{output_dir}/dprst_depth_batches/`
+the dprst polygon set or re-run `tile_set_groups`/`tile_batches` itself -- it
+reads the plan's already-tagged polygon parquet + batch manifest (both
+written once, by the plan job, not by every array task) and calls Task 4's
+`compute.run_batch` for this task's batch only, writing one per-batch
+parquet directly into `{output_dir}/dprst_depth_batches/`
 (`depstor_builders/dprst_depth.py::_compute_depths` glob-loads every
 `*.parquet` there on the next `build_depstor_rasters.py --step dprst_depth`
 run).
@@ -66,7 +69,12 @@ def main():
     parser.add_argument("--fabric", default=None, help="Fabric name (overrides FABRIC env / default_fabric)")
     parser.add_argument(
         "--batch_id", type=int, default=None,
-        help="Batch index into the plan's tile_batches list (default: $SLURM_ARRAY_TASK_ID)",
+        help="Batch index into the plan's tile_sets list (default: $SLURM_ARRAY_TASK_ID)",
+    )
+    parser.add_argument(
+        "--threads", type=int,
+        default=int(os.environ.get("SLURM_CPUS_PER_TASK", "1")),
+        help="concurrent tile sets (default: $SLURM_CPUS_PER_TASK)",
     )
     args = parser.parse_args()
 
@@ -98,25 +106,24 @@ def main():
         )
 
     manifest = json.loads(manifest_path.read_text())
-    all_batches = manifest["tile_batches"]
+    all_batches = manifest["tile_sets"]
     if not (0 <= batch_id < len(all_batches)):
         raise IndexError(
             f"--batch_id {batch_id} out of range for {len(all_batches)} batches in {manifest_path}"
         )
-    tile_keys = all_batches[batch_id]
+    tile_sets = all_batches[batch_id]
 
     dprst_gdf = gpd.read_parquet(tagged_path)
-    wesm_index = Path(config["wesm_index"])
-    wesm_gdf = gpd.read_file(wesm_index) if wesm_index.exists() else gpd.GeoDataFrame()
 
     batches_dir.mkdir(parents=True, exist_ok=True)
     out_parquet = batches_dir / f"batch_{batch_id:04d}.parquet"
 
     logger.info(
-        "=== run_dprst_depth_batch: batch %d/%d (%d tile keys, %d dprst polygons total) ===",
-        batch_id, len(all_batches), len(tile_keys), len(dprst_gdf),
+        "=== run_dprst_depth_batch: batch %d/%d (%d tile sets, %d dprst polygons total, "
+        "%d threads) ===",
+        batch_id, len(all_batches), len(tile_sets), len(dprst_gdf), args.threads,
     )
-    run_batch(dprst_gdf, tile_keys, wesm_gdf, out_parquet, logger)
+    run_batch(dprst_gdf, tile_sets, out_parquet, logger, n_threads=args.threads)
 
 
 if __name__ == "__main__":

@@ -90,14 +90,14 @@ fabrics:
     # regional-fill of dprst depth (median null / CV-selected
     # calibrated-Hollister — see dprst_depth.fill).
     ecoregions_gpkg: "{data_root}/input/ecoregions/us_eco_l3.gpkg"
-    # Pre-staged, 1m/QL1/QL2-filtered WESM (Work Extent Spatial Metadata) 3DEP
-    # workunit footprint index — a "project" column + geometry. Stage with
-    # `pixi run python -m gfv2_params.download.wesm` (download + onemeter_
-    # category filter + convex-hull footprint simplification, shared with
-    # scripts/diagnose/dprst_depth_probe.py via dprst_depth.wesm_io). Drives
-    # dprst_depth (#173)'s best_topo tagging (topo.resolution_class) and its
-    # 1 m project-tile lookup (compute._project_lookup).
-    wesm_index: "{data_root}/input/wesm/wesm_1m_footprints.gpkg"
+    # Real 3DEP 1 m tile inventory (issue #223) — replaces the retired
+    # convex-hull WESM footprint index. Staged from the S3 listing + each
+    # tile's own COG header via `sbatch slurm_batch/stage_dem_1m_inventory.batch`
+    # (gfv2_params.dprst_depth.inventory.build_inventory). Drives
+    # dprst_depth's `sources.tag_and_assign` — best_topo tagging + ranked
+    # real tile-set candidates — not the old hull-based `topo.resolution_class`.
+    dem_1m_inventory: "{data_root}/input/3dep/dem_1m_tile_inventory.parquet"
+    wesm_project_attrs: "{data_root}/input/wesm/wesm_project_attrs.parquet"
     # HRU polygon fabric — authoritative land/domain mask for the depstor
     # builders. gfv2_params.depstor_builders.landmask rasterises this to
     # land_mask.tif (driven by scripts/build_depstor_rasters.py).
@@ -162,7 +162,8 @@ fabrics:
     # signal: the endorheic classifier reads the FDR grid the router reads.
     sink_points_table: "{data_root}/input/nhd/sink_points.parquet"
     ecoregions_gpkg: "{data_root}/input/ecoregions/us_eco_l3.gpkg"
-    wesm_index: "{data_root}/input/wesm/wesm_1m_footprints.gpkg"
+    dem_1m_inventory: "{data_root}/input/3dep/dem_1m_tile_inventory.parquet"
+    wesm_project_attrs: "{data_root}/input/wesm/wesm_project_attrs.parquet"
     hru_gpkg: "{data_root}/gfv2/fabric/gfv2_nhru_merged.gpkg"
     hru_layer: nhru
     id_feature: nat_hru_id
@@ -263,7 +264,8 @@ fabrics:
     # EPA Level III Ecoregions (shared CONUS input, see
     # gfv2_params.download.epa_ecoregions). Drives dprst_depth (#173).
     ecoregions_gpkg: "{data_root}/input/ecoregions/us_eco_l3.gpkg"
-    wesm_index: "{data_root}/input/wesm/wesm_1m_footprints.gpkg"
+    dem_1m_inventory: "{data_root}/input/3dep/dem_1m_tile_inventory.parquet"
+    wesm_project_attrs: "{data_root}/input/wesm/wesm_project_attrs.parquet"
 
   tjc:
     # Small regional fabric inside VPU 12 (Texas-Gulf); pre-merged single gpkg
@@ -306,4 +308,5 @@ fabrics:
     # EPA Level III Ecoregions (shared CONUS input, see
     # gfv2_params.download.epa_ecoregions). Drives dprst_depth (#173).
     ecoregions_gpkg: "{data_root}/input/ecoregions/us_eco_l3.gpkg"
-    wesm_index: "{data_root}/input/wesm/wesm_1m_footprints.gpkg"
+    dem_1m_inventory: "{data_root}/input/3dep/dem_1m_tile_inventory.parquet"
+    wesm_project_attrs: "{data_root}/input/wesm/wesm_project_attrs.parquet"
