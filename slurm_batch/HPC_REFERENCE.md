@@ -809,10 +809,12 @@ pixi run python -m gfv2_params.dprst_depth.tiling --plan \
 - A failed/timed-out array task (stage 2) only owns its own
   `batch_XXXX.parquet` — resubmit just that index:
   `sbatch --array=<idx> --export=ALL,BASE_CONFIG=...,FABRIC=... slurm_batch/run_dprst_depth_batch.batch`.
-- **A task that fails with "TRANSIENT network failure persisted through the
-  deferred retry pass"** (`compute.run_batch`'s transient-vs-permanent retry
-  doctrine — see CLAUDE.md's dprst_depth bullet) means the network, not the
-  data: a DNS failure, connect/timeout, or an HTTP 0/408/429/5xx on
+- **A task that fails with "persistent TRANSIENT-or-UNCLASSIFIED failure
+  through the deferred retry pass"** (`compute.run_batch`'s transient-vs-
+  permanent retry doctrine — see CLAUDE.md's dprst_depth bullet; wording as
+  of #223 round 5 review, final polish m1 — earlier builds said "TRANSIENT
+  network failure persisted") USUALLY means the network, not the data: a DNS
+  failure, connect/timeout, or an HTTP 0/408/429/5xx on
   `prd-tnm.s3.amazonaws.com` (whether at a tile-set OPEN or DURING a
   per-polygon READ on an already-open set — the two are classified
   differently internally but retried/deferred the same way, #223 round 3)
@@ -830,6 +832,20 @@ pixi run python -m gfv2_params.dprst_depth.tiling --plan \
   worst case is TENS OF MINUTES per set/polygon (#223 round 4 review,
   MINOR M2) — a task legitimately failing this way after that long is not
   itself a sign of a bug.
+  **But the message is not always the network**: the wording says
+  "UNCLASSIFIED", not "network", because a genuinely corrupt object (a
+  zeroed TIFF IFD, an IFD offset past EOF) produces the SAME "unknown"
+  cause-chain shape as a live brown-out and so ALSO defers and eventually
+  raises here — that's doctrine-consistent (an "unknown" verdict is never
+  treated as permanent, #223 round 5), not a bug. **If this recurs on a
+  resubmit** (the network has genuinely had time to recover and the task
+  still fails the same way), suspect the OBJECT, not the network: the raise
+  now names each affected tile set's LAST exception message
+  (`(last: ...)` — #223 round 5 review, m1) — pull the key(s) from that
+  text and `curl -I`/`curl` (HEAD/GET) them directly; a corrupted or
+  truncated response confirms a data defect that retrying can never fix, and
+  the remedy is re-staging that object (or excluding it), not resubmitting
+  again.
   No `batch_XXXX.parquet` is written for that task, so it is simply missing,
   not wrong — **just resubmit that same array index** once the network has
   recovered, exactly as for any other failed/timed-out array task above. Do
@@ -843,7 +859,16 @@ pixi run python -m gfv2_params.dprst_depth.tiling --plan \
   above, or just re-run the whole `submit_dprst_depth.sh "$BATCHES" <fabric>
   configs/base_config.yml <N_TILE_BATCHES>` — it's idempotent (the plan step
   deletes and rewrites the per-batch parquets, so a full re-run costs
-  recompute time, never a wrong product).
+  recompute time, never a wrong product). **Residual narrow window (#223
+  round 5 review, final polish m2):** the read-path disambiguation can still
+  read PERMANENT in two edge cases neither cache-clearing nor the per-key
+  probe closes — an outage that resumes in the few milliseconds between the
+  cache-cleared probe/fresh-read and the READ it's meant to validate, or a
+  degradation that affects block/range GETs but spares the small (~16 KB)
+  header GET the probe itself relies on — so a resolved-PERMANENT verdict on
+  the read path is not an absolute guarantee against a very-short or
+  GET-size-selective blip; this is a known, accepted gap, not a defect to
+  chase with a bigger probe.
 - **A task's log showing `n_transient_retry > 0` in its summary line, even
   when it did NOT fail** is a real network hiccup the batch rode out —
   every affected polygon still resolved on its correct primary/candidate
@@ -897,8 +922,8 @@ pixi run python -m gfv2_params.dprst_depth.tiling --plan \
   a genuinely reproducible, permanent `BuildVRT` defect as transient for the
   same underlying reason, risking an array task that retries/defers/fails
   forever over a condition that will never resolve on retry — the operator
-  symptom for THAT case is a task that keeps failing with "TRANSIENT network
-  failure persisted" even though the network is fine, on a tile set whose
+  symptom for THAT case is a task that keeps failing with "persistent
+  TRANSIENT-or-UNCLASSIFIED failure" even though the network is fine, on a tile set whose
   `BuildVRT` failure is a genuine, reproducible defect (heterogeneous
   projection/band-count/band-dtype, or another condition `BuildVRT` doesn't
   happen to name). Both are code fixes (an "unknown" cause-chain verdict is
