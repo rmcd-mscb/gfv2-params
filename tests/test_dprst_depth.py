@@ -815,6 +815,27 @@ def _write_plan(batch_dir, comids, n_batches):
 
 
 def _write_batch(batch_dir, i, comids, depths):
+    """Current-schema (post-#223) batch parquet -- carries `source`/`interior_coverage`.
+    See `_write_legacy_batch` for the PRE-#223 shape (issue #223 review round 2,
+    finding 3) some tests deliberately still need."""
+    n = len(comids)
+    pd.DataFrame({
+        "COMID": comids,
+        "dprst_depth_m": depths,
+        "measured_max_m": [d + 0.5 for d in depths],
+        "hollister_max_m": [d + 0.2 for d in depths],
+        "flat": [False] * n,
+        "resolution": ["10m"] * n,
+        "method": ["measured"] * n,
+        "source": ["10m"] * n,
+        "interior_coverage": [1.0] * n,
+    }).to_parquet(batch_dir / f"batch_{i:04d}.parquet", index=False)
+
+
+def _write_legacy_batch(batch_dir, i, comids, depths):
+    """PRE-#223 batch parquet shape -- no `source`/`interior_coverage` at all (those
+    columns didn't exist yet). Reproduces exactly what a `--from`/`--force` re-run
+    against an old, unregenerated batch dir looks like."""
     n = len(comids)
     pd.DataFrame({
         "COMID": comids,
@@ -861,6 +882,43 @@ def test_compute_depths_ingests_and_dedupes_batch_parquets(tmp_path):
     assert by_comid.loc[555, "dprst_depth_m"] == pytest.approx(1.0)  # batch_000 kept (keep="first")
     assert by_comid.loc[600, "dprst_depth_m"] == pytest.approx(2.0)
     assert by_comid.loc[700, "dprst_depth_m"] == pytest.approx(3.0)
+
+
+def test_compute_depths_raises_on_pre_223_batch_parquets_missing_source_columns(tmp_path):
+    """`_fill_and_join`'s `keep_cols` used to silently drop whatever `_DEPTH_COLUMNS`
+    member a loaded batch frame didn't have -- exactly what re-running against a
+    PRE-#223 batch dir (no `source`/`interior_coverage` at all) looks like.
+    `_verify_batches_match_plan` only checks `n_batches` and the COMID set, not the
+    schema, so a stale batch dir passes that check silently; `_compute_depths` must
+    catch it itself."""
+    batch_dir = tmp_path / "dprst_depth_batches"
+    batch_dir.mkdir()
+    _write_plan(batch_dir, [1, 2], n_batches=1)
+    _write_legacy_batch(batch_dir, 0, [1, 2], [1.0, 2.0])
+
+    with pytest.raises(RuntimeError, match=r"missing column\(s\).*source.*interior_coverage"):
+        dprst_depth._compute_depths(
+            _make_dprst_gdf([1, 2]), ctx=_parquet_ctx(tmp_path),
+            step_cfg={"batch_dir": str(batch_dir)}, logger=_L(),
+        )
+
+
+def test_compute_depths_does_not_raise_on_a_legitimately_empty_batch_set(tmp_path):
+    """`compute._empty_batch_frame` guarantees every `_DEPTH_COLUMNS` member for a
+    legitimately empty batch (a SLURM array task with 0 assigned tile sets) -- that
+    path must NOT trip the new missing-column raise, only a NON-empty frame missing
+    a column should."""
+    batch_dir = tmp_path / "dprst_depth_batches"
+    batch_dir.mkdir()
+    _write_plan(batch_dir, [], n_batches=1)
+    from gfv2_params.dprst_depth.compute import _empty_batch_frame
+    _empty_batch_frame().to_parquet(batch_dir / "batch_0000.parquet", index=False)
+
+    out = dprst_depth._compute_depths(
+        _make_dprst_gdf([]), ctx=_parquet_ctx(tmp_path),
+        step_cfg={"batch_dir": str(batch_dir)}, logger=_L(),
+    )
+    assert len(out) == 0
 
 
 # ---------------------------------------------------------------------------

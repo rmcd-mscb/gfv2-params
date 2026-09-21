@@ -337,6 +337,32 @@ def _compute_depths(
             len(parquet_files), batch_dir,
         )
         depth_df = pd.concat([pd.read_parquet(f) for f in parquet_files], ignore_index=True)
+        # `_fill_and_join`'s `keep_cols = [c for c in _DEPTH_COLUMNS if c in
+        # depth_df.columns]` silently drops whatever's missing -- fine for a
+        # legitimately EMPTY batch (`compute._empty_batch_frame` guarantees every
+        # column, just 0 rows), but a NON-empty concatenated frame missing one is
+        # exactly what a `--from`/`--force` re-run against PRE-#223 batch parquets
+        # looks like (written before `source`/`interior_coverage` existed).
+        # `_verify_batches_match_plan` only checks `n_batches` and the COMID set,
+        # not the schema, so a stale batch dir passes that check silently and this
+        # join would too -- the provenance parquet is exactly what the re-run
+        # validation (scripts/diagnose/compare_dprst_depth_runs.py) diffs. Scoped to
+        # THIS branch only (loaded-from-disk parquets), not the in-process
+        # `run_batch` call below, whose real output always carries every
+        # `_OUTPUT_COLUMNS` member by construction (compute.py) -- so a test double
+        # standing in for it doesn't need to replicate that schema too.
+        if len(depth_df) > 0:
+            missing = [c for c in _DEPTH_COLUMNS if c not in depth_df.columns]
+            if missing:
+                raise RuntimeError(
+                    f"dprst_depth: {len(depth_df):,} non-empty per-polygon depth row(s) "
+                    f"loaded from {batch_dir} are missing column(s) {missing} that "
+                    f"_DEPTH_COLUMNS declares. This is what loading PRE-#223 "
+                    f"batch_*.parquet files (written before source/interior_coverage "
+                    f"existed) looks like. Re-run the tiled stage "
+                    f"(slurm_batch/submit_dprst_depth.sh) to regenerate them with the "
+                    f"current schema before building this step."
+                )
     else:
         # Refuse CONUS-scale work BEFORE starting it (#221). This branch used to accept any
         # size and say so only at INFO: gfv2r2's first run reached it with 392,672
