@@ -450,6 +450,28 @@ def test_tag_polygons_requires_the_inventory_files_to_exist(tmp_path):
         b._tag_polygons(dprst, ctx, _L())
 
 
+def test_tag_polygons_threads_the_min_dem_1m_tiles_override_through_to_the_raise(tmp_path):
+    """(#223 review round 3, test gap 6d) Every existing test touching
+    `min_dem_1m_tiles`/`min_dem_1m_projects`/`min_wesm_project_attrs_rows` sets
+    them to 0 (disabling the floor) -- nothing proves the NON-zero override path,
+    `ctx.min_dem_1m_tiles` actually reaching `sources.tag_and_assign` through
+    `_tag_polygons`, works at all."""
+    from gfv2_params.depstor_builders import dprst_depth as b
+    dem_1m_inventory, wesm_project_attrs = _write_inventory(tmp_path)  # 1 tile/1 project
+    ecoregions_gpkg = tmp_path / "ecoregions.gpkg"
+    _write_ecoregions_gpkg(ecoregions_gpkg)
+    ctx = BuildContext(
+        fabric="t", template_path=Path("unused"), output_dir=tmp_path,
+        hru_gpkg=tmp_path / "hru.gpkg", hru_layer="nhru",
+        dem_1m_inventory=dem_1m_inventory, wesm_project_attrs=wesm_project_attrs,
+        ecoregions_gpkg=ecoregions_gpkg,
+        min_dem_1m_tiles=5,
+    )
+    dprst = _make_dprst_gdf([1, 2])
+    with pytest.raises(RuntimeError, match=r"dem_1m_inventory carries 1 tiles, below its floor of 5"):
+        b._tag_polygons(dprst, ctx, _L())
+
+
 # ---------------------------------------------------------------------------
 # Task 8 (#173): per-HRU aggregation -- finalize_depth_params (pure) +
 # area_weighted_provenance
@@ -882,6 +904,19 @@ def test_compute_depths_ingests_and_dedupes_batch_parquets(tmp_path):
     assert by_comid.loc[555, "dprst_depth_m"] == pytest.approx(1.0)  # batch_000 kept (keep="first")
     assert by_comid.loc[600, "dprst_depth_m"] == pytest.approx(2.0)
     assert by_comid.loc[700, "dprst_depth_m"] == pytest.approx(3.0)
+
+
+def test_output_columns_and_depth_columns_declare_the_same_set():
+    """(#223 review round 3, also-fix 5) `_compute_depths`'s missing-column raise
+    (round 2, finding 3) is scoped to the loaded-from-disk `parquet_files` branch
+    ONLY, on the premise that the REAL `compute.run_batch`'s in-process output
+    always carries every `dprst_depth._DEPTH_COLUMNS` member by construction --
+    i.e. that `compute._OUTPUT_COLUMNS` and `dprst_depth._DEPTH_COLUMNS` name the
+    SAME set. Nothing pinned that equality; if the two lists ever diverge (a
+    column added to one but not the other), that premise silently breaks and the
+    in-process path could ship a frame missing a declared column with no raise
+    anywhere."""
+    assert set(compute_mod._OUTPUT_COLUMNS) == set(dprst_depth._DEPTH_COLUMNS)
 
 
 def test_compute_depths_raises_on_pre_223_batch_parquets_missing_source_columns(tmp_path):
