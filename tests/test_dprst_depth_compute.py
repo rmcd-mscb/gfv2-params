@@ -707,8 +707,10 @@ def _make_dns_failing_vrt(tmp_path, real_tif_path):
     import xml.etree.ElementTree as ET
 
     vrt_path = tmp_path / "dns_fail.vrt"
-    ds = gdal.BuildVRT(str(vrt_path), [str(real_tif_path)])
-    ds = None  # flush -- see open_tile_set's own comment on why this is required
+    # Discard BuildVRT's return value outright (never bind it) -- see
+    # `open_tile_set`'s own comment on why holding the reference would
+    # leave the VRT unflushed to disk.
+    gdal.BuildVRT(str(vrt_path), [str(real_tif_path)])
     tree = ET.parse(vrt_path)
     for elem in tree.iter("SourceFilename"):
         elem.text = _INVALID_URL_A
