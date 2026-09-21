@@ -206,6 +206,11 @@ def test_run_batch_skips_polygon_with_no_usable_source(tmp_path, monkeypatch, ca
     df = run_batch(_gdf([(7, P1, [P1, TEN])]), [P1], tmp_path / "b.parquet", _L())
     assert len(df) == 0
     assert "n_no_source=1" in caplog.text
+    # (#223 review round 2, finding 9) this run already exercises the summary
+    # line's success_fraction < 0.90 WARNING branch (0/1 written here) but never
+    # asserted the LEVEL -- close the only untested half of that escalation.
+    summary = [r for r in caplog.records if r.msg.startswith("run_batch:")]
+    assert summary and summary[0].levelno == logging.WARNING
 
 
 def test_run_batch_threads_give_identical_output_to_serial(tmp_path, monkeypatch):
