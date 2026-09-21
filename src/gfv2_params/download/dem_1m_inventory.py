@@ -49,10 +49,21 @@ def stage(data_root: Path, *, n_threads: int, force: bool, logger) -> tuple[Path
         )
     df = inv.build_inventory(projects, n_threads=n_threads, logger=logger)
 
+    # Write BOTH temp files first, then rename BOTH (#223 review round 3, also-fix
+    # 2). The previous write-then-rename-per-file loop wrote and renamed inv_path
+    # to its final name BEFORE `attrs.to_parquet` (the second frame's write) ever
+    # ran -- a crash in that window leaves a FRESH inventory beside STALE attrs on
+    # disk, undetectable afterwards (both files exist, both parse fine, nothing
+    # flags that they were staged on different runs). Getting both frames onto
+    # disk as temps before either rename narrows that window to back-to-back
+    # `Path.rename` calls instead of spanning a full `to_parquet` write.
+    pending = []
     for path, frame in ((inv_path, df), (attrs_path, attrs)):
         path.parent.mkdir(parents=True, exist_ok=True)
         tmp = path.with_name(f"_staging_{path.name}")
         frame.to_parquet(tmp)
+        pending.append((tmp, path, frame))
+    for tmp, path, frame in pending:
         tmp.rename(path)
         logger.info("  wrote %s (%d rows)", path, len(frame))
     return inv_path, attrs_path
