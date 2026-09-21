@@ -278,8 +278,44 @@ _TRANSIENT_ERROR_MARKERS = (
 # before this fix (no retry). "not recognized as being in a supported file
 # format" is GDAL's message for a genuinely unreadable published object (2
 # known in the real corpus).
+#
+# "gdalbuildvrt does not support" (#223 round 5 review, audit finding) --
+# the SAME marker text `_PERMANENT_BUILDVRT_MARKERS` already checks, but
+# that list is consulted ONLY inside `open_tile_set` to decide whether to
+# set `real_cause = build_exc` in the first place; nothing previously made
+# `_classify_error_chain` itself recognize this text on the exception it
+# later has to classify. Without it, `open_tile_set` correctly identifies a
+# genuinely heterogeneous-projection/band-count/band-dtype `BuildVRT`
+# failure and chains it as `real_cause` -- but `_classify_error_chain`
+# still read the resulting `TileSetOpenError` as `"unknown"` (verified
+# directly: neither the outer message nor "gdalbuildvrt does not support
+# heterogeneous projection: ..." matches any OLD marker here), and
+# `_resolve_open_transient` then routed it through
+# `_reclassify_unknown_open_failure`, whose per-key probe finds every key
+# healthy (heterogeneity is a MOSAIC-level property, invisible to a
+# single-key `rasterio.open`) and returns `True` -- silently reclassifying
+# a real, reproducible tile-set defect as a transient network race, to be
+# retried/deferred and, worst case, to fail the whole array task instead
+# of simply walking that polygon's candidate list. The existing tests for
+# this path (`test_open_tile_set_still_treats_a_genuinely_heterogeneous_
+# projection_as_permanent`) only asserted `_is_transient_error_chain(...)
+# is False`, which is ALSO true for `"unknown"` and so never caught this.
+#
+# "buildvrt failure reproduced on healthy keys" (#223 round 5 review,
+# IMPORTANT R4-I1) -- `open_tile_set`'s backstop same-inputs `BuildVRT`
+# retry (see its own comment) wraps an IDENTICALLY-reproduced failure in an
+# exception carrying this EXACT phrase, precisely BECAUSE `build_exc` itself
+# (a bare, unmarked message like "Can't open /vsicurl/a.tif.") carries no
+# signal here either -- without an explicit marker, that case also read
+# `"unknown"`, and `_reclassify_unknown_open_failure` reclassified it
+# TRANSIENT for the same reason as above (every key opens fine
+# individually), so the task retried/deferred/failed forever blaming "the
+# network" for what a same-inputs retry had already proven was a genuine,
+# reproducible defect.
 _PERMANENT_ERROR_MARKERS = (
     "not recognized as being in a supported file format",
+    "gdalbuildvrt does not support",
+    "buildvrt failure reproduced on healthy keys",
 )
 
 # HTTP status classification, shared by the string-level `_is_transient_
@@ -595,14 +631,36 @@ def _clear_vsicurl_cache(ts: TileSet) -> None:
     for key in ts.keys:
         try:
             gdal.VSICurlPartialClearCache(key)
-        except Exception:  # noqa: BLE001 - best-effort; a key that isn't a real
+        except Exception as exc:  # noqa: BLE001 - best-effort; a key that isn't a real
             # vsicurl-style URL (e.g. a local path, or a synthetic test
             # key) raises "Missing url parameter" here rather than a
             # no-op -- this is a cache hygiene step, not a correctness
             # requirement for a key that was never cached in the first
             # place, so a failure here must never mask the REAL
-            # classification work the caller is about to do.
-            pass
+            # classification work the caller is about to do. #223 round 5
+            # review, MINOR M-1: silently swallowing this unconditionally
+            # hid the one case worth an operator's attention -- a REAL
+            # `/vsicurl/http(s)://...` key that failed to clear (the
+            # cache-clear this whole function exists to guarantee, R3-C1)
+            # -- so that case logs at WARNING. Verified directly: a plain
+            # local path (no `/vsicurl/` prefix at all) does NOT even raise
+            # here -- `VSICurlPartialClearCache` silently no-ops for it --
+            # but a `/vsicurl/`-prefixed key with no real host (e.g. this
+            # file's own pervasive synthetic `"/vsicurl/a.tif"` test keys)
+            # DOES raise "Missing url parameter", and that is exactly the
+            # "synthetic/non-URL test key" case meant to log at DEBUG only
+            # -- checking the FULL `/vsicurl/http://` or `/vsicurl/https://`
+            # prefix (not just `/vsicurl/`) is what actually distinguishes
+            # the two, since a bare `/vsicurl/` prefix alone is common to
+            # both.
+            level = (
+                logging.WARNING
+                if key.startswith(("/vsicurl/http://", "/vsicurl/https://"))
+                else logging.DEBUG
+            )
+            logging.getLogger(__name__).log(
+                level, "  _clear_vsicurl_cache: could not clear cache for %s: %s", key, exc
+            )
 
 
 def _probe_keys_for_real_cause(ts: TileSet) -> Exception | None:
@@ -615,17 +673,35 @@ def _probe_keys_for_real_cause(ts: TileSet) -> Exception | None:
     pre-outage cached header, then probes EVERY key individually with
     `rasterio.open` (under the same reduced-retry env `_attempt`'s own
     open uses -- see `_IN_PROCESS_RETRY_ENV`) and returns ONE
-    representative exception, chosen this way (#223 round 3 review,
-    IMPORTANT M-B): TRANSIENT if ANY failing key's own exception
-    classifies transient, PERMANENT only if EVERY failing key's own
-    exception is permanent. Classifying from just the FIRST failing key
-    (the round 1/2 behaviour) could call a set permanent because its
-    first key genuinely 404s while a later key is merely mid-outage, or
-    miss a real 404 sitting behind an earlier key's transient blip.
-    Returns `None` if every key opens fine on its own -- `BuildVRT` failed
-    for some other reason (see `open_tile_set`'s I-A handling of that
-    case), and the caller falls back to classifying `BuildVRT`'s own
-    raised exception/message instead."""
+    representative exception, chosen this way (#223 round 5 review,
+    CRITICAL R4-C1, superseding round 3's M-B): PERMANENT only if EVERY
+    failing key's own exception chain classifies EXPLICITLY permanent --
+    any key whose chain is transient OR unknown makes the WHOLE probe
+    return THAT key's exception immediately, as evidence the set is not
+    (yet) confirmed permanent, rather than accumulating it as a candidate
+    "permanent" cause. `_classify_error_chain`'s own doctrine (an unknown
+    verdict is never itself permanent, #223 round 5) applies here just as
+    much as it does to the caller's own handling of this function's
+    return value -- the OLD check (`_is_transient_error_chain(exc)`, i.e.
+    `_classify_error_chain(exc) == "transient"`) let an `"unknown"`-chain
+    key fall through to `first_permanent` right alongside a genuinely
+    permanent one, which is exactly what silently promoted a persistent
+    low-speed brown-out (curl aborting a trickling header fetch --
+    "TIFFReadDirectory: Failed to read directory at offset N", carrying no
+    HTTP/curl text at all, hence unclassifiable on its own) to a
+    confirmed-PERMANENT verdict at BOTH `_reclassify_unknown_read_failure`
+    and `_reclassify_unknown_open_failure` (reproduced directly,
+    `probe22.py`). Classifying from just the FIRST failing key (the round
+    1/2 behaviour) could call a set permanent because its first key
+    genuinely 404s while a later key is merely mid-outage, or miss a real
+    404 sitting behind an earlier key's transient blip -- the ANY-non-
+    permanent-short-circuits / ALL-must-be-permanent-to-accumulate shape
+    here still avoids both, while also refusing to call a set permanent
+    off the back of an unclassifiable key. Returns `None` if every key
+    opens fine on its own -- `BuildVRT` failed for some other reason (see
+    `open_tile_set`'s I-A handling of that case), and the caller falls
+    back to classifying `BuildVRT`'s own raised exception/message
+    instead."""
     _clear_vsicurl_cache(ts)
     first_permanent: Exception | None = None
     for key in ts.keys:
@@ -633,7 +709,7 @@ def _probe_keys_for_real_cause(ts: TileSet) -> Exception | None:
             with rasterio.Env(**_IN_PROCESS_RETRY_ENV), rasterio.open(key):
                 pass
         except Exception as exc:  # noqa: BLE001 - returned to the caller, never raised here
-            if _is_transient_error_chain(exc):
+            if _classify_error_chain(exc) != "permanent":
                 return exc
             if first_permanent is None:
                 first_permanent = exc
@@ -745,7 +821,33 @@ def open_tile_set(ts: TileSet):
                         retry_vrt_ds = None  # flush -- see the module comment above on why
                         gdal.Unlink(retry_vsimem)  # never used -- this retry is classification-only
                 if retry_message is not None and retry_message == str(build_exc):
-                    real_cause = build_exc  # type: ignore[assignment]
+                    # #223 round 5 review, IMPORTANT R4-I1: `build_exc` itself
+                    # is a bare, unmarked message (e.g. "Can't open
+                    # /vsicurl/a.tif.") -- setting `real_cause = build_exc`
+                    # directly left `_classify_error_chain` reading this
+                    # REPRODUCED, every-key-healthy failure as `"unknown"`,
+                    # and `_resolve_open_transient` -> `_reclassify_unknown_
+                    # open_failure` then reclassified it TRANSIENT (its own
+                    # probe finds every key healthy too, for the same
+                    # reason) -- so a genuine, reproducible defect retried,
+                    # deferred, and ultimately failed the whole array task
+                    # forever, blaming "the network" (reproduced directly,
+                    # `probe25.py`). An identical failure on a same-inputs
+                    # retry with every key healthy is PRECISELY the other
+                    # half of this round's permanence doctrine (a failure
+                    # that reproduces while every key's header opens cleanly
+                    # on a cleared cache) -- so it gets an EXPLICIT permanent
+                    # marker here, not `build_exc`'s own unmarked text.
+                    # `build_exc` is preserved as `__cause__` for diagnostics
+                    # (never reached by `_classify_error_chain`, since the
+                    # marker matches at this, the outer, level first).
+                    real_cause = RasterioIOError(
+                        f"buildvrt failure reproduced on healthy keys: BuildVRT failed "
+                        f"identically ({build_exc!r}) on a same-inputs retry for tile set "
+                        f"project={ts.project!r} with every key probed healthy -- a "
+                        f"genuine, reproducible defect, not a network timing race"
+                    )
+                    real_cause.__cause__ = build_exc
                 else:
                     # Raise a synthetically-transient cause (see
                     # `_TRANSIENT_ERROR_MARKERS`'s "buildvrt race window"
@@ -865,7 +967,7 @@ def _reclassify_unknown_read_failure(ts: TileSet, geom, logger: logging.Logger) 
 
     Returns True (transient) UNLESS:
     - `_probe_keys_for_real_cause` finds a concrete cause on one of `ts`'s
-      keys that itself classifies permanent, or
+      keys that itself classifies EXPLICITLY permanent, or
     - every key opens fine on its own AND an independent, completely FRESH
       `open_tile_set` + read of the SAME window (not reusing the caller's
       possibly-tainted already-open connection) reproduces either an
@@ -875,10 +977,24 @@ def _reclassify_unknown_read_failure(ts: TileSet, geom, logger: logging.Logger) 
     A fresh attempt that instead reproduces an EXPLICIT transient signal
     (the network is still visibly down) stays transient -- it just hasn't
     recovered yet, which is not evidence of a data problem either.
+
+    #223 round 5 review, CRITICAL R4-C1: when `probed is not None`, this
+    used to `return _is_transient_error_chain(probed)` -- `False` for BOTH
+    an explicitly permanent verdict AND an unknown one, wrongly treating
+    "unknown" as grounds to stop retrying. `_probe_keys_for_real_cause`
+    itself now only ever returns a non-`None` value that is either
+    EXPLICITLY permanent (every failing key agreed) or evidence of a
+    transient/unknown condition (see its own docstring) -- so the correct
+    read here is `not _is_permanent_error_chain(probed)`: transient stays
+    transient, unknown resolves transient too (the "unknown is never
+    permanent by itself" doctrine), and ONLY an explicit permanent verdict
+    resolves permanent. Reproduced directly (`probe22.py`): a persistent
+    low-speed brown-out produced exactly this "unknown" probe result, and
+    the OLD line here resolved it PERMANENT while the outage was ongoing.
     """
     probed = _probe_keys_for_real_cause(ts)  # clears each key's /vsicurl/ cache first, R3-C1
     if probed is not None:
-        return _is_transient_error_chain(probed)
+        return not _is_permanent_error_chain(probed)
     # `_clear_vsicurl_cache` again, explicitly, right before this "fresh"
     # open -- #223 round 4, R3-C1's own reviewer-verified fix
     # (`cachefix.py`). Without it, the fresh `open_tile_set` below reuses
@@ -928,10 +1044,18 @@ def _reclassify_unknown_open_failure(ts: TileSet, logger: logging.Logger) -> boo
     "already open" connection to re-verify against, unlike the read
     case) -- treat it as a TRANSIENT timing race, the same doctrine I-A
     already established for the multi-key `BuildVRT`-probe case,
-    generalized here to the single-key open path."""
+    generalized here to the single-key open path.
+
+    #223 round 5 review, CRITICAL R4-C1 (open-time instance): same fix as
+    `_reclassify_unknown_read_failure` -- `not _is_permanent_error_chain(
+    probed)`, not `_is_transient_error_chain(probed)`, so a probed key
+    that is itself unclassifiable ("unknown") resolves transient (retry),
+    not permanent. Reproduced directly (`probe22.py`'s open-time variant):
+    the SAME persistent low-speed brown-out demotes at open time too under
+    the old check."""
     probed = _probe_keys_for_real_cause(ts)
     if probed is not None:
-        return _is_transient_error_chain(probed)
+        return not _is_permanent_error_chain(probed)
     return True
 
 
