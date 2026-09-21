@@ -809,6 +809,23 @@ pixi run python -m gfv2_params.dprst_depth.tiling --plan \
 - A failed/timed-out array task (stage 2) only owns its own
   `batch_XXXX.parquet` — resubmit just that index:
   `sbatch --array=<idx> --export=ALL,BASE_CONFIG=...,FABRIC=... slurm_batch/run_dprst_depth_batch.batch`.
+- **A task that fails with "TRANSIENT network failure persisted after N
+  retries"** (`compute.run_batch`'s transient-vs-permanent retry doctrine —
+  see CLAUDE.md's dprst_depth bullet) means the network, not the data: a DNS
+  failure, connect/timeout, or an HTTP 429/5xx on `prd-tnm.s3.amazonaws.com`
+  outlasted every retry attempt for one or more tile sets. No
+  `batch_XXXX.parquet` is written for that task, so it is simply missing,
+  not wrong — **just resubmit that same array index** once the network has
+  recovered, exactly as for any other failed/timed-out array task above. Do
+  NOT reach for `--force` or a re-plan: the primary tile set assignment for
+  those polygons is still correct, only the read attempt failed.
+- **A task that fails/logs with a `n_compute_error > 0` summary (ERROR
+  level) instead** is a different signal — a genuine code/data bug (a
+  corrupt COG, a bad/missing CRS, a `MemoryError`) rather than a network
+  blip or a routine permanent read gap (404/403, an unreadable object, a
+  mixed-CRS `BuildVRT` failure — those count as `n_read_failure` and walk
+  the candidate list as before) — and resubmitting the same index will not
+  fix it; it needs investigation first.
 - Re-running the plan step (stage 1) **deletes the per-batch parquets** and
   rewrites `_plan/*` (#221), so re-run the whole array after it — or just use
   `submit_dprst_depth.sh`, which always runs plan → array → build together.

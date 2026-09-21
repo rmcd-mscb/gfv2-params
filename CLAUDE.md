@@ -324,12 +324,37 @@ These are hard-won; violating them silently corrupts outputs.
   groups polygons by their assigned primary tile set (one polygon, exactly one
   set — no cross-polygon component-chaining); `compute.run_batch` opens each
   set ONCE and runs sets concurrently on a thread pool, walking a polygon's
-  remaining ranked candidates when its primary source yields no valid
-  interior, ending at the 10 m seamless tile. The old hull-driven transitive
-  tile-key chaining could span >4,000 tiles in one component and left two
-  array tasks with ~16,000/~12,000 fallback polygons each, running past 24 h
-  against a 34-minute median — gone now that each polygon resolves to exactly
-  one primary set. `interior_coverage` is written per polygon (a truncated
+  remaining ranked candidates when its primary source PERMANENTLY yields no
+  valid interior or a PERMANENT read/open error (404/403, an unreadable
+  object, a mixed-CRS `BuildVRT` mosaic), ending at the 10 m seamless tile.
+  The old hull-driven transitive tile-key chaining could span >4,000 tiles
+  in one component and left two array tasks with ~16,000/~12,000 fallback
+  polygons each, running past 24 h against a 34-minute median — gone now
+  that each polygon resolves to exactly one primary set. **A TRANSIENT
+  failure is not evidence a source is unusable and must never advance the
+  candidate walk** (`compute._is_transient_error`): DNS resolution failures,
+  connect failures, timeouts, connection resets/receive failures/empty
+  replies, SSL handshake errors, and HTTP 429/5xx are retried on the SAME
+  source with bounded exponential backoff + jitter
+  (`compute._RETRY_ATTEMPTS`/`_backoff_delay`, 5 attempts starting ~2 s;
+  jitter matters because every thread of every SLURM task can start within
+  the same second), both at the tile-set OPEN and at a per-polygon read
+  (`_retry_compute_one`). If a transient failure persists after every retry,
+  `run_batch` FAILS THE WHOLE ARRAY TASK LOUDLY — raises, writes NO
+  `batch_XXXX.parquet` — rather than silently falling through to a
+  lower-ranked candidate; the operator's remedy is to resubmit that array
+  index (`slurm_batch/HPC_REFERENCE.md`'s dprst_depth Recovery section).
+  This closes a real incident (2026-09-20, tjc smoke rerun, 8 tile tasks x 8
+  threads all starting within the same second): a cluster-wide DNS failure
+  ("CURL error: Could not resolve host: prd-tnm.s3.amazonaws.com", 532
+  times across 5 nodes within the single second 21:08:10) was, pre-fix,
+  indistinguishable from a genuine PERMANENT miss — `_attempt` immediately
+  advanced the candidate walk, and `_recover` deliberately skips the
+  already-tried primary set, so once DNS recovered a moment later every
+  affected polygon resolved against a lower-ranked candidate with no error
+  at all: 4,822 of 5,535 polygons (87%) were silently read from other than
+  their correctly-ranked primary source, and 578 single-candidate polygons
+  got no row whatsoever. `interior_coverage` is written per polygon (a truncated
   interior is COVERAGE LOSS, not fill corruption — richdem excludes interior
   nodata cells) but nothing downstream FILTERS on it yet — the donor filter
   that would exclude low-coverage polygons from the regional calibration is

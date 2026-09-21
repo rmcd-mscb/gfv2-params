@@ -65,10 +65,20 @@ production; it stays only as a Phase-0 audit function):
   zone) that intersect the polygon's rim-buffered window, ordered by (covers
   the whole window, best quality level, newest collection date, project
   name). The primary (highest-ranked) set is what `compute.run_batch` reads
-  first; if its interior yields no valid cells it walks the remaining ranked
-  candidates rather than falling back immediately.
+  first; if its interior genuinely yields no valid cells, or the read fails
+  for a PERMANENT reason (404/403, an unreadable object, a mixed-CRS mosaic),
+  it walks the remaining ranked candidates rather than falling back
+  immediately. A **TRANSIENT** failure (DNS, connect, timeout, connection
+  reset, HTTP 429/5xx) is a different path entirely: it is retried on the
+  SAME set with backoff+jitter, and if it never clears, the whole batch task
+  fails loudly rather than silently walking the candidate list — a transient
+  network blip is not evidence the primary set is unusable (see
+  `compute._is_transient_error`; measured incident: a one-second cluster-wide
+  DNS failure on 2026-09-20 silently demoted 87% of a smoke rerun's polygons
+  off their correctly-ranked primary before this fix existed).
 - **10 m seamless (1/3 arc-second)** — always appended as the LAST candidate,
-  read only if every real 1 m candidate failed.
+  read only if every real 1 m candidate PERMANENTLY failed (never reached
+  by a still-retrying or ultimately-fatal transient failure).
 
 This replaces a convex-HULL footprint test that invented coverage: measured
 on the gfv2r2 CONUS run, 51.6% of polygons took the old per-polygon
@@ -301,9 +311,16 @@ fixed SLURM array (default 150 batches):
   thread pool (`--threads`) because the work is remote-read bound — on the
   OLD pre-#223-part-2 per-polygon path, which 51.6% of gfv2r2 polygons took,
   73% of the FALLBACK time (not overall pipeline time) was spent in
-  `vrt.read`, not arithmetic. A polygon whose primary set yields no valid
-  interior walks its remaining ranked candidates, ending at the 10 m
-  seamless tile.
+  `vrt.read`, not arithmetic. A polygon whose primary set PERMANENTLY yields
+  no valid interior walks its remaining ranked candidates, ending at the
+  10 m seamless tile. A TRANSIENT open/read failure (a network blip) is
+  instead retried on the same set with backoff+jitter, never treated as
+  grounds to walk the candidate list; if it never clears, the whole array
+  task fails loudly and is simply resubmitted (see
+  `slurm_batch/HPC_REFERENCE.md`'s dprst_depth Recovery section) rather than
+  silently shipping a degraded product — the fix for a real 2026-09-20
+  incident where a one-second DNS outage silently demoted 87% of a smoke
+  rerun's polygons off their correct primary source.
 - Budget: ~**250–500 core-hours** at CONUS scale, ~**5 h** wall-clock, ~**4 GiB**
   per window (float32 DEM + richdem float64 fill copies). The prairie-pothole
   belt is the largest single batch and the load-balance long pole. The single
@@ -374,6 +391,24 @@ by-design. Recorded so a future cleanup doesn't remove them by mistake.
   `provenance_source` means the builder run is incomplete/broken. Unconfigured
   `provenance_source` (not this parameter's case) is unaffected: provenance
   stays simply absent, no raise.
+- **Transient network failures silently demoting polygons off their correct
+  primary source — fixed (2026-09-20 incident).** A cluster-wide DNS failure
+  during a smoke rerun (532 "Could not resolve host" errors across 5 nodes
+  within one second) used to be treated identically to a genuine PERMANENT
+  read failure (a 404, an unreadable object): `_attempt` immediately walked
+  the candidate list, and `_recover` deliberately skips the already-tried
+  primary — so once DNS recovered a moment later, every affected polygon
+  resolved against a LOWER-ranked candidate with no error at all. Measured
+  effect: 4,822 of 5,535 polygons (87%) silently read from other than their
+  correctly-ranked primary source, and 578 single-candidate polygons got no
+  row. `compute._is_transient_error` now classifies a failure as transient
+  (DNS, connect, timeout, connection reset, HTTP 429/5xx) vs permanent
+  (404/403, an unreadable object, a mixed-CRS mosaic); a transient failure
+  is retried on the SAME source with backoff+jitter (`compute._RETRY_
+  ATTEMPTS`/`_backoff_delay`), and if it never clears, `run_batch` fails the
+  whole array task loudly (no `batch_XXXX.parquet` written) instead of
+  silently degrading — see `slurm_batch/HPC_REFERENCE.md`'s dprst_depth
+  Recovery section for the resubmit-by-array-index remedy.
 - **Polygon-set divergence from `dprst_binary.tif` — fixed (segment-driven
   on-stream classifier).** `topo.load_fabric_dprst_polygons` reconstructs "which
   waterbodies are dprst" independently of the `dprst` builder, and used to do so
