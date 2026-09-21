@@ -864,8 +864,12 @@ def test_run_batch_raises_when_transient_open_failure_never_clears(tmp_path, mon
     monkeypatch.setattr(compute_mod, "_compute_one", _fake_compute(set()))
 
     out_parquet = tmp_path / "b.parquet"
-    with pytest.raises(RuntimeError, match="P1"):
+    # #223 round 5 review, final polish m1: the raise also names the last
+    # exception message per set -- assert the real DNS text made it
+    # through, not just the project name.
+    with pytest.raises(RuntimeError, match="P1") as excinfo:
         run_batch(_gdf([(7, P1, [P1, TEN])]), [P1], out_parquet, _L())
+    assert _DNS_ERROR in str(excinfo.value)
 
     assert not out_parquet.exists()
 
@@ -1062,8 +1066,12 @@ def test_run_batch_raises_when_per_polygon_transient_failure_never_clears(tmp_pa
     monkeypatch.setattr(compute_mod, "_compute_one", _always_flaky_compute_one)
 
     out_parquet = tmp_path / "b.parquet"
-    with pytest.raises(RuntimeError, match="P1"):
+    # #223 round 5 review, final polish m1: same assertion as the open-time
+    # counterpart above -- the last exception message must actually be
+    # named, not just the project.
+    with pytest.raises(RuntimeError, match="P1") as excinfo:
         run_batch(_gdf([(7, P1, [P1, TEN])]), [P1], out_parquet, _L())
+    assert _DNS_ERROR in str(excinfo.value)
 
     assert not out_parquet.exists()
 
@@ -1690,8 +1698,18 @@ def test_real_gdal_r5_c1_persistent_brownout_never_promotes_read_time(tmp_path, 
 
         monkeypatch.setattr(compute_mod, "_compute_one", _brownout_starts_and_persists)
         out_parquet = tmp_path / "b.parquet"
-        with pytest.raises(RuntimeError, match="TRANSIENT network failure persisted"):
+        # #223 round 5 review, final polish m1: the raise wording changed to
+        # "persistent TRANSIENT-or-UNCLASSIFIED failure" (this failure shape
+        # is genuinely indistinguishable from a corrupt object at this
+        # layer -- see the raise's own comment), and now names the last
+        # exception message per set.
+        with pytest.raises(RuntimeError, match="persistent TRANSIENT-or-UNCLASSIFIED failure") as excinfo:
             run_batch(gdf, [P1r], out_parquet, _L())
+        # The last exception message is actually named, not just "P1=1" --
+        # an operator needs the TEXT to tell a still-down network apart
+        # from a corrupt object without re-deriving the classification.
+        assert "P1=1 (last:" in str(excinfo.value)
+        assert "may be corrupt" in str(excinfo.value)
         # NEVER a partial/degraded product, and never a silent P2 ship.
         assert not out_parquet.exists()
     finally:

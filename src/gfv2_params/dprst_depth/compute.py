@@ -1060,7 +1060,14 @@ def _reclassify_unknown_open_failure(ts: TileSet, logger: logging.Logger) -> boo
 
 
 def _retry_compute_one(
-    vrt, ts: TileSet, idx, geom, logger: logging.Logger, bump, stop_event: threading.Event
+    vrt,
+    ts: TileSet,
+    idx,
+    geom,
+    logger: logging.Logger,
+    bump,
+    stop_event: threading.Event,
+    record_exc=lambda exc: None,
 ) -> tuple[dict | None, bool]:
     """`_compute_one(vrt, geom)`, retrying a TRANSIENT `RasterioIOError` on
     the SAME already-open set/polygon (bounded backoff, see
@@ -1085,6 +1092,18 @@ def _retry_compute_one(
     attempt -- the disambiguation itself does real network I/O) and then
     treated as whichever it resolves to for the rest of this call's
     attempts. Any OTHER exception is re-raised immediately, unchanged.
+
+    `record_exc` (#223 round 5 review, MINOR m1) -- called with the LAST
+    exception this call gave up on transiently, so `run_batch`'s final
+    "persisted through the deferred retry pass" raise can name it. This
+    matters because the SAME doctrine that correctly refuses to call an
+    "unknown" chain permanent (see `_classify_error_chain`'s docstring)
+    also means a genuinely corrupt object (a zeroed TIFF IFD, an IFD
+    offset past EOF -- content defects, not transport ones) can classify
+    identically to a real brown-out and so ALSO defers and ultimately
+    raises; the exception text is what lets an operator who sees the same
+    failure recur after a resubmit tell "still down" from "this object is
+    broken" without re-deriving the classification by hand.
     """
     unknown_verdict: bool | None = None
     for attempt in range(1, _RETRY_ATTEMPTS + 1):
@@ -1118,6 +1137,7 @@ def _retry_compute_one(
                     "second pass, NOT advancing to a lower-ranked candidate",
                     ts.project, idx, _RETRY_ATTEMPTS, exc,
                 )
+                record_exc(exc)
                 return None, True
             bump("n_transient_retry")
             delay = _backoff_delay(attempt)
@@ -1295,6 +1315,14 @@ def run_batch(
         "n_no_source": 0,
     }
     lock = threading.Lock()
+    # {project: last exception message this project's set/polygon gave up
+    # on transiently} (#223 round 5 review, MINOR m1) -- read ONLY by the
+    # final "persisted through the deferred retry pass" raise, to name a
+    # concrete cause instead of leaving an operator to guess whether it's
+    # really still the network. Plain dict writes (never a read-modify-
+    # write) are safe under the GIL without `lock`; "last one wins" is
+    # deliberate -- the MOST RECENT give-up is the most useful one to show.
+    last_exc_by_project: dict[str, str] = {}
     # Shared across every `_attempt`/`_retry_compute_one` call in a PASS
     # (rebound to a fresh `Event` before the deferred pass, below) -- once
     # ANY set/polygon in this pass confirms the network is down (exhausts
@@ -1385,7 +1413,11 @@ def run_batch(
                             continue
                         try:
                             r, gave_up = _retry_compute_one(
-                                vrt, ts, idx, dprst_gdf.geometry.loc[idx], logger, _bump, transient_stop
+                                vrt, ts, idx, dprst_gdf.geometry.loc[idx], logger, _bump,
+                                transient_stop,
+                                record_exc=lambda exc: last_exc_by_project.__setitem__(
+                                    ts.project, str(exc)
+                                ),
                             )
                         except RasterioIOError as exc:
                             _bump("n_read_failure")
@@ -1475,6 +1507,7 @@ def run_batch(
                 # (not failed) -- see `run_batch`'s docstring.
                 transient_idx.update(unresolved)
                 transient_stop.set()
+                last_exc_by_project[ts.project] = str(open_exc)
                 logger.warning(
                     "  set=%s: TRANSIENT open failure exhausted this pass's "
                     "in-place retry budget (%d attempts, %s) -- %d polygon(s) "
@@ -1675,13 +1708,37 @@ def run_batch(
         # dprst_depth Recovery section -- downstream stages need resubmitting
         # too, or a whole-DAG resubmit via `submit_dprst_depth.sh`, which is
         # idempotent).
+        #
+        # #223 round 5 review (final polish, m1): this branch is reached by
+        # BOTH a genuine, still-ongoing network outage AND -- because
+        # `_classify_error_chain`'s doctrine correctly refuses to call an
+        # "unknown" chain permanent (see its own docstring) -- a genuinely
+        # corrupt object (a zeroed TIFF IFD, an IFD offset past EOF) that
+        # classifies identically to a brown-out and so also defers and ends
+        # up here. The OLD "TRANSIENT network failure persisted" wording
+        # asserted a diagnosis this code cannot actually make; "persistent
+        # TRANSIENT-or-UNCLASSIFIED failure" says only what's known. Naming
+        # each set's LAST exception message (`last_exc_by_project`, threaded
+        # through `_retry_compute_one`'s `record_exc` and the open-retry
+        # loop's own `open_exc`) is what lets an operator who sees this
+        # recur after a resubmit actually tell the two apart, rather than
+        # re-deriving the classification by hand -- see
+        # `slurm_batch/HPC_REFERENCE.md`'s dprst_depth Recovery section for
+        # the "if it recurs, the object may be corrupt" remedy this enables.
         affected = sum(len(idxs) for _, idxs in transient_failures)
-        named = ", ".join(f"{proj}={len(idxs)}" for proj, idxs in transient_failures)
+        named = ", ".join(
+            f"{proj}={len(idxs)} (last: "
+            f"{last_exc_by_project.get(proj, '<no exception captured -- deferred without its own attempt>')})"
+            for proj, idxs in transient_failures
+        )
         message = (
-            f"run_batch: TRANSIENT network failure persisted through the deferred "
-            f"retry pass on {len(transient_failures)} tile set(s)/candidate(s) "
+            f"run_batch: persistent TRANSIENT-or-UNCLASSIFIED failure through the "
+            f"deferred retry pass on {len(transient_failures)} tile set(s)/candidate(s) "
             f"({named}) -- {affected} polygon(s) unresolved. NOT writing "
-            f"{out_parquet}. Resubmit this array task once the network recovers."
+            f"{out_parquet}. Resubmit this array task once the network recovers -- "
+            f"if this recurs, the named object(s) may be corrupt rather than the "
+            f"network still being down; see slurm_batch/HPC_REFERENCE.md's "
+            f"dprst_depth Recovery section."
         )
         logger.error(message)
         raise RuntimeError(message)
