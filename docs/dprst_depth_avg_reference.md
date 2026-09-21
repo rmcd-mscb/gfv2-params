@@ -532,6 +532,46 @@ by-design. Recorded so a future cleanup doesn't remove them by mistake.
   outer one exits; and four more curl/HTTP2 wordings ("Operation too
   slow", "Failure when receiving data from the peer", "Send failure",
   "was not closed cleanly") were added as explicit transient markers.
+- **An "unknown" cause-chain verdict was still slipping into "permanent"
+  at three sites, plus an adjacent BuildVRT-marker gap — fixed (#223 round
+  5 review).** One principle, applied via a full audit of every
+  `_classify_error_chain`/`_is_transient_error_chain`/`_is_permanent_
+  error_chain` call site in `compute.py`: an `"unknown"` verdict is NEVER,
+  by itself, grounds to call a source permanent -- permanent requires an
+  explicit marker/status, or a reproduction on a cache-cleared, all-keys-
+  healthy fresh attempt. `_probe_keys_for_real_cause`'s per-key loop
+  recorded a failing key whose OWN chain was `"unknown"` (a persistent
+  low-speed brown-out surfacing as "TIFFReadDirectory: Failed to read
+  directory at offset N", the SAME unclassifiable shape round 4's open-time
+  finding already documented) as the representative PERMANENT cause, and
+  both `_reclassify_unknown_read_failure`/`_reclassify_unknown_open_failure`
+  then read that result via `_is_transient_error_chain` (`False` for
+  `"unknown"`) -- so a brown-out that had NOT actually cleared could still
+  be wrongly declared permanent at either the read or the open path
+  (reproduced directly: a persistent brown-out demoted at both). Fixed by
+  having the probe loop return a non-explicitly-permanent key's exception
+  immediately (only a key EVERY failing key agrees is explicitly permanent
+  ever accumulates), and by having both reclassify functions read the
+  result via `not _is_permanent_error_chain(...)` instead. A second,
+  related gap in the same audit: the BuildVRT backstop's "reproduced
+  identically on healthy keys" case (round 4) carried `real_cause =
+  build_exc`, a bare unmarked message that ALSO classified `"unknown"` and
+  was then wrongly reclassified transient by the same per-key-probe
+  mechanism -- retrying/deferring/failing the whole array task forever over
+  a condition a same-inputs retry had already proven reproducible. Fixed
+  with an explicit `"buildvrt failure reproduced on healthy keys"` marker.
+  The audit also found this was not unique to the backstop: the pre-existing
+  `_PERMANENT_BUILDVRT_MARKERS` list ("gdalbuildvrt does not support",
+  covering a genuinely heterogeneous projection/band-count/band-dtype
+  mosaic) was never mirrored into `_PERMANENT_ERROR_MARKERS` -- the list
+  `_classify_error_chain` actually reads -- so EVERY genuinely
+  heterogeneous-mosaic tile set suffered the same "unknown ->
+  wrongly-transient" fate, not just the backstop-specific case; the two
+  existing tests for that path only asserted `_is_transient_error_chain(...)
+  is False` (also true for `"unknown"`), which is why this went unnoticed
+  through three prior review rounds. Also fixed (MINOR): `_clear_vsicurl_
+  cache` used to swallow every cache-clear failure silently; it now logs
+  WARNING for a real `/vsicurl/http(s)://...` key and DEBUG otherwise.
 - **Polygon-set divergence from `dprst_binary.tif` — fixed (segment-driven
   on-stream classifier).** `topo.load_fabric_dprst_polygons` reconstructs "which
   waterbodies are dprst" independently of the `dprst` builder, and used to do so

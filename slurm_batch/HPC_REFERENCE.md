@@ -886,6 +886,28 @@ pixi run python -m gfv2_params.dprst_depth.tiling --plan \
   fix, not a new failure mode to recognize — but it explains why a task
   from before this fix landed could have silently shipped a demoted
   polygon during an outage that hadn't actually cleared yet.
+- **Incident note (#223 round 5 review):** the round-4 fix above cleared
+  the cache, but the DISAMBIGUATION LOGIC itself still had a gap: a probed
+  key whose own chain classified `"unknown"` (not just an explicit
+  permanent marker/status) was wrongly folded into the "permanent" verdict
+  at three call sites, so a PERSISTENT brown-out — one that had not
+  cleared even by the time the probe/reproduction ran — could still be
+  wrongly declared permanent and demote to a lower-ranked candidate.
+  Separately, `open_tile_set`'s BuildVRT backstop (round 4) could reclassify
+  a genuinely reproducible, permanent `BuildVRT` defect as transient for the
+  same underlying reason, risking an array task that retries/defers/fails
+  forever over a condition that will never resolve on retry — the operator
+  symptom for THAT case is a task that keeps failing with "TRANSIENT network
+  failure persisted" even though the network is fine, on a tile set whose
+  `BuildVRT` failure is a genuine, reproducible defect (heterogeneous
+  projection/band-count/band-dtype, or another condition `BuildVRT` doesn't
+  happen to name). Both are code fixes (an "unknown" cause-chain verdict is
+  now never, by itself, treated as permanent; the BuildVRT case now carries
+  an explicit marker) — no operator action needed for a task run AFTER this
+  fix, but it explains why a pre-fix task could have (a) silently shipped a
+  demoted polygon during a brown-out that never actually cleared, or (b)
+  spuriously failed the whole array on a genuinely permanent (not network)
+  `BuildVRT` defect.
 - Re-running the plan step (stage 1) **deletes the per-batch parquets** and
   rewrites `_plan/*` (#221), so re-run the whole array after it — or just use
   `submit_dprst_depth.sh`, which always runs plan → array → build together.

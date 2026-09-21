@@ -490,7 +490,86 @@ These are hard-won; violating them silently corrupts outputs.
   the project floor catches BOTH (357 and 875 are both < 900) — an earlier
   400/500-range project floor would have let the second incident (875
   projects) straight through, which is exactly what two independent review
-  passes caught.
+  passes caught. **An `"unknown"` cause-chain verdict is NEVER, by itself,
+  grounds to call a source permanent** (#223 round 5 review) — PERMANENT
+  requires EITHER an explicit marker/status matched in the chain, OR a
+  failure that reproduces while every key's header opens cleanly on a
+  cache CLEARED first (`_clear_vsicurl_cache`, R3-C1's own precondition —
+  a probe/reproduction against a STALE cached header can never tell
+  "unknown" apart from "permanent" either way). Rounds 2-4 each found
+  another call site where this slipped through; round 5's own finding
+  (CRITICAL R4-C1) was `_probe_keys_for_real_cause`'s per-key loop itself:
+  a failing key whose OWN chain classified `"unknown"` (a persistent
+  low-speed brown-out — curl aborting a trickling header fetch mid-probe —
+  surfaces as "TIFFReadDirectory: Failed to read directory at offset N",
+  carrying no HTTP/curl text, indistinguishable in shape from the OPEN-time
+  R3-I2 finding) was recorded as the representative PERMANENT cause, and
+  BOTH `_reclassify_unknown_read_failure` and `_reclassify_unknown_open_
+  failure` then called `_is_transient_error_chain(probed)` on it — `False`
+  for `"unknown"` — silently promoting a brown-out that was STILL ONGOING
+  to a confirmed-permanent verdict (reproduced directly, job-equivalent
+  probe, 2026-09-21: a persistent brown-out demoted at BOTH read and open
+  time). Fixed two ways, together: (1) the probe loop itself now returns a
+  failing key's exception immediately whenever that key's OWN chain is
+  NOT explicitly `"permanent"` (transient or unknown alike) — only a key
+  that EVERY OTHER failing key also confirms explicitly permanent ever
+  accumulates as the returned "permanent" cause; (2) both reclassify
+  functions now read a non-`None` probe result via `not
+  _is_permanent_error_chain(probed)`, not `_is_transient_error_chain
+  (probed)` — the former is `True` for both `"transient"` and `"unknown"`,
+  the latter wrongly `False` for `"unknown"` too. A SEPARATE, adjacent gap
+  the same audit found (IMPORTANT R4-I1): `open_tile_set`'s BuildVRT
+  backstop (R3-I1) used to set `real_cause = build_exc` directly when a
+  same-inputs retry reproduced an IDENTICAL failure with every key
+  probed healthy — but `build_exc` is a bare, unmarked message (e.g.
+  "Can't open <url>."), so `_classify_error_chain` read the resulting
+  `TileSetOpenError` as `"unknown"` too, and `_reclassify_unknown_open_
+  failure`'s own per-key probe (finding every key healthy, for the SAME
+  reason BuildVRT's backstop retry did) reclassified it TRANSIENT —
+  retrying, deferring, and ultimately FAILING THE WHOLE ARRAY TASK forever
+  over a condition a same-inputs retry had already PROVEN reproducible.
+  Fixed by wrapping that case in a new exception carrying an explicit
+  `"buildvrt failure reproduced on healthy keys"` marker (added to
+  `_PERMANENT_ERROR_MARKERS`), with `build_exc` preserved one level down
+  as `__cause__` for diagnostics. **The SAME audit also found this marker
+  gap was not unique to the backstop case**: `_PERMANENT_BUILDVRT_MARKERS`
+  ("gdalbuildvrt does not support", covering a genuinely heterogeneous
+  projection/band-count/band-dtype mosaic) was ALREADY a real, distinct
+  list from `_PERMANENT_ERROR_MARKERS` — `_build_exc_is_permanent` reads
+  the former to decide `real_cause = build_exc` in `open_tile_set`, but
+  nothing made `_classify_error_chain` (what every downstream caller
+  actually reads) recognize that same text, so EVERY genuinely
+  heterogeneous-mosaic tile set suffered the identical "unknown ->
+  wrongly-transient" failure mode, not just the backstop-reproduced one —
+  verified directly against a real `TileSetOpenError` built from a real
+  heterogeneous-CRS `BuildVRT` failure (classified `"unknown"` before this
+  fix). The two existing tests for that path
+  (`test_open_tile_set_still_treats_a_genuinely_heterogeneous_projection_
+  as_permanent`, and the band-count/dtype pair) only asserted
+  `_is_transient_error_chain(...) is False` — ALSO true for `"unknown"` —
+  which is exactly why this gap went unnoticed through three prior review
+  rounds; they now also assert `_is_permanent_error_chain(...) is True`.
+  Fixed by adding `"gdalbuildvrt does not support"` to `_PERMANENT_ERROR_
+  MARKERS` too, so the two marker lists agree on every case
+  `_build_exc_is_permanent` already recognized. **A full audit of every
+  `_classify_error_chain`/`_is_transient_error_chain`/`_is_permanent_
+  error_chain` call site in `compute.py`** (round 5's own mandate, since
+  rounds 2-4 each found ANOTHER instance) confirmed no OTHER site has this
+  flaw: `_retry_compute_one` and `_resolve_open_transient` both already
+  delegate an `"unknown"` verdict to the (now-fixed) reclassify functions
+  rather than defaulting it themselves; `_reclassify_unknown_read_
+  failure`'s OWN fresh-reproduction except-block (the case where
+  `_probe_keys_for_real_cause` found every key healthy in the FIRST
+  place) correctly treats a REPRODUCED `"unknown"` on that fresh,
+  cache-cleared connection as PERMANENT — that IS the doctrine's second
+  legitimate path to permanence, not a bug. Also fixed in the same round
+  (MINOR M-1): `_clear_vsicurl_cache` used to swallow every cache-clear
+  failure silently; it now logs WARNING for a genuine `/vsicurl/http(s)://
+  ...` key (the case R3-C1's whole fix depends on) and DEBUG for anything
+  else (a bare `/vsicurl/foo.tif` with no real host, or a local path —
+  verified directly that `gdal.VSICurlPartialClearCache` doesn't even
+  raise for a well-formed real URL regardless of host reachability; only a
+  `/vsicurl/`-prefixed key with NO scheme raises "Missing url parameter").
 - **`sources.assign_sources`'s per-polygon loop is slow enough to size SLURM
   jobs around.** Measured against the real staged inventory: ~9.97-15 ms per
   1m-tagged polygon (`rank_candidates`'s per-polygon `gpd.GeoDataFrame(...)`
