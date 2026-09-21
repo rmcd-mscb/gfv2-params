@@ -67,6 +67,7 @@ from concurrent.futures import ThreadPoolExecutor
 import geopandas as gpd
 import pandas as pd
 import rasterio
+from rasterio.errors import RasterioIOError
 from rasterio.warp import transform_bounds
 from shapely.geometry import box
 
@@ -99,6 +100,10 @@ TILE_NAME_RE = re.compile(r"USGS_.+?_x(?P<x>\d+)y(?P<y>\d+)_(?P<project>.+)\.(?i
 # matching/filtering (that's `TILE_NAME_RE` alone now).
 MODERN_ZONED_TILE_NAME_RE = re.compile(r"USGS_1M_(?P<zone>\d{2})_x\d+y\d+_.+\.tif$")
 INVENTORY_COLUMNS = ["project", "key", "zone", "crs", "width", "height", "minx", "miny", "maxx", "maxy"]
+# Gate on the fraction of project DIRECTORIES that contribute ZERO tiles (#223
+# review round 3) -- see `build_inventory`'s own comment at the check site for
+# the healthy-baseline/regression numbers this threshold separates.
+MAX_ZERO_TILE_PROJECT_FRAC = 0.05
 _KEY_RE = re.compile(r"<Key>([^<]*)</Key>")
 _PREFIX_RE = re.compile(r"<Prefix>([^<]*)</Prefix>")
 _TOKEN_RE = re.compile(r"<NextContinuationToken>([^<]*)</NextContinuationToken>")
@@ -267,7 +272,8 @@ def tile_record(key: str, header: dict) -> dict:
 def build_inventory(projects, *, n_threads: int = 32, lister=list_project_tiles,
                     header_reader=read_tile_header, logger, max_fail_frac: float = 0.01) -> pd.DataFrame:
     with ThreadPoolExecutor(n_threads) as ex:
-        keys = [k for ks in ex.map(lister, projects) for k in ks]
+        per_project_keys = list(ex.map(lister, projects))
+    keys = [k for ks in per_project_keys for k in ks]
     logger.info("  listed %d tile(s) across %d project(s)", len(keys), len(projects))
     if not keys and projects:
         # `if keys and ...` below short-circuits to False on an empty list, so a
@@ -276,23 +282,70 @@ def build_inventory(projects, *, n_threads: int = 32, lister=list_project_tiles,
         # well-formed, EMPTY DataFrame and a silent 0-row inventory written to the
         # shared data root. Mirrors the `min_onstream_comids`/endorheic-floor
         # convention in CLAUDE.md: an empty result must raise, never masquerade as
-        # success just because it type-checks.
+        # success just because it type-checks. Checked BEFORE the partial
+        # zero-tile-project gate below: ALL projects zero is this specific,
+        # unambiguous message, not the generic "X% zero" one.
         raise RuntimeError(
             f"0 tile keys listed across {len(projects)} project(s) -- refusing to "
             "stage an empty inventory"
         )
 
+    # "listed N tile(s) across M project(s)" above prints M as the number of
+    # directories ASKED FOR, not the number that actually contributed a tile --
+    # a directory whose listing returns [] (no matching keys, not an exception)
+    # produces no header-read failure at all, so round 2's failure-count total
+    # doesn't cover this either. Both of this branch's development regressions
+    # (610, then 92, silently-zero-tile directories, out of 967) would have
+    # printed that same INFO line either way. `MAX_ZERO_TILE_PROJECT_FRAC` gates
+    # it: today's healthy baseline measures 28/967 = 2.9%; the SECOND regression
+    # (92 dirs) was 9.5%; the FIRST (610 dirs) was 63% -- 5% cleanly separates
+    # healthy from either.
+    zero_tile_projects = [p for p, ks in zip(projects, per_project_keys) if not ks]
+    if zero_tile_projects:
+        frac = len(zero_tile_projects) / len(projects)
+        logger.warning(
+            "  %d/%d project director(ies) (%.1f%%) contributed ZERO tiles -- "
+            "first few: %s", len(zero_tile_projects), len(projects), 100 * frac,
+            zero_tile_projects[:10],
+        )
+        if frac > MAX_ZERO_TILE_PROJECT_FRAC:
+            raise RuntimeError(
+                f"{len(zero_tile_projects)} of {len(projects)} project director(ies) "
+                f"({100 * frac:.1f}%) contributed ZERO tiles -- above the "
+                f"{MAX_ZERO_TILE_PROJECT_FRAC:.0%} gate (healthy baseline measured "
+                f"2.9%; this branch's two development regressions were 9.5% and "
+                f"63%). This is not covered by the header-read failure-count gate -- "
+                f"a directory whose listing simply returns no matching keys raises "
+                f"nothing. First few zero-tile directories: {zero_tile_projects[:20]}. "
+                f"Investigate the S3 listing (renamed TIFF/ subpath, a naming "
+                f"convention TILE_NAME_RE still misses, ...) before staging."
+            )
+
     def _one(key):
         try:
-            return tile_record(key, header_reader(key)), None
-        except Exception as exc:  # noqa: BLE001 - counted and gated below
-            return None, f"{key}: {type(exc).__name__}: {exc}"
+            return tile_record(key, header_reader(key)), None, False
+        except RasterioIOError as exc:
+            # Expected: a routine open/read failure (404, timeout, transient S3
+            # blip) -- counted and gated below like any other tile-count shortfall.
+            return None, f"{key}: {type(exc).__name__}: {exc}", False
+        except Exception as exc:  # noqa: BLE001 - genuine bug-class, see below
+            # NOT a routine read failure -- a `zone_from_crs` raise (unrecognised
+            # CRS), a malformed header dict, a `transform_bounds` failure, or any
+            # other code/data bug. Split from the RasterioIOError case above the
+            # same way `compute._attempt` splits expected read failures from
+            # unexpected ones -- a real bug must not be bucketed identically to a
+            # routine 404 and hidden under the `max_fail_frac` gate.
+            return None, f"{key}: {type(exc).__name__}: {exc}", True
 
     with ThreadPoolExecutor(n_threads) as ex:
         results = list(ex.map(_one, keys))
-    failures = [e for _, e in results if e]
-    for e in failures[:20]:
+    failures = [(e, is_bug) for _, e, is_bug in results if e]
+    expected_failures = [e for e, is_bug in failures if not is_bug]
+    bug_failures = [e for e, is_bug in failures if is_bug]
+    for e in expected_failures[:20]:
         logger.warning("  header read failed: %s", e)
+    for e in bug_failures[:20]:
+        logger.error("  header read failed with a genuine code/data BUG (not a routine read failure): %s", e)
     if failures:
         # The per-failure lines above are capped at 20 -- at today's scale (up to
         # 1,256 tiles per project) an entire project or CRS family can vanish under
@@ -302,7 +355,7 @@ def build_inventory(projects, *, n_threads: int = 32, lister=list_project_tiles,
         # on each failure's own key -- no extra I/O), so a WARNING-level log scan
         # catches it without an operator having to diff tile counts by hand.
         worst = Counter()
-        for e in failures:
+        for e, _ in failures:
             try:
                 worst[_project_from_key(e.split(": ", 1)[0])] += 1
             except ValueError:
@@ -312,16 +365,43 @@ def build_inventory(projects, *, n_threads: int = 32, lister=list_project_tiles,
             "  %d/%d tile header read(s) failed in total (first 20 shown above); "
             "worst-hit project(s): %s", len(failures), len(keys), top,
         )
+    if bug_failures:
+        # Distinct from the WARNING totals above: a nonzero bug-class count is
+        # worth surfacing on its own, since `max_fail_frac` (1% by default) would
+        # otherwise silently tolerate a handful of genuine code/data bugs as long
+        # as the combined failure rate stays under the gate.
+        logger.error(
+            "  %d/%d tile header read(s) failed with a genuine code/data BUG (zone_from_crs, "
+            "a malformed header, transform_bounds, ...) -- NOT a routine read failure.",
+            len(bug_failures), len(keys),
+        )
     if keys and len(failures) / len(keys) > max_fail_frac:
         raise RuntimeError(
             f"{len(failures)} of {len(keys)} tile header reads failed "
-            f"(> {max_fail_frac:.1%}); refusing to stage a partial inventory"
+            f"({len(bug_failures)} of them a genuine code/data bug, not a routine "
+            f"read failure) (> {max_fail_frac:.1%}); refusing to stage a partial "
+            f"inventory"
         )
-    df = pd.DataFrame([r for r, _ in results if r], columns=INVENTORY_COLUMNS)
+    df = pd.DataFrame([r for r, _, _ in results if r], columns=INVENTORY_COLUMNS)
     # Defensive: uniqueness should already follow from correct pagination, but
     # don't let a future continuation-token regression silently double-count a
     # tile -- de-dup before sorting rather than trusting `list_s3` forever.
-    return df.drop_duplicates(subset="key").sort_values("key").reset_index(drop=True)
+    df = df.drop_duplicates(subset="key").sort_values("key").reset_index(drop=True)
+    # `sources.encode`/`decode` serialise a TileSet as "project|covers|key1|..."
+    # -- nothing previously enforced that a project NAME can't itself contain
+    # that delimiter (verified against all 967 listed directories on
+    # 2026-09-19 that none do, but nothing stages that verification going
+    # forward). A future project name that does would make `decode` silently
+    # mis-split it, not raise -- catch it loud, here, at staging time instead.
+    bad_names = sorted({p for p in df["project"] if "|" in p})
+    if bad_names:
+        raise RuntimeError(
+            f"{len(bad_names)} project name(s) contain '|', the delimiter "
+            f"sources.encode()/decode() rely on to serialise a TileSet -- "
+            f"decode() would silently mis-split these rather than raise. "
+            f"Refusing to stage. Offending name(s): {bad_names[:10]}"
+        )
+    return df
 
 
 def load_inventory(path) -> gpd.GeoDataFrame:

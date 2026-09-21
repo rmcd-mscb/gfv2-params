@@ -3,6 +3,7 @@ import logging
 import numpy as np
 import pandas as pd
 import pytest
+from rasterio.errors import RasterioIOError
 
 from gfv2_params.dprst_depth import inventory as inv
 
@@ -270,6 +271,17 @@ def test_zone_from_crs_accepts_the_full_wgs84_utm_range():
     assert inv.zone_from_crs("EPSG:32760") == 60
 
 
+@pytest.mark.parametrize("crs", ["EPSG:26924", "EPSG:32600", "EPSG:32661", "EPSG:32700", "EPSG:32761"])
+def test_zone_from_crs_raises_one_past_every_range_boundary(crs):
+    # (#223 review round 3, test gap 6c) Off-by-one boundary cases for
+    # `_UTM_ZONE_EPSG_RANGES`: 26924 is one past the NAD83 UTM max (26923, the
+    # first STATE PLANE code); 32600/32700 are one BELOW their family's zone-1
+    # code (zone 0 doesn't exist); 32661/32761 are one past each family's
+    # zone-60 max.
+    with pytest.raises(ValueError, match=crs):
+        inv.zone_from_crs(crs)
+
+
 def test_build_inventory_counts_failures_and_raises_above_threshold():
     keys = [f"/vsicurl/https://x/Projects/P1/TIFF/USGS_1M_15_x{i}y500_P1.tif" for i in range(10)]
     ok = {"crs": "EPSG:26915", "width": 10012, "height": 10012,
@@ -328,6 +340,38 @@ def test_build_inventory_counts_an_unrecognised_crs_as_a_header_failure():
                             logger=logging.getLogger("t"), n_threads=1, max_fail_frac=0.0)
 
 
+def test_build_inventory_splits_bug_class_failures_from_expected_read_failures(caplog):
+    # (#223 review round 3, also-fix 1) A genuine code/data bug (here,
+    # zone_from_crs's ValueError on an unrecognised CRS) must be bucketed
+    # DIFFERENTLY from a routine RasterioIOError -- ERROR, not WARNING -- and
+    # surfaced as a distinct nonzero count, not silently merged into the plain
+    # failure total the way it used to be (`except Exception` caught both alike).
+    keys = [
+        "/vsicurl/https://x/Projects/P1/TIFF/USGS_1M_15_x1y500_P1.tif",  # RasterioIOError -> expected
+        "/vsicurl/https://x/Projects/P1/TIFF/USGS_1M_15_x2y500_P1.tif",  # bad CRS -> bug-class
+    ]
+    bad_crs = {"crs": "EPSG:4326", "width": 10, "height": 10, "bounds": (0, 0, 1, 1)}
+
+    def reader(key):
+        if key.endswith("x1y500_P1.tif"):
+            raise RasterioIOError("synthetic 404")
+        return bad_crs
+
+    with caplog.at_level(logging.WARNING, logger="t"):
+        with pytest.raises(
+            RuntimeError, match=r"2 of 2 tile header reads failed \(1 of them a genuine code/data bug"
+        ):
+            inv.build_inventory(["P1"], lister=lambda p: keys, header_reader=reader,
+                                logger=logging.getLogger("t"), n_threads=1, max_fail_frac=0.0)
+
+    assert any(
+        r.levelno == logging.ERROR and "genuine code/data BUG" in r.getMessage() for r in caplog.records
+    )
+    assert any(
+        r.levelno == logging.WARNING and "header read failed: " in r.getMessage() for r in caplog.records
+    )
+
+
 def test_build_inventory_raises_on_zero_keys_with_nonempty_projects():
     # A systemic listing bug (renamed TIFF/ subpath, changed directory layout,
     # anything that returns [] rather than raising) must not fall through to a
@@ -336,6 +380,55 @@ def test_build_inventory_raises_on_zero_keys_with_nonempty_projects():
     with pytest.raises(RuntimeError, match="0 tile keys listed across 3 project"):
         inv.build_inventory(["P1", "P2", "P3"], lister=lambda p: [],
                             header_reader=lambda k: {}, logger=logging.getLogger("t"))
+
+
+def test_build_inventory_raises_on_a_project_name_containing_the_encode_delimiter():
+    # (#223 review round 3, also-fix 3) sources.encode()/decode() serialise a
+    # TileSet as "project|covers|key1|...". A future project name containing
+    # '|' would make decode() silently mis-split it rather than raise --
+    # nothing previously enforced the invariant at staging time.
+    keys = ["/vsicurl/https://x/Projects/BAD|NAME/TIFF/USGS_1M_15_x1y500_BAD|NAME.tif"]
+    ok = {"crs": "EPSG:26915", "width": 10, "height": 10, "bounds": (0, 0, 1, 1)}
+    with pytest.raises(RuntimeError, match=r"project name\(s\) contain '\|'.*BAD\|NAME"):
+        inv.build_inventory(["BAD|NAME"], lister=lambda p: keys, header_reader=lambda k: ok,
+                            logger=logging.getLogger("t"))
+
+
+def test_build_inventory_warns_but_does_not_raise_under_the_zero_tile_project_gate(caplog):
+    # 1 of 20 projects (5%) contributes zero tiles -- AT the gate (frac > 0.05 is
+    # strict), not above it, so this must WARN, not raise.
+    ok = {"crs": "EPSG:26915", "width": 10, "height": 10, "bounds": (0.0, 0.0, 10.0, 10.0)}
+    keys_by_project = {f"P{i}": [f"/vsicurl/https://x/Projects/P{i}/TIFF/USGS_1M_15_x1y1_P{i}.tif"]
+                       for i in range(19)}
+    keys_by_project["P19"] = []  # the one zero-tile project
+
+    with caplog.at_level(logging.WARNING, logger="t"):
+        df = inv.build_inventory(
+            list(keys_by_project), lister=lambda p: keys_by_project[p],
+            header_reader=lambda k: ok, logger=logging.getLogger("t"),
+        )
+    assert len(df) == 19
+    assert "1/20 project director(ies) (5.0%) contributed ZERO tiles" in caplog.text
+    assert "P19" in caplog.text
+
+
+def test_build_inventory_raises_above_the_zero_tile_project_gate():
+    # This branch's SECOND development regression measured 92/967 = 9.5% zero-tile
+    # directories -- reproduce that shape (scaled down) rather than a synthetic
+    # round number, since that's the exact incident this gate exists to catch.
+    ok = {"crs": "EPSG:26915", "width": 10, "height": 10, "bounds": (0.0, 0.0, 10.0, 10.0)}
+    n = 20
+    n_zero = 2  # 10% -- above the 5% gate
+    keys_by_project = {f"P{i}": [f"/vsicurl/https://x/Projects/P{i}/TIFF/USGS_1M_15_x1y1_P{i}.tif"]
+                       for i in range(n)}
+    for i in range(n_zero):
+        keys_by_project[f"P{i}"] = []
+
+    with pytest.raises(RuntimeError, match=r"2 of 20 project director\(ies\) \(10\.0%\) contributed ZERO tiles"):
+        inv.build_inventory(
+            list(keys_by_project), lister=lambda p: keys_by_project[p],
+            header_reader=lambda k: ok, logger=logging.getLogger("t"),
+        )
 
 
 @pytest.mark.parametrize("value,rank", [("QL 0", 0), ("QL 1", 1), ("QL1", 1), ("QL 2", 2),
