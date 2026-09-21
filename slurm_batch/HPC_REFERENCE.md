@@ -809,23 +809,50 @@ pixi run python -m gfv2_params.dprst_depth.tiling --plan \
 - A failed/timed-out array task (stage 2) only owns its own
   `batch_XXXX.parquet` — resubmit just that index:
   `sbatch --array=<idx> --export=ALL,BASE_CONFIG=...,FABRIC=... slurm_batch/run_dprst_depth_batch.batch`.
-- **A task that fails with "TRANSIENT network failure persisted after N
-  retries"** (`compute.run_batch`'s transient-vs-permanent retry doctrine —
-  see CLAUDE.md's dprst_depth bullet) means the network, not the data: a DNS
-  failure, connect/timeout, or an HTTP 429/5xx on `prd-tnm.s3.amazonaws.com`
-  outlasted every retry attempt for one or more tile sets. No
+- **A task that fails with "TRANSIENT network failure persisted through the
+  deferred retry pass"** (`compute.run_batch`'s transient-vs-permanent retry
+  doctrine — see CLAUDE.md's dprst_depth bullet) means the network, not the
+  data: a DNS failure, connect/timeout, or an HTTP 429/5xx on
+  `prd-tnm.s3.amazonaws.com` outlasted every in-place retry AND the one
+  deferred retry (~2 minutes in place, then a 60s-plus-pause second attempt
+  — issue #223 round 2) for one or more tile sets/candidates. No
   `batch_XXXX.parquet` is written for that task, so it is simply missing,
   not wrong — **just resubmit that same array index** once the network has
   recovered, exactly as for any other failed/timed-out array task above. Do
   NOT reach for `--force` or a re-plan: the primary tile set assignment for
-  those polygons is still correct, only the read attempt failed.
+  those polygons is still correct, only the read attempt failed. **Also
+  resubmit (or re-run) the downstream stages** — `afterok` chaining means a
+  failed array task already cancelled the Build/mean-zonal/finalize jobs
+  behind it, so a lone `sbatch --array=<idx> ...` resubmit of the array task
+  alone leaves the rest of the DAG un-submitted; either chain the remaining
+  stages by hand from `slurm_batch/HPC_REFERENCE.md`'s per-stage commands
+  above, or just re-run the whole `submit_dprst_depth.sh "$BATCHES" <fabric>
+  configs/base_config.yml <N_TILE_BATCHES>` — it's idempotent (the plan step
+  deletes and rewrites the per-batch parquets, so a full re-run costs
+  recompute time, never a wrong product).
+- **A task's log showing `n_transient_retry > 0` in its summary line, even
+  when it did NOT fail** is a real network hiccup the batch rode out —
+  every affected polygon still resolved on its correct primary/candidate
+  source, so nothing needs resubmitting, but the summary escalates to
+  WARNING specifically so this is visible on a normal log scan (worth a
+  glance to confirm it's not the start of a wider outage).
 - **A task that fails/logs with a `n_compute_error > 0` summary (ERROR
   level) instead** is a different signal — a genuine code/data bug (a
   corrupt COG, a bad/missing CRS, a `MemoryError`) rather than a network
   blip or a routine permanent read gap (404/403, an unreadable object, a
-  mixed-CRS `BuildVRT` failure — those count as `n_read_failure` and walk
+  heterogeneous `BuildVRT` mosaic — those count as `n_read_failure` and walk
   the candidate list as before) — and resubmitting the same index will not
   fix it; it needs investigation first.
+- **Incident note (2026-09-20, tjc smoke rerun, job 4532393):** the
+  rerun's SECOND failure was not a persistent host outage — the real DNS
+  outage measured ~30s (21:49:54-21:50:24), while the code's
+  then-5-attempt/~20s in-place retry budget exhausted by 21:50:16, 8s
+  before the network actually recovered, and the same set opened fine
+  again moments later. The retry budget was simply shorter than the
+  outage it was meant to survive, not a sign the host was actually down
+  for good. This is what `compute.run_batch`'s DEFERRED second pass (a
+  60s-plus pause, then one more full retry attempt before treating a
+  failure as persistent) now guards against.
 - Re-running the plan step (stage 1) **deletes the per-batch parquets** and
   rewrites `_plan/*` (#221), so re-run the whole array after it — or just use
   `submit_dprst_depth.sh`, which always runs plan → array → build together.

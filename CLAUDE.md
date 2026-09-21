@@ -320,41 +320,82 @@ These are hard-won; violating them silently corrupts outputs.
   tile sets by (covers window, QL, newest collect_end, project). WESM is read
   geometry-free, for QL/dates only. The inventory is a SNAPSHOT: re-staging
   obliges a dprst_depth re-run of every fabric. A tile set is one project in
-  ONE UTM zone, because BuildVRT cannot mosaic mixed CRSs. `tiling.tile_set_groups`
-  groups polygons by their assigned primary tile set (one polygon, exactly one
-  set — no cross-polygon component-chaining); `compute.run_batch` opens each
-  set ONCE and runs sets concurrently on a thread pool, walking a polygon's
-  remaining ranked candidates when its primary source PERMANENTLY yields no
-  valid interior or a PERMANENT read/open error (404/403, an unreadable
-  object, a mixed-CRS `BuildVRT` mosaic), ending at the 10 m seamless tile.
-  The old hull-driven transitive tile-key chaining could span >4,000 tiles
-  in one component and left two array tasks with ~16,000/~12,000 fallback
-  polygons each, running past 24 h against a 34-minute median — gone now
-  that each polygon resolves to exactly one primary set. **A TRANSIENT
-  failure is not evidence a source is unusable and must never advance the
-  candidate walk** (`compute._is_transient_error`): DNS resolution failures,
+  ONE UTM zone (`sources.rank_candidates` groups by it) because a single VRT
+  can't coherently represent two CRSs — but do NOT assume a heterogeneous set
+  that slips through makes `gdal.BuildVRT` return `None` or raise on its own:
+  by DEFAULT it silently SKIPS any key it can't open or that disagrees with
+  the rest and returns a mosaic of whatever's left, with no error at all
+  (verified with a real UTM 14N + UTM 15N pair, and separately with a
+  good-key + DNS-failing-key pair, and a good-key + 404-key pair — all three
+  produce a working partial VRT). `open_tile_set` therefore builds with
+  `gdal.BuildVRTOptions(strict=True)` so any unopenable or heterogeneous
+  source is FATAL instead (#223 round 2, I1) — a set whose keys all open and
+  agree builds exactly as before. `tiling.tile_set_groups` groups polygons by
+  their assigned primary tile set (one polygon, exactly one set — no
+  cross-polygon component-chaining); `compute.run_batch` opens each set ONCE
+  and runs sets concurrently on a thread pool, walking a polygon's remaining
+  ranked candidates when its primary source PERMANENTLY yields no valid
+  interior or a PERMANENT read/open error (404/403, an unreadable object, a
+  heterogeneous `BuildVRT` mosaic), ending at the 10 m seamless tile. The old
+  hull-driven transitive tile-key chaining could span >4,000 tiles in one
+  component and left two array tasks with ~16,000/~12,000 fallback polygons
+  each, running past 24 h against a 34-minute median — gone now that each
+  polygon resolves to exactly one primary set. **A TRANSIENT failure is not
+  evidence a source is unusable and must never advance the candidate walk**
+  (`compute._is_transient_error_chain` — classifies an exception's WHOLE
+  `__cause__`/`__context__` chain, not just its own message; a network
+  failure surfacing at READ time through a `WarpedVRT` comes through as a
+  generic `RasterioIOError('Read failed. See previous exception for
+  details.')` with the real GDAL `CPLE_HttpResponseError`/
+  `CPLE_AppDefinedError` cause only in the chain — verified against real
+  GDAL 3.12.3/rasterio 1.5.0, #223 round 2, C2): DNS resolution failures,
   connect failures, timeouts, connection resets/receive failures/empty
   replies, SSL handshake errors, and HTTP 429/5xx are retried on the SAME
   source with bounded exponential backoff + jitter
-  (`compute._RETRY_ATTEMPTS`/`_backoff_delay`, 5 attempts starting ~2 s;
-  jitter matters because every thread of every SLURM task can start within
-  the same second), both at the tile-set OPEN and at a per-polygon read
-  (`_retry_compute_one`). If a transient failure persists after every retry,
-  `run_batch` FAILS THE WHOLE ARRAY TASK LOUDLY — raises, writes NO
-  `batch_XXXX.parquet` — rather than silently falling through to a
-  lower-ranked candidate; the operator's remedy is to resubmit that array
-  index (`slurm_batch/HPC_REFERENCE.md`'s dprst_depth Recovery section).
-  This closes a real incident (2026-09-20, tjc smoke rerun, 8 tile tasks x 8
-  threads all starting within the same second): a cluster-wide DNS failure
-  ("CURL error: Could not resolve host: prd-tnm.s3.amazonaws.com", 532
-  times across 5 nodes within the single second 21:08:10) was, pre-fix,
-  indistinguishable from a genuine PERMANENT miss — `_attempt` immediately
-  advanced the candidate walk, and `_recover` deliberately skips the
-  already-tried primary set, so once DNS recovered a moment later every
-  affected polygon resolved against a lower-ranked candidate with no error
-  at all: 4,822 of 5,535 polygons (87%) were silently read from other than
-  their correctly-ranked primary source, and 578 single-candidate polygons
-  got no row whatsoever. `interior_coverage` is written per polygon (a truncated
+  (`compute._RETRY_ATTEMPTS`/`_backoff_delay`, 6 attempts / ~2 minute
+  IN-PLACE budget; jitter matters because every thread of every SLURM task
+  can start within the same second), both at the tile-set OPEN and at a
+  per-polygon read (`_retry_compute_one`). A multi-key `BuildVRT` failure
+  carries NO classifiable cause on its own — `gdal.GetLastErrorMsg()` is
+  EMPTY there even under real GDAL (verified for an all-DNS and an all-404
+  key list) — so `open_tile_set` probes each key individually
+  (`_probe_keys_for_real_cause`) and chains that key's REAL exception as
+  `__cause__` (#223 round 2, C1); without it, a multi-key set's DNS failure
+  classified PERMANENT, QUIETER than the original bare-`RuntimeError` bug it
+  replaced (that at least forced an ERROR-level `n_compute_error` summary).
+  A set/polygon that exhausts its in-place budget is DEFERRED, not
+  immediately failed — after every other set in the batch and the `_recover`
+  walk finish, `run_batch` pauses `compute._DEFERRED_PASS_PAUSE_S` (60 s) and
+  gives every deferred item ONE more full attempt; only if THAT also fails
+  transiently does `run_batch` FAIL THE WHOLE ARRAY TASK LOUDLY — raise,
+  write NO `batch_XXXX.parquet` — rather than silently falling through to a
+  lower-ranked candidate (#223 round 2, I4: the in-place budget can be
+  shorter than the real outage — see below). A shared `threading.Event`
+  lets a still-retrying sibling in the SAME pass bail out early once ANY
+  set/polygon in that pass confirms the network is down, instead of every
+  one independently burning its own ~2 minutes to the same conclusion (I3);
+  it's reset before the deferred pass so that pass gets its own fair first
+  attempt. The operator's remedy for a task that still fails is to resubmit
+  that array index, AND its downstream stages, or resubmit the whole
+  `submit_dprst_depth.sh` DAG (idempotent) — see
+  `slurm_batch/HPC_REFERENCE.md`'s dprst_depth Recovery section.
+  This closes TWO real incidents (2026-09-20, tjc smoke rerun, 8 tile tasks
+  x 8 threads all starting within the same second). The first (job
+  4529029): a cluster-wide DNS failure ("CURL error: Could not resolve
+  host: prd-tnm.s3.amazonaws.com", 532 times across 5 nodes within the
+  single second 21:08:10) was, pre-fix, indistinguishable from a genuine
+  PERMANENT miss — `_attempt` immediately advanced the candidate walk, and
+  `_recover` deliberately skips the already-tried primary set, so once DNS
+  recovered a moment later every affected polygon resolved against a
+  lower-ranked candidate with no error at all: 4,822 of 5,535 polygons
+  (87%) were silently read from other than their correctly-ranked primary
+  source, and 578 single-candidate polygons got no row whatsoever. The
+  SECOND (job 4532393, discovered testing the round-1 fix): the outage
+  itself measured ~30s (21:49:54-21:50:24) while the then-5-attempt/~20s
+  in-place budget exhausted by 21:50:16 — 8s before the network actually
+  recovered — wrongly declaring a set persistent moments before it would
+  have succeeded; the deferred second pass exists for exactly this.
+  `interior_coverage` is written per polygon (a truncated
   interior is COVERAGE LOSS, not fill corruption — richdem excludes interior
   nodata cells) but nothing downstream FILTERS on it yet — the donor filter
   that would exclude low-coverage polygons from the regional calibration is
