@@ -117,23 +117,41 @@ def test_tag_and_assign_raises_on_empty_inventory(tmp_path):
 
 def test_tag_and_assign_raises_below_tile_floor(tmp_path):
     # 10 tiles/10 projects: both axes are under the module defaults
-    # (DEFAULT_MIN_INVENTORY_TILES=50,000 / DEFAULT_MIN_INVENTORY_PROJECTS=500) --
+    # (DEFAULT_MIN_INVENTORY_TILES=100,000 / DEFAULT_MIN_INVENTORY_PROJECTS=900) --
     # the tile-count check is the first one `tag_and_assign` runs, so it fires here.
     inv_path = _write_inventory_rows(tmp_path, n_tiles=10, n_projects=10)
     attrs_path = _write_attrs_rows(tmp_path, 10)
-    with pytest.raises(RuntimeError, match=r"dem_1m_inventory carries 10 tiles, below its floor of 50,000"):
+    with pytest.raises(RuntimeError, match=r"dem_1m_inventory carries 10 tiles, below its floor of 100,000"):
         S.tag_and_assign(_tiny_dprst(), inv_path, attrs_path, logging.getLogger("t"))
 
 
 def test_tag_and_assign_raises_below_project_floor(tmp_path):
     # Override the tile floor down so ONLY the distinct-project-count check can fire --
-    # isolates it from the tile-count check without generating 50,000 synthetic rows.
+    # isolates it from the tile-count check without generating 100,000 synthetic rows.
     inv_path = _write_inventory_rows(tmp_path, n_tiles=20, n_projects=3)
     attrs_path = _write_attrs_rows(tmp_path, 3)
-    with pytest.raises(RuntimeError, match=r"dem_1m_inventory spans 3 distinct projects, below its floor of 500"):
+    with pytest.raises(RuntimeError, match=r"dem_1m_inventory spans 3 distinct projects, below its floor of 900"):
         S.tag_and_assign(
             _tiny_dprst(), inv_path, attrs_path, logging.getLogger("t"), min_inventory_tiles=5,
         )
+
+
+def test_tag_and_assign_default_floors_catch_the_second_historical_incident(tmp_path):
+    """(#223 review round 3) The FIRST partial inventory this branch staged during
+    development (88,403 tiles/357 projects) trips the tile floor easily. The
+    SECOND (121,849 tiles/875 projects) does NOT trip the tile floor
+    (121,849 >= DEFAULT_MIN_INVENTORY_TILES) -- only the distinct-project floor
+    catches it (875 < DEFAULT_MIN_INVENTORY_PROJECTS). Both review passes that
+    flagged this used a real inventory-shaped count, not a tiny synthetic one, so
+    reproduce that here: 875 distinct projects, well over the tile floor. No
+    overrides -- this exercises the DEFAULT floors, which every existing floor
+    test either uses tiny synthetic counts against or overrides down."""
+    inv_path = _write_inventory_rows(tmp_path, n_tiles=121_849, n_projects=875)
+    attrs_path = _write_attrs_rows(tmp_path, 875)
+    assert 121_849 >= S.DEFAULT_MIN_INVENTORY_TILES, "tile floor must NOT fire for this incident"
+    assert 875 < S.DEFAULT_MIN_INVENTORY_PROJECTS, "project floor MUST fire for this incident"
+    with pytest.raises(RuntimeError, match=r"dem_1m_inventory spans 875 distinct projects, below its floor of 900"):
+        S.tag_and_assign(_tiny_dprst(), inv_path, attrs_path, logging.getLogger("t"))
 
 
 def test_tag_and_assign_raises_on_empty_attrs(tmp_path):

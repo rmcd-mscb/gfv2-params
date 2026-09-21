@@ -63,8 +63,17 @@ _NO_DATE = pd.Timestamp("1900-01-01")
 # have shipped a CONUS product with two thirds, then 9%, of projects
 # silently downgraded to the 10 m seamless fallback, caught only by a manual
 # probe. The measured full CONUS inventory (2026-09-20) is 125,627 tiles
-# across 939 distinct projects; these defaults sit well under that so normal
-# day-to-day tile-count drift never trips them. `min_inventory_tiles`/
+# across 939 distinct projects.
+#
+# The two floors are NOT redundant -- each catches a different one of the two
+# historical incidents against these defaults: the TILE floor
+# (`DEFAULT_MIN_INVENTORY_TILES`) catches only the first (88,403 < 100,000;
+# 121,849 is NOT below it), while the PROJECT floor
+# (`DEFAULT_MIN_INVENTORY_PROJECTS`) catches BOTH (357 and 875 are both <
+# 900) -- an earlier draft set the project floor to 500, which the second
+# incident (875 projects) would have sailed straight through. Both are set
+# well under the measured 125,627/939 so normal day-to-day tile-count drift
+# (USGS only ADDS projects over time) never trips them. `min_inventory_tiles`/
 # `min_inventory_projects`/`min_attrs_rows` (all `tag_and_assign` kwargs,
 # threaded from a `min_dem_1m_tiles`/`min_dem_1m_projects`/
 # `min_wesm_project_attrs_rows` fabric-profile override, in the style of
@@ -72,8 +81,8 @@ _NO_DATE = pd.Timestamp("1900-01-01")
 # value disables that one check. Every fabric profile today points at the
 # SAME staged inventory file, so there is no legitimate reason to lower them
 # -- they are an escape hatch, not a dial anyone should need to turn.
-DEFAULT_MIN_INVENTORY_TILES = 50_000
-DEFAULT_MIN_INVENTORY_PROJECTS = 500
+DEFAULT_MIN_INVENTORY_TILES = 100_000
+DEFAULT_MIN_INVENTORY_PROJECTS = 900
 DEFAULT_MIN_PROJECT_ATTRS_ROWS = 500
 
 
@@ -99,19 +108,23 @@ def _check_inventory_floor(
             f"dem_1m_inventory carries {n_tiles:,} tiles, below its floor of "
             f"{floor_tiles:,} (measured full CONUS inventory, 2026-09-20: 125,627 "
             f"tiles / 939 projects). That is a collapsed or partial listing, not real "
-            f"coverage loss -- this branch shipped two well-formed inventories of "
-            f"exactly this shape during development (88,403 tiles/357 projects, then "
-            f"121,849/875), each silently downgrading most polygons to the 10 m "
-            f"seamless fallback. Re-stage: sbatch slurm_batch/stage_dem_1m_inventory.batch. "
-            f"Lower `min_dem_1m_tiles` in the fabric profile ONLY if this inventory is "
-            f"deliberately regional/test-scale."
+            f"coverage loss -- this is the shape of the FIRST of two well-formed, "
+            f"partial inventories this branch staged during development (88,403 "
+            f"tiles/357 projects; a second, 121,849/875, is below THIS floor's default "
+            f"but caught by the distinct-project floor below instead), each silently "
+            f"downgrading most polygons to the 10 m seamless fallback. Re-stage: sbatch "
+            f"slurm_batch/stage_dem_1m_inventory.batch. Lower `min_dem_1m_tiles` in the "
+            f"fabric profile ONLY if this inventory is deliberately regional/test-scale."
         )
     if floor_projects > 0 and n_projects < floor_projects:
         raise RuntimeError(
             f"dem_1m_inventory spans {n_projects:,} distinct projects, below its floor "
             f"of {floor_projects:,} (measured full CONUS inventory, 2026-09-20: 125,627 "
             f"tiles / 939 projects). Same failure mode as the tile-count floor -- a "
-            f"collapsed/partial listing, not real coverage loss. Re-stage: sbatch "
+            f"collapsed/partial listing, not real coverage loss. This floor is what "
+            f"catches BOTH of the two well-formed, partial inventories this branch "
+            f"staged during development (357 projects, then 875 -- the tile-count floor "
+            f"alone would have missed the second). Re-stage: sbatch "
             f"slurm_batch/stage_dem_1m_inventory.batch. Lower `min_dem_1m_projects` in "
             f"the fabric profile ONLY if this inventory is deliberately "
             f"regional/test-scale."
@@ -132,7 +145,9 @@ def _check_project_attrs_floor(attrs: pd.DataFrame, *, min_rows: int | None) -> 
     if floor > 0 and n < floor:
         raise RuntimeError(
             f"wesm_project_attrs carries {n:,} rows, below its floor of {floor:,} "
-            f"(measured full CONUS inventory, 2026-09-20: 939 projects). That is a "
+            f"(measured full CONUS wesm_project_attrs, 2026-09-20: 932 rows -- NOT "
+            f"the tile inventory's 939 projects; the two counts are close but not "
+            f"identical). That is a "
             f"collapsed or partial WESM join, degrading most projects' ranking to "
             f"(covers, name) with no real quality/date signal. Re-stage: sbatch "
             f"slurm_batch/stage_dem_1m_inventory.batch. Lower "
