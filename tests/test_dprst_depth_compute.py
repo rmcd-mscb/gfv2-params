@@ -175,10 +175,23 @@ def test_open_tile_set_raises_when_buildvrt_returns_none(monkeypatch):
     """A mixed CRS/UTM zone slipping through `sources.rank_candidates` is the
     expected real-world cause (BuildVRT cannot mosaic mixed CRSs) -- must raise
     HERE, attributed to the set, not fall through to a misleading downstream
-    read failure."""
+    read failure.
+
+    (transient-retry fix, #223 follow-on) Originally asserted a bare
+    `RuntimeError` -- that type is exactly the bug the transient-retry fix
+    closes: it landed in `_attempt`'s generic `except Exception` handler
+    (the `n_compute_error` BUG bucket) instead of the routine-open-failure
+    `except RasterioIOError` branch, hiding the 2026-09-20 DNS incident's
+    real network cause behind "UNEXPECTED compute error". `open_tile_set`
+    now raises `TileSetOpenError`, a `RasterioIOError` subclass carrying
+    GDAL's own `GetLastErrorMsg()` text, so `_is_transient_error` can
+    classify the cause from the message alone."""
     monkeypatch.setattr(compute_mod.gdal, "BuildVRT", lambda *a, **k: None)
+    monkeypatch.setattr(
+        compute_mod.gdal, "GetLastErrorMsg", lambda: "not all sources have the same CRS"
+    )
     ts = TileSet(project="P", keys=("/vsicurl/a.tif", "/vsicurl/b.tif"), covers=True)
-    with pytest.raises(RuntimeError, match="cannot build the mosaic"), open_tile_set(ts):
+    with pytest.raises(compute_mod.TileSetOpenError, match="cannot build the mosaic"), open_tile_set(ts):
         pass
 
 
@@ -515,3 +528,208 @@ def test_run_batch_reports_partial_coverage_as_measured_not_flat(tmp_path, monke
     assert row["method"] == "measured"
     assert not row["flat"]
     assert 0.0 < row["interior_coverage"] < 1.0
+
+
+# ---------------------------------------------------------------------------
+# Transient-vs-permanent retry (issue #223 real-incident follow-on,
+# 2026-09-20): a cluster-wide DNS failure ("CURL error: Could not resolve
+# host: prd-tnm.s3.amazonaws.com", 532 times across 5 nodes within the
+# single second 21:08:10) must be RETRIED on the same source, never treated
+# as grounds to advance `_recover`'s candidate walk -- that's what silently
+# demoted 4,822 of 5,535 tjc polygons (87%) off their correctly-ranked
+# primary source on the real rerun. Every test below patches `_sleep` so
+# the backoff never actually waits.
+# ---------------------------------------------------------------------------
+
+_DNS_ERROR = "CURL error: Could not resolve host: prd-tnm.s3.amazonaws.com"
+
+
+def test_is_transient_error_classifies_the_measured_dns_incident_as_transient():
+    assert compute_mod._is_transient_error(_DNS_ERROR) is True
+
+
+def test_is_transient_error_classifies_404_and_unsupported_format_as_permanent():
+    assert compute_mod._is_transient_error("HTTP response code: 404") is False
+    assert compute_mod._is_transient_error(
+        "USGS_1M_x.tif: not recognized as being in a supported file format"
+    ) is False
+
+
+def test_run_batch_retries_transient_open_failure_then_succeeds_on_primary(tmp_path, monkeypatch, caplog):
+    """(test 1/5 from the transient-retry spec) An open that fails
+    transiently twice and then succeeds must resolve the polygon against
+    its PRIMARY source, count exactly 2 retries, and inflate neither
+    `n_recovered` nor `n_read_failure` -- a transient failure that
+    eventually succeeds was never a failure of this source at all."""
+    monkeypatch.setattr(compute_mod, "_sleep", lambda s: None)
+    caplog.set_level(logging.INFO)
+    calls = {"n": 0}
+
+    @contextmanager
+    def _fake_open_flaky_then_ok(ts):
+        calls["n"] += 1
+        if calls["n"] <= 2:
+            raise RasterioIOError(_DNS_ERROR)
+        yield ts.project
+
+    monkeypatch.setattr(compute_mod, "open_tile_set", _fake_open_flaky_then_ok)
+    monkeypatch.setattr(compute_mod, "_compute_one", _fake_compute(set()))
+
+    df = run_batch(_gdf([(7, P1, [P1, P2, TEN])]), [P1], tmp_path / "b.parquet", _L())
+
+    assert df.loc[0, "source"] == "P1" and df.loc[0, "method"] == "measured"
+    summaries = [r.getMessage() for r in caplog.records if "run_batch:" in r.getMessage()]
+    assert summaries and "n_transient_retry=2" in summaries[-1]
+    assert "n_recovered=0" in summaries[-1]
+    assert "n_read_failure=0" in summaries[-1]
+
+
+def test_run_batch_raises_when_transient_open_failure_never_clears(tmp_path, monkeypatch):
+    """(test 2/5) Every retry attempt also failing transiently must FAIL THE
+    WHOLE TASK -- raise, name the affected set, and write NO parquet at
+    all -- rather than let `_recover` silently demote the polygon to a
+    lower-ranked candidate."""
+    monkeypatch.setattr(compute_mod, "_sleep", lambda s: None)
+
+    @contextmanager
+    def _fake_open_always_flaky(ts):
+        raise RasterioIOError(_DNS_ERROR)
+        yield  # pragma: no cover - unreachable; required so this stays a generator function
+
+    monkeypatch.setattr(compute_mod, "open_tile_set", _fake_open_always_flaky)
+    monkeypatch.setattr(compute_mod, "_compute_one", _fake_compute(set()))
+
+    out_parquet = tmp_path / "b.parquet"
+    with pytest.raises(RuntimeError, match="P1"):
+        run_batch(_gdf([(7, P1, [P1, TEN])]), [P1], out_parquet, _L())
+
+    assert not out_parquet.exists()
+
+
+def test_run_batch_does_not_retry_a_permanent_open_failure(tmp_path, monkeypatch):
+    """(test 3/5) A PERMANENT failure (here: GDAL's "not recognized..."
+    message for a genuinely unreadable object) must NOT be retried at
+    all -- `_sleep` is never called -- and the candidate walk must proceed
+    exactly as it did before this fix."""
+    sleep_calls = []
+    monkeypatch.setattr(compute_mod, "_sleep", lambda s: sleep_calls.append(s))
+
+    @contextmanager
+    def _fake_open_unreadable(ts):
+        if ts.project == "P1":
+            raise RasterioIOError(
+                "USGS_1M_x.tif: not recognized as being in a supported file format"
+            )
+        yield ts.project
+
+    monkeypatch.setattr(compute_mod, "open_tile_set", _fake_open_unreadable)
+    monkeypatch.setattr(compute_mod, "_compute_one", _fake_compute(set()))
+
+    df = run_batch(_gdf([(7, P1, [P1, P2, TEN])]), [P1], tmp_path / "b.parquet", _L())
+
+    assert df.loc[0, "source"] == "P2"  # candidate walk proceeded, unaffected by this fix
+    assert sleep_calls == []  # never retried
+
+
+def test_open_tile_set_buildvrt_none_transient_message_is_classified_transient(monkeypatch):
+    """(test 4/5) `open_tile_set`'s `TileSetOpenError`, carrying a transient
+    GDAL `GetLastErrorMsg()` (the measured 2026-09-20 DNS cause), must
+    classify as transient -- i.e. retryable by `_attempt`."""
+    monkeypatch.setattr(compute_mod.gdal, "BuildVRT", lambda *a, **k: None)
+    monkeypatch.setattr(compute_mod.gdal, "GetLastErrorMsg", lambda: _DNS_ERROR)
+    ts = TileSet(project="P", keys=("/vsicurl/a.tif", "/vsicurl/b.tif"), covers=True)
+    with pytest.raises(compute_mod.TileSetOpenError) as excinfo, open_tile_set(ts):
+        pass
+    assert compute_mod._is_transient_error(str(excinfo.value)) is True
+
+
+def test_open_tile_set_buildvrt_none_permanent_message_is_classified_permanent(monkeypatch):
+    """(test 4/5) The same `TileSetOpenError`, but with a permanent-looking
+    GDAL cause (mixed CRS -- the pre-existing documented cause of a `None`
+    BuildVRT), must classify as permanent -- i.e. NOT retryable."""
+    monkeypatch.setattr(compute_mod.gdal, "BuildVRT", lambda *a, **k: None)
+    monkeypatch.setattr(
+        compute_mod.gdal, "GetLastErrorMsg", lambda: "not all sources have the same CRS"
+    )
+    ts = TileSet(project="P", keys=("/vsicurl/a.tif", "/vsicurl/b.tif"), covers=True)
+    with pytest.raises(compute_mod.TileSetOpenError) as excinfo, open_tile_set(ts):
+        pass
+    assert compute_mod._is_transient_error(str(excinfo.value)) is False
+
+
+def test_run_batch_retries_a_transient_tile_set_open_error(tmp_path, monkeypatch, caplog):
+    """(test 4/5, end to end) `TileSetOpenError` -- what `open_tile_set` now
+    raises when `gdal.BuildVRT` returns `None` for a transient GDAL cause --
+    IS a `RasterioIOError` subclass, so `_attempt` must retry it exactly
+    like a plain single-key open failure."""
+    monkeypatch.setattr(compute_mod, "_sleep", lambda s: None)
+    caplog.set_level(logging.INFO)
+    calls = {"n": 0}
+
+    @contextmanager
+    def _fake_open_buildvrt_flaky(ts):
+        calls["n"] += 1
+        if calls["n"] <= 1:
+            raise compute_mod.TileSetOpenError(
+                f"gdal.BuildVRT returned None for tile set project={ts.project!r} "
+                f"keys={ts.keys!r} -- cannot build the mosaic (GDAL: {_DNS_ERROR})"
+            )
+        yield ts.project
+
+    monkeypatch.setattr(compute_mod, "open_tile_set", _fake_open_buildvrt_flaky)
+    monkeypatch.setattr(compute_mod, "_compute_one", _fake_compute(set()))
+
+    df = run_batch(_gdf([(7, P1, [P1, TEN])]), [P1], tmp_path / "b.parquet", _L())
+
+    assert df.loc[0, "source"] == "P1"
+    summaries = [r.getMessage() for r in caplog.records if "run_batch:" in r.getMessage()]
+    assert summaries and "n_transient_retry=1" in summaries[-1]
+
+
+def test_run_batch_retries_a_transient_per_polygon_read_failure(tmp_path, monkeypatch, caplog):
+    """(test 5/5) A per-polygon `_compute_one` call that fails transiently
+    (the SET opened fine; only THIS polygon's read hit the blip) must be
+    retried on the SAME already-open set, ending up read from the
+    PRIMARY -- never dropped to `_recover`'s candidate walk."""
+    monkeypatch.setattr(compute_mod, "_sleep", lambda s: None)
+    caplog.set_level(logging.INFO)
+    calls = {"n": 0}
+
+    def _flaky_compute_one(vrt, geom):
+        calls["n"] += 1
+        if calls["n"] <= 2:
+            raise RasterioIOError(_DNS_ERROR)
+        return {
+            "dprst_depth_m": 1.0, "measured_max_m": 2.0, "hollister_max_m": 3.0,
+            "flat": False, "resolution": "1m", "interior_coverage": 1.0,
+        }
+
+    monkeypatch.setattr(compute_mod, "open_tile_set", _fake_open())
+    monkeypatch.setattr(compute_mod, "_compute_one", _flaky_compute_one)
+
+    df = run_batch(_gdf([(7, P1, [P1, TEN])]), [P1], tmp_path / "b.parquet", _L())
+
+    assert df.loc[0, "source"] == "P1"
+    summaries = [r.getMessage() for r in caplog.records if "run_batch:" in r.getMessage()]
+    assert summaries and "n_transient_retry=2" in summaries[-1]
+    assert "n_recovered=0" in summaries[-1]
+
+
+def test_run_batch_raises_when_per_polygon_transient_failure_never_clears(tmp_path, monkeypatch):
+    """A per-polygon read that fails transiently on every attempt is the
+    same doctrine as a persistently-failing OPEN (test 2/5 above): fail the
+    whole task, write no parquet, rather than fall through to a
+    lower-ranked candidate."""
+    monkeypatch.setattr(compute_mod, "_sleep", lambda s: None)
+
+    def _always_flaky_compute_one(vrt, geom):
+        raise RasterioIOError(_DNS_ERROR)
+
+    monkeypatch.setattr(compute_mod, "open_tile_set", _fake_open())
+    monkeypatch.setattr(compute_mod, "_compute_one", _always_flaky_compute_one)
+
+    out_parquet = tmp_path / "b.parquet"
+    with pytest.raises(RuntimeError, match="P1"):
+        run_batch(_gdf([(7, P1, [P1, TEN])]), [P1], out_parquet, _L())
+
+    assert not out_parquet.exists()
