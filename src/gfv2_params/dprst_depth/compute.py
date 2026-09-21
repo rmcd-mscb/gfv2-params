@@ -41,13 +41,16 @@ Four layers, ordered by how much I/O they touch:
   always-present 10 m seamless tile — see `run_batch`'s own docstring for
   the counter/logging contract this candidate-recovery path preserves from
   the pre-#223 per-tile design. A TRANSIENT failure (a network blip -- see
-  `_is_transient_error_chain`, which classifies an exception's WHOLE cause
+  `_classify_error_chain`, which classifies an exception's WHOLE cause
   chain) is retried on the SAME source instead; a failure that outlasts
   that in-place budget is DEFERRED to one more attempt after a pause
   rather than declared persistent immediately, and only fails the whole
   task if that deferred attempt also fails -- never silently demoting a
-  correctly-ranked primary to a worse candidate (the two 2026-09-20 DNS
-  incidents this guards against).
+  correctly-ranked primary to a worse candidate (the three 2026-09-20 DNS
+  incidents this guards against: two at the tile-set OPEN level, and a
+  third at the per-polygon READ level on an already-open set, whose
+  failure chain carries no HTTP/curl signal at all and is disambiguated by
+  probe/reproduction instead -- see `_reclassify_unknown_read_failure`).
 """
 from __future__ import annotations
 
@@ -99,6 +102,26 @@ __all__ = [
 # would make an in-place edit to either module's "own" copy silently change
 # the other's env too.
 _ENV_OPTS = dict(GDAL_HTTP_ENV)
+
+# `_ENV_OPTS` with GDAL's OWN retry layer turned off, for every call site
+# that is itself inside OUR retry loop (`_attempt`'s open, `_retry_
+# compute_one`'s reads, and the classification probes both call). #223
+# round 3 review, M-D: `_ENV_OPTS`'s production GDAL_HTTP_MAX_RETRY=5 (with
+# GDAL_HTTP_RETRY_DELAY=2) runs INSIDE a single attempt of our own loop --
+# measured directly against a persistent 503 with `_ENV_OPTS` unchanged,
+# one single read attempt was measured at ~188s (GDAL's own 5 retries,
+# each preceded by a growing internal delay, all before OUR backoff/
+# logging ever runs) -- so the documented "~2 minute in-place budget"
+# (`_RETRY_ATTEMPTS` attempts) was really bounded by `_RETRY_ATTEMPTS * ~188s`
+# (nearly 19 minutes, worst case), not ~2 minutes. Our own backoff+jitter
+# (`_backoff_delay`) already
+# provides the SAME resilience one layer up, with visible logging and
+# counters GDAL's internal retries have neither -- so the retry-loop call
+# sites disable GDAL's, making OUR loop the single source of truth for the
+# budget. `_ENV_OPTS` itself is untouched for every OTHER caller (e.g.
+# `topo.read_window`'s single-shot reads, which are not wrapped in any
+# retry loop and still want GDAL's own retry as their only safety net).
+_IN_PROCESS_RETRY_ENV = dict(_ENV_OPTS, GDAL_HTTP_MAX_RETRY="0")
 
 # Output columns of `run_batch`'s parquet, fixed so an empty batch (a
 # SLURM array task with 0 assigned tile sets) still writes a well-formed,
@@ -213,74 +236,84 @@ _TRANSIENT_ERROR_MARKERS = (
     "empty reply from server",
     "ssl connect error",
     "ssl handshake",
+    # `open_tile_set` uses this EXACT phrase (see its I-A comment) when
+    # `BuildVRT` fails but the per-key probe finds every key healthy and
+    # `BuildVRT`'s own message names no concrete permanent cause -- the
+    # outage most likely ended BETWEEN the BuildVRT attempt and the probe
+    # (#223 round 3 review, IMPORTANT I-A). A synthetic marker, not
+    # anything GDAL itself emits, so it can't collide with a real message.
+    "buildvrt race window",
 )
-# HTTP 429 (throttling) and any 5xx (server-side) status, reported by
-# GDAL/curl as e.g. "HTTP error code: 503" or "response code: 429" -- both
-# transient. Matched only when the message also mentions "http"/"curl"
-# (`_HTTP_CONTEXT_RE` below) so an incidental "500"/"429" substring inside a
-# tile filename or COMID can't false-positive -- real vsicurl failures
-# always carry one of those two words (GDAL's own "CURL error: ..." prefix,
-# or an "HTTP ... code" body), so this stays lenient about the exact status
-# phrasing while still gating on genuine transport context.
-_TRANSIENT_HTTP_STATUS_RE = re.compile(r"\b(429|5\d\d)\b")
-# HTTP "response code ...: 0" -- GDAL's shape for "no HTTP response was
-# ever received at all" (a connection/DNS-level failure, not a real status
-# code) -- e.g. the per-key `BuildVRT` probe's generic text
-# "HTTP response code on <url>: 0" (#223 round 2 review, C1). Distinct from
-# `_TRANSIENT_HTTP_STATUS_RE`'s 429/5xx: "0" is never a genuine status.
-_ZERO_RESPONSE_CODE_RE = re.compile(r"response code[^0-9]{0,10}\b0\b")
 
 # Substrings/patterns that mark a failure as PERMANENT -- the source itself
 # is unusable, so `_recover`'s candidate walk must proceed exactly as
 # before this fix (no retry). "not recognized as being in a supported file
 # format" is GDAL's message for a genuinely unreadable published object (2
-# known in the real corpus); HTTP 404/403 are a missing/forbidden object.
+# known in the real corpus).
 _PERMANENT_ERROR_MARKERS = (
     "not recognized as being in a supported file format",
 )
-_PERMANENT_HTTP_STATUS_RE = re.compile(r"\b(404|403)\b")
-_HTTP_CONTEXT_RE = re.compile(r"\b(?:http|curl)\b")
+
+# HTTP status classification, shared by the string-level `_is_transient_
+# error` and `_classify_error_chain`'s per-level walk below. #223 round 3
+# review, IMPORTANT I-C: round 2 treated EVERY `CPLE_HttpResponseError` as
+# transient unless it named 404/403, which wrongly retried (then deferred,
+# then permanently failed the whole task over) a 400/401/410/416 -- genuine
+# client-side/object-level errors, not transport hiccups. Only "0" (no
+# real HTTP response at all -- a connection/DNS-level failure surfacing
+# through GDAL's generic "HTTP response code ...: 0" wording, not a real
+# status), 408 (request timeout), 429 (throttling), and any 5xx
+# (server-side) are transient; every OTHER 4xx is permanent.
+#
+# Anchored on a status/response/error/code CUE within 12 characters of the
+# digits, not a bare number anywhere in `text` -- `TileSetOpenError`'s own
+# message embeds the full `ts.keys` URLs (port numbers, and "127.0.0.1"'s
+# own "0" octets, both otherwise indistinguishable from a real status
+# code), so an unanchored `\b0\b`/`\b4\d\d\b` false-positived on a LOOPBACK
+# IP's "0" octet inside a URL during round 3's own real-GDAL test
+# (verified directly: a good+404 mixed set misclassified transient via the
+# "0" in "127.0.0.1"). The two regexes can't both match the same digit
+# token, so checking transient first is sufficient -- no ordering
+# ambiguity.
+_TRANSIENT_HTTP_CODE_RE = re.compile(
+    r"(?:response code|error code|status code|http error)\D{0,12}\b(0|408|429|5\d\d)\b"
+)
+_PERMANENT_HTTP_CODE_RE = re.compile(
+    r"(?:response code|error code|status code|http error)\D{0,12}\b4\d\d\b"
+)
+
+
+def _http_status_is_transient(text: str) -> bool | None:
+    """Classify an HTTP status embedded in `text` (already lower-cased):
+    `True` (0/408/429/5xx), `False` (any other 4xx), or `None` if no
+    recognizable status-code phrasing is present in `text` at all --
+    distinct from `False`, since "no signal here" and "an explicit
+    permanent signal here" must be told apart by `_classify_error_chain`'s
+    UNKNOWN handling (#223 round 3, C-A)."""
+    if _TRANSIENT_HTTP_CODE_RE.search(text):
+        return True
+    if _PERMANENT_HTTP_CODE_RE.search(text):
+        return False
+    return None
 
 
 def _is_transient_error(message: str) -> bool:
     """Classify a source open/read failure MESSAGE STRING as TRANSIENT
     (retry the SAME source) vs PERMANENT (advance `_recover`'s candidate
-    walk, exactly as pre-#223-transient-retry).
-
-    This is the STRING-level primitive `_is_transient_error_chain` (below)
-    calls once per level of a raised exception's cause chain -- most
-    CALLERS that have an actual exception in hand (as opposed to a bare
-    message `open_tile_set` itself constructs) should go through
-    `_is_transient_error_chain`, not this function directly, or they will
-    miss a real cause buried in `__cause__`/`__context__` (#223 round 2,
-    C2 -- a per-polygon READ failure through a `WarpedVRT` surfaces as a
-    generic `RasterioIOError('Read failed. See previous exception for
-    details.')`, with the actual "CURL error: Could not resolve host: ..."
-    text only in the chain).
-
-    PERMANENT markers are checked first so a message that happens to
-    combine both (unseen in practice, but a heterogeneous-mosaic failure
-    could in principle mention a transport detail) still fails safe toward
-    NOT retrying -- retrying a genuinely unusable source only burns
-    `_RETRY_ATTEMPTS` rounds of backoff before reaching the same correct
-    outcome, whereas mis-retrying a truly transient failure as permanent
-    would incorrectly demote a correctly-ranked primary source instantly,
-    which is the whole bug this exists to fix. Anything matching neither
-    list is treated as PERMANENT (the safe default -- unclassified
-    failures keep today's behaviour rather than silently gaining an
-    unbounded retry)."""
+    walk, exactly as pre-#223-transient-retry). A plain boolean, so
+    "permanent" and "no signal at all" both read as `False` here -- most
+    callers with an actual exception in hand should go through
+    `_classify_error_chain`/`_is_transient_error_chain`/`_is_permanent_
+    error_chain` instead, which distinguish those two and walk the whole
+    cause chain, not just one message (#223 round 2, C2)."""
     text = str(message).lower()
     if any(marker in text for marker in _PERMANENT_ERROR_MARKERS):
         return False
-    has_http_context = bool(_HTTP_CONTEXT_RE.search(text))
-    if has_http_context and _PERMANENT_HTTP_STATUS_RE.search(text):
-        return False
     if any(marker in text for marker in _TRANSIENT_ERROR_MARKERS):
         return True
-    if has_http_context and (
-        _TRANSIENT_HTTP_STATUS_RE.search(text) or _ZERO_RESPONSE_CODE_RE.search(text)
-    ):
-        return True
+    verdict = _http_status_is_transient(text)
+    if verdict is not None:
+        return verdict
     return False
 
 
@@ -294,7 +327,7 @@ _MAX_ERROR_CHAIN_DEPTH = 8
 def _error_chain_messages(exc: BaseException) -> list[tuple[str, str]]:
     """Walk `exc`'s `__cause__`/`__context__` chain (bounded depth,
     de-duplicated by identity) and return each level's `(type_name,
-    str(...))`. See `_is_transient_error_chain`, the actual classifier that
+    str(...))`. See `_classify_error_chain`, the actual classifier that
     consumes this."""
     levels: list[tuple[str, str]] = []
     seen: set[int] = set()
@@ -308,38 +341,67 @@ def _error_chain_messages(exc: BaseException) -> list[tuple[str, str]]:
     return levels
 
 
-def _is_transient_error_chain(exc: BaseException) -> bool:
-    """Classify a RAISED EXCEPTION as TRANSIENT vs PERMANENT by checking
-    `_is_transient_error` against EVERY level of `exc`'s
-    `__cause__`/`__context__` chain (`_error_chain_messages`), not just
-    `str(exc)`. This is the function every CALLER that has an exception in
-    hand must use (#223 round 2, C2) -- a network failure surfacing during
-    an actual per-polygon DEM read (rather than a tile-set open) comes
-    through real GDAL/rasterio as a generic
-    `RasterioIOError('Read failed. See previous exception for details.')`,
-    with the REAL cause (a GDAL `CPLE_HttpResponseError`/
-    `CPLE_AppDefinedError` carrying the actual "CURL error: Could not
-    resolve host: ..." text) only reachable via the chain (verified against
-    real GDAL 3.12.3/rasterio 1.5.0).
+def _classify_error_chain(exc: BaseException) -> str:
+    """Classify a RAISED EXCEPTION's WHOLE `__cause__`/`__context__` chain
+    (`_error_chain_messages`) as `"transient"`, `"permanent"`, or
+    `"unknown"` -- the first level (outer to inner) carrying an EXPLICIT
+    signal wins. A `CPLE_HttpResponseError`'s own `str()` is always exactly
+    its status text (e.g. "HTTP response code: 404" -- verified real GDAL
+    3.12.3), which `_http_status_is_transient`'s phrase-anchored regex
+    already matches directly; no separate class-name special case is
+    needed (nor, per #223 round 3's own false-positive finding, wanted --
+    see `_TRANSIENT_HTTP_CODE_RE`'s docstring on why an UNANCHORED status
+    check is unsafe against a message that also embeds a URL).
 
-    Also treats a `rasterio._err.CPLE_HttpResponseError` ANYWHERE in the
-    chain as transient outright unless ITS OWN text says 404/403 (checked
-    by class NAME, not by importing the internal `rasterio._err` module --
-    it is explicitly documented as "intended for use only in Rasterio's
-    Cython code"). That class means "the HTTP transport itself reported
-    something", which plain substring matching under-covers: the per-key
-    `BuildVRT` probe's failure text can be as generic as "HTTP response
-    code on <url>: 0" -- code 0 meaning no real HTTP response was ever
-    received (a DNS/connect-level failure), which `_ZERO_RESPONSE_CODE_RE`
-    also catches directly on the string level, belt-and-suspenders."""
-    for type_name, message in _error_chain_messages(exc):
-        if type_name == "CPLE_HttpResponseError" and not _PERMANENT_HTTP_STATUS_RE.search(
-            message.lower()
-        ):
-            return True
-        if _is_transient_error(message):
-            return True
-    return False
+    `"unknown"` is the (#223 round 3 review, CRITICAL C-A) case this
+    function exists to make explicit: a network blip DURING an active
+    block fetch on an ALREADY-OPEN dataset -- as opposed to at OPEN time --
+    surfaces through real GDAL/rasterio as a generic `RasterioIOError('Read
+    failed. See previous exception for details.')` wrapping
+    `CPLE_AppDefinedError`s like "IReadBlock failed .../TIFFReadEncodedTile
+    Read error ...; got 0 bytes, expected N" -- verified (real GDAL
+    3.12.3/rasterio 1.5.0) to carry NO HTTP/curl text at all, for a 503, a
+    connection reset, AND a 404 alike. Every OPEN-time call site
+    (`_probe_keys_for_real_cause`'s single-key `rasterio.open`, `open_tile_
+    set`'s single-key branch, the multi-key `BuildVRT` probe) reliably gets
+    an explicit `"transient"`/`"permanent"` verdict instead -- `"unknown"`
+    is specific to a read on a dataset that already opened successfully,
+    and its ONLY caller, `_retry_compute_one`, must NOT default it to
+    permanent (a real, reproducible content gap normally comes back as
+    nodata -- `_compute_one` returning `None` -- not as a raised exception;
+    an exception at read time on an already-open set is itself evidence of
+    a transport-level hiccup, not a data problem) -- see `_retry_compute_
+    one`'s own re-classification logic for how `"unknown"` is resolved.
+
+    `_is_transient_error_chain`/`_is_permanent_error_chain` below are
+    boolean views for callers (every OPEN-time site) that never legitimately
+    see `"unknown"` and don't need to handle it specially."""
+    for _type_name, message in _error_chain_messages(exc):
+        text = message.lower()
+        if any(marker in text for marker in _PERMANENT_ERROR_MARKERS):
+            return "permanent"
+        if any(marker in text for marker in _TRANSIENT_ERROR_MARKERS):
+            return "transient"
+        verdict = _http_status_is_transient(text)
+        if verdict is not None:
+            return "transient" if verdict else "permanent"
+    return "unknown"
+
+
+def _is_transient_error_chain(exc: BaseException) -> bool:
+    """Boolean view of `_classify_error_chain`: True iff EXPLICITLY
+    transient. For an OPEN-time exception (the only kind this is meant
+    for), "not transient" and "permanent" coincide -- see `_classify_
+    error_chain`'s docstring for why a READ-time exception is different
+    and must not use this function without first ruling out `"unknown"`."""
+    return _classify_error_chain(exc) == "transient"
+
+
+def _is_permanent_error_chain(exc: BaseException) -> bool:
+    """Boolean view of `_classify_error_chain`: True iff EXPLICITLY
+    permanent (an explicit marker/status matched) -- distinct from `not
+    _is_transient_error_chain(exc)`, which is also True for `"unknown"`."""
+    return _classify_error_chain(exc) == "permanent"
 
 
 def _backoff_delay(attempt: int) -> float:
@@ -443,29 +505,56 @@ def compute_polygon(geom, best_topo: str, wesm_row=None) -> dict:
     return result
 
 
+# Substrings naming a CONCRETE permanent condition in `gdal.BuildVRT`'s OWN
+# raised exception (`build_exc`) -- verified real text: "gdalbuildvrt does
+# not support heterogeneous projection: expected <CRS>, got <CRS>." Used
+# ONLY as a fallback when `_probe_keys_for_real_cause` finds every key
+# healthy (#223 round 3 review, IMPORTANT I-A) -- `build_exc`'s own generic
+# "Can't open <url>." carries no such signal and must not be mistaken for
+# one.
+_PERMANENT_BUILDVRT_MARKERS = ("heterogeneous projection",)
+
+
+def _build_exc_is_permanent(build_exc: Exception | None) -> bool:
+    """True iff `gdal.BuildVRT`'s OWN raised exception names a CONCRETE
+    permanent condition (see `_PERMANENT_BUILDVRT_MARKERS`) -- see
+    `open_tile_set`'s I-A handling for why this is checked only as a
+    fallback, and only when every key opens fine on its own."""
+    if build_exc is None:
+        return False
+    text = str(build_exc).lower()
+    return any(marker in text for marker in _PERMANENT_BUILDVRT_MARKERS)
+
+
 def _probe_keys_for_real_cause(ts: TileSet) -> Exception | None:
     """When `gdal.BuildVRT` fails to build `ts.keys`' mosaic,
     `gdal.GetLastErrorMsg()` is EMPTY at that point even under real GDAL
     (verified for both an all-DNS-failure and an all-404 key list, #223
     round 2 review) -- it carries no classifiable cause on its own. Probe
-    each key individually with `rasterio.open` (the same call, under the
-    same env, `open_tile_set`'s single-key branch already uses) until one
-    fails, and return that key's REAL exception -- a plain
-    `RasterioIOError` carrying the actual "CURL error: Could not resolve
-    host: ..."/"HTTP response code: 404" text that `_is_transient_error`
-    already classifies correctly for the single-key path (that path was
-    fixed in round 1; this reuses it rather than re-deriving a second
-    classification source). Returns `None` if every key opens fine on its
-    own -- `BuildVRT` failed for some other reason (e.g. a genuinely
-    heterogeneous CRS under `strict=True`), and the caller falls back to
-    classifying `BuildVRT`'s own raised exception/message instead."""
+    EVERY key individually with `rasterio.open` (the same call, under the
+    same reduced-retry env `_attempt`'s own open uses -- see
+    `_IN_PROCESS_RETRY_ENV`) and return ONE representative exception,
+    chosen this way (#223 round 3 review, IMPORTANT M-B): TRANSIENT if ANY
+    failing key's own exception classifies transient, PERMANENT only if
+    EVERY failing key's own exception is permanent. Classifying from just
+    the FIRST failing key (the round 1/2 behaviour) could call a set
+    permanent because its first key genuinely 404s while a later key is
+    merely mid-outage, or miss a real 404 sitting behind an earlier key's
+    transient blip. Returns `None` if every key opens fine on its own --
+    `BuildVRT` failed for some other reason (see `open_tile_set`'s I-A
+    handling of that case), and the caller falls back to classifying
+    `BuildVRT`'s own raised exception/message instead."""
+    first_permanent: Exception | None = None
     for key in ts.keys:
         try:
-            with rasterio.Env(**_ENV_OPTS), rasterio.open(key):
+            with rasterio.Env(**_IN_PROCESS_RETRY_ENV), rasterio.open(key):
                 pass
         except Exception as exc:  # noqa: BLE001 - returned to the caller, never raised here
-            return exc
-    return None
+            if _is_transient_error_chain(exc):
+                return exc
+            if first_permanent is None:
+                first_permanent = exc
+    return first_permanent
 
 
 @contextmanager
@@ -502,8 +591,17 @@ def open_tile_set(ts: TileSet):
         # of the primary's own keys never made it into the mosaic.
         # `strict=True` makes GDAL treat any unopenable or heterogeneous
         # source as FATAL instead -- a set whose keys all open cleanly and
-        # agree on CRS/etc. builds EXACTLY as before, so in-bounds output
-        # is unchanged.
+        # agree on CRS/etc. builds EXACTLY as before. **This IS a
+        # trade-off, not "unaffected" (#223 round 3 review, MINOR M-A):**
+        # for a multi-key set that DOES have one bad key, `strict=True`
+        # demotes/retries the WHOLE set rather than silently mosaicking the
+        # other, healthy keys -- a polygon whose window happens to fall
+        # entirely on the healthy keys still pays for the one bad key. That
+        # is deliberate: the alternative (accepting GDAL's silent partial
+        # mosaic) is exactly the worse failure mode this fix replaces, and
+        # a set-level retry/deferral/candidate-walk already exists to
+        # recover from it -- there is no silent per-key partial acceptance
+        # path, on purpose.
         try:
             vrt_ds = gdal.BuildVRT(vsimem, list(ts.keys), options=gdal.BuildVRTOptions(strict=True))
         except Exception as exc:  # noqa: BLE001 - GDAL raises under gdal.UseExceptions(); converted below
@@ -519,7 +617,38 @@ def open_tile_set(ts: TileSet):
             # PERMANENT -- QUIETER than the pre-round-1 bare `RuntimeError`
             # bug, which at least forced an ERROR-level `n_compute_error`
             # summary (#223 round 2, CRITICAL C1).
-            real_cause = _probe_keys_for_real_cause(ts) or build_exc
+            probed = _probe_keys_for_real_cause(ts)
+            if probed is not None:
+                real_cause: Exception = probed
+            elif _build_exc_is_permanent(build_exc):
+                # Every key opens fine on its own, but `BuildVRT`'s OWN
+                # message names a CONCRETE permanent condition (e.g. a
+                # genuinely heterogeneous projection/CRS) -- a real defect
+                # in this tile set, not a network timing issue.
+                real_cause = build_exc  # type: ignore[assignment]
+            else:
+                # Every key opens fine on its own AND `BuildVRT` named no
+                # concrete permanent cause -- classifying this PERMANENT
+                # (the round 1/2 fallback: `probed or build_exc`, i.e.
+                # `build_exc`'s own generic "Can't open <url>." text) is a
+                # RACE: the outage most likely ended BETWEEN `BuildVRT`'s
+                # attempt and this probe (#223 round 3 review, IMPORTANT
+                # I-A) -- verified directly: forcing the outage to clear
+                # right before the probe still left `build_exc` as a bare,
+                # unclassifiable "Can't open ..." RuntimeError with no
+                # network signal of its own, which the OLD fallback would
+                # have taken as permanent. Raise a synthetically-transient
+                # cause instead (see `_TRANSIENT_ERROR_MARKERS`'s "buildvrt
+                # race window" entry) so the caller's existing retry logic
+                # retries the WHOLE build, rather than demoting to a
+                # lower-ranked candidate over what was likely already fixed.
+                real_cause = RasterioIOError(
+                    f"BuildVRT failed for tile set project={ts.project!r} but "
+                    f"every key opened fine on a follow-up probe and BuildVRT "
+                    f"itself named no concrete permanent cause -- treating as "
+                    f"a buildvrt race window (the outage likely ended between "
+                    f"the BuildVRT attempt and the probe); build_exc={build_exc!r}"
+                )
             gdal_msg = gdal.GetLastErrorMsg() or "<no GDAL error message>"
             raise TileSetOpenError(
                 f"gdal.BuildVRT failed for tile set project={ts.project!r} "
@@ -610,6 +739,53 @@ def _compute_one(vrt, geom) -> dict | None:
     return result
 
 
+def _reclassify_unknown_read_failure(ts: TileSet, geom, logger: logging.Logger) -> bool:
+    """Disambiguate an UNKNOWN read-time `RasterioIOError` (#223 round 3
+    review, CRITICAL C-A) -- one whose whole cause chain carries neither an
+    explicit transient NOR an explicit permanent signal (`_classify_error_
+    chain(exc) == "unknown"`), which is exactly what a real network blip
+    DURING an active block fetch on an already-open dataset looks like
+    (verified: a 503, a connection reset, and a 404 partway through a read
+    all produce an identical generic `CPLE_AppDefinedError`/
+    `TIFFReadEncodedTile` chain with no HTTP/curl text at all).
+
+    Returns True (transient) UNLESS:
+    - `_probe_keys_for_real_cause` finds a concrete cause on one of `ts`'s
+      keys that itself classifies permanent, or
+    - every key opens fine on its own AND an independent, completely FRESH
+      `open_tile_set` + read of the SAME window (not reusing the caller's
+      possibly-tainted already-open connection) reproduces either an
+      explicit permanent signal, or the SAME kind of unclassifiable
+      failure again -- a real, reproducible problem unrelated to a
+      lingering network blip that merely hasn't cleared yet.
+    A fresh attempt that instead reproduces an EXPLICIT transient signal
+    (the network is still visibly down) stays transient -- it just hasn't
+    recovered yet, which is not evidence of a data problem either.
+    """
+    probed = _probe_keys_for_real_cause(ts)
+    if probed is not None:
+        return _is_transient_error_chain(probed)
+    try:
+        with rasterio.Env(**_IN_PROCESS_RETRY_ENV), open_tile_set(ts) as fresh_vrt:
+            _compute_one(fresh_vrt, geom)
+        return True  # reproduction succeeded (or found no valid interior) -- was transient
+    except RasterioIOError as exc2:
+        verdict = _classify_error_chain(exc2)
+        if verdict == "transient":
+            return True  # network still visibly down -- not yet recovered, not a data problem
+        # `verdict` is "permanent" (an explicit signal appeared) or
+        # "unknown" (the SAME unclassifiable symptom reproduced on a brand
+        # new connection with healthy keys) -- either way, that is the
+        # "reproduces while every key opens cleanly" case, and both count
+        # as PERMANENT here.
+        logger.warning(
+            "  set=%s: unclassifiable read failure reproduced on a fresh "
+            "connection (probe healthy, fresh-read verdict=%s: %s) -- "
+            "treating as PERMANENT", ts.project, verdict, exc2,
+        )
+        return False
+
+
 def _retry_compute_one(
     vrt, ts: TileSet, idx, geom, logger: logging.Logger, bump, stop_event: threading.Event
 ) -> tuple[dict | None, bool]:
@@ -628,13 +804,16 @@ def _retry_compute_one(
     lower-ranked candidate here -- the primary is still the correct
     source; `run_batch` gives it ONE deferred retry, after a pause, before
     treating it as truly persistent (#223 round 2, I4). A PERMANENT
-    `RasterioIOError` (classified via `_is_transient_error_chain`, which
-    walks the exception's cause chain -- see its docstring for why a plain
-    `str(exc)` check misses a network failure surfacing at READ time), or
-    any other exception, is re-raised immediately on the first attempt
-    with no retry -- unchanged pre-existing behaviour, left for the
-    caller's own try/except to handle exactly as before this fix.
+    `RasterioIOError` is re-raised immediately with no retry -- unchanged
+    pre-existing behaviour, left for the caller's own try/except to handle
+    exactly as before this fix. An UNKNOWN one (#223 round 3 review,
+    CRITICAL C-A -- see `_reclassify_unknown_read_failure`) is disambiguated
+    ONCE per call (cached in `unknown_verdict`, not re-probed on every
+    attempt -- the disambiguation itself does real network I/O) and then
+    treated as whichever it resolves to for the rest of this call's
+    attempts. Any OTHER exception is re-raised immediately, unchanged.
     """
+    unknown_verdict: bool | None = None
     for attempt in range(1, _RETRY_ATTEMPTS + 1):
         if stop_event.is_set():
             logger.warning(
@@ -646,7 +825,18 @@ def _retry_compute_one(
         try:
             return _compute_one(vrt, geom), False
         except RasterioIOError as exc:
-            if not _is_transient_error_chain(exc):
+            verdict = _classify_error_chain(exc)
+            if verdict == "unknown":
+                if unknown_verdict is None:
+                    unknown_verdict = _reclassify_unknown_read_failure(ts, geom, logger)
+                    logger.warning(
+                        "  set=%s idx=%s: unclassifiable read failure (%s) -- "
+                        "resolved to %s via probe/reproduction", ts.project, idx,
+                        exc, "TRANSIENT" if unknown_verdict else "PERMANENT",
+                    )
+                if not unknown_verdict:
+                    raise
+            elif verdict == "permanent":
                 raise
             if attempt >= _RETRY_ATTEMPTS:
                 logger.warning(
@@ -685,25 +875,33 @@ def run_batch(
     path, which 51.6% of gfv2r2 polygons took, 73% of the FALLBACK time (not
     overall pipeline time) was `vrt.read`, not arithmetic. A polygon whose
     primary yields no valid interior, or hits a PERMANENT read/open failure
-    (empty interior; HTTP 404/403; an unreadable object; a heterogeneous
-    `BuildVRT` mosaic -- see `_is_transient_error_chain`), walks its
-    remaining ranked `candidates`, ending at the 10 m seamless tile.
-    Counters stay split (#173 PR#177 FIX 2, transient-retry fix follow-on):
-    read failures (expected PERMANENT failures + empty interiors, WARNING)
-    vs compute errors (bugs, ERROR) vs transient retries vs polygons with
-    no usable source at all.
+    (empty interior; HTTP 404/401/etc. -- any 4xx except 408/429; an
+    unreadable object; a heterogeneous `BuildVRT` mosaic -- see
+    `_classify_error_chain`), walks its remaining ranked `candidates`,
+    ending at the 10 m seamless tile. Counters stay split (#173 PR#177 FIX
+    2, transient-retry fix follow-on): read failures (expected PERMANENT
+    failures + empty interiors, WARNING) vs compute errors (bugs, ERROR)
+    vs transient retries vs polygons with no usable source at all.
 
     A TRANSIENT failure (a network hiccup -- DNS, connect, timeout,
-    connection reset, HTTP 429/5xx; see `_is_transient_error_chain`, which
-    classifies the exception's WHOLE cause chain, not just its own
-    message) is a DIFFERENT code path entirely, both at the set-open level
-    and at the per-polygon `_compute_one` level: it is retried
-    `_RETRY_ATTEMPTS` times with backoff+jitter (`_backoff_delay`, ~2
-    minute in-place budget) on the SAME source, and NEVER handed to
-    `_recover`'s candidate walk even if that in-place budget is exhausted.
-    The doctrine (CLAUDE.md's dprst_depth bullet) is that a transient
-    failure is not evidence the primary is unusable -- the network is
-    what's broken, not the source ranking.
+    connection reset, HTTP 0/408/429/5xx; see `_classify_error_chain`,
+    which classifies the exception's WHOLE cause chain, not just its own
+    message, into `"transient"`/`"permanent"`/`"unknown"`) is a DIFFERENT
+    code path entirely, both at the set-open level and at the per-polygon
+    `_compute_one` level: it is retried `_RETRY_ATTEMPTS` times with
+    backoff+jitter (`_backoff_delay`, ~2 minute in-place budget, with
+    GDAL's OWN retry layer disabled for these attempts so our loop -- not
+    GDAL's -- owns that budget; see `_IN_PROCESS_RETRY_ENV`) on the SAME
+    source, and NEVER handed to `_recover`'s candidate walk even if that
+    in-place budget is exhausted. The doctrine (CLAUDE.md's dprst_depth
+    bullet) is that a transient failure is not evidence the primary is
+    unusable -- the network is what's broken, not the source ranking. A
+    READ-time failure (on an already-open set) that classifies `"unknown"`
+    -- carrying NEITHER signal, which real GDAL produces identically for a
+    503, a connection reset, AND a 404 partway through a block fetch (#223
+    round 3 review, CRITICAL C-A) -- is disambiguated via
+    `_reclassify_unknown_read_failure` rather than defaulting to permanent;
+    see that function's docstring.
 
     A set/polygon that exhausts its in-place budget is DEFERRED, not
     immediately failed: once every OTHER set in this batch and the
@@ -745,7 +943,11 @@ def run_batch(
     RETRIES that happened (not give-ups, and never a candidate-walk step) --
     a transient failure that eventually succeeds, whether in-place or on
     the deferred pass, inflates NEITHER `n_read_failure` nor `n_recovered`;
-    it was never treated as a failure of that source at all.
+    it was never treated as a failure of that source at all. `n_recovered`
+    DOES count a candidate that only resolved on the deferred pass (#223
+    round 3 review, IMPORTANT I-B) -- it is a recovery (this idx's PRIMARY
+    still failed permanently; a lower-ranked candidate is what shipped it)
+    regardless of which pass finally got the candidate a clean read.
 
     The final summary line is escalated (#173 FIX 3, restored in the #223
     fix-round-1 rewrite; degradation term added in review round 3; retry
@@ -870,9 +1072,20 @@ def run_batch(
                 open_exc = None
                 break
             try:
-                with rasterio.Env(**_ENV_OPTS), open_tile_set(ts) as vrt:
+                with rasterio.Env(**_IN_PROCESS_RETRY_ENV), open_tile_set(ts) as vrt:
                     for idx in remaining:
                         if transient_stop.is_set():
+                            # (#223 round 3 review, MINOR M-E) Named
+                            # individually, not just folded into the
+                            # group-level "deferring all N polygon(s)"
+                            # WARNING above -- an operator scanning this
+                            # set's own log lines for why THIS polygon
+                            # never got attempted needs it here too.
+                            logger.warning(
+                                "  set=%s idx=%s: deferred without an attempt -- a "
+                                "sibling set/polygon in this pass already confirmed "
+                                "the network is down", ts.project, idx,
+                            )
                             transient_idx.add(idx)
                             continue
                         try:
@@ -982,7 +1195,17 @@ def run_batch(
         transient_fail = [i for i in idxs if i in transient_idx]
         return done, pending, transient_fail
 
-    results, to_recover, deferred = {}, [], []
+    results, to_recover = {}, []
+    # Each entry: (ts_str, idx, is_recovery). `is_recovery` distinguishes a
+    # PRIMARY-pass deferral (this idx's own primary source, never yet
+    # walked through `_recover`) from a `_recover`-CANDIDATE deferral (this
+    # idx already used up its "no usable source" budget on earlier
+    # candidates and is now waiting on ts_str specifically) -- needed so a
+    # deferred idx that resolves successfully bumps `n_recovered` iff it
+    # actually took the candidate-recovery path (#223 round 3 review,
+    # IMPORTANT I-B: previously ungated, so `recovered_fraction` silently
+    # missed every polygon that recovered ONLY via the deferred pass).
+    deferred: list[tuple[str, object, bool]] = []
     items = sorted(members.items())
     with ThreadPoolExecutor(max(1, n_threads)) as ex:
         for i, ((ts_str, _), (done, pending, transient_fail)) in enumerate(
@@ -990,15 +1213,15 @@ def run_batch(
         ):
             results.update(done)
             to_recover += pending
-            if transient_fail:
+            for idx in transient_fail:
                 # DEFERRED, not final -- see `run_batch`'s docstring / I4.
                 # `ts_str` (not just the decoded project name) is kept so
                 # the deferred pass below can re-`_attempt` this EXACT set.
-                deferred.append((ts_str, transient_fail))
+                deferred.append((ts_str, idx, False))
             if i % 25 == 0:
                 logger.info("  [%d/%d tile sets] %d polygons done", i, len(members), len(results))
 
-    def _recover(idx):
+    def _recover(idx, resume_after: str | None = None):
         # Skip the PRIMARY set (already tried above), not just the first list entry --
         # `candidates[0] == source_tiles` holds today by construction
         # (`sources.assign_sources` always takes `candidates[0]` as `source_tiles`),
@@ -1014,8 +1237,18 @@ def run_batch(
         # stops there -- DEFERRING that candidate (returned as `ts_str`, not a
         # decoded project name, so the deferred pass can re-`_attempt` it directly)
         # rather than falling through to `n_no_source`.
+        #
+        # `resume_after` (#223 round 3 review, MINOR M-C): when the deferred
+        # pass re-invokes `_recover` for an idx that already walked (and
+        # permanently exhausted) some PRIOR candidates before deferring on
+        # THIS one, resume the walk immediately AFTER `resume_after` rather
+        # than restarting from the polygon's full candidate list -- restarting
+        # would re-try, and re-COUNT (`n_read_failure`), candidates already
+        # known permanently bad.
         primary = dprst_gdf.at[idx, "source_tiles"]
         candidates = [c for c in dprst_gdf.at[idx, "candidates"] if c != primary]
+        if resume_after is not None and resume_after in candidates:
+            candidates = candidates[candidates.index(resume_after) + 1 :]
         for ts_str in candidates:
             done, _, transient_fail = _attempt(ts_str, [idx])
             if idx in done:
@@ -1035,7 +1268,7 @@ def run_batch(
     with ThreadPoolExecutor(max(1, n_threads)) as ex:
         for idx, r, transient_ts_str in ex.map(_recover, sorted(to_recover)):
             if transient_ts_str is not None:
-                deferred.append((transient_ts_str, [idx]))
+                deferred.append((transient_ts_str, idx, True))
             elif r is None:
                 counts["n_no_source"] += 1
             else:
@@ -1051,13 +1284,19 @@ def run_batch(
         # the primary-pass or the `_recover`-candidate level) gets exactly
         # ONE more full attempt here, after a pause, before being treated as
         # truly persistent. Merge by `ts_str` first so a set that produced
-        # several small deferred groups is retried ONCE, not once per group.
+        # several small deferred groups is retried ONCE, not once per group;
+        # `deferred_recovery_idx` (I-B) tracks, per idx, whether THIS
+        # deferral is a candidate-recovery one, since a single `ts_str`
+        # group can mix a primary-pass deferral for one idx with a
+        # recovery-candidate deferral for another.
         deferred_groups: dict[str, list] = {}
-        for ts_str_d, idxs_d in deferred:
+        deferred_recovery_idx: set = set()
+        for ts_str_d, idx_d, is_recovery in deferred:
             bucket = deferred_groups.setdefault(ts_str_d, [])
-            for i in idxs_d:
-                if i not in bucket:
-                    bucket.append(i)
+            if idx_d not in bucket:
+                bucket.append(idx_d)
+            if is_recovery:
+                deferred_recovery_idx.add(idx_d)
         n_deferred_polygons = sum(len(v) for v in deferred_groups.values())
         logger.warning(
             "  %d tile set/candidate group(s), %d polygon(s) exhausted their "
@@ -1075,22 +1314,41 @@ def run_batch(
             for (ts_str_d, _), (done2, pending2, transient_fail2) in zip(
                 deferred_items, ex.map(lambda kv: _attempt(*kv), deferred_items)
             ):
-                results.update(done2)
+                for idx2, r2 in done2.items():
+                    results[idx2] = r2
+                    if idx2 in deferred_recovery_idx:
+                        # Resolved on a deferred retry of a CANDIDATE (not
+                        # this idx's own primary) -- this IS a recovery,
+                        # exactly as if it had resolved on the very first
+                        # `_recover` pass (#223 round 3 review, I-B).
+                        counts["n_recovered"] += 1
                 if pending2:
                     # A PERMANENT condition (e.g. an empty interior) found
                     # only on the deferred retry -- give it the SAME
-                    # candidate walk any other permanent failure gets. A
-                    # further transient give-up during THIS walk is final
-                    # immediately (no third pass -- "ONE deferred retry" is
-                    # the contract), not deferred again.
-                    for idx2, r2, transient_ts_str2 in map(_recover, sorted(pending2)):
-                        if transient_ts_str2 is not None:
-                            transient_failures.append((decode(transient_ts_str2).project, [idx2]))
-                        elif r2 is None:
-                            counts["n_no_source"] += 1
-                        else:
-                            counts["n_recovered"] += 1
-                            results[idx2] = r2
+                    # candidate walk any other permanent failure gets,
+                    # resuming AFTER `ts_str_d` for an idx that already
+                    # walked candidates up to it (M-C), run CONCURRENTLY
+                    # rather than serially under the builtin `map` (M-C).
+                    # A further transient give-up during THIS walk is
+                    # final immediately (no third pass -- "ONE deferred
+                    # retry" is the contract), not deferred again.
+                    resume_points = {
+                        idx2: (ts_str_d if ts_str_d != dprst_gdf.at[idx2, "source_tiles"] else None)
+                        for idx2 in sorted(pending2)
+                    }
+                    with ThreadPoolExecutor(max(1, n_threads)) as ex2:
+                        recover_results = ex2.map(
+                            lambda i: _recover(i, resume_after=resume_points[i]),
+                            resume_points,
+                        )
+                        for idx2, r2, transient_ts_str2 in recover_results:
+                            if transient_ts_str2 is not None:
+                                transient_failures.append((decode(transient_ts_str2).project, [idx2]))
+                            elif r2 is None:
+                                counts["n_no_source"] += 1
+                            else:
+                                counts["n_recovered"] += 1
+                                results[idx2] = r2
                 if transient_fail2:
                     transient_failures.append((decode(ts_str_d).project, transient_fail2))
 
