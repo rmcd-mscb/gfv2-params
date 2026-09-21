@@ -161,6 +161,37 @@ def test_run_batch_recovers_void_primary_from_next_candidate(tmp_path, monkeypat
     assert summaries and "n_read_failure=1" in summaries[-1]
 
 
+def test_recover_skips_the_primary_by_value_not_position(tmp_path, monkeypatch):
+    """(#223 review round 2, finding 5) `_recover` used to slice off `candidates[0]`,
+    assuming it always equals `source_tiles` -- true today by construction
+    (`sources.assign_sources` always writes `candidates[0]` as `source_tiles`), but
+    an unchecked positional coupling across two modules. Build a candidates list
+    where the primary is NOT first (`[P2, P1, TEN]` with `source_tiles=P1`) to prove
+    the fix compares by VALUE: it skips P1 (already tried above, and fails again
+    here) and still walks P2 -- the old slicing implementation would have sliced off
+    P2 instead (assuming position 0 was the already-tried primary), retried P1 for
+    no reason, and fallen through to the 10m last resort without ever trying P2."""
+    monkeypatch.setattr(compute_mod, "open_tile_set", _fake_open(bad_projects={"P1"}))
+    monkeypatch.setattr(compute_mod, "_compute_one", _fake_compute(set()))
+    df = run_batch(_gdf([(7, P1, [P2, P1, TEN])]), [P1], tmp_path / "b.parquet", _L())
+    assert df.loc[0, "source"] == "P2"
+
+
+def test_run_batch_warns_on_a_manifest_tile_set_with_no_member_polygon(tmp_path, monkeypatch, caplog):
+    """(#223 review round 2, finding 4) A manifest tile set with zero member
+    polygons in `dprst_gdf` (a planner/tagged-parquet generation mismatch) used to
+    drop out of `members` with no signal at all -- `run_batch` must WARN."""
+    monkeypatch.setattr(compute_mod, "open_tile_set", _fake_open())
+    monkeypatch.setattr(compute_mod, "_compute_one", _fake_compute(set()))
+    caplog.set_level(logging.INFO)
+    # P2 is in the manifest's tile_sets but no polygon's source_tiles is P2.
+    run_batch(_gdf([(7, P1, [P1, TEN])]), [P1, P2], tmp_path / "b.parquet", _L())
+    assert any(
+        r.levelno == logging.WARNING and "NO member polygon" in r.getMessage() and P2 in r.getMessage()
+        for r in caplog.records
+    )
+
+
 def test_run_batch_falls_to_10m_when_every_1m_set_fails(tmp_path, monkeypatch):
     monkeypatch.setattr(compute_mod, "open_tile_set", _fake_open(bad_projects={"P1", "P2"}))
     monkeypatch.setattr(compute_mod, "_compute_one", _fake_compute(set()))

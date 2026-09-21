@@ -327,6 +327,19 @@ def run_batch(
             raise KeyError(f"run_batch needs '{col}' (plan with sources.tag_and_assign first)")
     wanted = set(tile_sets)
     members = {s: list(g.index) for s, g in dprst_gdf.groupby("source_tiles") if s in wanted}
+    empty_sets = wanted - set(members)
+    if empty_sets:
+        # A manifest tile set with no member polygons in THIS `dprst_gdf` is a
+        # planner/tagged-parquet generation mismatch (the plan step's manifest and
+        # `dprst_polygons_tagged.parquet` were written together, but nothing re-checks
+        # them against each other here) -- it silently drops those polygons from this
+        # batch with no signal at all, since the dict comprehension above just never
+        # produces an entry for them.
+        logger.warning(
+            "  %d/%d tile set(s) in this batch's manifest have NO member polygon in "
+            "dprst_gdf (planner/tagged-parquet mismatch?): %s",
+            len(empty_sets), len(tile_sets), sorted(empty_sets)[:10],
+        )
     counts = {"n_read_failure": 0, "n_compute_error": 0, "n_recovered": 0, "n_no_source": 0}
     lock = threading.Lock()
 
@@ -406,7 +419,15 @@ def run_batch(
                 logger.info("  [%d/%d tile sets] %d polygons done", i, len(members), len(results))
 
     def _recover(idx):
-        candidates = dprst_gdf.at[idx, "candidates"][1:]
+        # Skip the PRIMARY set (already tried above), not just the first list entry --
+        # `candidates[0] == source_tiles` holds today by construction
+        # (`sources.assign_sources` always takes `candidates[0]` as `source_tiles`),
+        # but that's an unchecked positional coupling across two modules. Compare
+        # against the polygon's own `source_tiles` instead of slicing, so a future
+        # divergence between the two doesn't silently skip retrying (or silently never
+        # retry) the wrong candidate.
+        primary = dprst_gdf.at[idx, "source_tiles"]
+        candidates = [c for c in dprst_gdf.at[idx, "candidates"] if c != primary]
         for ts_str in candidates:
             done, _ = _attempt(ts_str, [idx])
             if idx in done:
