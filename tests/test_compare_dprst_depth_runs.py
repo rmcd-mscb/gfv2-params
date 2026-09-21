@@ -13,6 +13,7 @@ _spec = importlib.util.spec_from_file_location(
 _mod = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(_mod)
 compare = _mod.compare
+main = _mod.main
 
 
 def test_compare_classifies_rows():
@@ -45,3 +46,28 @@ def test_compare_reports_dropped_comids_separately_from_changed():
     assert r["violations_dropped"] == [2]   # expected identical but gone entirely
     assert r["violations_changed"] == []
     assert r["violations"] == [2]
+
+
+def test_main_exits_0_on_a_clean_comparison(tmp_path, monkeypatch):
+    """(#223 review round 3, test gap 6b) `main()`'s exit code is the ACTUAL
+    re-run gate a CI/operator script checks -- untested until now."""
+    old = tmp_path / "old.parquet"
+    new = tmp_path / "new.parquet"
+    pd.DataFrame({"COMID": [1, 2], "dprst_depth_m": [1.0, 2.0]}).to_parquet(old)
+    pd.DataFrame({"COMID": [1, 2], "dprst_depth_m": [1.0, 2.0]}).to_parquet(new)
+    monkeypatch.setattr("sys.argv", ["compare_dprst_depth_runs.py", str(old), str(new)])
+    assert main() == 0
+
+
+def test_main_exits_1_on_an_expect_identical_violation(tmp_path, monkeypatch, capsys):
+    old = tmp_path / "old.parquet"
+    new = tmp_path / "new.parquet"
+    ids = tmp_path / "ids.txt"
+    pd.DataFrame({"COMID": [1, 2], "dprst_depth_m": [1.0, 2.0]}).to_parquet(old)
+    pd.DataFrame({"COMID": [1, 2], "dprst_depth_m": [1.0, 9.0]}).to_parquet(new)  # COMID 2 changed
+    ids.write_text("2\n")
+    monkeypatch.setattr(
+        "sys.argv", ["compare_dprst_depth_runs.py", str(old), str(new), "--expect-identical", str(ids)],
+    )
+    assert main() == 1
+    assert "first violations (changed)" in capsys.readouterr().out
