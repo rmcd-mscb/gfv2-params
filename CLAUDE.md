@@ -342,35 +342,70 @@ These are hard-won; violating them silently corrupts outputs.
   each, running past 24 h against a 34-minute median — gone now that each
   polygon resolves to exactly one primary set. **A TRANSIENT failure is not
   evidence a source is unusable and must never advance the candidate walk**
-  (`compute._is_transient_error_chain` — classifies an exception's WHOLE
-  `__cause__`/`__context__` chain, not just its own message; a network
-  failure surfacing at READ time through a `WarpedVRT` comes through as a
+  (`compute._classify_error_chain` — classifies an exception's WHOLE
+  `__cause__`/`__context__` chain, not just its own message, into
+  `"transient"`/`"permanent"`/`"unknown"`; a network failure surfacing at
+  OPEN time comes through with a directly classifiable "CURL error: Could
+  not resolve host: ..."/"HTTP response code: 404" in the chain — verified
+  against real GDAL 3.12.3/rasterio 1.5.0). **Correction (#223 round 3
+  review, CRITICAL C-A):** a network failure surfacing DURING a per-polygon
+  READ on an ALREADY-OPEN set is NOT the same shape — it comes through as a
   generic `RasterioIOError('Read failed. See previous exception for
-  details.')` with the real GDAL `CPLE_HttpResponseError`/
-  `CPLE_AppDefinedError` cause only in the chain — verified against real
-  GDAL 3.12.3/rasterio 1.5.0, #223 round 2, C2): DNS resolution failures,
-  connect failures, timeouts, connection resets/receive failures/empty
-  replies, SSL handshake errors, and HTTP 429/5xx are retried on the SAME
-  source with bounded exponential backoff + jitter
-  (`compute._RETRY_ATTEMPTS`/`_backoff_delay`, 6 attempts / ~2 minute
-  IN-PLACE budget; jitter matters because every thread of every SLURM task
-  can start within the same second), both at the tile-set OPEN and at a
-  per-polygon read (`_retry_compute_one`). A multi-key `BuildVRT` failure
-  carries NO classifiable cause on its own — `gdal.GetLastErrorMsg()` is
-  EMPTY there even under real GDAL (verified for an all-DNS and an all-404
-  key list) — so `open_tile_set` probes each key individually
-  (`_probe_keys_for_real_cause`) and chains that key's REAL exception as
-  `__cause__` (#223 round 2, C1); without it, a multi-key set's DNS failure
-  classified PERMANENT, QUIETER than the original bare-`RuntimeError` bug it
-  replaced (that at least forced an ERROR-level `n_compute_error` summary).
-  A set/polygon that exhausts its in-place budget is DEFERRED, not
+  details.')` wrapping `CPLE_AppDefinedError`s like "IReadBlock failed
+  .../TIFFReadEncodedTile ...; got 0 bytes, expected N", verified to carry
+  **no HTTP/curl text at all**, for a 503, a connection reset, AND a 404
+  alike — `_classify_error_chain` correctly reads that as `"unknown"`, not
+  permanent, and `_retry_compute_one` disambiguates it via
+  `_reclassify_unknown_read_failure` (probe each key; if every key is
+  healthy, an independent fresh open+re-read of the SAME window — a
+  reproducible failure there, or an explicit signal on retry, is what
+  finally calls it permanent) rather than defaulting to permanent, which is
+  exactly what silently demoted a polygon mid-read pre-round-3. DNS
+  resolution failures, connect failures, timeouts, connection resets/
+  receive failures/empty replies, SSL handshake errors, and HTTP 0/408/429/
+  5xx are retried on the SAME source with bounded exponential backoff +
+  jitter (`compute._RETRY_ATTEMPTS`/`_backoff_delay`, 6 attempts / ~2
+  minute IN-PLACE budget, with GDAL's OWN retry layer disabled for these
+  attempts via `compute._IN_PROCESS_RETRY_ENV` so OUR loop — not GDAL's —
+  owns that budget: measured directly, a single read attempt under a
+  persistent 503 with GDAL's own `GDAL_HTTP_MAX_RETRY=5` left in place took
+  ~188s, which would have made the "~2 minute" budget really
+  `_RETRY_ATTEMPTS * ~188s` (#223 round 3, M-D); jitter matters because
+  every thread of every SLURM task can start within the same second), both
+  at the tile-set OPEN and at a per-polygon read (`_retry_compute_one`).
+  Every OTHER 4xx besides 408/429 is PERMANENT (#223 round 3, I-C) — round
+  2 treated any `CPLE_HttpResponseError` as transient unless it named
+  404/403, which wrongly retried-then-deferred-then-permanently-failed a
+  400/401/410/416. A multi-key `BuildVRT` failure carries NO classifiable
+  cause on its own — `gdal.GetLastErrorMsg()` is EMPTY there even under
+  real GDAL (verified for an all-DNS and an all-404 key list) — so
+  `open_tile_set` probes EVERY key (transient if any failing key is
+  transient, permanent only if all are — #223 round 3, M-B) and chains the
+  representative exception as `__cause__` (#223 round 2, C1); without it, a
+  multi-key set's DNS failure classified PERMANENT, QUIETER than the
+  original bare-`RuntimeError` bug it replaced. **If every key probes
+  healthy** (#223 round 3, I-A), the OLD fallback to `BuildVRT`'s own
+  generic "Can't open <url>." was ALSO wrong — that shape is exactly what
+  an outage ending BETWEEN the `BuildVRT` attempt and the probe looks like,
+  so it's now treated as a "buildvrt race window" (transient, retries the
+  build) UNLESS `BuildVRT`'s own message names a concrete permanent
+  condition (a genuinely heterogeneous projection/CRS). Note `strict=True`
+  is a real trade-off, not "unaffected" (#223 round 3, M-A): one bad key in
+  an otherwise-healthy multi-key set demotes/retries the WHOLE set, by
+  design — there is no silent per-key partial acceptance path. A
+  set/polygon that exhausts its in-place budget is DEFERRED, not
   immediately failed — after every other set in the batch and the `_recover`
   walk finish, `run_batch` pauses `compute._DEFERRED_PASS_PAUSE_S` (60 s) and
   gives every deferred item ONE more full attempt; only if THAT also fails
   transiently does `run_batch` FAIL THE WHOLE ARRAY TASK LOUDLY — raise,
   write NO `batch_XXXX.parquet` — rather than silently falling through to a
   lower-ranked candidate (#223 round 2, I4: the in-place budget can be
-  shorter than the real outage — see below). A shared `threading.Event`
+  shorter than the real outage — see below). `n_recovered` counts a
+  candidate that only resolved on the deferred pass too (#223 round 3,
+  I-B), and a `_recover` walk resumed on the deferred pass picks up
+  immediately AFTER the candidate that deferred, never re-trying (and
+  re-counting) an earlier one already known permanently bad (#223 round 3,
+  M-C). A shared `threading.Event`
   lets a still-retrying sibling in the SAME pass bail out early once ANY
   set/polygon in that pass confirms the network is down, instead of every
   one independently burning its own ~2 minutes to the same conclusion (I3);

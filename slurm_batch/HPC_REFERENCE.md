@@ -812,11 +812,16 @@ pixi run python -m gfv2_params.dprst_depth.tiling --plan \
 - **A task that fails with "TRANSIENT network failure persisted through the
   deferred retry pass"** (`compute.run_batch`'s transient-vs-permanent retry
   doctrine — see CLAUDE.md's dprst_depth bullet) means the network, not the
-  data: a DNS failure, connect/timeout, or an HTTP 429/5xx on
-  `prd-tnm.s3.amazonaws.com` outlasted every in-place retry AND the one
-  deferred retry (~2 minutes in place, then a 60s-plus-pause second attempt
-  — issue #223 round 2) for one or more tile sets/candidates. No
-  `batch_XXXX.parquet` is written for that task, so it is simply missing,
+  data: a DNS failure, connect/timeout, or an HTTP 0/408/429/5xx on
+  `prd-tnm.s3.amazonaws.com` (whether at a tile-set OPEN or DURING a
+  per-polygon READ on an already-open set — the two are classified
+  differently internally but retried/deferred the same way, #223 round 3)
+  outlasted every in-place retry AND the one
+  deferred retry (~2 minutes in place — with GDAL's own retry layer
+  disabled for these attempts, so that budget is real, not multiplied by
+  GDAL's own internal retries, #223 round 3 M-D — then a 60s-plus-pause
+  second attempt, issue #223 round 2) for one or more tile sets/candidates.
+  No `batch_XXXX.parquet` is written for that task, so it is simply missing,
   not wrong — **just resubmit that same array index** once the network has
   recovered, exactly as for any other failed/timed-out array task above. Do
   NOT reach for `--force` or a re-plan: the primary tile set assignment for
@@ -839,10 +844,18 @@ pixi run python -m gfv2_params.dprst_depth.tiling --plan \
 - **A task that fails/logs with a `n_compute_error > 0` summary (ERROR
   level) instead** is a different signal — a genuine code/data bug (a
   corrupt COG, a bad/missing CRS, a `MemoryError`) rather than a network
-  blip or a routine permanent read gap (404/403, an unreadable object, a
-  heterogeneous `BuildVRT` mosaic — those count as `n_read_failure` and walk
-  the candidate list as before) — and resubmitting the same index will not
-  fix it; it needs investigation first.
+  blip or a routine permanent read gap (any 4xx except 408/429, an
+  unreadable object, a heterogeneous `BuildVRT` mosaic — those count as
+  `n_read_failure` and walk the candidate list as before) — and
+  resubmitting the same index will not fix it; it needs investigation
+  first.
+- **A multi-key primary set with only ONE genuinely bad key still demotes
+  the WHOLE set** (`strict=True` — #223 round 3, M-A) — this is a
+  deliberate trade-off, not a bug: the alternative (silently mosaicking
+  the healthy keys and dropping the bad one) is the exact failure mode
+  `strict=True` replaced. A polygon whose window happens to fall entirely
+  on the healthy keys still pays for the bad one; the set-level retry/
+  deferral/candidate-walk is what recovers it.
 - **Incident note (2026-09-20, tjc smoke rerun, job 4532393):** the
   rerun's SECOND failure was not a persistent host outage — the real DNS
   outage measured ~30s (21:49:54-21:50:24), while the code's

@@ -322,20 +322,33 @@ fixed SLURM array (default 150 batches):
   no valid interior walks its remaining ranked candidates, ending at the
   10 m seamless tile. A TRANSIENT open/read failure (a network blip,
   classified from the exception's WHOLE cause chain, not just its own
-  message — a read-time network failure through a `WarpedVRT` comes through
-  as a generic wrapper exception with the real cause only in `__cause__`)
-  is instead retried on the same set with backoff+jitter (~2 minute
-  in-place budget); if that's exhausted, ONE deferred retry follows a pause
-  before it's treated as persistent, never treated as grounds to walk the
-  candidate list either way. If the deferred retry also fails, the whole
+  message) is instead retried on the same set with backoff+jitter (~2
+  minute in-place budget, with GDAL's own retry layer disabled for these
+  attempts so our loop owns that budget -- GDAL's own 5 retries alone
+  measured ~188s for ONE attempt against a persistent 503); if that's
+  exhausted, ONE deferred retry follows a pause before it's treated as
+  persistent, never treated as grounds to walk the candidate list either
+  way. **A read-time failure on an ALREADY-OPEN set through a `WarpedVRT`
+  is NOT the same shape as an open-time one** -- it comes through as a
+  generic wrapper exception (`RasterioIOError('Read failed. See previous
+  exception for details.')`) whose chain carries NO HTTP/curl signal at
+  all, for a 503, a connection reset, or a 404 alike (verified real GDAL
+  3.12.3/rasterio 1.5.0); this classifies `"unknown"`, not permanent, and
+  is disambiguated by probing every key and, if every key is healthy, an
+  independent fresh open+re-read of the same window, rather than assumed
+  permanent. If the deferred retry also fails, the whole
   array task fails loudly and is simply resubmitted -- along with its
   downstream stages, since `afterok` chaining already cancelled them (see
   `slurm_batch/HPC_REFERENCE.md`'s dprst_depth Recovery section) -- rather
   than silently shipping a degraded product. The fix for two real
-  2026-09-20 incidents: a one-second DNS outage that silently demoted 87%
+  2026-09-20 incidents (a one-second DNS outage that silently demoted 87%
   of a smoke rerun's polygons off their correct primary source, and a
   second run whose ~30s DNS outage briefly outlasted a since-widened
-  in-place-only retry budget.
+  in-place-only retry budget) plus a real-GDAL-probe review that found the
+  read-time gap above, a per-key-probe race (an outage ending between a
+  `BuildVRT` failure and its own recovery probe), and an over-broad
+  HTTP-status classification (every 4xx besides 408/429 is now permanent,
+  not just 404/403).
 - Budget: ~**250–500 core-hours** at CONUS scale, ~**5 h** wall-clock, ~**4 GiB**
   per window (float32 DEM + richdem float64 fill copies). The prairie-pothole
   belt is the largest single batch and the load-balance long pole. The single
@@ -416,26 +429,70 @@ by-design. Recorded so a future cleanup doesn't remove them by mistake.
   affected polygon resolved against a LOWER-ranked candidate with no error
   at all. Measured effect: 4,822 of 5,535 polygons (87%) silently read from
   other than their correctly-ranked primary source, and 578
-  single-candidate polygons got no row. `compute._is_transient_error_chain`
-  now classifies a RAISED EXCEPTION as transient (DNS, connect, timeout,
-  connection reset, HTTP 429/5xx) vs permanent (404/403, an unreadable
-  object, a heterogeneous `BuildVRT` mosaic) by walking its WHOLE
-  `__cause__`/`__context__` chain, not just its own message -- a real
-  per-polygon network failure at READ time (through a `WarpedVRT`) comes
-  through as a generic wrapper exception whose message alone gives no
-  classifiable signal, and a multi-key `BuildVRT` failure's
-  `gdal.GetLastErrorMsg()` is empty even under real GDAL, so `open_tile_set`
-  probes each key individually to recover a real, classifiable cause. A
+  single-candidate polygons got no row. `compute._classify_error_chain`
+  now classifies a RAISED EXCEPTION as `"transient"` (DNS, connect,
+  timeout, connection reset, HTTP 0/408/429/5xx), `"permanent"` (any other
+  4xx, an unreadable object, a heterogeneous `BuildVRT` mosaic), or
+  `"unknown"`, by walking its WHOLE `__cause__`/`__context__` chain, not
+  just its own message -- an OPEN-time network failure comes through with
+  a directly classifiable "CURL error: ..."/"HTTP response code: ..." in
+  the chain, but a real per-polygon network failure at READ time (through
+  a `WarpedVRT` on an ALREADY-OPEN set) does NOT: it comes through as a
+  generic wrapper exception verified to carry **no HTTP/curl text at all**
+  for a 503, a connection reset, or a 404 alike (real GDAL 3.12.3/rasterio
+  1.5.0) -- that reads `"unknown"`, disambiguated by probing every key and,
+  if every key is healthy, an independent fresh open+re-read of the same
+  window, rather than defaulted to permanent. A multi-key `BuildVRT`
+  failure's `gdal.GetLastErrorMsg()` is ALSO empty even under real GDAL, so
+  `open_tile_set` probes every key individually (transient if any failing
+  key is, permanent only if all are) to recover a real, classifiable
+  cause -- and if every key probes HEALTHY, that is itself evidence the
+  outage ended between the `BuildVRT` attempt and the probe, so it is
+  treated as transient (a "race window") rather than falling back to
+  `BuildVRT`'s own unclassifiable message. A
   transient failure is retried on the SAME source with backoff+jitter
-  (`compute._RETRY_ATTEMPTS`/`_backoff_delay`, ~2 minute in-place budget);
-  a round-2 review's own reproduction found that in-place budget could
-  itself be shorter than a real ~30s outage, so a failure that exhausts it
-  is DEFERRED to one more attempt after a pause rather than declared
-  persistent immediately -- only if that also fails does `run_batch` fail
-  the whole array task loudly (no `batch_XXXX.parquet` written) instead of
-  silently degrading — see `slurm_batch/HPC_REFERENCE.md`'s dprst_depth
+  (`compute._RETRY_ATTEMPTS`/`_backoff_delay`, ~2 minute in-place budget,
+  with GDAL's own retry layer disabled for these attempts so our loop
+  owns that budget -- GDAL's alone measured ~188s for one attempt against
+  a persistent 503); a round-2 review's own reproduction found that
+  in-place budget could itself be shorter than a real ~30s outage, so a
+  failure that exhausts it is DEFERRED to one more attempt after a pause
+  rather than declared persistent immediately -- only if that also fails
+  does `run_batch` fail the whole array task loudly (no `batch_XXXX.parquet`
+  written) instead of silently degrading — see
+  `slurm_batch/HPC_REFERENCE.md`'s dprst_depth
   Recovery section for the resubmit-by-array-index (and downstream-stage)
   remedy.
+- **Read-time network failures still silently demoted, the per-key-probe
+  race, and an over-broad HTTP-status check — fixed (#223 round 3
+  review).** Real-GDAL probing found the round-1/2 fix above covered only
+  the OPEN-time path: a network blip DURING a per-polygon read on an
+  already-open set produced an unclassifiable chain that defaulted to
+  PERMANENT (observed directly: `n_read_failure=1, n_transient_retry=0,
+  n_recovered=1`, the row shipped from a lower-ranked candidate) --
+  `_retry_compute_one` now resolves an `"unknown"` verdict via
+  `_reclassify_unknown_read_failure` instead of assuming permanent. A
+  second gap: when `_probe_keys_for_real_cause` found every key healthy,
+  the code fell back to `BuildVRT`'s own generic "Can't open <url>."
+  message and called it permanent -- but that generic shape is exactly
+  what an outage ending BETWEEN the `BuildVRT` attempt and the probe looks
+  like (reproduced directly); it's now transient unless `BuildVRT`'s
+  message names a concrete permanent condition (a genuinely heterogeneous
+  projection). A third: every `CPLE_HttpResponseError` not naming 404/403
+  used to classify transient, wrongly retrying-then-deferring-then-
+  permanently-failing a 400/401/410/416; only 0/408/429/5xx are transient
+  now. Also fixed: the per-key probe classified from the FIRST failing key
+  only (now: transient if ANY failing key is, permanent only if ALL are);
+  a candidate that recovered only on the deferred pass never counted
+  toward `n_recovered`; a `_recover` walk resumed on the deferred pass
+  re-tried (and re-counted) an already-permanently-failed earlier
+  candidate instead of resuming after the one that deferred; and GDAL's
+  own retry layer running inside each of our own attempts made the
+  documented "~2 minute" in-place budget really unbounded in the worst
+  case (measured ~188s per attempt against a persistent 503) -- our loop
+  now disables it for these attempts. Separately documented (not a
+  defect): `strict=True` demoting a whole multi-key set over ONE bad key
+  is a deliberate trade-off, not "unaffected".
 - **Polygon-set divergence from `dprst_binary.tif` — fixed (segment-driven
   on-stream classifier).** `topo.load_fabric_dprst_polygons` reconstructs "which
   waterbodies are dprst" independently of the `dprst` builder, and used to do so
