@@ -214,6 +214,21 @@ def open_tile_set(ts: TileSet):
                 f"gdal.BuildVRT returned None for tile set project={ts.project!r} "
                 f"keys={ts.keys!r} -- cannot build the mosaic"
             )
+        # GDAL only serialises a VRT to its target (here, /vsimem/...) when the
+        # dataset handle is flushed/released -- it does NOT happen just because
+        # BuildVRT returned. Dropping the Python reference here (rather than
+        # leaving it bound for the rest of this generator's body) is what
+        # triggers that: `topo.read_window`'s BuildVRT call has always DISCARDED
+        # its return value outright, which is why THAT path works and this one
+        # didn't. Verified by reproduction: `rasterio.open(vsimem)` immediately
+        # after `gdal.BuildVRT` (ds still bound) raises RasterioIOError "No such
+        # file or directory"; releasing it first opens cleanly. Without this, any
+        # polygon whose window touches 2+ tiles of its primary (multi-key) set
+        # ALWAYS fails to open, is treated by `_attempt`'s outer handler as a
+        # routine read failure, and falls all the way to the 10 m last resort --
+        # exit code 0, `method="measured"`, from 10 m data with a correctly
+        # ranked 1 m source sitting right there unread.
+        vrt_ds = None
         path = vsimem
     try:
         with rasterio.open(path) as src:

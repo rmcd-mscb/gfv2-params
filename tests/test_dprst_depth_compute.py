@@ -5,13 +5,14 @@ import geopandas as gpd
 import numpy as np
 import pandas as pd
 import pytest
+import rasterio
 from affine import Affine
 from rasterio.errors import RasterioIOError
 from rasterio.io import MemoryFile
 from shapely.geometry import box
 
 import gfv2_params.dprst_depth.compute as compute_mod
-from gfv2_params.dprst_depth.compute import _polygon_depth_from_dem, run_batch
+from gfv2_params.dprst_depth.compute import _polygon_depth_from_dem, open_tile_set, run_batch
 from gfv2_params.dprst_depth.sources import TileSet, encode
 
 
@@ -97,6 +98,88 @@ def test_read_tile_window_rim_buffer_bounds(monkeypatch):
     assert captured["bounds"] == (
         1000.0 - 200.0, 2000.0 - 200.0, 1100.0 + 200.0, 2100.0 + 200.0,
     )
+
+
+# ---------------------------------------------------------------------------
+# The REAL open_tile_set (#223 review round 3, CRITICAL): every test above and
+# below this block monkeypatches open_tile_set away entirely, so the real
+# function -- specifically its `len(ts.keys) > 1` BuildVRT branch -- had ZERO
+# coverage. Direct tests of it only, no monkeypatching of open_tile_set itself.
+# ---------------------------------------------------------------------------
+
+
+def _write_small_tif(path, transform, value, width=10, height=10, crs="EPSG:5070", nodata=-9999.0):
+    with rasterio.open(
+        path, "w", driver="GTiff", width=width, height=height, count=1,
+        dtype="float32", crs=crs, transform=transform, nodata=nodata,
+    ) as ds:
+        ds.write(np.full((height, width), value, dtype="float32"), 1)
+
+
+def test_open_tile_set_mosaics_a_real_multi_key_set(tmp_path):
+    """(#223 review round 3, CRITICAL) `open_tile_set`'s multi-key branch builds
+    an in-memory VRT via `gdal.BuildVRT`, but GDAL only serialises a VRT to its
+    target when the dataset handle is FLUSHED/RELEASED -- not just because
+    BuildVRT returned a Dataset. The shipped code kept `vrt_ds` bound for the
+    whole `with rasterio.open(path)` block below it, so `/vsimem/...vrt` did not
+    exist yet when rasterio tried to open it, and EVERY multi-tile set failed
+    with RasterioIOError -- `_attempt`'s outer handler treats that as a routine
+    404, so every polygon whose window touched 2+ tiles of its primary project
+    silently fell all the way to the 10 m last resort. `topo.read_window` has
+    always discarded BuildVRT's return value outright (never bound it), which is
+    why that path worked and this one didn't. Two adjacent real GeoTIFFs, same
+    CRS, mosaicked and read back -- this is the test whose absence let the bug
+    through."""
+    tile1 = tmp_path / "tile1.tif"
+    tile2 = tmp_path / "tile2.tif"
+    _write_small_tif(tile1, Affine(1.0, 0, 0.0, 0, -1.0, 10.0), value=1.0)
+    _write_small_tif(tile2, Affine(1.0, 0, 10.0, 0, -1.0, 10.0), value=2.0)
+
+    ts = TileSet(project="P", keys=(str(tile1), str(tile2)), covers=True)
+    with open_tile_set(ts) as vrt:
+        arr = vrt.read(1)
+        assert vrt.width == 20 and vrt.height == 10
+        assert vrt.bounds.left == pytest.approx(0.0)
+        assert vrt.bounds.right == pytest.approx(20.0)
+        assert np.allclose(arr[:, :10], 1.0) and np.allclose(arr[:, 10:], 2.0)
+
+
+def test_open_tile_set_unlinks_the_vsimem_vrt_even_if_the_body_raises(tmp_path, monkeypatch):
+    """The `finally: gdal.Unlink(vsimem)` cleanup must fire on an exception
+    raised INSIDE the `with open_tile_set(ts):` body too, not only on a clean
+    exit -- a leaked /vsimem/ entry per failed polygon set would otherwise
+    accumulate for the life of the process."""
+    tile1 = tmp_path / "tile1.tif"
+    tile2 = tmp_path / "tile2.tif"
+    _write_small_tif(tile1, Affine(1.0, 0, 0.0, 0, -1.0, 10.0), value=1.0)
+    _write_small_tif(tile2, Affine(1.0, 0, 10.0, 0, -1.0, 10.0), value=2.0)
+    ts = TileSet(project="P", keys=(str(tile1), str(tile2)), covers=True)
+
+    unlinked = []
+    real_unlink = compute_mod.gdal.Unlink
+
+    def _spy_unlink(path):
+        unlinked.append(path)
+        return real_unlink(path)
+
+    monkeypatch.setattr(compute_mod.gdal, "Unlink", _spy_unlink)
+
+    with pytest.raises(RuntimeError, match="boom"), open_tile_set(ts):
+        raise RuntimeError("boom")
+
+    assert len(unlinked) == 1
+    assert unlinked[0].startswith("/vsimem/dprst_depth_set_")
+
+
+def test_open_tile_set_raises_when_buildvrt_returns_none(monkeypatch):
+    """A mixed CRS/UTM zone slipping through `sources.rank_candidates` is the
+    expected real-world cause (BuildVRT cannot mosaic mixed CRSs) -- must raise
+    HERE, attributed to the set, not fall through to a misleading downstream
+    read failure."""
+    monkeypatch.setattr(compute_mod.gdal, "BuildVRT", lambda *a, **k: None)
+    ts = TileSet(project="P", keys=("/vsicurl/a.tif", "/vsicurl/b.tif"), covers=True)
+    with pytest.raises(RuntimeError, match="cannot build the mosaic"), open_tile_set(ts):
+        pass
 
 
 # ---------------------------------------------------------------------------
