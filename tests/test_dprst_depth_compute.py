@@ -7,8 +7,11 @@ import pandas as pd
 import pytest
 import rasterio
 from affine import Affine
+from osgeo import gdal
+from rasterio.enums import Resampling
 from rasterio.errors import RasterioIOError
 from rasterio.io import MemoryFile
+from rasterio.vrt import WarpedVRT
 from shapely.geometry import box
 
 import gfv2_params.dprst_depth.compute as compute_mod
@@ -18,6 +21,15 @@ from gfv2_params.dprst_depth.sources import TileSet, encode
 
 def _L(name="test_dprst_depth_compute"):
     return logging.getLogger(name)
+
+
+def _raise_buildvrt_heterogeneous(*_args, **_kwargs):
+    """A stand-in for `gdal.BuildVRT` raising under `gdal.UseExceptions()`
+    -- used only to isolate `open_tile_set`'s fallback branch (see
+    `test_open_tile_set_raises_when_buildvrt_fails_and_the_per_key_probe_finds_nothing`);
+    the message is a plain PERMANENT-shaped string, deliberately not
+    claiming to reproduce any specific real GDAL wording."""
+    raise RuntimeError("mock GDAL: heterogeneous mosaic")
 
 
 def test_polygon_depth_from_dem_bowl_and_flat():
@@ -171,28 +183,35 @@ def test_open_tile_set_unlinks_the_vsimem_vrt_even_if_the_body_raises(tmp_path, 
     assert unlinked[0].startswith("/vsimem/dprst_depth_set_")
 
 
-def test_open_tile_set_raises_when_buildvrt_returns_none(monkeypatch):
-    """A mixed CRS/UTM zone slipping through `sources.rank_candidates` is the
-    expected real-world cause (BuildVRT cannot mosaic mixed CRSs) -- must raise
-    HERE, attributed to the set, not fall through to a misleading downstream
-    read failure.
+def test_open_tile_set_raises_when_buildvrt_fails_and_the_per_key_probe_finds_nothing(monkeypatch):
+    """`open_tile_set`'s `BuildVRT`-failure fallback path: if
+    `_probe_keys_for_real_cause` finds every key opens FINE on its own (the
+    probe doesn't reproduce what's wrong -- e.g. a genuinely heterogeneous
+    CRS that `strict=True` rejects even though each individual key is
+    readable on its own), `open_tile_set` must still raise, chaining
+    `BuildVRT`'s own exception as `__cause__` rather than silently
+    swallowing the failure.
 
-    (transient-retry fix, #223 follow-on) Originally asserted a bare
-    `RuntimeError` -- that type is exactly the bug the transient-retry fix
-    closes: it landed in `_attempt`'s generic `except Exception` handler
-    (the `n_compute_error` BUG bucket) instead of the routine-open-failure
-    `except RasterioIOError` branch, hiding the 2026-09-20 DNS incident's
-    real network cause behind "UNEXPECTED compute error". `open_tile_set`
-    now raises `TileSetOpenError`, a `RasterioIOError` subclass carrying
-    GDAL's own `GetLastErrorMsg()` text, so `_is_transient_error` can
-    classify the cause from the message alone."""
-    monkeypatch.setattr(compute_mod.gdal, "BuildVRT", lambda *a, **k: None)
-    monkeypatch.setattr(
-        compute_mod.gdal, "GetLastErrorMsg", lambda: "not all sources have the same CRS"
-    )
+    (#223 round 2 review) Originally asserted a bare `RuntimeError` from a
+    `None`-returning `BuildVRT` (the pre-round-1 bug: that type landed in
+    `_attempt`'s `n_compute_error` bug bucket instead of the routine-open-
+    failure branch) and separately mocked `gdal.GetLastErrorMsg` to return
+    a fabricated CRS-mismatch string -- but real GDAL's `GetLastErrorMsg()`
+    is EMPTY at this point even under real GDAL 3.12.3 (verified for both
+    an all-DNS and an all-404 key list, round 2 review), so that mock
+    asserted a message real GDAL never actually returns there. This test
+    does not touch `GetLastErrorMsg` at all (whatever the real one returns
+    is embedded in the message but never asserted); `_probe_keys_for_real_
+    cause` is mocked instead, to isolate this ONE fallback branch without
+    live network I/O -- the two real-GDAL-probe tests below cover the
+    branch where the probe DOES find the real cause."""
+    monkeypatch.setattr(compute_mod.gdal, "BuildVRT", _raise_buildvrt_heterogeneous)
+    monkeypatch.setattr(compute_mod, "_probe_keys_for_real_cause", lambda ts: None)
     ts = TileSet(project="P", keys=("/vsicurl/a.tif", "/vsicurl/b.tif"), covers=True)
-    with pytest.raises(compute_mod.TileSetOpenError, match="cannot build the mosaic"), open_tile_set(ts):
+    with pytest.raises(compute_mod.TileSetOpenError, match="cannot build the mosaic") as excinfo, open_tile_set(ts):
         pass
+    assert isinstance(excinfo.value.__cause__, RuntimeError)
+    assert compute_mod._is_transient_error_chain(excinfo.value) is False
 
 
 # ---------------------------------------------------------------------------
@@ -631,30 +650,96 @@ def test_run_batch_does_not_retry_a_permanent_open_failure(tmp_path, monkeypatch
     assert sleep_calls == []  # never retried
 
 
-def test_open_tile_set_buildvrt_none_transient_message_is_classified_transient(monkeypatch):
-    """(test 4/5) `open_tile_set`'s `TileSetOpenError`, carrying a transient
-    GDAL `GetLastErrorMsg()` (the measured 2026-09-20 DNS cause), must
-    classify as transient -- i.e. retryable by `_attempt`."""
-    monkeypatch.setattr(compute_mod.gdal, "BuildVRT", lambda *a, **k: None)
-    monkeypatch.setattr(compute_mod.gdal, "GetLastErrorMsg", lambda: _DNS_ERROR)
-    ts = TileSet(project="P", keys=("/vsicurl/a.tif", "/vsicurl/b.tif"), covers=True)
-    with pytest.raises(compute_mod.TileSetOpenError) as excinfo, open_tile_set(ts):
-        pass
-    assert compute_mod._is_transient_error(str(excinfo.value)) is True
+# ---------------------------------------------------------------------------
+# Round 2 (#223 review): REAL GDAL/rasterio probes, no mocks of GDAL's own
+# error machinery. A round-2 review found that round 1's `GetLastErrorMsg`
+# mocks (just deleted above) asserted messages real GDAL never emits at
+# that call site -- the exact trap that hid the pre-round-1 BuildVRT-flush
+# bug (every test back then mocked `open_tile_set` itself, so the real
+# function had zero coverage). `.invalid` is a reserved TLD (RFC 2606) that
+# fails DNS resolution deterministically, even with no network access at
+# all, so these are CI-safe; `GDAL_HTTP_MAX_RETRY=0` + a short timeout keep
+# them fast regardless (a DNS failure never reaches curl's own HTTP retry
+# layer anyway -- that's the whole premise of the original incident).
+# ---------------------------------------------------------------------------
+
+_INVALID_HOST_ENV = dict(GDAL_HTTP_MAX_RETRY="0", GDAL_HTTP_TIMEOUT="2", GDAL_HTTP_CONNECTTIMEOUT="2")
+_INVALID_URL_A = "/vsicurl/https://this-host-does-not-exist.invalid/a.tif"
+_INVALID_URL_B = "/vsicurl/https://this-host-does-not-exist.invalid/b.tif"
 
 
-def test_open_tile_set_buildvrt_none_permanent_message_is_classified_permanent(monkeypatch):
-    """(test 4/5) The same `TileSetOpenError`, but with a permanent-looking
-    GDAL cause (mixed CRS -- the pre-existing documented cause of a `None`
-    BuildVRT), must classify as permanent -- i.e. NOT retryable."""
-    monkeypatch.setattr(compute_mod.gdal, "BuildVRT", lambda *a, **k: None)
-    monkeypatch.setattr(
-        compute_mod.gdal, "GetLastErrorMsg", lambda: "not all sources have the same CRS"
-    )
-    ts = TileSet(project="P", keys=("/vsicurl/a.tif", "/vsicurl/b.tif"), covers=True)
-    with pytest.raises(compute_mod.TileSetOpenError) as excinfo, open_tile_set(ts):
-        pass
-    assert compute_mod._is_transient_error(str(excinfo.value)) is False
+def test_real_gdal_path1_single_key_open_dns_failure_is_transient():
+    """PATH 1 of the incident: a single-key `open_tile_set` (`rasterio.open`
+    directly) against a REAL DNS failure. Fixed in round 1; kept here as
+    the real-GDAL baseline the other two paths are compared against."""
+    ts = TileSet(project="P", keys=(_INVALID_URL_A,), covers=True)
+    with rasterio.Env(**_INVALID_HOST_ENV):
+        with pytest.raises(RasterioIOError) as excinfo:
+            with open_tile_set(ts):
+                pass
+    assert compute_mod._is_transient_error_chain(excinfo.value) is True
+
+
+def test_real_gdal_path2_multikey_buildvrt_open_dns_failure_is_transient():
+    """PATH 2 of the incident: a multi-key `open_tile_set` (the
+    `gdal.BuildVRT` mosaic branch) against a REAL DNS failure on every key
+    -- #223 round 2 CRITICAL C1. `gdal.GetLastErrorMsg()` is empty here
+    even under real GDAL (verified by the reviewer), so this exercises the
+    per-key `rasterio.open` probe (`_probe_keys_for_real_cause`) that
+    recovers the real classifiable cause -- without it, this path
+    classified PERMANENT (the bug C1 fixes)."""
+    ts = TileSet(project="P", keys=(_INVALID_URL_A, _INVALID_URL_B), covers=True)
+    with rasterio.Env(**_INVALID_HOST_ENV):
+        with pytest.raises(compute_mod.TileSetOpenError) as excinfo:
+            with open_tile_set(ts):
+                pass
+    assert compute_mod._is_transient_error_chain(excinfo.value) is True
+
+
+def _make_dns_failing_vrt(tmp_path, real_tif_path):
+    """A real local GDAL VRT over `real_tif_path`, then its
+    `<SourceFilename>` XML-rewritten (via `ElementTree`, NOT a naive string
+    replace -- a string replace produced an unreadable VRT when tried,
+    #223 round 2 review) to a `.invalid` DNS-failing URL. Reproduces a
+    per-polygon READ hitting a real network failure through a `WarpedVRT`
+    over a local VRT -- the exact shape `open_tile_set`'s multi-key branch
+    produces in production."""
+    import xml.etree.ElementTree as ET
+
+    vrt_path = tmp_path / "dns_fail.vrt"
+    ds = gdal.BuildVRT(str(vrt_path), [str(real_tif_path)])
+    ds = None  # flush -- see open_tile_set's own comment on why this is required
+    tree = ET.parse(vrt_path)
+    for elem in tree.iter("SourceFilename"):
+        elem.text = _INVALID_URL_A
+        elem.set("relativeToVRT", "0")
+    tree.write(vrt_path)
+    return vrt_path
+
+
+def test_real_gdal_path3_per_polygon_read_through_warpedvrt_dns_failure_is_transient(tmp_path):
+    """PATH 3 of the incident: a per-polygon READ (not an open) against a
+    REAL DNS failure reached through a `WarpedVRT` over a local VRT --
+    #223 round 2 CRITICAL C2. Real GDAL wraps this as a generic
+    `RasterioIOError('Read failed. See previous exception for details.')`;
+    the real cause (a GDAL `CPLE_HttpResponseError`/`CPLE_AppDefinedError`
+    carrying the actual CURL/DNS text) is only reachable via
+    `__cause__`/`__context__`, which is exactly what
+    `_is_transient_error_chain` walks (a plain `_is_transient_error(str(exc))`
+    check on the outer message alone would miss it and classify
+    PERMANENT)."""
+    real_tif = tmp_path / "real.tif"
+    _write_small_tif(real_tif, Affine(1.0, 0, 0.0, 0, -1.0, 10.0), value=1.0)
+    vrt_path = _make_dns_failing_vrt(tmp_path, real_tif)
+
+    with rasterio.Env(**_INVALID_HOST_ENV):
+        with rasterio.open(vrt_path) as src, WarpedVRT(
+            src, crs="EPSG:5070", resampling=Resampling.nearest
+        ) as vrt:
+            with pytest.raises(RasterioIOError) as excinfo:
+                vrt.read(1)
+
+    assert compute_mod._is_transient_error_chain(excinfo.value) is True
 
 
 def test_run_batch_retries_a_transient_tile_set_open_error(tmp_path, monkeypatch, caplog):
@@ -716,8 +801,9 @@ def test_run_batch_retries_a_transient_per_polygon_read_failure(tmp_path, monkey
 
 
 def test_run_batch_raises_when_per_polygon_transient_failure_never_clears(tmp_path, monkeypatch):
-    """A per-polygon read that fails transiently on every attempt is the
-    same doctrine as a persistently-failing OPEN (test 2/5 above): fail the
+    """A per-polygon read that fails transiently on every attempt, through
+    BOTH the in-place budget and the one deferred retry, is the same
+    doctrine as a persistently-failing OPEN (test 2/5 above): fail the
     whole task, write no parquet, rather than fall through to a
     lower-ranked candidate."""
     monkeypatch.setattr(compute_mod, "_sleep", lambda s: None)
@@ -733,3 +819,44 @@ def test_run_batch_raises_when_per_polygon_transient_failure_never_clears(tmp_pa
         run_batch(_gdf([(7, P1, [P1, TEN])]), [P1], out_parquet, _L())
 
     assert not out_parquet.exists()
+
+
+def test_run_batch_recovers_via_the_deferred_pass_when_a_transient_failure_outlasts_the_inplace_budget(
+    tmp_path, monkeypatch, caplog
+):
+    """(#223 round 2, I4) The real second 2026-09-20 smoke failure (job
+    4532393) was NOT a persistent host failure -- a ~30s DNS outage
+    outlasted the then-5-attempt/~20s in-place retry budget by 8s, so the
+    set was wrongly declared persistent moments before it would have
+    succeeded. A set whose open fails transiently through its ENTIRE
+    in-place budget (`_RETRY_ATTEMPTS` attempts) must NOT immediately fail
+    the task -- it is deferred to a second pass, and if THAT succeeds (as
+    here: the fake clears on its `_RETRY_ATTEMPTS + 1`-th call, i.e. the
+    deferred pass's very first attempt), the polygon resolves against its
+    PRIMARY source with NO raise at all."""
+    monkeypatch.setattr(compute_mod, "_sleep", lambda s: None)
+    caplog.set_level(logging.INFO)
+    calls = {"n": 0}
+
+    @contextmanager
+    def _fake_open_outlasts_inplace_budget(ts):
+        calls["n"] += 1
+        if calls["n"] <= compute_mod._RETRY_ATTEMPTS:
+            raise RasterioIOError(_DNS_ERROR)
+        yield ts.project
+
+    monkeypatch.setattr(compute_mod, "open_tile_set", _fake_open_outlasts_inplace_budget)
+    monkeypatch.setattr(compute_mod, "_compute_one", _fake_compute(set()))
+
+    df = run_batch(_gdf([(7, P1, [P1, P2, TEN])]), [P1], tmp_path / "b.parquet", _L())
+
+    assert df.loc[0, "source"] == "P1" and df.loc[0, "method"] == "measured"
+    summaries = [r.getMessage() for r in caplog.records if r.getMessage().startswith("run_batch:")]
+    assert summaries
+    # in-place attempts 1..(_RETRY_ATTEMPTS - 1) each bump the counter (the
+    # final in-place attempt exhausts without bumping -- it's a give-up,
+    # not a retry); the deferred pass's own first attempt succeeds outright
+    # with no further retry needed.
+    expected_retries = compute_mod._RETRY_ATTEMPTS - 1
+    assert f"n_transient_retry={expected_retries}" in summaries[-1]
+    assert "n_recovered=0" in summaries[-1]
