@@ -817,10 +817,19 @@ pixi run python -m gfv2_params.dprst_depth.tiling --plan \
   per-polygon READ on an already-open set — the two are classified
   differently internally but retried/deferred the same way, #223 round 3)
   outlasted every in-place retry AND the one
-  deferred retry (~2 minutes in place — with GDAL's own retry layer
-  disabled for these attempts, so that budget is real, not multiplied by
-  GDAL's own internal retries, #223 round 3 M-D — then a 60s-plus-pause
-  second attempt, issue #223 round 2) for one or more tile sets/candidates.
+  deferred retry (~2 minutes of BACKOFF in place — with GDAL's own retry
+  layer disabled for these attempts, so the RETRY COUNT is real, not
+  multiplied by GDAL's own internal retries, #223 round 3 M-D — then a
+  60s-plus-pause second attempt, issue #223 round 2) for one or more tile
+  sets/candidates. **That "~2 minutes" is the real total only for a
+  fast-failing error** (DNS, connection-refused, an HTTP status
+  response) — a HANG-type failure (a trickling or non-responding
+  connection) still pays GDAL's own per-request `GDAL_HTTP_TIMEOUT`
+  (60s)/`_CONNECTTIMEOUT` (30s)/`_LOW_SPEED_TIME` (30s) on top of that,
+  and one attempt can involve more than one request, so the realistic
+  worst case is TENS OF MINUTES per set/polygon (#223 round 4 review,
+  MINOR M2) — a task legitimately failing this way after that long is not
+  itself a sign of a bug.
   No `batch_XXXX.parquet` is written for that task, so it is simply missing,
   not wrong — **just resubmit that same array index** once the network has
   recovered, exactly as for any other failed/timed-out array task above. Do
@@ -866,6 +875,17 @@ pixi run python -m gfv2_params.dprst_depth.tiling --plan \
   for good. This is what `compute.run_batch`'s DEFERRED second pass (a
   60s-plus pause, then one more full retry attempt before treating a
   failure as persistent) now guards against.
+- **Incident note (#223 round 4 review):** a reviewer's own real-GDAL
+  reproduction found the round-3 fix above STILL demoted a polygon when
+  an outage PERSISTED through the reclassification check itself, because
+  GDAL's in-process `/vsicurl/` cache served the disambiguation probe and
+  the "fresh" re-read from the file's CACHED, pre-outage headers, so both
+  reported "healthy" while the network was genuinely still down.
+  `compute._clear_vsicurl_cache` now clears that cache before every such
+  probe/re-open. No operator action needed for this one — it's a code
+  fix, not a new failure mode to recognize — but it explains why a task
+  from before this fix landed could have silently shipped a demoted
+  polygon during an outage that hadn't actually cleared yet.
 - Re-running the plan step (stage 1) **deletes the per-batch parquets** and
   rewrites `_plan/*` (#221), so re-run the whole array after it — or just use
   `submit_dprst_depth.sh`, which always runs plan → array → build together.

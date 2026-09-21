@@ -364,14 +364,24 @@ These are hard-won; violating them silently corrupts outputs.
   resolution failures, connect failures, timeouts, connection resets/
   receive failures/empty replies, SSL handshake errors, and HTTP 0/408/429/
   5xx are retried on the SAME source with bounded exponential backoff +
-  jitter (`compute._RETRY_ATTEMPTS`/`_backoff_delay`, 6 attempts / ~2
-  minute IN-PLACE budget, with GDAL's OWN retry layer disabled for these
-  attempts via `compute._IN_PROCESS_RETRY_ENV` so OUR loop — not GDAL's —
-  owns that budget: measured directly, a single read attempt under a
-  persistent 503 with GDAL's own `GDAL_HTTP_MAX_RETRY=5` left in place took
-  ~188s, which would have made the "~2 minute" budget really
-  `_RETRY_ATTEMPTS * ~188s` (#223 round 3, M-D); jitter matters because
-  every thread of every SLURM task can start within the same second), both
+  jitter (`compute._RETRY_ATTEMPTS`/`_backoff_delay`, 6 attempts, gaps
+  4/8/16/32/60s summing to ~2 minutes of BACKOFF, with GDAL's OWN retry
+  layer disabled for these attempts via `compute._IN_PROCESS_RETRY_ENV` so
+  OUR loop — not GDAL's — owns the RETRY COUNT: measured directly, a
+  single read attempt under a persistent 503 with GDAL's own
+  `GDAL_HTTP_MAX_RETRY=5` left in place took ~188s, which would have made
+  the "~2 minute" budget really `_RETRY_ATTEMPTS * ~188s` (#223 round 3,
+  M-D). **That "~2 minutes" is real only for a FAST-FAILING error** (DNS,
+  connection-refused, an HTTP status response) — `GDAL_HTTP_TIMEOUT`
+  (60s)/`_CONNECTTIMEOUT` (30s)/`_LOW_SPEED_TIME`+`_LIMIT` (30s under
+  1000 B/s) still apply PER REQUEST even with GDAL's retry layer off, so a
+  HANG-type failure (a trickling/non-responding connection, as opposed to
+  one that fails outright) can still cost ~60-90s per attempt, and one
+  attempt can involve more than one underlying HTTP request — the
+  realistic worst case for a hang is TENS OF MINUTES per set/polygon
+  (#223 round 4 review, MINOR M2). Jitter matters, not just the retry
+  count, because every thread of every SLURM task can start within the
+  same second), both
   at the tile-set OPEN and at a per-polygon read (`_retry_compute_one`).
   Every OTHER 4xx besides 408/429 is PERMANENT (#223 round 3, I-C) — round
   2 treated any `CPLE_HttpResponseError` as transient unless it named
@@ -383,13 +393,35 @@ These are hard-won; violating them silently corrupts outputs.
   transient, permanent only if all are — #223 round 3, M-B) and chains the
   representative exception as `__cause__` (#223 round 2, C1); without it, a
   multi-key set's DNS failure classified PERMANENT, QUIETER than the
-  original bare-`RuntimeError` bug it replaced. **If every key probes
-  healthy** (#223 round 3, I-A), the OLD fallback to `BuildVRT`'s own
-  generic "Can't open <url>." was ALSO wrong — that shape is exactly what
-  an outage ending BETWEEN the `BuildVRT` attempt and the probe looks like,
-  so it's now treated as a "buildvrt race window" (transient, retries the
-  build) UNLESS `BuildVRT`'s own message names a concrete permanent
-  condition (a genuinely heterogeneous projection/CRS). Note `strict=True`
+  original bare-`RuntimeError` bug it replaced. **Every probe/re-open
+  clears GDAL's OWN `/vsicurl/` cache first** (`compute._clear_vsicurl_
+  cache`, #223 round 4 review, CRITICAL R3-C1) — without it, a probe or a
+  "fresh" re-open reuses the file's CACHED, pre-outage headers and reports
+  "healthy" even while the network is still down, so an outage that
+  PERSISTS through reclassification (not just one that already cleared)
+  was still silently demoted: reproduced directly (job-equivalent probe,
+  2026-09-21), the reclassification itself reported "resolved to PERMANENT
+  via probe/reproduction" while the outage was ongoing. **If every key
+  probes healthy** (#223 round 3, I-A), the OLD fallback to `BuildVRT`'s
+  own generic "Can't open <url>." was ALSO wrong — that shape is exactly
+  what an outage ending BETWEEN the `BuildVRT` attempt and the probe looks
+  like, so it's now treated as a "buildvrt race window" (transient,
+  retries the build) UNLESS `BuildVRT`'s own message names a concrete
+  permanent condition, checked two ways (#223 round 4 review, IMPORTANT
+  R3-I1): a message matching the marker `"gdalbuildvrt does not
+  support"` (covers heterogeneous projection, band COUNT, and band DATA
+  TYPE alike — narrower wording that named only "heterogeneous
+  projection" wrongly called the other two transient, since `strict=True`
+  rejects them the SAME deterministic way), OR — as a backstop — an
+  IDENTICAL failure message on a same-inputs `BuildVRT` retry (classification-only,
+  never reused even on success). Analogously, an OPEN-time failure that
+  itself classifies `"unknown"` (round 3 assumed every open-time failure
+  is directly classifiable; a trickling header GET aborted by curl's
+  low-speed-abort gives "TIFFReadDirectory: Failed to read directory at
+  offset N", which is not — #223 round 4 review, IMPORTANT R3-I2) is
+  routed through the SAME cache-cleared per-key probe
+  (`compute._reclassify_unknown_open_failure`) rather than defaulting to
+  permanent. Note `strict=True`
   is a real trade-off, not "unaffected" (#223 round 3, M-A): one bad key in
   an otherwise-healthy multi-key set demotes/retries the WHOLE set, by
   design — there is no silent per-key partial acceptance path. A
@@ -404,11 +436,15 @@ These are hard-won; violating them silently corrupts outputs.
   candidate that only resolved on the deferred pass too (#223 round 3,
   I-B), and a `_recover` walk resumed on the deferred pass picks up
   immediately AFTER the candidate that deferred, never re-trying (and
-  re-counting) an earlier one already known permanently bad (#223 round 3,
-  M-C). A shared `threading.Event`
+  re-counting) an earlier one already known permanently bad, running in
+  its OWN `ThreadPoolExecutor` pass AFTER the deferred pass's own executor
+  has fully exited rather than nested inside it (#223 round 3, M-C; round
+  4 review, M3 — nesting could reach 2x `n_threads` concurrent open
+  handles for no benefit). A shared `threading.Event`
   lets a still-retrying sibling in the SAME pass bail out early once ANY
   set/polygon in that pass confirms the network is down, instead of every
-  one independently burning its own ~2 minutes to the same conclusion (I3);
+  one independently burning its own in-place budget to the same conclusion
+  (I3);
   it's reset before the deferred pass so that pass gets its own fair first
   attempt. The operator's remedy for a task that still fails is to resubmit
   that array index, AND its downstream stages, or resubmit the whole

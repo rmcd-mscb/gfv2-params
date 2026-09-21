@@ -72,13 +72,17 @@ production; it stays only as a Phase-0 audit function):
   mosaicking a partial set of keys, which is GDAL's own default), it walks
   the remaining ranked candidates rather than falling back immediately. A
   **TRANSIENT** failure (DNS, connect, timeout, connection reset, HTTP
-  429/5xx) is a different path entirely: it is retried on the SAME set with
-  backoff+jitter (~2 minutes in place), and if it outlasts that budget, it
+  0/408/429/5xx) is a different path entirely: it is retried on the SAME set
+  with backoff+jitter (~2 minutes of backoff sleep, for a FAST-FAILING error
+  -- a HANG-type one, e.g. a trickling connection, still pays GDAL's own
+  per-request timeouts on top of that and can run to tens of minutes, see
+  below), and if it outlasts that budget, it
   gets ONE deferred retry after a pause before the whole batch task fails
   loudly -- a transient network blip is not evidence the primary set is
   unusable, and the in-place budget alone can be shorter than the real
-  outage (see `compute._is_transient_error_chain`, which classifies an
-  exception's whole cause chain, not just its own message; two measured
+  outage (see `compute._classify_error_chain`, which classifies an
+  exception's whole cause chain, not just its own message, into
+  transient/permanent/unknown; two measured
   incidents: a one-second cluster-wide DNS failure on 2026-09-20 that
   silently demoted 87% of a smoke rerun's polygons off their correctly-
   ranked primary before this fix existed, and a second run whose ~30s DNS
@@ -451,10 +455,12 @@ by-design. Recorded so a future cleanup doesn't remove them by mistake.
   treated as transient (a "race window") rather than falling back to
   `BuildVRT`'s own unclassifiable message. A
   transient failure is retried on the SAME source with backoff+jitter
-  (`compute._RETRY_ATTEMPTS`/`_backoff_delay`, ~2 minute in-place budget,
+  (`compute._RETRY_ATTEMPTS`/`_backoff_delay`, ~2 minutes of backoff sleep,
   with GDAL's own retry layer disabled for these attempts so our loop
-  owns that budget -- GDAL's alone measured ~188s for one attempt against
-  a persistent 503); a round-2 review's own reproduction found that
+  owns the RETRY COUNT -- GDAL's own layer alone measured ~188s for one
+  attempt against a persistent 503; that "~2 minutes" total is real only
+  for a fast-failing error, not a hang-type one, see the round-4 entry
+  below); a round-2 review's own reproduction found that
   in-place budget could itself be shorter than a real ~30s outage, so a
   failure that exhausts it is DEFERRED to one more attempt after a pause
   rather than declared persistent immediately -- only if that also fails
@@ -493,6 +499,39 @@ by-design. Recorded so a future cleanup doesn't remove them by mistake.
   now disables it for these attempts. Separately documented (not a
   defect): `strict=True` demoting a whole multi-key set over ONE bad key
   is a deliberate trade-off, not "unaffected".
+- **The round-3 read-time fix itself still demoted a polygon, plus two
+  more classification gaps — fixed (#223 round 4 review).** A reviewer's
+  own real-GDAL reproduction found the round-3 fix's disambiguation
+  (`_reclassify_unknown_read_failure`) still called a PERSISTENT outage
+  PERMANENT: its probe and its "fresh" open+re-read were both served from
+  GDAL's in-process `/vsicurl/` cache of the file's ORIGINAL,
+  pre-outage headers, so both reported "healthy" while the network was
+  genuinely still down, and the fresh read's own real (still-failing)
+  attempt reproduced the same unclassifiable shape a second time --
+  exactly what the pre-fix code took as proof of a reproducible permanent
+  problem. `compute._clear_vsicurl_cache` now clears every key's cache
+  before each such probe/re-open. Two more gaps in the same review:
+  `strict=True` also deterministically rejects a heterogeneous band COUNT
+  and DATA TYPE, not just projection -- the narrower marker called both a
+  transient "race window", which retried, deferred, and then permanently
+  failed the task over a condition that could never resolve; the
+  `_PERMANENT_BUILDVRT_MARKERS` prefix widened to `"gdalbuildvrt does not
+  support"`, plus a same-inputs `BuildVRT` retry as a backstop (an
+  IDENTICAL failure message twice, with keys healthy, is PERMANENT even
+  if unnamed). And an OPEN-time failure can ALSO be unclassifiable (a
+  trickling header GET aborted by curl's low-speed-abort gives
+  "TIFFReadDirectory: Failed to read directory at offset N", with no
+  HTTP/curl text) -- round 3 assumed every open-time failure is directly
+  classifiable; it now routes through the same cache-cleared per-key probe
+  (`compute._reclassify_unknown_open_failure`) instead of defaulting to
+  permanent. Also fixed: the HTTP-status regex missed GDAL's "response
+  code ON `<url>`: 0" wording (the URL between the cue and the code is
+  routinely 60-100+ characters, far past the original 12-character gap);
+  a deferred-pass `ThreadPoolExecutor` nested inside another one (up to 2x
+  `n_threads` concurrent open handles) now runs as its own pass after the
+  outer one exits; and four more curl/HTTP2 wordings ("Operation too
+  slow", "Failure when receiving data from the peer", "Send failure",
+  "was not closed cleanly") were added as explicit transient markers.
 - **Polygon-set divergence from `dprst_binary.tif` — fixed (segment-driven
   on-stream classifier).** `topo.load_fabric_dprst_polygons` reconstructs "which
   waterbodies are dprst" independently of the `dprst` builder, and used to do so
