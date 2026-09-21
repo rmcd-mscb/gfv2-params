@@ -330,12 +330,23 @@ def run_batch(
     different mechanism.
 
     The final summary line is escalated (#173 FIX 3, restored in the #223
-    fix-round-1 rewrite): ERROR if `n_compute_error > 0` (a real bug must
-    never hide behind the expected read-failure rate), else WARNING if the
-    written fraction of polygons drops below 90% (a mass read failure -- S3
-    outage, HPC firewall regression -- must not exit 0 with only an INFO
-    line while the product quietly degrades, e.g. every 1 m set failing and
-    every polygon recovering to 10 m).
+    fix-round-1 rewrite; degradation term added in review round 3): ERROR if
+    `n_compute_error > 0` (a real bug must never hide behind the expected
+    read-failure rate); else WARNING if EITHER the written fraction of
+    polygons drops below 90% (polygons LOST entirely -- a mass read failure,
+    S3 outage, HPC firewall regression) OR more than 10% of planned polygons
+    needed `_recover` at all (polygons that still SHIPPED, via the fallback
+    ladder, but only because their primary set failed to open/read). The
+    second term is the one that actually catches "every 1 m set failing and
+    every polygon recovering to 10 m": every recovered polygon is still in
+    `out`, so `success_fraction` alone stays at 1.0 for that exact scenario
+    and would otherwise log at INFO -- this is precisely the failure mode the
+    round-3 `open_tile_set`/BuildVRT-flush bug produced (every multi-tile-key
+    primary open failed, recovering silently to the 10 m last resort). 10%
+    is chosen symmetrically with the existing 90% success-fraction gate;
+    genuine tile-boundary/hydro-flattening noise recovers a small, roughly
+    constant fraction of polygons, so a jump to double digits is a systemic
+    signal, not routine variance.
     """
     for col in ("source_tiles", "candidates", "COMID"):
         if col not in dprst_gdf.columns:
@@ -476,6 +487,7 @@ def run_batch(
 
     n_planned = sum(len(v) for v in members.values())
     success_fraction = len(out) / n_planned if n_planned else 1.0
+    recovered_fraction = counts["n_recovered"] / n_planned if n_planned else 0.0
     summary_args = (
         len(out), n_planned, len(members),
         ", ".join(f"{k}={v}" for k, v in counts.items()), out_parquet,
@@ -484,13 +496,19 @@ def run_batch(
     # (#173 FIX 3, restored in the #223 fix-round-1 rewrite) Completeness
     # gate: a mass read-failure (S3 outage / HPC firewall regression) or ANY
     # unexpected compute error must not ship silently at INFO -- escalate
-    # the whole summary line so it's visible in a normal log scan. Without
-    # this, an S3/firewall regression that fails every 1 m set (every
-    # polygon quietly recovering to 10 m) would exit 0 with one INFO line
-    # and the product would silently degrade.
+    # the whole summary line so it's visible in a normal log scan.
+    #
+    # (#223 review round 3) `success_fraction` alone does NOT catch "every 1 m
+    # set failing and every polygon recovering to 10 m" -- a recovered polygon
+    # is still written to `out`, so that scenario keeps success_fraction at 1.0
+    # and would log at INFO despite every 1 m read having failed (exactly what
+    # the round-3 open_tile_set/BuildVRT-flush bug produced). `recovered_
+    # fraction > 0.10` (symmetric with the 90% success-fraction gate) catches
+    # it: a material share of polygons needing the fallback ladder at all is a
+    # systemic primary-open/read signal, not routine tile-boundary noise.
     if counts["n_compute_error"] > 0:
         logger.error(summary_fmt, *summary_args)
-    elif success_fraction < 0.90:
+    elif success_fraction < 0.90 or recovered_fraction > 0.10:
         logger.warning(summary_fmt, *summary_args)
     else:
         logger.info(summary_fmt, *summary_args)

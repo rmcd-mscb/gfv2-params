@@ -282,6 +282,24 @@ def test_run_batch_falls_to_10m_when_every_1m_set_fails(tmp_path, monkeypatch):
     assert df.loc[0, "source"] == "10m" and df.loc[0, "resolution"] == "10m"
 
 
+def test_run_batch_warns_when_recovery_rate_is_material_even_at_full_success(tmp_path, monkeypatch, caplog):
+    """(#223 review round 3, IMPORTANT) `success_fraction` alone stays at 1.0 when
+    every polygon still ships via the fallback ladder -- exactly what "every 1 m set
+    failing and every polygon recovering to 10 m" looks like (the docstring's own
+    named scenario, and the CRITICAL open_tile_set/BuildVRT-flush bug's actual
+    failure mode: it never lost a polygon, it silently downgraded every one of
+    them). The summary must WARN on the recovered-fraction term even though every
+    polygon was written and `success_fraction == 1.0`."""
+    monkeypatch.setattr(compute_mod, "open_tile_set", _fake_open(bad_projects={"P1"}))
+    monkeypatch.setattr(compute_mod, "_compute_one", _fake_compute(set()))
+    caplog.set_level(logging.INFO)
+    gdf = _gdf([(i, P1, [P1, TEN]) for i in range(5)])
+    out = run_batch(gdf, [P1], tmp_path / "b.parquet", _L())
+    assert len(out) == 5 and (out["source"] == "10m").all()  # every polygon still shipped
+    summary = [r for r in caplog.records if r.msg.startswith("run_batch:")]
+    assert summary and summary[-1].levelno == logging.WARNING
+
+
 def test_run_batch_skips_polygon_with_no_usable_source(tmp_path, monkeypatch, caplog):
     monkeypatch.setattr(compute_mod, "open_tile_set", _fake_open())
     monkeypatch.setattr(compute_mod, "_compute_one", _fake_compute({"P1", "10m"}))
