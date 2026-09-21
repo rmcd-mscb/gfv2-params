@@ -320,16 +320,153 @@ These are hard-won; violating them silently corrupts outputs.
   tile sets by (covers window, QL, newest collect_end, project). WESM is read
   geometry-free, for QL/dates only. The inventory is a SNAPSHOT: re-staging
   obliges a dprst_depth re-run of every fabric. A tile set is one project in
-  ONE UTM zone, because BuildVRT cannot mosaic mixed CRSs. `tiling.tile_set_groups`
-  groups polygons by their assigned primary tile set (one polygon, exactly one
-  set — no cross-polygon component-chaining); `compute.run_batch` opens each
-  set ONCE and runs sets concurrently on a thread pool, walking a polygon's
-  remaining ranked candidates when its primary source yields no valid
-  interior, ending at the 10 m seamless tile. The old hull-driven transitive
-  tile-key chaining could span >4,000 tiles in one component and left two
-  array tasks with ~16,000/~12,000 fallback polygons each, running past 24 h
-  against a 34-minute median — gone now that each polygon resolves to exactly
-  one primary set. `interior_coverage` is written per polygon (a truncated
+  ONE UTM zone (`sources.rank_candidates` groups by it) because a single VRT
+  can't coherently represent two CRSs — but do NOT assume a heterogeneous set
+  that slips through makes `gdal.BuildVRT` return `None` or raise on its own:
+  by DEFAULT it silently SKIPS any key it can't open or that disagrees with
+  the rest and returns a mosaic of whatever's left, with no error at all
+  (verified with a real UTM 14N + UTM 15N pair, and separately with a
+  good-key + DNS-failing-key pair, and a good-key + 404-key pair — all three
+  produce a working partial VRT). `open_tile_set` therefore builds with
+  `gdal.BuildVRTOptions(strict=True)` so any unopenable or heterogeneous
+  source is FATAL instead (#223 round 2, I1) — a set whose keys all open and
+  agree builds exactly as before. `tiling.tile_set_groups` groups polygons by
+  their assigned primary tile set (one polygon, exactly one set — no
+  cross-polygon component-chaining); `compute.run_batch` opens each set ONCE
+  and runs sets concurrently on a thread pool, walking a polygon's remaining
+  ranked candidates when its primary source PERMANENTLY yields no valid
+  interior or a PERMANENT read/open error (404/403, an unreadable object, a
+  heterogeneous `BuildVRT` mosaic), ending at the 10 m seamless tile. The old
+  hull-driven transitive tile-key chaining could span >4,000 tiles in one
+  component and left two array tasks with ~16,000/~12,000 fallback polygons
+  each, running past 24 h against a 34-minute median — gone now that each
+  polygon resolves to exactly one primary set. **A TRANSIENT failure is not
+  evidence a source is unusable and must never advance the candidate walk**
+  (`compute._classify_error_chain` — classifies an exception's WHOLE
+  `__cause__`/`__context__` chain, not just its own message, into
+  `"transient"`/`"permanent"`/`"unknown"`; a network failure surfacing at
+  OPEN time comes through with a directly classifiable "CURL error: Could
+  not resolve host: ..."/"HTTP response code: 404" in the chain — verified
+  against real GDAL 3.12.3/rasterio 1.5.0). **Correction (#223 round 3
+  review, CRITICAL C-A):** a network failure surfacing DURING a per-polygon
+  READ on an ALREADY-OPEN set is NOT the same shape — it comes through as a
+  generic `RasterioIOError('Read failed. See previous exception for
+  details.')` wrapping `CPLE_AppDefinedError`s like "IReadBlock failed
+  .../TIFFReadEncodedTile ...; got 0 bytes, expected N", verified to carry
+  **no HTTP/curl text at all**, for a 503, a connection reset, AND a 404
+  alike — `_classify_error_chain` correctly reads that as `"unknown"`, not
+  permanent, and `_retry_compute_one` disambiguates it via
+  `_reclassify_unknown_read_failure` (probe each key; if every key is
+  healthy, an independent fresh open+re-read of the SAME window — a
+  reproducible failure there, or an explicit signal on retry, is what
+  finally calls it permanent) rather than defaulting to permanent, which is
+  exactly what silently demoted a polygon mid-read pre-round-3. DNS
+  resolution failures, connect failures, timeouts, connection resets/
+  receive failures/empty replies, SSL handshake errors, and HTTP 0/408/429/
+  5xx are retried on the SAME source with bounded exponential backoff +
+  jitter (`compute._RETRY_ATTEMPTS`/`_backoff_delay`, 6 attempts, gaps
+  4/8/16/32/60s summing to ~2 minutes of BACKOFF, with GDAL's OWN retry
+  layer disabled for these attempts via `compute._IN_PROCESS_RETRY_ENV` so
+  OUR loop — not GDAL's — owns the RETRY COUNT: measured directly, a
+  single read attempt under a persistent 503 with GDAL's own
+  `GDAL_HTTP_MAX_RETRY=5` left in place took ~188s, which would have made
+  the "~2 minute" budget really `_RETRY_ATTEMPTS * ~188s` (#223 round 3,
+  M-D). **That "~2 minutes" is real only for a FAST-FAILING error** (DNS,
+  connection-refused, an HTTP status response) — `GDAL_HTTP_TIMEOUT`
+  (60s)/`_CONNECTTIMEOUT` (30s)/`_LOW_SPEED_TIME`+`_LIMIT` (30s under
+  1000 B/s) still apply PER REQUEST even with GDAL's retry layer off, so a
+  HANG-type failure (a trickling/non-responding connection, as opposed to
+  one that fails outright) can still cost ~60-90s per attempt, and one
+  attempt can involve more than one underlying HTTP request — the
+  realistic worst case for a hang is TENS OF MINUTES per set/polygon
+  (#223 round 4 review, MINOR M2). Jitter matters, not just the retry
+  count, because every thread of every SLURM task can start within the
+  same second), both
+  at the tile-set OPEN and at a per-polygon read (`_retry_compute_one`).
+  Every OTHER 4xx besides 408/429 is PERMANENT (#223 round 3, I-C) — round
+  2 treated any `CPLE_HttpResponseError` as transient unless it named
+  404/403, which wrongly retried-then-deferred-then-permanently-failed a
+  400/401/410/416. A multi-key `BuildVRT` failure carries NO classifiable
+  cause on its own — `gdal.GetLastErrorMsg()` is EMPTY there even under
+  real GDAL (verified for an all-DNS and an all-404 key list) — so
+  `open_tile_set` probes EVERY key (transient if any failing key is
+  transient, permanent only if all are — #223 round 3, M-B) and chains the
+  representative exception as `__cause__` (#223 round 2, C1); without it, a
+  multi-key set's DNS failure classified PERMANENT, QUIETER than the
+  original bare-`RuntimeError` bug it replaced. **Every probe/re-open
+  clears GDAL's OWN `/vsicurl/` cache first** (`compute._clear_vsicurl_
+  cache`, #223 round 4 review, CRITICAL R3-C1) — without it, a probe or a
+  "fresh" re-open reuses the file's CACHED, pre-outage headers and reports
+  "healthy" even while the network is still down, so an outage that
+  PERSISTS through reclassification (not just one that already cleared)
+  was still silently demoted: reproduced directly (job-equivalent probe,
+  2026-09-21), the reclassification itself reported "resolved to PERMANENT
+  via probe/reproduction" while the outage was ongoing. **If every key
+  probes healthy** (#223 round 3, I-A), the OLD fallback to `BuildVRT`'s
+  own generic "Can't open <url>." was ALSO wrong — that shape is exactly
+  what an outage ending BETWEEN the `BuildVRT` attempt and the probe looks
+  like, so it's now treated as a "buildvrt race window" (transient,
+  retries the build) UNLESS `BuildVRT`'s own message names a concrete
+  permanent condition, checked two ways (#223 round 4 review, IMPORTANT
+  R3-I1): a message matching the marker `"gdalbuildvrt does not
+  support"` (covers heterogeneous projection, band COUNT, and band DATA
+  TYPE alike — narrower wording that named only "heterogeneous
+  projection" wrongly called the other two transient, since `strict=True`
+  rejects them the SAME deterministic way), OR — as a backstop — an
+  IDENTICAL failure message on a same-inputs `BuildVRT` retry (classification-only,
+  never reused even on success). Analogously, an OPEN-time failure that
+  itself classifies `"unknown"` (round 3 assumed every open-time failure
+  is directly classifiable; a trickling header GET aborted by curl's
+  low-speed-abort gives "TIFFReadDirectory: Failed to read directory at
+  offset N", which is not — #223 round 4 review, IMPORTANT R3-I2) is
+  routed through the SAME cache-cleared per-key probe
+  (`compute._reclassify_unknown_open_failure`) rather than defaulting to
+  permanent. Note `strict=True`
+  is a real trade-off, not "unaffected" (#223 round 3, M-A): one bad key in
+  an otherwise-healthy multi-key set demotes/retries the WHOLE set, by
+  design — there is no silent per-key partial acceptance path. A
+  set/polygon that exhausts its in-place budget is DEFERRED, not
+  immediately failed — after every other set in the batch and the `_recover`
+  walk finish, `run_batch` pauses `compute._DEFERRED_PASS_PAUSE_S` (60 s) and
+  gives every deferred item ONE more full attempt; only if THAT also fails
+  transiently does `run_batch` FAIL THE WHOLE ARRAY TASK LOUDLY — raise,
+  write NO `batch_XXXX.parquet` — rather than silently falling through to a
+  lower-ranked candidate (#223 round 2, I4: the in-place budget can be
+  shorter than the real outage — see below). `n_recovered` counts a
+  candidate that only resolved on the deferred pass too (#223 round 3,
+  I-B), and a `_recover` walk resumed on the deferred pass picks up
+  immediately AFTER the candidate that deferred, never re-trying (and
+  re-counting) an earlier one already known permanently bad, running in
+  its OWN `ThreadPoolExecutor` pass AFTER the deferred pass's own executor
+  has fully exited rather than nested inside it (#223 round 3, M-C; round
+  4 review, M3 — nesting could reach 2x `n_threads` concurrent open
+  handles for no benefit). A shared `threading.Event`
+  lets a still-retrying sibling in the SAME pass bail out early once ANY
+  set/polygon in that pass confirms the network is down, instead of every
+  one independently burning its own in-place budget to the same conclusion
+  (I3);
+  it's reset before the deferred pass so that pass gets its own fair first
+  attempt. The operator's remedy for a task that still fails is to resubmit
+  that array index, AND its downstream stages, or resubmit the whole
+  `submit_dprst_depth.sh` DAG (idempotent) — see
+  `slurm_batch/HPC_REFERENCE.md`'s dprst_depth Recovery section.
+  This closes TWO real incidents (2026-09-20, tjc smoke rerun, 8 tile tasks
+  x 8 threads all starting within the same second). The first (job
+  4529029): a cluster-wide DNS failure ("CURL error: Could not resolve
+  host: prd-tnm.s3.amazonaws.com", 532 times across 5 nodes within the
+  single second 21:08:10) was, pre-fix, indistinguishable from a genuine
+  PERMANENT miss — `_attempt` immediately advanced the candidate walk, and
+  `_recover` deliberately skips the already-tried primary set, so once DNS
+  recovered a moment later every affected polygon resolved against a
+  lower-ranked candidate with no error at all: 4,822 of 5,535 polygons
+  (87%) were silently read from other than their correctly-ranked primary
+  source, and 578 single-candidate polygons got no row whatsoever. The
+  SECOND (job 4532393, discovered testing the round-1 fix): the outage
+  itself measured ~30s (21:49:54-21:50:24) while the then-5-attempt/~20s
+  in-place budget exhausted by 21:50:16 — 8s before the network actually
+  recovered — wrongly declaring a set persistent moments before it would
+  have succeeded; the deferred second pass exists for exactly this.
+  `interior_coverage` is written per polygon (a truncated
   interior is COVERAGE LOSS, not fill corruption — richdem excludes interior
   nodata cells) but nothing downstream FILTERS on it yet — the donor filter
   that would exclude low-coverage polygons from the regional calibration is
@@ -353,7 +490,86 @@ These are hard-won; violating them silently corrupts outputs.
   the project floor catches BOTH (357 and 875 are both < 900) — an earlier
   400/500-range project floor would have let the second incident (875
   projects) straight through, which is exactly what two independent review
-  passes caught.
+  passes caught. **An `"unknown"` cause-chain verdict is NEVER, by itself,
+  grounds to call a source permanent** (#223 round 5 review) — PERMANENT
+  requires EITHER an explicit marker/status matched in the chain, OR a
+  failure that reproduces while every key's header opens cleanly on a
+  cache CLEARED first (`_clear_vsicurl_cache`, R3-C1's own precondition —
+  a probe/reproduction against a STALE cached header can never tell
+  "unknown" apart from "permanent" either way). Rounds 2-4 each found
+  another call site where this slipped through; round 5's own finding
+  (CRITICAL R4-C1) was `_probe_keys_for_real_cause`'s per-key loop itself:
+  a failing key whose OWN chain classified `"unknown"` (a persistent
+  low-speed brown-out — curl aborting a trickling header fetch mid-probe —
+  surfaces as "TIFFReadDirectory: Failed to read directory at offset N",
+  carrying no HTTP/curl text, indistinguishable in shape from the OPEN-time
+  R3-I2 finding) was recorded as the representative PERMANENT cause, and
+  BOTH `_reclassify_unknown_read_failure` and `_reclassify_unknown_open_
+  failure` then called `_is_transient_error_chain(probed)` on it — `False`
+  for `"unknown"` — silently promoting a brown-out that was STILL ONGOING
+  to a confirmed-permanent verdict (reproduced directly, job-equivalent
+  probe, 2026-09-21: a persistent brown-out demoted at BOTH read and open
+  time). Fixed two ways, together: (1) the probe loop itself now returns a
+  failing key's exception immediately whenever that key's OWN chain is
+  NOT explicitly `"permanent"` (transient or unknown alike) — only a key
+  that EVERY OTHER failing key also confirms explicitly permanent ever
+  accumulates as the returned "permanent" cause; (2) both reclassify
+  functions now read a non-`None` probe result via `not
+  _is_permanent_error_chain(probed)`, not `_is_transient_error_chain
+  (probed)` — the former is `True` for both `"transient"` and `"unknown"`,
+  the latter wrongly `False` for `"unknown"` too. A SEPARATE, adjacent gap
+  the same audit found (IMPORTANT R4-I1): `open_tile_set`'s BuildVRT
+  backstop (R3-I1) used to set `real_cause = build_exc` directly when a
+  same-inputs retry reproduced an IDENTICAL failure with every key
+  probed healthy — but `build_exc` is a bare, unmarked message (e.g.
+  "Can't open <url>."), so `_classify_error_chain` read the resulting
+  `TileSetOpenError` as `"unknown"` too, and `_reclassify_unknown_open_
+  failure`'s own per-key probe (finding every key healthy, for the SAME
+  reason BuildVRT's backstop retry did) reclassified it TRANSIENT —
+  retrying, deferring, and ultimately FAILING THE WHOLE ARRAY TASK forever
+  over a condition a same-inputs retry had already PROVEN reproducible.
+  Fixed by wrapping that case in a new exception carrying an explicit
+  `"buildvrt failure reproduced on healthy keys"` marker (added to
+  `_PERMANENT_ERROR_MARKERS`), with `build_exc` preserved one level down
+  as `__cause__` for diagnostics. **The SAME audit also found this marker
+  gap was not unique to the backstop case**: `_PERMANENT_BUILDVRT_MARKERS`
+  ("gdalbuildvrt does not support", covering a genuinely heterogeneous
+  projection/band-count/band-dtype mosaic) was ALREADY a real, distinct
+  list from `_PERMANENT_ERROR_MARKERS` — `_build_exc_is_permanent` reads
+  the former to decide `real_cause = build_exc` in `open_tile_set`, but
+  nothing made `_classify_error_chain` (what every downstream caller
+  actually reads) recognize that same text, so EVERY genuinely
+  heterogeneous-mosaic tile set suffered the identical "unknown ->
+  wrongly-transient" failure mode, not just the backstop-reproduced one —
+  verified directly against a real `TileSetOpenError` built from a real
+  heterogeneous-CRS `BuildVRT` failure (classified `"unknown"` before this
+  fix). The two existing tests for that path
+  (`test_open_tile_set_still_treats_a_genuinely_heterogeneous_projection_
+  as_permanent`, and the band-count/dtype pair) only asserted
+  `_is_transient_error_chain(...) is False` — ALSO true for `"unknown"` —
+  which is exactly why this gap went unnoticed through three prior review
+  rounds; they now also assert `_is_permanent_error_chain(...) is True`.
+  Fixed by adding `"gdalbuildvrt does not support"` to `_PERMANENT_ERROR_
+  MARKERS` too, so the two marker lists agree on every case
+  `_build_exc_is_permanent` already recognized. **A full audit of every
+  `_classify_error_chain`/`_is_transient_error_chain`/`_is_permanent_
+  error_chain` call site in `compute.py`** (round 5's own mandate, since
+  rounds 2-4 each found ANOTHER instance) confirmed no OTHER site has this
+  flaw: `_retry_compute_one` and `_resolve_open_transient` both already
+  delegate an `"unknown"` verdict to the (now-fixed) reclassify functions
+  rather than defaulting it themselves; `_reclassify_unknown_read_
+  failure`'s OWN fresh-reproduction except-block (the case where
+  `_probe_keys_for_real_cause` found every key healthy in the FIRST
+  place) correctly treats a REPRODUCED `"unknown"` on that fresh,
+  cache-cleared connection as PERMANENT — that IS the doctrine's second
+  legitimate path to permanence, not a bug. Also fixed in the same round
+  (MINOR M-1): `_clear_vsicurl_cache` used to swallow every cache-clear
+  failure silently; it now logs WARNING for a genuine `/vsicurl/http(s)://
+  ...` key (the case R3-C1's whole fix depends on) and DEBUG for anything
+  else (a bare `/vsicurl/foo.tif` with no real host, or a local path —
+  verified directly that `gdal.VSICurlPartialClearCache` doesn't even
+  raise for a well-formed real URL regardless of host reachability; only a
+  `/vsicurl/`-prefixed key with NO scheme raises "Missing url parameter").
 - **`sources.assign_sources`'s per-polygon loop is slow enough to size SLURM
   jobs around.** Measured against the real staged inventory: ~9.97-15 ms per
   1m-tagged polygon (`rank_candidates`'s per-polygon `gpd.GeoDataFrame(...)`

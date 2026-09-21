@@ -809,6 +809,130 @@ pixi run python -m gfv2_params.dprst_depth.tiling --plan \
 - A failed/timed-out array task (stage 2) only owns its own
   `batch_XXXX.parquet` — resubmit just that index:
   `sbatch --array=<idx> --export=ALL,BASE_CONFIG=...,FABRIC=... slurm_batch/run_dprst_depth_batch.batch`.
+- **A task that fails with "persistent TRANSIENT-or-UNCLASSIFIED failure
+  through the deferred retry pass"** (`compute.run_batch`'s transient-vs-
+  permanent retry doctrine — see CLAUDE.md's dprst_depth bullet; wording as
+  of #223 round 5 review, final polish m1 — earlier builds said "TRANSIENT
+  network failure persisted") USUALLY means the network, not the data: a DNS
+  failure, connect/timeout, or an HTTP 0/408/429/5xx on
+  `prd-tnm.s3.amazonaws.com` (whether at a tile-set OPEN or DURING a
+  per-polygon READ on an already-open set — the two are classified
+  differently internally but retried/deferred the same way, #223 round 3)
+  outlasted every in-place retry AND the one
+  deferred retry (~2 minutes of BACKOFF in place — with GDAL's own retry
+  layer disabled for these attempts, so the RETRY COUNT is real, not
+  multiplied by GDAL's own internal retries, #223 round 3 M-D — then a
+  60s-plus-pause second attempt, issue #223 round 2) for one or more tile
+  sets/candidates. **That "~2 minutes" is the real total only for a
+  fast-failing error** (DNS, connection-refused, an HTTP status
+  response) — a HANG-type failure (a trickling or non-responding
+  connection) still pays GDAL's own per-request `GDAL_HTTP_TIMEOUT`
+  (60s)/`_CONNECTTIMEOUT` (30s)/`_LOW_SPEED_TIME` (30s) on top of that,
+  and one attempt can involve more than one request, so the realistic
+  worst case is TENS OF MINUTES per set/polygon (#223 round 4 review,
+  MINOR M2) — a task legitimately failing this way after that long is not
+  itself a sign of a bug.
+  **But the message is not always the network**: the wording says
+  "UNCLASSIFIED", not "network", because a genuinely corrupt object (a
+  zeroed TIFF IFD, an IFD offset past EOF) produces the SAME "unknown"
+  cause-chain shape as a live brown-out and so ALSO defers and eventually
+  raises here — that's doctrine-consistent (an "unknown" verdict is never
+  treated as permanent, #223 round 5), not a bug. **If this recurs on a
+  resubmit** (the network has genuinely had time to recover and the task
+  still fails the same way), suspect the OBJECT, not the network: the raise
+  now names each affected tile set's LAST exception message
+  (`(last: ...)` — #223 round 5 review, m1) — pull the key(s) from that
+  text and `curl -I`/`curl` (HEAD/GET) them directly; a corrupted or
+  truncated response confirms a data defect that retrying can never fix, and
+  the remedy is re-staging that object (or excluding it), not resubmitting
+  again.
+  No `batch_XXXX.parquet` is written for that task, so it is simply missing,
+  not wrong — **just resubmit that same array index** once the network has
+  recovered, exactly as for any other failed/timed-out array task above. Do
+  NOT reach for `--force` or a re-plan: the primary tile set assignment for
+  those polygons is still correct, only the read attempt failed. **Also
+  resubmit (or re-run) the downstream stages** — `afterok` chaining means a
+  failed array task already cancelled the Build/mean-zonal/finalize jobs
+  behind it, so a lone `sbatch --array=<idx> ...` resubmit of the array task
+  alone leaves the rest of the DAG un-submitted; either chain the remaining
+  stages by hand from `slurm_batch/HPC_REFERENCE.md`'s per-stage commands
+  above, or just re-run the whole `submit_dprst_depth.sh "$BATCHES" <fabric>
+  configs/base_config.yml <N_TILE_BATCHES>` — it's idempotent (the plan step
+  deletes and rewrites the per-batch parquets, so a full re-run costs
+  recompute time, never a wrong product). **Residual narrow window (#223
+  round 5 review, final polish m2):** the read-path disambiguation can still
+  read PERMANENT in two edge cases neither cache-clearing nor the per-key
+  probe closes — an outage that resumes in the few milliseconds between the
+  cache-cleared probe/fresh-read and the READ it's meant to validate, or a
+  degradation that affects block/range GETs but spares the small (~16 KB)
+  header GET the probe itself relies on — so a resolved-PERMANENT verdict on
+  the read path is not an absolute guarantee against a very-short or
+  GET-size-selective blip; this is a known, accepted gap, not a defect to
+  chase with a bigger probe.
+- **A task's log showing `n_transient_retry > 0` in its summary line, even
+  when it did NOT fail** is a real network hiccup the batch rode out —
+  every affected polygon still resolved on its correct primary/candidate
+  source, so nothing needs resubmitting, but the summary escalates to
+  WARNING specifically so this is visible on a normal log scan (worth a
+  glance to confirm it's not the start of a wider outage).
+- **A task that fails/logs with a `n_compute_error > 0` summary (ERROR
+  level) instead** is a different signal — a genuine code/data bug (a
+  corrupt COG, a bad/missing CRS, a `MemoryError`) rather than a network
+  blip or a routine permanent read gap (any 4xx except 408/429, an
+  unreadable object, a heterogeneous `BuildVRT` mosaic — those count as
+  `n_read_failure` and walk the candidate list as before) — and
+  resubmitting the same index will not fix it; it needs investigation
+  first.
+- **A multi-key primary set with only ONE genuinely bad key still demotes
+  the WHOLE set** (`strict=True` — #223 round 3, M-A) — this is a
+  deliberate trade-off, not a bug: the alternative (silently mosaicking
+  the healthy keys and dropping the bad one) is the exact failure mode
+  `strict=True` replaced. A polygon whose window happens to fall entirely
+  on the healthy keys still pays for the bad one; the set-level retry/
+  deferral/candidate-walk is what recovers it.
+- **Incident note (2026-09-20, tjc smoke rerun, job 4532393):** the
+  rerun's SECOND failure was not a persistent host outage — the real DNS
+  outage measured ~30s (21:49:54-21:50:24), while the code's
+  then-5-attempt/~20s in-place retry budget exhausted by 21:50:16, 8s
+  before the network actually recovered, and the same set opened fine
+  again moments later. The retry budget was simply shorter than the
+  outage it was meant to survive, not a sign the host was actually down
+  for good. This is what `compute.run_batch`'s DEFERRED second pass (a
+  60s-plus pause, then one more full retry attempt before treating a
+  failure as persistent) now guards against.
+- **Incident note (#223 round 4 review):** a reviewer's own real-GDAL
+  reproduction found the round-3 fix above STILL demoted a polygon when
+  an outage PERSISTED through the reclassification check itself, because
+  GDAL's in-process `/vsicurl/` cache served the disambiguation probe and
+  the "fresh" re-read from the file's CACHED, pre-outage headers, so both
+  reported "healthy" while the network was genuinely still down.
+  `compute._clear_vsicurl_cache` now clears that cache before every such
+  probe/re-open. No operator action needed for this one — it's a code
+  fix, not a new failure mode to recognize — but it explains why a task
+  from before this fix landed could have silently shipped a demoted
+  polygon during an outage that hadn't actually cleared yet.
+- **Incident note (#223 round 5 review):** the round-4 fix above cleared
+  the cache, but the DISAMBIGUATION LOGIC itself still had a gap: a probed
+  key whose own chain classified `"unknown"` (not just an explicit
+  permanent marker/status) was wrongly folded into the "permanent" verdict
+  at three call sites, so a PERSISTENT brown-out — one that had not
+  cleared even by the time the probe/reproduction ran — could still be
+  wrongly declared permanent and demote to a lower-ranked candidate.
+  Separately, `open_tile_set`'s BuildVRT backstop (round 4) could reclassify
+  a genuinely reproducible, permanent `BuildVRT` defect as transient for the
+  same underlying reason, risking an array task that retries/defers/fails
+  forever over a condition that will never resolve on retry — the operator
+  symptom for THAT case is a task that keeps failing with "persistent
+  TRANSIENT-or-UNCLASSIFIED failure" even though the network is fine, on a tile set whose
+  `BuildVRT` failure is a genuine, reproducible defect (heterogeneous
+  projection/band-count/band-dtype, or another condition `BuildVRT` doesn't
+  happen to name). Both are code fixes (an "unknown" cause-chain verdict is
+  now never, by itself, treated as permanent; the BuildVRT case now carries
+  an explicit marker) — no operator action needed for a task run AFTER this
+  fix, but it explains why a pre-fix task could have (a) silently shipped a
+  demoted polygon during a brown-out that never actually cleared, or (b)
+  spuriously failed the whole array on a genuinely permanent (not network)
+  `BuildVRT` defect.
 - Re-running the plan step (stage 1) **deletes the per-batch parquets** and
   rewrites `_plan/*` (#221), so re-run the whole array after it — or just use
   `submit_dprst_depth.sh`, which always runs plan → array → build together.
