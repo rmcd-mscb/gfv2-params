@@ -906,6 +906,29 @@ def test_compute_depths_ingests_and_dedupes_batch_parquets(tmp_path):
     assert by_comid.loc[700, "dprst_depth_m"] == pytest.approx(3.0)
 
 
+def test_compute_depths_empty_batch_keeps_depths_numeric(tmp_path):
+    """A small fabric leaves some array batches empty, written by
+    `compute._empty_batch_frame` with every column `object`. Under pandas 3 the
+    concat used to promote `dprst_depth_m` to `object`, and `burn_depth`'s
+    `np.isfinite` then raised (flaming_gorge, job 4619566). Depths must stay float."""
+    from gfv2_params.dprst_depth import compute
+
+    batch_dir = tmp_path / "dprst_depth_batches"
+    batch_dir.mkdir()
+    _write_plan(batch_dir, [600, 700], n_batches=2)
+    _write_batch(batch_dir, 0, [600, 700], [2.0, 3.0])
+    compute._empty_batch_frame().to_parquet(batch_dir / "batch_0001.parquet", index=False)
+
+    step_cfg = {"batch_dir": str(batch_dir)}
+    dprst = _make_dprst_gdf([600, 700])
+
+    out = dprst_depth._compute_depths(dprst, ctx=_parquet_ctx(tmp_path), step_cfg=step_cfg, logger=_L())
+
+    assert sorted(out["COMID"].tolist()) == [600, 700]
+    assert pd.api.types.is_float_dtype(out["dprst_depth_m"])
+    assert np.isfinite(out["dprst_depth_m"]).all()
+
+
 def test_output_columns_and_depth_columns_declare_the_same_set():
     """(#223 review round 3, also-fix 5) `_compute_depths`'s missing-column raise
     (round 2, finding 3) is scoped to the loaded-from-disk `parquet_files` branch

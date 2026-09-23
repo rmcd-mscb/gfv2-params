@@ -336,7 +336,15 @@ def _compute_depths(
             "(verified against its plan)",
             len(parquet_files), batch_dir,
         )
-        depth_df = pd.concat([pd.read_parquet(f) for f in parquet_files], ignore_index=True)
+        # Drop EMPTY batches before the concat. `compute._empty_batch_frame` writes
+        # every column as `object`, and pandas 3 no longer ignores empty frames when
+        # resolving dtypes -- so on a small fabric (flaming_gorge: 26 of 150 batches
+        # empty) one empty batch turned `dprst_depth_m` into `object` and
+        # `burn_depth`'s `np.isfinite` raised. Filtering here, not only at the
+        # writer, is what repairs batch dirs already on disk. Keep one frame if all
+        # are empty so the schema check below still sees the columns.
+        frames = [pd.read_parquet(f) for f in parquet_files]
+        depth_df = pd.concat([f for f in frames if len(f)] or frames[:1], ignore_index=True)
         # `_fill_and_join`'s `keep_cols = [c for c in _DEPTH_COLUMNS if c in
         # depth_df.columns]` silently drops whatever's missing -- fine for a
         # legitimately EMPTY batch (`compute._empty_batch_frame` guarantees every
