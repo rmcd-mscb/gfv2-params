@@ -167,8 +167,15 @@ Scaffold the full directory tree under `data_root`:
 
 ```bash
 pixi run init-data-root
-pixi run init-data-root --check    # verify manually-staged inputs are present
+pixi run init-data-root --check    # exits 1 and lists any staged input that is missing
 ```
+
+`--check` covers the manually-staged files below plus the shared depstor
+layers the active profile names (`nhd_waterbodies.gpkg`, the BurnAdd and sink
+tables, `wbd_huc12.parquet`, `us_eco_l3.gpkg`, the 3DEP inventory; staged by
+the `gfv2_params.download.*` modules and `stage_dem_1m_inventory.batch`, see
+RUNME Step 0). It checks inputs only, never the `shared/` products Stage 1
+builds; `scripts/check_fabric_profile.py` checks those before a fabric run.
 
 Manually-staged files required before `--check`:
 

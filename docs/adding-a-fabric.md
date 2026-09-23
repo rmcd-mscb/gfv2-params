@@ -304,17 +304,21 @@ The parameter files are here, one CSV per parameter:
 proves nothing, because the gap-fill step adds a row for every missing HRU, so
 the count is always right. The two checks that do discriminate:
 
-- The pre-fill copy at `merged/_unfilled/<name>.csv` should also have your HRU
-  count plus one header line. A shortfall there means some batches produced no
-  data and the fill step invented them.
-- The fill job's `.err` log should say `Found 0 missing` for each parameter,
-  and every file's modification time must be later than the time you submitted
-  the chain. On a re-run, files older than the submission are the previous
-  run's product.
+- The fill job's `.err` log should say `Found 0 missing` for each parameter.
+  This is the check that works on every run.
+- Every `merged/*.csv` file's modification time must be later than the time
+  you submitted the chain. On a re-run, a file older than the submission is
+  the previous run's product. (Only the files directly in `merged/`: the
+  `_unfilled/` and `_intermediates/` subfolders are written once and kept.)
+- On a fabric's **first** run only, the pre-fill copy at
+  `merged/_unfilled/<name>.csv` should also have your HRU count plus one header
+  line. A shortfall there means some batches produced no data and the fill step
+  invented them. On a re-run that folder still holds the first run's copy, so
+  do not read it as the current result.
 
 ```bash
+ls -l --time-style=long-iso /caldera/hovenweep/projects/usgs/water/impd/nhgf/gfv2_param_v2/myfabric/params/merged/*.csv
 wc -l /caldera/hovenweep/projects/usgs/water/impd/nhgf/gfv2_param_v2/myfabric/params/merged/_unfilled/nhm_elevation_params.csv
-ls -l --time-style=long-iso /caldera/hovenweep/projects/usgs/water/impd/nhgf/gfv2_param_v2/myfabric/params/merged/
 ```
 
 **Two numbers to read and record.** They are in the `.err` log of the first
