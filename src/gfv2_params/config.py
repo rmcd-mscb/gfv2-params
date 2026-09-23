@@ -18,6 +18,22 @@ VPU_RASTER_MAP = {
     "OR": "17",
 }
 
+# Path-valued profile keys naming the SHARED CONUS depstor inputs -- identical for
+# every fabric, staged once per data root. Read by both `init-data-root --check`
+# (are they staged?) and `scripts/check_fabric_profile.py` (does this profile's
+# value exist?), so the list lives here once. A profile that does not declare one
+# of these is a documented omission (tjc has no burn_add_waterbody_table).
+SHARED_DEPSTOR_INPUT_KEYS = (
+    "waterbody_gpkg",
+    "wbd_huc12_table",
+    "burn_add_waterbody_table",
+    "sink_points_table",
+    "ecoregions_gpkg",
+    "dem_1m_inventory",
+    "wesm_project_attrs",
+    "twi_raster",
+)
+
 # Default base config location (relative to this file -> repo root)
 _DEFAULT_BASE_CONFIG = Path(__file__).resolve().parent.parent.parent / "configs" / "base_config.yml"
 

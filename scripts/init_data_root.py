@@ -25,7 +25,7 @@ import re
 import textwrap
 from pathlib import Path
 
-from gfv2_params.config import _DEFAULT_BASE_CONFIG, load_base_config
+from gfv2_params.config import _DEFAULT_BASE_CONFIG, SHARED_DEPSTOR_INPUT_KEYS, load_base_config
 from gfv2_params.log import configure_logging
 
 # ---------------------------------------------------------------------------
@@ -258,17 +258,9 @@ _FIXED_REQUIRED_PATHS = (
 # can never name a file no profile reads (the retired
 # input/depstor/<fabric>_segments_wbodies.gpkg sentinel did exactly that). A key
 # a profile does not declare is a documented, legitimate omission (tjc has no
-# burn_add_waterbody_table) and is not checked.
-_SHARED_INPUT_PROFILE_KEYS = (
-    "waterbody_gpkg",
-    "wbd_huc12_table",
-    "burn_add_waterbody_table",
-    "sink_points_table",
-    "ecoregions_gpkg",
-    "dem_1m_inventory",
-    "wesm_project_attrs",
-    "twi_raster",
-)
+# burn_add_waterbody_table) and is not checked. The key list is shared with
+# scripts/check_fabric_profile.py via config.py.
+_SHARED_INPUT_PROFILE_KEYS = SHARED_DEPSTOR_INPUT_KEYS
 
 
 def validate_inputs(data_root: Path, config: dict, logger) -> None:

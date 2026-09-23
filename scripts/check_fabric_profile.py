@@ -36,24 +36,14 @@ from pathlib import Path
 import pandas as pd
 import pyogrio
 
-from gfv2_params.config import load_base_config, require_config_key
+from gfv2_params.config import SHARED_DEPSTOR_INPUT_KEYS, load_base_config, require_config_key
 from gfv2_params.depstor_builders.vpu_id import resolve_vpu_source, vpu_to_code
 
 # Path-valued profile keys, checked only when the profile declares them. An
 # undeclared key is a documented omission (tjc has no burn_add_waterbody_table),
-# not a missing file.
-_PATH_KEYS = (
-    "template_raster",
-    "fdr_raster",
-    "twi_raster",
-    "waterbody_gpkg",
-    "wbd_huc12_table",
-    "burn_add_waterbody_table",
-    "sink_points_table",
-    "ecoregions_gpkg",
-    "dem_1m_inventory",
-    "wesm_project_attrs",
-)
+# not a missing file. The fabric-owned FDR clip plus the shared CONUS inputs
+# `init-data-root --check` also verifies (one list, in config.py).
+_PATH_KEYS = ("template_raster", "fdr_raster") + SHARED_DEPSTOR_INPUT_KEYS
 
 _SCRIPT = "check_fabric_profile"
 
