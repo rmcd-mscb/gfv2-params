@@ -212,3 +212,53 @@ def test_main_exits_nonzero_on_failure_and_zero_on_success(tmp_path, capsys):
     rc = check_fabric_profile.main(["--fabric", "demo", "--base_config", str(base)])
     assert rc == 0
     assert "FAIL" not in capsys.readouterr().out
+
+
+def test_a_text_id_column_fails_instead_of_crashing(tmp_path):
+    """A string id column must come back as a FAIL line, not a traceback:
+    every check runs so the whole punch-list comes out of one run."""
+    gpkg = _write_fabric(tmp_path / "demo.gpkg", ["a", "b", "c"])
+    results = run_checks(_profile(tmp_path, gpkg))
+    failed = _failed(results)
+    assert "id column is integer" in failed
+    assert "a" in failed["id column is integer"]
+    assert any(r.name == "vpu resolves" for r in results)  # later checks still ran
+
+
+def test_an_all_null_id_column_fails_instead_of_crashing(tmp_path):
+    gpkg = _write_fabric(tmp_path / "demo.gpkg", [None, None, None])
+    results = run_checks(_profile(tmp_path, gpkg))
+    failed = _failed(results)
+    assert "id column has no nulls" in failed
+    assert "id column contiguous 1..N" in failed
+    assert any(r.name == "vpu resolves" for r in results)
+
+
+def test_an_empty_hru_layer_fails_instead_of_crashing(tmp_path):
+    gpkg = tmp_path / "demo.gpkg"
+    empty = gpd.GeoDataFrame({"hru_id": []}, geometry=gpd.GeoSeries([], crs="EPSG:5070"))
+    empty.to_file(gpkg, layer="nhru", driver="GPKG")
+    results = run_checks(_profile(tmp_path, gpkg, segments_gpkg=None))
+    failed = _failed(results)
+    assert "id column contiguous 1..N" in failed
+    assert "expected_max_hru_id matches" in failed
+    assert any(r.name == "vpu resolves" for r in results)
+
+
+def test_a_bad_value_in_the_vpu_attribute_fails(tmp_path):
+    """The multi-VPU path: vpu_id calls vpu_to_code on every row, so one bad
+    value raises hours into the depstor stack. Check the distinct values now."""
+    gpkg = _write_fabric(tmp_path / "demo.gpkg", [1, 2, 3], vpu_attr=["14", "14", "99"])
+    cfg = _profile(tmp_path, gpkg)
+    del cfg["vpu"]
+    failed = _failed(run_checks(cfg))
+    assert "vpu resolves" in failed
+    assert "99" in failed["vpu resolves"]
+
+
+def test_sub_region_labels_in_the_vpu_attribute_pass(tmp_path):
+    """03N / 10U map to their parent raster VPU, exactly as vpu_to_code does."""
+    gpkg = _write_fabric(tmp_path / "demo.gpkg", [1, 2, 3], vpu_attr=["03N", "10U", "10L"])
+    cfg = _profile(tmp_path, gpkg)
+    del cfg["vpu"]
+    assert "vpu resolves" not in _failed(run_checks(cfg))

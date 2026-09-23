@@ -33,6 +33,7 @@ import argparse
 from dataclasses import dataclass
 from pathlib import Path
 
+import pandas as pd
 import pyogrio
 
 from gfv2_params.config import load_base_config, require_config_key
@@ -96,14 +97,33 @@ def _check_ids(results: list[CheckResult], config: dict, gpkg: Path, layer: str,
         return
     results.append(CheckResult("id column present", True, id_col))
 
-    ids = pyogrio.read_dataframe(gpkg, layer=layer, columns=[id_col], read_geometry=False)[id_col]
-    n_null = int(ids.isna().sum())
+    raw = pyogrio.read_dataframe(gpkg, layer=layer, columns=[id_col], read_geometry=False)[id_col]
+    n_null = int(raw.isna().sum())
     results.append(CheckResult(
         "id column has no nulls", n_null == 0,
         f"{n_null} null id(s)" if n_null else "no nulls",
     ))
-    ids = ids.dropna().astype("int64")
+    raw = raw.dropna()
+
+    # A text column, or a float column with fractional values, is not an id
+    # column. Report it rather than let the cast raise a traceback.
+    numeric = pd.to_numeric(raw, errors="coerce")
+    bad = raw[numeric.isna() | (numeric % 1 != 0)]
+    if len(bad):
+        results.append(CheckResult(
+            "id column is integer", False,
+            f"non-integer value(s): {bad.astype(str).unique()[:5].tolist()}",
+        ))
+        return
+    results.append(CheckResult("id column is integer", True, str(raw.dtype)))
+    ids = numeric.astype("int64")
     n = len(ids)
+    expected = config.get("expected_max_hru_id")
+
+    if n == 0:
+        results.append(CheckResult("id column contiguous 1..N", False, "no ids at all (empty layer, or every id null)"))
+        results.append(CheckResult("expected_max_hru_id matches", False, f"profile says {expected}, the gpkg has no ids"))
+        return
 
     dup = sorted(ids[ids.duplicated()].unique().tolist())
     results.append(CheckResult(
@@ -120,11 +140,41 @@ def _check_ids(results: list[CheckResult], config: dict, gpkg: Path, layer: str,
         else f"{n} rows but ids run {lo}..{hi}; missing from 1..{n}: {missing[:10]}",
     ))
 
-    expected = config.get("expected_max_hru_id")
     results.append(CheckResult(
         "expected_max_hru_id matches", expected == hi,
         f"profile says {expected}, the gpkg's highest id is {hi}",
     ))
+
+
+def _check_vpu(config: dict, gpkg: Path, layer: str, fields: list[str] | None) -> CheckResult:
+    """Resolve `vpu` the way vpu_id.build() will, and validate the VALUES it will see.
+
+    On the scalar path that is the one profile value. On the attribute path
+    (a multi-VPU fabric, the gfv2 pattern) `vpu_id` calls `vpu_to_code` on
+    every row while rasterizing, so one bad value in the column raises hours
+    into the depstor stack. Check every distinct value now.
+    """
+    try:
+        kind, value = resolve_vpu_source(config.get("vpu"), fields is not None and "vpu" in fields)
+    except ValueError as exc:
+        return CheckResult("vpu resolves", False, str(exc))
+    if kind == "scalar":
+        try:
+            vpu_to_code(value)
+        except ValueError as exc:
+            return CheckResult("vpu resolves", False, str(exc))
+        return CheckResult("vpu resolves", True, f"scalar: {value}")
+
+    values = pyogrio.read_dataframe(gpkg, layer=layer, columns=["vpu"], read_geometry=False)["vpu"]
+    bad = []
+    for v in values.dropna().unique():
+        try:
+            vpu_to_code(v)
+        except ValueError:
+            bad.append(str(v))
+    if bad:
+        return CheckResult("vpu resolves", False, f"`vpu` attribute has value(s) that are not a VPU: {bad[:10]}")
+    return CheckResult("vpu resolves", True, f"attribute: {sorted(values.dropna().astype(str).unique().tolist())}")
 
 
 def run_checks(config: dict) -> list[CheckResult]:
@@ -144,13 +194,7 @@ def run_checks(config: dict) -> list[CheckResult]:
     if fields is not None:
         _check_ids(results, config, hru_gpkg, hru_layer, fields)
 
-    try:
-        kind, value = resolve_vpu_source(config.get("vpu"), fields is not None and "vpu" in fields)
-        if kind == "scalar":
-            vpu_to_code(value)
-        results.append(CheckResult("vpu resolves", True, f"{kind}: {value}"))
-    except ValueError as exc:
-        results.append(CheckResult("vpu resolves", False, str(exc)))
+    results.append(_check_vpu(config, hru_gpkg, hru_layer, fields))
 
     for key in _PATH_KEYS:
         if key in config:
