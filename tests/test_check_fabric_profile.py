@@ -262,3 +262,132 @@ def test_sub_region_labels_in_the_vpu_attribute_pass(tmp_path):
     cfg = _profile(tmp_path, gpkg)
     del cfg["vpu"]
     assert "vpu resolves" not in _failed(run_checks(cfg))
+
+
+# --- review round 2: nothing may escape as a traceback, nothing may mask a FAIL ---
+
+
+def test_a_null_in_the_vpu_attribute_fails(tmp_path):
+    """vpu_id calls vpu_to_code on EVERY row, nulls included; a null raises there.
+    Dropping nulls before the check would report PASS for a fabric that fails
+    at step 11 of the depstor stack."""
+    gpkg = _write_fabric(tmp_path / "demo.gpkg", [1, 2, 3], vpu_attr=["14", None, "14"])
+    cfg = _profile(tmp_path, gpkg)
+    del cfg["vpu"]
+    failed = _failed(run_checks(cfg))
+    assert "vpu resolves" in failed
+    assert "null" in failed["vpu resolves"]
+
+
+def test_an_unreadable_hru_gpkg_fails_instead_of_crashing(tmp_path):
+    """A 0-byte file (an interrupted cp in Step 2) is not a gpkg."""
+    gpkg = tmp_path / "demo.gpkg"
+    gpkg.touch()
+    results = run_checks(_profile(tmp_path, gpkg, segments_gpkg=None))
+    failed = _failed(results)
+    assert "hru_gpkg readable" in failed
+    assert any(r.name == "vpu resolves" for r in results)
+
+
+def test_an_unreadable_segments_gpkg_fails_and_the_id_checks_still_run(tmp_path):
+    gpkg = _write_fabric(tmp_path / "demo.gpkg", [1, 2, 3], with_segments=False)
+    broken = tmp_path / "segments.gpkg"
+    broken.write_text("not a geopackage")
+    results = run_checks(_profile(tmp_path, gpkg, segments_gpkg=str(broken)))
+    failed = _failed(results)
+    assert "segments_gpkg readable" in failed
+    assert any(r.name == "id column contiguous 1..N" and r.ok for r in results)
+
+
+def test_an_empty_segments_layer_fails(tmp_path):
+    """A present-but-empty nsegment layer makes every waterbody depression storage."""
+    gpkg = _write_fabric(tmp_path / "demo.gpkg", [1, 2, 3], with_segments=False)
+    empty = gpd.GeoDataFrame({"seg_id": []}, geometry=gpd.GeoSeries([], crs="EPSG:5070"))
+    empty.to_file(gpkg, layer="nsegment", driver="GPKG", mode="a")
+    failed = _failed(run_checks(_profile(tmp_path, gpkg)))
+    assert "segments_layer has features" in failed
+
+
+def test_missing_id_feature_key_fails_instead_of_crashing(tmp_path):
+    gpkg = _write_fabric(tmp_path / "demo.gpkg", [1, 2, 3])
+    cfg = _profile(tmp_path, gpkg)
+    del cfg["id_feature"]
+    results = run_checks(cfg)
+    assert "id_feature declared" in _failed(results)
+    assert any(r.name == "vpu resolves" for r in results)
+
+
+def test_missing_hru_gpkg_key_fails_instead_of_crashing(tmp_path):
+    cfg = _profile(tmp_path, tmp_path / "demo.gpkg")
+    del cfg["hru_gpkg"]
+    results = run_checks(cfg)
+    assert "hru_gpkg declared" in _failed(results)
+    assert results
+
+
+def test_missing_hru_layer_or_segments_gpkg_key_fails(tmp_path):
+    """The pipeline requires both (require_config_key / segment_wbody raises);
+    the validator must not default them and report PASS."""
+    gpkg = _write_fabric(tmp_path / "demo.gpkg", [1, 2, 3])
+    cfg = _profile(tmp_path, gpkg)
+    del cfg["hru_layer"]
+    assert "hru_layer declared" in _failed(run_checks(cfg))
+    cfg = _profile(tmp_path, gpkg)
+    del cfg["segments_gpkg"]
+    assert "segments_gpkg declared" in _failed(run_checks(cfg))
+
+
+def test_a_null_path_value_fails_instead_of_crashing(tmp_path):
+    """A user who blanks `twi_raster:` in the profile gets a FAIL line, not a TypeError,
+    and the remaining path checks still run."""
+    gpkg = _write_fabric(tmp_path / "demo.gpkg", [1, 2, 3])
+    present = tmp_path / "us_eco_l3.gpkg"
+    present.touch()
+    cfg = _profile(tmp_path, gpkg, twi_raster=None, ecoregions_gpkg=str(present))
+    results = run_checks(cfg)
+    failed = _failed(results)
+    assert "twi_raster declared" in failed
+    assert any(r.name == "ecoregions_gpkg exists" and r.ok for r in results)
+
+
+def test_expected_max_hru_id_must_be_a_plain_integer(tmp_path):
+    """1745.0 passes `==` but breaks range() at the fill stage; "1745" (quoted like vpu)
+    fails the comparison with a message showing two equal numbers."""
+    gpkg = _write_fabric(tmp_path / "demo.gpkg", [1, 2, 3])
+    for bad in (3.0, "3", True):
+        failed = _failed(run_checks(_profile(tmp_path, gpkg, expected_max_hru_id=bad)))
+        assert "expected_max_hru_id is an integer" in failed, bad
+
+
+def test_every_declared_path_key_missing_on_disk_is_reported(tmp_path):
+    """Including template_raster / fdr_raster: the case a user who skipped the clip step hits."""
+    gpkg = _write_fabric(tmp_path / "demo.gpkg", [1, 2, 3])
+    keys = check_fabric_profile._PATH_KEYS
+    cfg = _profile(tmp_path, gpkg, **{k: str(tmp_path / f"{k}.missing") for k in keys})
+    failed = _failed(run_checks(cfg))
+    for k in keys:
+        assert f"{k} exists" in failed, k
+
+
+def test_main_reports_an_unknown_fabric_as_a_fail_line(tmp_path, capsys):
+    base = tmp_path / "base_config.yml"
+    base.write_text(yaml.safe_dump({"data_root": str(tmp_path), "fabrics": {"demo": {}}}))
+    rc = check_fabric_profile.main(["--fabric", "nope", "--base_config", str(base)])
+    out = capsys.readouterr().out
+    assert rc == 1
+    assert "FAIL" in out and "nope" in out
+
+
+def test_every_repo_profile_runs_without_raising():
+    """Every fabric in the real configs/base_config.yml goes through run_checks.
+
+    In CI the data root does not exist, so paths FAIL; the assertion is that no
+    profile makes the validator raise instead of reporting.
+    """
+    from gfv2_params.config import load_base_config
+
+    base = _REPO_ROOT / "configs" / "base_config.yml"
+    fabrics = yaml.safe_load(base.read_text())["fabrics"]
+    for fabric in fabrics:
+        results = run_checks(load_base_config(base, fabric=fabric))
+        assert results, fabric
