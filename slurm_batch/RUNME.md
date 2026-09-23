@@ -8,10 +8,20 @@ in [HPC_REFERENCE.md](HPC_REFERENCE.md).
 
 ## Before you start
 
-- Run `pixi install` once from the repo root; ensure `~/.pixi/bin` is on `PATH`.
+- **Your own clone:** run `pixi install` once from the repo root; ensure
+  `~/.pixi/bin` is on `PATH`.
+- **A checkout someone else also uses:** never run `pixi init`, `pixi install`
+  or `pixi lock` there — the env is already built, and a lock or env change
+  lands under every other user's running jobs. Put `--as-is` on every
+  `pixi run`, login node included. Your own `pixi` must be new enough to read
+  the checkout's `pixi.lock` (`pixi --version`; `pixi self-update` if not).
 - Always run `sbatch` / `submit_*.sh` from a shell where `~/.pixi/bin` is on
   `PATH` (SLURM inherits it — a missing PATH causes immediate `pixi: command not found`).
-- Run everything from the repo root (`cd <repo>`).
+- Run everything from the repo root (`cd <repo>`), by its absolute path, and
+  check `pwd`: a second clone with the same basename under another parent is
+  the wrong place, and its first symptom is `command not found`.
+- Running a fabric other than CONUS `gfv2` for the first time? Start at
+  [`docs/adding-a-fabric.md`](../docs/adding-a-fabric.md), not here.
 
 ---
 
@@ -31,7 +41,17 @@ sbatch slurm_batch/download_nhm_v11.batch
 sbatch slurm_batch/stage_twi.batch
 ```
 > Wait for all four jobs `COMPLETED`. Then stage the manual inputs listed in
-> `README.md` (soils, LULC, NHM defaults), then verify:
+> `README.md` (soils, LULC, NHM defaults), then the shared depstor layers:
+```bash
+srun -p cpu -A impd --time=02:00:00 --ntasks=1 --cpus-per-task=4 --mem=48G \
+  pixi run --as-is python -m gfv2_params.download.nhd_waterbodies
+pixi run --as-is python -m gfv2_params.download.nhd_burn_components
+pixi run --as-is python -m gfv2_params.download.wbd_huc12
+pixi run --as-is python -m gfv2_params.download.epa_ecoregions
+sbatch slurm_batch/stage_dem_1m_inventory.batch  # ~30-35 min
+```
+> Wait for the inventory job `COMPLETED`, then verify every staged input is
+> present (`--check` exits 1 and lists what is missing otherwise):
 ```bash
 pixi run init-data-root --check
 
@@ -51,12 +71,7 @@ sbatch slurm_batch/prepare_fabric.batch
 ```bash
 
 # 3 · Build depression-storage rasters
-#     One-time downloads (skip if already staged in this data_root):
-srun -p cpu -A impd --time=02:00:00 --ntasks=1 --cpus-per-task=4 --mem=48G \
-  pixi run --as-is python -m gfv2_params.download.nhd_waterbodies
-pixi run --as-is python -m gfv2_params.download.nhd_burn_components
-pixi run --as-is python -m gfv2_params.download.wbd_huc12
-sbatch slurm_batch/stage_dem_1m_inventory.batch  # ~30-35 min; must COMPLETE before submit_dprst_depth.sh below
+#     (the shared NHD/WBD/ecoregion/3DEP layers were staged in Step 0)
 pixi run --as-is python scripts/clip_shared_to_fabric.py --fabric gfv2
 #     Depstor raster stack — run in this order, waiting for each to COMPLETE:
 sbatch slurm_batch/build_depstor_rasters.batch --step landmask
@@ -362,16 +377,25 @@ sbatch slurm_batch/download_rpu_rasters.batch
 sbatch slurm_batch/download_nalcms.batch
 sbatch slurm_batch/download_nhm_v11.batch
 sbatch slurm_batch/stage_twi.batch
+# shared depstor layers (once per data root):
+srun -p cpu -A impd --time=02:00:00 --ntasks=1 --cpus-per-task=4 --mem=48G pixi run --as-is python -m gfv2_params.download.nhd_waterbodies
+pixi run --as-is python -m gfv2_params.download.nhd_burn_components
+pixi run --as-is python -m gfv2_params.download.wbd_huc12
+pixi run --as-is python -m gfv2_params.download.epa_ecoregions
+sbatch slurm_batch/stage_dem_1m_inventory.batch
 pixi run init-data-root --check     # after downloads + manual inputs are in place
 ```
 
 **What it does:** scaffolds `data_root`, downloads the public rasters (~112 GB
-NHDPlus RPU, ~2 GB NALCMS, NHM v1.1 LULC), stages per-RPU TWI; `--check`
-verifies manually-staged inputs. (Manual-input table + provenance →
-HPC_REFERENCE "Stage 0".)
+NHDPlus RPU, ~2 GB NALCMS, NHM v1.1 LULC), stages per-RPU TWI and the shared
+NHD/WBD/ecoregion/3DEP depstor layers; `--check` verifies every staged input
+the active profile names and exits 1, listing the missing ones, if any is
+absent. It checks inputs only: the `shared/` products Step 1 builds are
+verified later by `scripts/check_fabric_profile.py`. (Manual-input table +
+provenance → HPC_REFERENCE "Stage 0".)
 
-**Wait for:** the four download/stage jobs `COMPLETED` in `squeue`, and
-`init-data-root --check` reporting all inputs present.
+**Wait for:** the download/stage jobs `COMPLETED` in `squeue`, and
+`init-data-root --check` exiting 0 ("All required staged inputs are present").
 
 ---
 
@@ -880,9 +904,12 @@ tail -n 200 logs/job_<JOBID>.err
 
 ## Need more?
 
+Adding a new fabric from one geopackage is its own page:
+[`docs/adding-a-fabric.md`](../docs/adding-a-fabric.md).
+
 See [HPC_REFERENCE.md](HPC_REFERENCE.md) for:
 
-- Running other fabrics (VPU01 validation, Oregon, new fabric registration).
+- Running other fabrics (VPU01 validation, Oregon, per-VPU fabric merging).
 - Running one parameter at a time (Stage 4A incremental path).
 - Single-step raster rebuilds (`--step <name>`, `--from <name>`).
 - Recovery / partial reruns (single-batch array resubmit, VPU source refill).

@@ -12,8 +12,12 @@ or for a custom root:
 To register a brand-new fabric, append a profile stub to base_config.yml and
 scaffold its directories in one step:
     pixi run init-data-root --add-fabric oregon
-Then fill the TODO placeholders in the new profile (expected_max_hru_id,
-id_feature, hru_gpkg/hru_layer; uncomment the depstor keys only if needed).
+The stub is a COMPLETE, ACTIVE profile (the tjc/flaming_gorge shape): every
+depstor key is wired to its shared CONUS input. Only four values are
+fabric-specific and carry a TODO: expected_max_hru_id, id_feature, the
+hru_gpkg filename, and vpu. The plain-language walkthrough is
+docs/adding-a-fabric.md; validate the filled profile against the gpkg with
+scripts/check_fabric_profile.py before submitting anything.
 """
 
 import argparse
@@ -21,7 +25,7 @@ import re
 import textwrap
 from pathlib import Path
 
-from gfv2_params.config import _DEFAULT_BASE_CONFIG, load_base_config
+from gfv2_params.config import _DEFAULT_BASE_CONFIG, SHARED_DEPSTOR_INPUT_KEYS, load_base_config
 from gfv2_params.log import configure_logging
 
 # ---------------------------------------------------------------------------
@@ -59,10 +63,21 @@ _TREE = [
           nhm_default/      NHM default parameter files (input to final merge)
           nhd_downloads/    Raw NHDPlus zip archives
                             (downloadable via download/rpu_rasters.py)
-          depstor/          Per-fabric depression-storage inputs:
-                            <fabric>_segments_wbodies.gpkg (layers nsegment, v2_wb)
-                            (FDR is sourced from the shared shared/conus/vrt/fdr.vrt,
-                            not staged here per-fabric.)
+          nhd/              Shared NHDPlusV2 layers, staged once per data root:
+                            nhd_waterbodies.gpkg (read by every depstor fabric),
+                            burn_add_waterbodies.parquet (the waterbody BurnAdd
+                            merge, when a profile declares it), sink_points.parquet
+                            (provenance only; no builder reads it). Staged by
+                            gfv2_params.download.nhd_waterbodies / .nhd_burn_components.
+                            Stream segments are NOT staged here: they come from
+                            the fabric's own gpkg (profile key segments_gpkg), and
+                            the FDR from the shared shared/conus/vrt/fdr.vrt.
+          wbd/              wbd_huc12.parquet (gfv2_params.download.wbd_huc12)
+          3dep/             dem_1m_tile_inventory.parquet -- every published 3DEP
+                            1 m tile with its real extent
+          wesm/             wesm_project_attrs.parquet -- WESM project attributes
+                            (both staged by slurm_batch/stage_dem_1m_inventory.batch)
+          ecoregions/       us_eco_l3.gpkg (gfv2_params.download.epa_ecoregions)
           twi/<rpu>/        Per-RPU topographic wetness index rasters
                             (twi.tif + .tfw/.aux.xml/.ovr/.xml sidecars).
                             Provenance: USGS ScienceBase 5f5154ba82ce4c3d12386a02
@@ -81,7 +96,11 @@ _TREE = [
     ("input/nhd_downloads", None),
     ("input/copernicus_dem", None),
     ("input/copernicus_dem/raw", None),
-    ("input/depstor", None),
+    ("input/nhd", None),
+    ("input/wbd", None),
+    ("input/3dep", None),
+    ("input/wesm", None),
+    ("input/ecoregions", None),
     ("input/twi", None),
     # ---- shared (fabric-independent intermediates) -----------------------
     (
@@ -135,9 +154,13 @@ def _fabric_tree(fabric: str) -> list:
             All outputs scoped to the '{fabric}' watershed fabric.
 
             Subdirectory layout:
-              fabric/     Merged nhru GeoPackage produced by
-                          notebooks/merge_vpu_targets.py
-                          ({fabric}_nhru_merged.gpkg)
+              fabric/     The fabric GeoPackage named by the profile's hru_gpkg
+                          (a single pre-merged gpkg with nhru + nsegment layers,
+                          or {fabric}_nhru_merged.gpkg from
+                          notebooks/merge_vpu_targets.py for a per-VPU fabric)
+              shared/     {fabric}_fdr.vrt -- the fabric-bounds FDR clip written
+                          by scripts/clip_shared_to_fabric.py (template_raster
+                          and fdr_raster)
               batches/    Spatially-partitioned batch GeoPackages produced by
                           prepare_fabric.py (used by zonal stats scripts)
               depstor_rasters/
@@ -157,6 +180,7 @@ def _fabric_tree(fabric: str) -> list:
             """,
         ),
         (f"{fabric}/fabric", None),
+        (f"{fabric}/shared", None),
         (f"{fabric}/batches", None),
         (f"{fabric}/depstor_rasters", None),
         (f"{fabric}/params", None),
@@ -216,22 +240,42 @@ def _shapefile_companions(shp_path: Path) -> list[Path]:
     return [stem.with_suffix(ext) for ext in exts]
 
 
-def validate_inputs(data_root: Path, fabric: str, logger) -> None:
-    """Warn about missing staged inputs that cannot be auto-downloaded.
+# Staged INPUTS with no profile key (cannot be auto-downloaded). Inputs only:
+# --check runs at RUNME Step 0, before build_shared_rasters has produced
+# anything under shared/, and exits 1 on a missing path -- so the shared
+# products (fdr.vrt, the TWI percentile table, twi_raster) are deliberately
+# absent here and checked by scripts/check_fabric_profile.py instead.
+_FIXED_REQUIRED_PATHS = (
+    "input/soils_litho/TEXT_PRMS.tif",
+    "input/soils_litho/AWC.tif",
+    "input/soils_litho/Lithology_exp_Konly_Project.shp",
+    "input/lulc_veg/RootDepth.tif",
+    # Sentinel for the per-RPU TWI staging step. Run scripts/stage_twi.sh
+    # if missing.
+    "input/twi/01a/twi.tif",
+)
+
+# Shared depstor inputs, read from the ACTIVE PROFILE's own values so the check
+# can never name a file no profile reads (the retired
+# input/depstor/<fabric>_segments_wbodies.gpkg sentinel did exactly that). The
+# key list, and which omissions are legitimate, is SHARED_DEPSTOR_INPUT_KEYS in
+# config.py, shared with scripts/check_fabric_profile.py.
+_SHARED_INPUT_PROFILE_KEYS = SHARED_DEPSTOR_INPUT_KEYS
+
+
+def validate_inputs(data_root: Path, config: dict, logger) -> list[Path]:
+    """Report missing staged inputs; return the missing paths (`--check` exits 1 on any).
+
+    `config` is the resolved active profile (load_base_config), so the shared
+    depstor inputs are checked at the exact paths the pipeline will open.
 
     For required `.shp` paths, also validates the `.shx` / `.dbf` / `.prj`
     sidecars — each is reported separately so the user knows exactly what
     to stage.
     """
-    required = [
-        data_root / "input" / "soils_litho" / "TEXT_PRMS.tif",
-        data_root / "input" / "soils_litho" / "AWC.tif",
-        data_root / "input" / "soils_litho" / "Lithology_exp_Konly_Project.shp",
-        data_root / "input" / "lulc_veg" / "RootDepth.tif",
-        data_root / "input" / "depstor" / f"{fabric}_segments_wbodies.gpkg",
-        # Sentinel for the per-RPU TWI staging step. Run scripts/stage_twi.sh
-        # if missing.
-        data_root / "input" / "twi" / "01a" / "twi.tif",
+    required = [data_root / rel for rel in _FIXED_REQUIRED_PATHS]
+    required += [
+        Path(config[k]) for k in _SHARED_INPUT_PROFILE_KEYS if config.get(k) is not None
     ]
     # Expand each .shp into the .shp itself + its 3 required sidecars so
     # the user sees exactly which files are missing (not just "the shapefile").
@@ -249,47 +293,88 @@ def validate_inputs(data_root: Path, fabric: str, logger) -> None:
         for p in missing:
             logger.warning("  MISSING: %s", p)
         logger.warning(
-            "Stage these files manually before running the pipeline."
+            "Stage these before running the pipeline: the soils/LULC/TWI inputs by hand "
+            "(README.md 'Stage external inputs'), the NHD/WBD/ecoregion layers with "
+            "`python -m gfv2_params.download.<module>`, and the 3DEP inventory with "
+            "`sbatch slurm_batch/stage_dem_1m_inventory.batch` (RUNME.md Step 0)."
         )
     else:
         logger.info("All required staged inputs are present.")
+    return missing
 
 
 def _fabric_profile_stub(fabric: str) -> str:
     """Return a YAML profile stub for a new fabric (2-space indented).
 
-    Carries the keys every fabric needs (expected_max_hru_id, batch_size,
-    id_feature, hru_gpkg, hru_layer) as active TODO placeholders, plus a
-    commented depstor block to uncomment only when that pipeline is run.
-    hru_gpkg/hru_layer are NOT depstor-only — prepare_fabric, the ssflux
-    build_weights step, and gap-fill all require hru_gpkg for every fabric.
+    A COMPLETE, ACTIVE profile in the tjc/flaming_gorge shape (a single
+    pre-merged gpkg holding nhru + nsegment): every depstor key is wired to its
+    real shared CONUS input, not commented out. The old stub commented the
+    depstor block out and pointed it at retired paths, so the first outside
+    user had to reconstruct it by hand from another profile. Only the four
+    fabric-specific values carry a TODO: expected_max_hru_id, id_feature, the
+    hru_gpkg filename, and vpu. The two classifier floors stay opt-in.
+
+    tests/test_add_fabric.py pins this against docs/ARCHITECTURE.md's
+    required-keys table, so a key added here must be documented there.
     """
     return (
         f"\n"
         f"  {fabric}:\n"
-        f"    # TODO: fill these in for the '{fabric}' fabric, then drop the TODO notes.\n"
-        f"    expected_max_hru_id: 0  # TODO: highest HRU id in the fabric\n"
+        f"    # See docs/adding-a-fabric.md. Fill the four TODO values, then run\n"
+        f"    #   pixi run --as-is python scripts/check_fabric_profile.py --fabric {fabric}\n"
+        f"    # TODO: highest value of the id column (must equal the HRU count: ids run 1..N)\n"
+        f"    expected_max_hru_id: 0\n"
         f"    batch_size: 10000\n"
-        f"    id_feature: nat_hru_id  # TODO: HRU id column present in the fabric gpkg\n"
-        f"    # Fabric geopackage + layer. Required for EVERY fabric (read by\n"
-        f"    # prepare_fabric, ssflux build_weights, and gap-fill). For a\n"
-        f"    # VPU-merged fabric this is {{fabric}}_nhru_merged.gpkg (produced by\n"
-        f"    # notebooks/merge_vpu_targets.py); for a single-file/pre-merged\n"
-        f"    # fabric, point it at the gpkg you staged (any name).\n"
-        f'    hru_gpkg: "{{data_root}}/{{fabric}}/fabric/{{fabric}}_nhru_merged.gpkg"  # TODO: set to your fabric gpkg\n'
+        f"    # TODO: the HRU id column in your gpkg. Must be unique and contiguous 1..N;\n"
+        f"    # a national id with gaps makes gap-fill invent thousands of phantom HRUs.\n"
+        f"    id_feature: nat_hru_id\n"
+        f"    # TODO: your gpkg's filename. Put the file under {{data_root}}/{fabric}/fabric/\n"
+        f"    # (NOT input/fabric/). One file holds the nhru and nsegment layers.\n"
+        f'    hru_gpkg: "{{data_root}}/{{fabric}}/fabric/{fabric}.gpkg"\n'
         f"    hru_layer: nhru\n"
-        f"    # Uncomment + set these only if the depstor pipeline is run for this fabric.\n"
-        f"    # template_raster + fdr_raster: stage a fabric-bounds FDR clip first with\n"
+        f'    # TODO: the VPU this fabric lies in, as a string ("12", "14", "17").\n'
+        f"    # Delete this line only if the fabric spans several VPUs AND the nhru\n"
+        f"    # layer carries a per-HRU `vpu` column (the gfv2 pattern).\n"
+        f'    vpu: "00"\n'
+        f"    # --- depstor inputs (active: a new fabric is expected to run depstor) ---\n"
+        f"    # Fabric-bounds clip of the CONUS fdr.vrt; serves as BOTH template and\n"
+        f"    # FDR. Stage it BEFORE the first depstor run:\n"
         f"    #   pixi run --as-is python scripts/clip_shared_to_fabric.py --fabric {fabric}\n"
-        f"    # then point BOTH at the clip (it sizes depstor compute to the fabric and\n"
-        f"    # shares the hydrology lattice carea_map requires vs twi.vrt).\n"
-        f'    # template_raster: "{{data_root}}/{{fabric}}/shared/{{fabric}}_fdr.vrt"\n'
-        f'    # fdr_raster: "{{data_root}}/{{fabric}}/shared/{{fabric}}_fdr.vrt"\n'
-        f'    # twi_raster: "{{data_root}}/shared/conus/vrt/twi.vrt"\n'
-        f'    # segments_gpkg: "{{data_root}}/input/depstor/{{fabric}}_segments_wbodies.gpkg"\n'
-        f"    # segments_layer: nsegment\n"
-        f'    # waterbody_gpkg: "{{data_root}}/input/depstor/{{fabric}}_segments_wbodies.gpkg"\n'
-        f"    # waterbody_layer: v2_wb\n"
+        f'    template_raster: "{{data_root}}/{{fabric}}/shared/{{fabric}}_fdr.vrt"\n'
+        f'    fdr_raster: "{{data_root}}/{{fabric}}/shared/{{fabric}}_fdr.vrt"\n'
+        f"    # Open-source, CONUS-complete TWI; carea_map runs in percentile mode\n"
+        f"    # against it. Never the legacy twi.vrt (VPU-01-only absolute thresholds).\n"
+        f'    twi_raster: "{{data_root}}/shared/conus/vrt/twi_hydrodem.vrt"\n'
+        f"    # Stream segments = the model's own routing network, from the same gpkg.\n"
+        f"    # This is the on-stream classifier's primary input (segment_wbody).\n"
+        f'    segments_gpkg: "{{data_root}}/{{fabric}}/fabric/{fabric}.gpkg"\n'
+        f"    segments_layer: nsegment\n"
+        f"    # Shared CONUS inputs -- identical for every fabric, staged once per data\n"
+        f"    # root (pixi run --as-is init-data-root --check --fabric {fabric} confirms them).\n"
+        f'    waterbody_gpkg: "{{data_root}}/input/nhd/nhd_waterbodies.gpkg"\n'
+        f"    waterbody_layer: waterbodies\n"
+        f'    wbd_huc12_table: "{{data_root}}/input/wbd/wbd_huc12.parquet"\n'
+        f'    burn_add_waterbody_table: "{{data_root}}/input/nhd/burn_add_waterbodies.parquet"\n'
+        f'    sink_points_table: "{{data_root}}/input/nhd/sink_points.parquet"\n'
+        f'    ecoregions_gpkg: "{{data_root}}/input/ecoregions/us_eco_l3.gpkg"\n'
+        f"    # 3DEP 1 m tile inventory + WESM project attributes (dprst_depth);\n"
+        f"    # staged once by: sbatch slurm_batch/stage_dem_1m_inventory.batch\n"
+        f'    dem_1m_inventory: "{{data_root}}/input/3dep/dem_1m_tile_inventory.parquet"\n'
+        f'    wesm_project_attrs: "{{data_root}}/input/wesm/wesm_project_attrs.parquet"\n'
+        f"    # Optional floors on the classifier counts, so a mis-wired re-run fails\n"
+        f"    # instead of silently shipping a wrong product. Leave both out for the\n"
+        f"    # first run, then read the depstor log:\n"
+        f"    #   min_onstream_comids: a little below the segment_wbody line\n"
+        f"    #     '<N> on-stream COMIDs from <M> positive-length pairs'.\n"
+        f"    #   min_endorheic_comids: a little below the endorheic line's\n"
+        f"    #     'Signal A (terminus-inside-itself): <N>' -- Signal A ONLY. Signal B\n"
+        f"    #     and the union are CONUS-wide whenever wbd_huc12_table is set (the\n"
+        f"    #     builder reads the full WBD), so they are not this fabric's numbers.\n"
+        f"    #     Omit the key if Signal A is 0: a domain with no closed basin\n"
+        f"    #     legitimately has no endorheic waterbody, and a declared floor would\n"
+        f"    #     make that correct result raise.\n"
+        f"    # min_onstream_comids: 0\n"
+        f"    # min_endorheic_comids: 0\n"
     )
 
 
@@ -336,8 +421,9 @@ def add_fabric_profile(base_config_path: Path, fabric: str, logger) -> None:
     base_config_path.write_text("".join(lines))
     logger.info("Added fabric profile stub '%s' to %s", fabric, base_config_path)
     logger.warning(
-        "Profile '%s' has TODO placeholders (expected_max_hru_id, id_feature, "
-        "hru_gpkg) — edit %s before running the pipeline.", fabric, base_config_path,
+        "Profile '%s' has four TODO values (expected_max_hru_id, id_feature, "
+        "hru_gpkg, vpu) — edit %s, then validate with "
+        "scripts/check_fabric_profile.py --fabric %s.", fabric, base_config_path, fabric,
     )
 
 
@@ -369,7 +455,8 @@ def main():
     parser.add_argument(
         "--check",
         action="store_true",
-        help="After scaffolding, warn about missing staged input files",
+        help="After scaffolding, list the staged inputs the active profile needs that are "
+             "missing, and exit 1 if any is (exit 0 when everything is present)",
     )
     args = parser.parse_args()
 
@@ -379,12 +466,15 @@ def main():
     if args.add_fabric:
         add_fabric_profile(base_config_path, args.add_fabric, logger)
 
+    # --data_root re-roots the profile's own paths too, so --check looks for the
+    # shared inputs under the same root it scaffolds.
     base = load_base_config(
         base_config_path,
         fabric=args.add_fabric or args.fabric,
+        data_root=args.data_root,
     )
 
-    data_root = Path(args.data_root) if args.data_root else Path(base["data_root"])
+    data_root = Path(base["data_root"])
     fabric = base["fabric"]
 
     logger.info("data_root : %s", data_root)
@@ -392,8 +482,8 @@ def main():
 
     init_data_root(data_root, fabric, logger)
 
-    if args.check:
-        validate_inputs(data_root, fabric, logger)
+    if args.check and validate_inputs(data_root, base, logger):
+        raise SystemExit(1)
 
 
 if __name__ == "__main__":

@@ -16,6 +16,9 @@ USGS HPC cluster.
   [Architecture / Canonical](ARCHITECTURE.md) for the
   orchestrator + builder pattern, fabric profiles, and the
   4-stage table.
+- **Running the pipeline on a new fabric?** →
+  [Adding a fabric](adding-a-fabric.md) takes one geopackage to finished
+  parameters step by step, written for a collaborator new to the cluster.
 - **Adding a new HRU parameter?** →
   [Adding a parameter](ADDING_A_PARAMETER.md) traces `--param elevation`
   end-to-end. The pattern transfers.

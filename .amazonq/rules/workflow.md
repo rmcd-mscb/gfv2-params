@@ -175,4 +175,13 @@ Configuration (CFG-*), Code Quality (CODE-*), Hygiene (HYG-*), Architecture (ARC
 - `scripts/derive_depstor_params.py --mode copy_constants` — copies every
   `constants:` entry into `merged/`. Chained `afterok` by
   `submit_depstor_params.sh`; do not un-chain it (added PR #203)
-- `pixi run init-data-root` — scaffolds the data directory tree
+- `pixi run init-data-root` — scaffolds the data directory tree. `--add-fabric <name>`
+  appends a COMPLETE, ACTIVE profile (four TODO values: `expected_max_hru_id`,
+  `id_feature`, the `hru_gpkg` filename, `vpu`); `--check` verifies the shared inputs
+  the ACTIVE profile names, at their resolved paths (re-rooted under `--data_root` if
+  given), and exits 1 if any is missing
+- `python scripts/check_fabric_profile.py --fabric <name>` — validates a filled profile
+  against its gpkg (layers, id column unique + contiguous 1..N, `expected_max_hru_id`,
+  `vpu`, declared paths); PASS/FAIL per check, exit 1 on any failure. The last step
+  before `prepare_fabric` in `docs/adding-a-fabric.md`, the plain-language new-fabric
+  recipe

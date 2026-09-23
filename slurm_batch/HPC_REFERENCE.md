@@ -167,8 +167,15 @@ Scaffold the full directory tree under `data_root`:
 
 ```bash
 pixi run init-data-root
-pixi run init-data-root --check    # verify manually-staged inputs are present
+pixi run init-data-root --check    # exits 1 and lists any staged input that is missing
 ```
+
+`--check` covers the manually-staged files below plus the shared depstor
+layers the active profile names (`nhd_waterbodies.gpkg`, the BurnAdd and sink
+tables, `wbd_huc12.parquet`, `us_eco_l3.gpkg`, the 3DEP inventory; staged by
+the `gfv2_params.download.*` modules and `stage_dem_1m_inventory.batch`, see
+RUNME Step 0). It checks inputs only, never the `shared/` products Stage 1
+builds; `scripts/check_fabric_profile.py` checks those before a fabric run.
 
 Manually-staged files required before `--check`:
 
@@ -1418,43 +1425,36 @@ sibling `gfv2-spatial-targets` repo's `snodas_<year>_agg.nc` oracle.
 A new fabric is added by appending a profile to `configs/base_config.yml` —
 one file edit, no new YAMLs. Two cases:
 
-### Case A: Pre-merged fabric (single gpkg — e.g., oregon)
+### Case A: Pre-merged fabric (single gpkg — e.g., tjc, flaming_gorge)
 
-1. Register the fabric and scaffold output directories:
-   ```bash
-   pixi run init-data-root --add-fabric oregon
-   ```
-   Fill the stub's TODO placeholders. Required fields: `expected_max_hru_id`,
-   `batch_size`, `id_feature`, `hru_gpkg`/`hru_layer`. For depstor, also set
-   `template_raster`, `fdr_raster`, `twi_raster`,
-   `segments_gpkg`/`segments_layer`, `waterbody_gpkg`/`waterbody_layer`.
-   Stage the `template_raster`/`fdr_raster` clip:
-   ```bash
-   pixi run --as-is python scripts/clip_shared_to_fabric.py --fabric <name>
-   ```
-   For a single-file fabric like `oregon`, `segments_gpkg` can point at the
-   same gpkg as `hru_gpkg` with `segments_layer: nsegment`.
+The complete, plain-language procedure is
+[`docs/adding-a-fabric.md`](../docs/adding-a-fabric.md); this section is only
+the index of what it does, for readers who already know the pipeline.
 
-2. Place the fabric gpkg at the `hru_gpkg` path under
-   `{data_root}/oregon/fabric/` (NOT in `input/fabric/`).
+1. Inspect the gpkg with `ogrinfo` (id column, HRU count, VPU).
+2. Copy the gpkg to `{data_root}/<name>/fabric/` (NOT `input/fabric/`).
+3. `pixi run --as-is init-data-root --add-fabric <name>` appends a COMPLETE,
+   ACTIVE profile (the tjc shape: every depstor key wired to its shared CONUS
+   input, `twi_hydrodem.vrt`, `segments_gpkg` = `hru_gpkg`). Fill its four
+   TODO values: `expected_max_hru_id`, `id_feature`, the `hru_gpkg` filename,
+   `vpu`. The two classifier floors stay commented until a first run has
+   logged the real counts.
+4. `pixi run --as-is python scripts/clip_shared_to_fabric.py --fabric <name>`
+   stages the `template_raster`/`fdr_raster` clip.
+5. `pixi run --as-is python scripts/check_fabric_profile.py --fabric <name>`
+   validates the profile against the gpkg (layers, id contiguity,
+   `expected_max_hru_id`, `vpu`, declared paths) and exits 1 on any failure.
+6. `FABRIC=<name> sbatch slurm_batch/prepare_fabric.batch`.
+7. `./slurm_batch/submit_fabric_rerun.sh --dry-run <batches> <name>`, then the
+   real submission with `--force`; for a regional fabric pass the small-fabric
+   overrides (`SBATCH_MEM_PER_NODE`, `SBATCH_TIMELIMIT`, `STAGE2_MEM`,
+   `STAGE2_TIME`) documented in the generated section of
+   [RUNME.md](RUNME.md#complete-re-run-for-one-fabric).
 
-3. Prepare batches:
-   ```bash
-   sbatch slurm_batch/prepare_fabric.batch   # FABRIC= override if needed
-   ```
-
-4. Submit parameter jobs:
-   ```bash
-   BATCHES={data_root}/oregon/batches
-   slurm_batch/submit_zonal_params.sh $BATCHES oregon configs/base_config.yml
-   slurm_batch/submit_depstor_params.sh $BATCHES oregon configs/base_config.yml
-   ```
-
-> **TWI source pairing for non-VPU-01 fabrics:** the 8.0/15.6 absolute
-> thresholds are only calibrated for VPU 01. For multi-VPU or non-VPU-01
-> fabrics, use `threshold_mode: percentile` in
-> `configs/depstor/depstor_rasters.yml` with `twi_raster` pointing at
-> `twi_hydrodem.vrt`; the percentile cutoffs come from Stage 2a'.
+> **TWI source pairing:** the 8.0/15.6 absolute thresholds are only calibrated
+> for VPU 01. The stub points `twi_raster` at `twi_hydrodem.vrt`, and
+> `configs/depstor/depstor_rasters.yml` runs `threshold_mode: percentile`, so a
+> new fabric gets per-VPU percentile cutoffs (Stage 2a') without any edit.
 
 ### Case B: VPU-based fabric (per-VPU gpkgs — e.g., gfv2)
 

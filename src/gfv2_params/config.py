@@ -18,6 +18,26 @@ VPU_RASTER_MAP = {
     "OR": "17",
 }
 
+# Path-valued profile keys naming the SHARED CONUS depstor INPUTS -- identical for
+# every fabric, staged once per data root by the download modules. Read by both
+# `init-data-root --check` (are they staged? runs at RUNME Step 0) and
+# `scripts/check_fabric_profile.py` (does this profile's value exist?), so the
+# list lives here once. Inputs only: shared PRODUCTS such as `twi_raster`,
+# `fdr.vrt` and the TWI percentile table come from build_shared_rasters (Step 1)
+# and are checked by the validator alone. A key a profile omits is legitimate
+# (ARCHITECTURE.md's required-keys table marks wbd_huc12_table,
+# burn_add_waterbody_table and sink_points_table optional; tjc omits all three)
+# and is simply not checked.
+SHARED_DEPSTOR_INPUT_KEYS = (
+    "waterbody_gpkg",
+    "wbd_huc12_table",
+    "burn_add_waterbody_table",
+    "sink_points_table",
+    "ecoregions_gpkg",
+    "dem_1m_inventory",
+    "wesm_project_attrs",
+)
+
 # Default base config location (relative to this file -> repo root)
 _DEFAULT_BASE_CONFIG = Path(__file__).resolve().parent.parent.parent / "configs" / "base_config.yml"
 
@@ -36,6 +56,7 @@ def resolve_vpu(vpu: str) -> tuple[str, str]:
 def load_base_config(
     base_config_path: Path | None = None,
     fabric: str | None = None,
+    data_root: str | Path | None = None,
 ) -> dict:
     """Load the base config (data_root, fabric profile, etc.).
 
@@ -44,6 +65,10 @@ def load_base_config(
     are resolved. Fabric resolution order: explicit kwarg -> FABRIC env var
     -> default_fabric in base config.
 
+    `data_root` overrides the file's `data_root` BEFORE placeholders are
+    substituted, so every profile path re-roots with it (what
+    `init-data-root --data_root X` needs to check X, not the production root).
+
     Use this when a script needs base paths but does not use a per-step
     YAML config (e.g., merge_and_fill_params, find_missing_hru_ids).
     """
@@ -51,6 +76,8 @@ def load_base_config(
         base_config_path = _DEFAULT_BASE_CONFIG
     base = _load_yaml(base_config_path)
     base = _resolve_fabric_profile(base, fabric)
+    if data_root is not None:
+        base["data_root"] = str(data_root)
     replacements = {"data_root": base["data_root"], "fabric": base["fabric"]}
     return _resolve_placeholders(base, replacements)
 
