@@ -403,6 +403,14 @@ def test_shared_products_under_data_root_are_checked(tmp_path):
     assert "twi reference table exists" not in failed
 
 
+def test_an_empty_string_key_is_reported_as_undeclared(tmp_path):
+    """`hru_gpkg: ""` must be a `declared` FAIL like a missing key, not an AttributeError."""
+    cfg = _profile(tmp_path, tmp_path / "demo.gpkg", hru_gpkg="")
+    results = run_checks(cfg)
+    assert "hru_gpkg declared" in _failed(results)
+    assert results
+
+
 def test_every_repo_profile_runs_without_raising():
     """Every fabric in the real configs/base_config.yml goes through run_checks.
 

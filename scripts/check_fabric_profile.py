@@ -69,8 +69,8 @@ class CheckResult:
 
 
 def _declared(results: list[CheckResult], config: dict, key: str) -> bool:
-    """Append `<key> declared` only when it FAILS; a missing/null key is a FAIL line, not a raise."""
-    if config.get(key) is None:
+    """Append `<key> declared` only when it FAILS; a missing/null/empty key is a FAIL line, not a raise."""
+    if not config.get(key):
         results.append(CheckResult(f"{key} declared", False, f"`{key}` is missing or empty in the profile"))
         return False
     return True
