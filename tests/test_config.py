@@ -379,6 +379,24 @@ def test_require_config_key_missing_raises():
             require_config_key(config, "template_raster", "build_depstor_imperv")
 
 
+def test_load_base_config_data_root_override_reroots_the_profile():
+    """`init-data-root --data_root X --check` must check the profile's paths
+    under X, not under base_config.yml's data_root; the override has to be
+    applied BEFORE {data_root} is substituted."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        base_config = Path(tmpdir) / "base_config.yml"
+        base_config.write_text(yaml.dump({
+            "data_root": "/fake/root",
+            "default_fabric": "oregon",
+            "fabrics": {"oregon": {"hru_gpkg": "{data_root}/{fabric}/fabric/oregon.gpkg"}},
+        }))
+        cfg = load_base_config(base_config, fabric="oregon", data_root="/other/root")
+        assert cfg["data_root"] == "/other/root"
+        assert cfg["hru_gpkg"] == "/other/root/oregon/fabric/oregon.gpkg"
+        # no override: unchanged behaviour
+        assert load_base_config(base_config, fabric="oregon")["hru_gpkg"].startswith("/fake/root/")
+
+
 def test_require_config_key_present_returns_value():
     """require_config_key returns the value when present."""
     config = {"fabric": "gfv2", "template_raster": "/path/to/dem.vrt"}

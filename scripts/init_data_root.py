@@ -63,13 +63,15 @@ _TREE = [
           nhm_default/      NHM default parameter files (input to final merge)
           nhd_downloads/    Raw NHDPlus zip archives
                             (downloadable via download/rpu_rasters.py)
-          nhd/              Shared NHDPlusV2 layers every depstor fabric reads:
-                            nhd_waterbodies.gpkg, burn_add_waterbodies.parquet,
-                            sink_points.parquet (gfv2_params.download.nhd_waterbodies
-                            and .nhd_burn_components). Stream segments are NOT
-                            staged here: they come from the fabric's own gpkg
-                            (profile key segments_gpkg), and the FDR from the
-                            shared shared/conus/vrt/fdr.vrt.
+          nhd/              Shared NHDPlusV2 layers, staged once per data root:
+                            nhd_waterbodies.gpkg (read by every depstor fabric),
+                            burn_add_waterbodies.parquet (the waterbody BurnAdd
+                            merge, when a profile declares it), sink_points.parquet
+                            (provenance only; no builder reads it). Staged by
+                            gfv2_params.download.nhd_waterbodies / .nhd_burn_components.
+                            Stream segments are NOT staged here: they come from
+                            the fabric's own gpkg (profile key segments_gpkg), and
+                            the FDR from the shared shared/conus/vrt/fdr.vrt.
           wbd/              wbd_huc12.parquet (gfv2_params.download.wbd_huc12)
           3dep/             dem_1m_tile_inventory.parquet -- every published 3DEP
                             1 m tile with its real extent
@@ -263,8 +265,8 @@ _FIXED_REQUIRED_PATHS = (
 _SHARED_INPUT_PROFILE_KEYS = SHARED_DEPSTOR_INPUT_KEYS
 
 
-def validate_inputs(data_root: Path, config: dict, logger) -> None:
-    """Warn about missing staged inputs that cannot be auto-downloaded.
+def validate_inputs(data_root: Path, config: dict, logger) -> list[Path]:
+    """Report missing staged inputs; return the missing paths (`--check` exits 1 on any).
 
     `config` is the resolved active profile (load_base_config), so the shared
     depstor inputs are checked at the exact paths the pipeline will open.
@@ -274,7 +276,9 @@ def validate_inputs(data_root: Path, config: dict, logger) -> None:
     to stage.
     """
     required = [data_root / rel for rel in _FIXED_REQUIRED_PATHS]
-    required += [Path(config[k]) for k in _SHARED_INPUT_PROFILE_KEYS if k in config]
+    required += [
+        Path(config[k]) for k in _SHARED_INPUT_PROFILE_KEYS if config.get(k) is not None
+    ]
     # Expand each .shp into the .shp itself + its 3 required sidecars so
     # the user sees exactly which files are missing (not just "the shapefile").
     to_check: list[Path] = []
@@ -291,10 +295,15 @@ def validate_inputs(data_root: Path, config: dict, logger) -> None:
         for p in missing:
             logger.warning("  MISSING: %s", p)
         logger.warning(
-            "Stage these files manually before running the pipeline."
+            "Stage these before running the pipeline: the soils/LULC/TWI inputs by hand "
+            "(README.md 'Stage external inputs'), the NHD/WBD/ecoregion layers with "
+            "`python -m gfv2_params.download.<module>`, the 3DEP inventory with "
+            "`sbatch slurm_batch/stage_dem_1m_inventory.batch`, and the shared/ products "
+            "with build_shared_rasters.batch (RUNME.md Steps 0-1)."
         )
     else:
         logger.info("All required staged inputs are present.")
+    return missing
 
 
 def _fabric_profile_stub(fabric: str) -> str:
@@ -330,7 +339,7 @@ def _fabric_profile_stub(fabric: str) -> str:
         f"    # Delete this line only if the fabric spans several VPUs AND the nhru\n"
         f"    # layer carries a per-HRU `vpu` column (the gfv2 pattern).\n"
         f'    vpu: "00"\n'
-        f"    # --- depstor inputs (active: every fabric runs depstor) --------------\n"
+        f"    # --- depstor inputs (active: a new fabric is expected to run depstor) ---\n"
         f"    # Fabric-bounds clip of the CONUS fdr.vrt; serves as BOTH template and\n"
         f"    # FDR. Stage it BEFORE the first depstor run:\n"
         f"    #   pixi run --as-is python scripts/clip_shared_to_fabric.py --fabric {fabric}\n"
@@ -343,8 +352,8 @@ def _fabric_profile_stub(fabric: str) -> str:
         f"    # This is the on-stream classifier's primary input (segment_wbody).\n"
         f'    segments_gpkg: "{{data_root}}/{{fabric}}/fabric/{fabric}.gpkg"\n'
         f"    segments_layer: nsegment\n"
-        f"    # Shared CONUS inputs -- identical for every fabric, staged once per\n"
-        f"    # data root (pixi run --as-is init-data-root --check confirms them).\n"
+        f"    # Shared CONUS inputs -- identical for every fabric, staged once per data\n"
+        f"    # root (pixi run --as-is init-data-root --check --fabric {fabric} confirms them).\n"
         f'    waterbody_gpkg: "{{data_root}}/input/nhd/nhd_waterbodies.gpkg"\n'
         f"    waterbody_layer: waterbodies\n"
         f'    wbd_huc12_table: "{{data_root}}/input/wbd/wbd_huc12.parquet"\n'
@@ -355,10 +364,18 @@ def _fabric_profile_stub(fabric: str) -> str:
         f"    # staged once by: sbatch slurm_batch/stage_dem_1m_inventory.batch\n"
         f'    dem_1m_inventory: "{{data_root}}/input/3dep/dem_1m_tile_inventory.parquet"\n'
         f'    wesm_project_attrs: "{{data_root}}/input/wesm/wesm_project_attrs.parquet"\n'
-        f"    # Optional floors on the classifier counts. Leave them out unless you\n"
-        f"    # know the domain has closed-basin (endorheic) lakes; set each a little\n"
-        f"    # below the count the first run logs. Never add them defensively -- a\n"
-        f"    # domain with no closed basin legitimately yields zero endorheic COMIDs.\n"
+        f"    # Optional floors on the classifier counts, so a mis-wired re-run fails\n"
+        f"    # instead of silently shipping a wrong product. Leave both out for the\n"
+        f"    # first run, then read the depstor log:\n"
+        f"    #   min_onstream_comids: a little below the segment_wbody line\n"
+        f"    #     '<N> on-stream COMIDs from <M> positive-length pairs'.\n"
+        f"    #   min_endorheic_comids: a little below the endorheic line's\n"
+        f"    #     'Signal A (terminus-inside-itself): <N>' -- Signal A ONLY. Signal B\n"
+        f"    #     and the union are CONUS-wide whenever wbd_huc12_table is set (the\n"
+        f"    #     builder reads the full WBD), so they are not this fabric's numbers.\n"
+        f"    #     Omit the key if Signal A is 0: a domain with no closed basin\n"
+        f"    #     legitimately has no endorheic waterbody, and a declared floor would\n"
+        f"    #     make that correct result raise.\n"
         f"    # min_onstream_comids: 0\n"
         f"    # min_endorheic_comids: 0\n"
     )
@@ -441,7 +458,8 @@ def main():
     parser.add_argument(
         "--check",
         action="store_true",
-        help="After scaffolding, warn about missing staged input files",
+        help="After scaffolding, list the staged inputs the active profile needs that are "
+             "missing, and exit 1 if any is (exit 0 when everything is present)",
     )
     args = parser.parse_args()
 
@@ -451,12 +469,15 @@ def main():
     if args.add_fabric:
         add_fabric_profile(base_config_path, args.add_fabric, logger)
 
+    # --data_root re-roots the profile's own paths too, so --check looks for the
+    # shared inputs under the same root it scaffolds.
     base = load_base_config(
         base_config_path,
         fabric=args.add_fabric or args.fabric,
+        data_root=args.data_root,
     )
 
-    data_root = Path(args.data_root) if args.data_root else Path(base["data_root"])
+    data_root = Path(base["data_root"])
     fabric = base["fabric"]
 
     logger.info("data_root : %s", data_root)
@@ -464,8 +485,8 @@ def main():
 
     init_data_root(data_root, fabric, logger)
 
-    if args.check:
-        validate_inputs(data_root, base, logger)
+    if args.check and validate_inputs(data_root, base, logger):
+        raise SystemExit(1)
 
 
 if __name__ == "__main__":

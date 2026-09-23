@@ -20,6 +20,8 @@ import logging
 import sys
 from pathlib import Path
 
+import pytest
+
 # scripts/init_data_root.py is not a package import; load it by path.
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 _INIT_DATA_ROOT_PATH = _REPO_ROOT / "scripts" / "init_data_root.py"
@@ -146,16 +148,33 @@ def test_fixed_path_missing_still_reported(tmp_path, caplog):
     assert any("TEXT_PRMS.tif" in m for m in _missing(caplog))
 
 
-def test_declared_profile_path_missing_is_reported_at_its_resolved_path(tmp_path, caplog):
+def test_fixture_key_list_matches_the_shared_tuple():
+    """Fixture honesty: a key added to SHARED_DEPSTOR_INPUT_KEYS must be staged and
+    probed here too, or the parametrized test below silently never covers it."""
+    from gfv2_params.config import SHARED_DEPSTOR_INPUT_KEYS
+
+    assert set(_PROFILE_KEYS) == set(SHARED_DEPSTOR_INPUT_KEYS)
+    assert init_data_root._SHARED_INPUT_PROFILE_KEYS == SHARED_DEPSTOR_INPUT_KEYS
+
+
+@pytest.mark.parametrize("key", sorted(_PROFILE_KEYS))
+def test_declared_profile_path_missing_is_reported_at_its_resolved_path(tmp_path, caplog, key):
     """A shared input the profile DECLARES but that is not on disk is reported,
-    by the exact path the pipeline will try to open."""
+    by the exact path the pipeline will try to open — for every key."""
     _stage_everything(tmp_path)
-    (tmp_path / _PROFILE_KEYS["dem_1m_inventory"]).unlink()
+    (tmp_path / _PROFILE_KEYS[key]).unlink()
     caplog.set_level(logging.WARNING)
     logger = logging.getLogger("test_validate_inputs_missing_profile_path")
-    init_data_root.validate_inputs(tmp_path, _profile(tmp_path), logger)
+    missing = init_data_root.validate_inputs(tmp_path, _profile(tmp_path), logger)
     missing_msgs = _missing(caplog)
-    assert any(str(tmp_path / _PROFILE_KEYS["dem_1m_inventory"]) in m for m in missing_msgs), missing_msgs
+    assert any(str(tmp_path / _PROFILE_KEYS[key]) in m for m in missing_msgs), missing_msgs
+    assert missing == [tmp_path / _PROFILE_KEYS[key]]
+
+
+def test_returns_an_empty_list_when_everything_is_present(tmp_path):
+    """The return value is what --check exits on."""
+    _stage_everything(tmp_path)
+    assert init_data_root.validate_inputs(tmp_path, _profile(tmp_path), logging.getLogger("t")) == []
 
 
 def test_undeclared_profile_key_is_not_checked(tmp_path, caplog):

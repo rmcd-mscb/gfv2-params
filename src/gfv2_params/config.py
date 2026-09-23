@@ -52,6 +52,7 @@ def resolve_vpu(vpu: str) -> tuple[str, str]:
 def load_base_config(
     base_config_path: Path | None = None,
     fabric: str | None = None,
+    data_root: str | Path | None = None,
 ) -> dict:
     """Load the base config (data_root, fabric profile, etc.).
 
@@ -60,6 +61,10 @@ def load_base_config(
     are resolved. Fabric resolution order: explicit kwarg -> FABRIC env var
     -> default_fabric in base config.
 
+    `data_root` overrides the file's `data_root` BEFORE placeholders are
+    substituted, so every profile path re-roots with it (what
+    `init-data-root --data_root X` needs to check X, not the production root).
+
     Use this when a script needs base paths but does not use a per-step
     YAML config (e.g., merge_and_fill_params, find_missing_hru_ids).
     """
@@ -67,6 +72,8 @@ def load_base_config(
         base_config_path = _DEFAULT_BASE_CONFIG
     base = _load_yaml(base_config_path)
     base = _resolve_fabric_profile(base, fabric)
+    if data_root is not None:
+        base["data_root"] = str(data_root)
     replacements = {"data_root": base["data_root"], "fabric": base["fabric"]}
     return _resolve_placeholders(base, replacements)
 
