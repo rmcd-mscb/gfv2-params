@@ -256,37 +256,15 @@ via (highest precedence first):
 2. `FABRIC` env var passed through `sbatch`
 3. `default_fabric` in `configs/base_config.yml`
 
-**Pre-merged fabric** (single gpkg covering the full domain — e.g., Oregon):
-
-1. Register the fabric and scaffold its output dirs:
-   `pixi run init-data-root --add-fabric oregon` appends a profile stub under
-   `fabrics:` in `configs/base_config.yml`. Then fill the stub's TODO
-   placeholders. **All shared, required fabric inputs live in the profile**
-   — see [`docs/ARCHITECTURE.md#required-profile-keys`](docs/ARCHITECTURE.md#required-profile-keys)
-   for the per-key required-field table (which keys are always required, which
-   are depstor-only, and how to stage the fabric-bounds clip for
-   `template_raster`/`fdr_raster` via
-   `scripts/clip_shared_to_fabric.py`).
-
-   For non-VPU-01 fabrics with depstor, use `threshold_mode: percentile` in
-   `configs/depstor/depstor_rasters.yml` with `twi_raster` pointing at
-   `twi_hydrodem.vrt`, and run the `twi_reference` step first (Stage 2a' in
-   `slurm_batch/HPC_REFERENCE.md`).
-2. Place the fabric gpkg at the `hru_gpkg` path you set, under
-   `{data_root}/oregon/fabric/` (NOT in `input/fabric/`)
-3. Run `prepare_fabric.py --fabric oregon` (reads `hru_gpkg` from the profile —
-   no `--fabric_gpkg` needed), then submit Part 2 jobs via
-   `slurm_batch/submit_zonal_params.sh $BATCHES oregon configs/base_config.yml`
-   (submits an array + merge per param in its hardcoded `PARAMS` array, which
-   mirrors `configs/zonal/zonal_params.yml`). For Part 1 raster prep, `sbatch slurm_batch/build_shared_rasters.batch`.
-   The Part 2 zonal pass (and depstor) read the CONUS shared rasters from Part 1,
-   so scope Part 1 to the VPUs your fabric overlaps — Oregon HRUs fall in VPU 17
-   (incidental), so `VPUS=17 sbatch slurm_batch/build_shared_rasters.batch`
-   avoids rebuilding all of CONUS for a regional test. Stage 2d depstor is
-   **active** for `oregon` (issue #90); after staging the FDR clip (step 1),
-   run `FABRIC=oregon sbatch slurm_batch/build_depstor_rasters.batch`. For valid
-   `carea_max`/`smidx_coef`, use `threshold_mode: percentile` with
-   `twi_hydrodem.vrt` after completing Stage 2a' (`twi_reference`).
+**Pre-merged fabric** (single gpkg with `nhru` + `nsegment` layers — e.g.
+`tjc`, `flaming_gorge`): follow
+[`docs/adding-a-fabric.md`](docs/adding-a-fabric.md). It is the complete,
+plain-language procedure — inspect the gpkg with `ogrinfo`, register the
+profile with `pixi run --as-is init-data-root --add-fabric <name>` (the stub is
+a complete active profile with four TODO values), clip the FDR, validate with
+`scripts/check_fabric_profile.py`, prepare batches, then run the whole chain
+with `slurm_batch/submit_fabric_rerun.sh`. Every profile key is explained in
+[`docs/ARCHITECTURE.md#required-profile-keys`](docs/ARCHITECTURE.md#required-profile-keys).
 
 **VPU-based fabric** (per-VPU gpkgs that need merging — e.g., gfv2):
 

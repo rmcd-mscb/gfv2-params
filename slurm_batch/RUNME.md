@@ -8,10 +8,20 @@ in [HPC_REFERENCE.md](HPC_REFERENCE.md).
 
 ## Before you start
 
-- Run `pixi install` once from the repo root; ensure `~/.pixi/bin` is on `PATH`.
+- **Your own clone:** run `pixi install` once from the repo root; ensure
+  `~/.pixi/bin` is on `PATH`.
+- **A checkout someone else also uses:** never run `pixi init`, `pixi install`
+  or `pixi lock` there — the env is already built, and a lock or env change
+  lands under every other user's running jobs. Put `--as-is` on every
+  `pixi run`, login node included. Your own `pixi` must be new enough to read
+  the checkout's `pixi.lock` (`pixi --version`; `pixi self-update` if not).
 - Always run `sbatch` / `submit_*.sh` from a shell where `~/.pixi/bin` is on
   `PATH` (SLURM inherits it — a missing PATH causes immediate `pixi: command not found`).
-- Run everything from the repo root (`cd <repo>`).
+- Run everything from the repo root (`cd <repo>`), by its absolute path: a
+  stale second clone with the same basename is how the first outside user
+  lost a morning.
+- Running a fabric other than CONUS `gfv2` for the first time? Start at
+  [`docs/adding-a-fabric.md`](../docs/adding-a-fabric.md), not here.
 
 ---
 
@@ -880,9 +890,12 @@ tail -n 200 logs/job_<JOBID>.err
 
 ## Need more?
 
+Adding a new fabric from one geopackage is its own page:
+[`docs/adding-a-fabric.md`](../docs/adding-a-fabric.md).
+
 See [HPC_REFERENCE.md](HPC_REFERENCE.md) for:
 
-- Running other fabrics (VPU01 validation, Oregon, new fabric registration).
+- Running other fabrics (VPU01 validation, Oregon, per-VPU fabric merging).
 - Running one parameter at a time (Stage 4A incremental path).
 - Single-step raster rebuilds (`--step <name>`, `--from <name>`).
 - Recovery / partial reruns (single-batch array resubmit, VPU source refill).

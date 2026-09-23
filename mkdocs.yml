@@ -101,6 +101,7 @@ nav:
   - HPC workflow: hpc-workflow.md
   - Architecture:
       - Canonical: ARCHITECTURE.md
+      - Adding a fabric: adding-a-fabric.md
       - Adding a parameter: ADDING_A_PARAMETER.md
       - Python patterns: python-patterns.md
   - Pipeline reference:
