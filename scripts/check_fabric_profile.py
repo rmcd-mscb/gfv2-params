@@ -26,9 +26,10 @@ mistakes that corrupt a new fabric SILENTLY rather than loudly:
   (its own `resolve_vpu_source` / `vpu_to_code`): a valid profile scalar, else
   a per-HRU `vpu` column with no null and no non-VPU value. Otherwise `vpu_id`
   raises at step 11 of the depstor stack.
-- Every path in `_PATH_KEYS` (the fabric FDR clip plus the shared CONUS inputs)
-  that the profile declares must exist at the resolved path. Opt-in
-  comparison tables are not checked.
+- Every path in `_PATH_KEYS` (the fabric FDR clip, the TWI product, the shared
+  CONUS inputs) that the profile declares must exist at the resolved path, and
+  so must the two shared products with no profile key (`fdr.vrt`, the TWI
+  percentile table). Opt-in comparison tables are not checked.
 """
 
 from __future__ import annotations
@@ -45,9 +46,19 @@ from gfv2_params.depstor_builders.vpu_id import resolve_vpu_source, vpu_to_code
 
 # Path-valued profile keys, checked only when the profile declares them. An
 # undeclared key is a legitimate omission (see SHARED_DEPSTOR_INPUT_KEYS), not a
-# missing file. The fabric-owned FDR clip plus the shared CONUS inputs
-# `init-data-root --check` also verifies (one list, in config.py).
-_PATH_KEYS = ("template_raster", "fdr_raster") + SHARED_DEPSTOR_INPUT_KEYS
+# missing file: the fabric-owned FDR clip, the shared TWI product, plus the
+# shared CONUS inputs `init-data-root --check` also verifies (one list, in config.py).
+_PATH_KEYS = ("template_raster", "fdr_raster", "twi_raster") + SHARED_DEPSTOR_INPUT_KEYS
+
+# Shared PRODUCTS of build_shared_rasters with no profile key, which every depstor
+# run reads by convention: fdr.vrt is clip_shared_to_fabric's default source and
+# the percentile table is carea_map's percentile-mode lookup. `init-data-root
+# --check` cannot demand them (it runs before Step 1 builds them), so they are
+# checked here, right before anything expensive.
+_SHARED_PRODUCTS = (
+    ("shared fdr.vrt exists", "shared/conus/vrt/fdr.vrt"),
+    ("twi reference table exists", "shared/conus/twi_reference_percentiles.hydrodem.csv"),
+)
 
 
 @dataclass
@@ -230,6 +241,14 @@ def run_checks(config: dict) -> list[CheckResult]:
         results.append(CheckResult(
             f"{key} exists", p.exists(), str(p) if p.exists() else f"not found: {p}",
         ))
+
+    if _declared(results, config, "data_root"):
+        for name, rel in _SHARED_PRODUCTS:
+            p = Path(config["data_root"]) / rel
+            results.append(CheckResult(
+                name, p.exists(),
+                str(p) if p.exists() else f"not found: {p} (built by build_shared_rasters.batch, RUNME Step 1)",
+            ))
     return results
 
 

@@ -18,11 +18,16 @@ VPU_RASTER_MAP = {
     "OR": "17",
 }
 
-# Path-valued profile keys naming the SHARED CONUS depstor inputs -- identical for
-# every fabric, staged once per data root. Read by both `init-data-root --check`
-# (are they staged?) and `scripts/check_fabric_profile.py` (does this profile's
-# value exist?), so the list lives here once. A profile that does not declare one
-# of these is a documented omission (tjc has no burn_add_waterbody_table).
+# Path-valued profile keys naming the SHARED CONUS depstor INPUTS -- identical for
+# every fabric, staged once per data root by the download modules. Read by both
+# `init-data-root --check` (are they staged? runs at RUNME Step 0) and
+# `scripts/check_fabric_profile.py` (does this profile's value exist?), so the
+# list lives here once. Inputs only: shared PRODUCTS such as `twi_raster`,
+# `fdr.vrt` and the TWI percentile table come from build_shared_rasters (Step 1)
+# and are checked by the validator alone. A key a profile omits is legitimate
+# (ARCHITECTURE.md's required-keys table marks wbd_huc12_table,
+# burn_add_waterbody_table and sink_points_table optional; tjc omits all three)
+# and is simply not checked.
 SHARED_DEPSTOR_INPUT_KEYS = (
     "waterbody_gpkg",
     "wbd_huc12_table",
@@ -31,7 +36,6 @@ SHARED_DEPSTOR_INPUT_KEYS = (
     "ecoregions_gpkg",
     "dem_1m_inventory",
     "wesm_project_attrs",
-    "twi_raster",
 )
 
 # Default base config location (relative to this file -> repo root)

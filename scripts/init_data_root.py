@@ -240,10 +240,11 @@ def _shapefile_companions(shp_path: Path) -> list[Path]:
     return [stem.with_suffix(ext) for ext in exts]
 
 
-# Staged inputs with no profile key (cannot be auto-downloaded), plus the two
-# shared products every depstor fabric reads by convention rather than via a
-# profile key: fdr.vrt is clip_shared_to_fabric's default source, and the
-# hydrodem percentile table is what carea_map's percentile mode looks up.
+# Staged INPUTS with no profile key (cannot be auto-downloaded). Inputs only:
+# --check runs at RUNME Step 0, before build_shared_rasters has produced
+# anything under shared/, and exits 1 on a missing path -- so the shared
+# products (fdr.vrt, the TWI percentile table, twi_raster) are deliberately
+# absent here and checked by scripts/check_fabric_profile.py instead.
 _FIXED_REQUIRED_PATHS = (
     "input/soils_litho/TEXT_PRMS.tif",
     "input/soils_litho/AWC.tif",
@@ -252,16 +253,13 @@ _FIXED_REQUIRED_PATHS = (
     # Sentinel for the per-RPU TWI staging step. Run scripts/stage_twi.sh
     # if missing.
     "input/twi/01a/twi.tif",
-    "shared/conus/vrt/fdr.vrt",
-    "shared/conus/twi_reference_percentiles.hydrodem.csv",
 )
 
 # Shared depstor inputs, read from the ACTIVE PROFILE's own values so the check
 # can never name a file no profile reads (the retired
-# input/depstor/<fabric>_segments_wbodies.gpkg sentinel did exactly that). A key
-# a profile does not declare is a documented, legitimate omission (tjc has no
-# burn_add_waterbody_table) and is not checked. The key list is shared with
-# scripts/check_fabric_profile.py via config.py.
+# input/depstor/<fabric>_segments_wbodies.gpkg sentinel did exactly that). The
+# key list, and which omissions are legitimate, is SHARED_DEPSTOR_INPUT_KEYS in
+# config.py, shared with scripts/check_fabric_profile.py.
 _SHARED_INPUT_PROFILE_KEYS = SHARED_DEPSTOR_INPUT_KEYS
 
 
@@ -297,9 +295,8 @@ def validate_inputs(data_root: Path, config: dict, logger) -> list[Path]:
         logger.warning(
             "Stage these before running the pipeline: the soils/LULC/TWI inputs by hand "
             "(README.md 'Stage external inputs'), the NHD/WBD/ecoregion layers with "
-            "`python -m gfv2_params.download.<module>`, the 3DEP inventory with "
-            "`sbatch slurm_batch/stage_dem_1m_inventory.batch`, and the shared/ products "
-            "with build_shared_rasters.batch (RUNME.md Steps 0-1)."
+            "`python -m gfv2_params.download.<module>`, and the 3DEP inventory with "
+            "`sbatch slurm_batch/stage_dem_1m_inventory.batch` (RUNME.md Step 0)."
         )
     else:
         logger.info("All required staged inputs are present.")

@@ -31,17 +31,14 @@ sys.modules["init_data_root"] = init_data_root
 _spec.loader.exec_module(init_data_root)
 
 
-# The fixed, non-profile paths: staged inputs with no profile key, plus the two
-# shared products every depstor fabric reads by convention (fdr.vrt is
-# clip_shared_to_fabric's default source; the percentile table is what
-# carea_map's percentile mode looks up).
+# The fixed, non-profile paths: staged inputs with no profile key. Only INPUTS:
+# --check runs at RUNME Step 0, before build_shared_rasters exists, so products
+# under shared/ are check_fabric_profile's job, not this one's.
 _FIXED = [
     "input/soils_litho/TEXT_PRMS.tif",
     "input/soils_litho/AWC.tif",
     "input/lulc_veg/RootDepth.tif",
     "input/twi/01a/twi.tif",
-    "shared/conus/vrt/fdr.vrt",
-    "shared/conus/twi_reference_percentiles.hydrodem.csv",
 ]
 
 # Profile-keyed shared inputs, as a real resolved profile would carry them.
@@ -53,7 +50,6 @@ _PROFILE_KEYS = {
     "ecoregions_gpkg": "input/ecoregions/us_eco_l3.gpkg",
     "dem_1m_inventory": "input/3dep/dem_1m_tile_inventory.parquet",
     "wesm_project_attrs": "input/wesm/wesm_project_attrs.parquet",
-    "twi_raster": "shared/conus/vrt/twi_hydrodem.vrt",
 }
 
 
@@ -191,18 +187,19 @@ def test_undeclared_profile_key_is_not_checked(tmp_path, caplog):
     assert any("All required staged inputs are present" in r.message for r in caplog.records)
 
 
-def test_shared_products_every_fabric_reads_are_checked(tmp_path, caplog):
-    """fdr.vrt (the clip source) and the hydrodem percentile table (carea_map's
-    lookup) have no profile key, but a fabric cannot run without them."""
+def test_shared_products_are_not_checked_here(tmp_path, caplog):
+    """fdr.vrt, the hydrodem percentile table and twi_raster are PRODUCTS of
+    build_shared_rasters (RUNME Step 1). --check runs in Step 0, before they can
+    exist, and exits 1 on anything missing -- so they must not be in its list.
+    check_fabric_profile.py checks them, right before a fabric run."""
     _stage_everything(tmp_path)
-    (tmp_path / "shared/conus/vrt/fdr.vrt").unlink()
-    (tmp_path / "shared/conus/twi_reference_percentiles.hydrodem.csv").unlink()
-    caplog.set_level(logging.WARNING)
+    cfg = _profile(tmp_path)
+    cfg["twi_raster"] = str(tmp_path / "shared/conus/vrt/twi_hydrodem.vrt")  # not staged
+    caplog.set_level(logging.INFO)
     logger = logging.getLogger("test_validate_inputs_shared_products")
-    init_data_root.validate_inputs(tmp_path, _profile(tmp_path), logger)
-    missing_msgs = _missing(caplog)
-    assert any("fdr.vrt" in m for m in missing_msgs), missing_msgs
-    assert any("twi_reference_percentiles.hydrodem.csv" in m for m in missing_msgs), missing_msgs
+    missing = init_data_root.validate_inputs(tmp_path, cfg, logger)
+    assert missing == []
+    assert not any("shared/" in m for m in _missing(caplog))
 
 
 def test_retired_per_fabric_depstor_sentinel_is_gone(tmp_path, caplog):

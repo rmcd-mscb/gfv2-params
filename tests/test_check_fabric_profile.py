@@ -74,8 +74,16 @@ def _failed(results) -> dict[str, str]:
     return {r.name: r.detail for r in results if not r.ok}
 
 
+def _stage_shared_products(data_root: Path) -> None:
+    """The two build_shared_rasters products the validator checks by convention."""
+    for name, rel in check_fabric_profile._SHARED_PRODUCTS:
+        (data_root / rel).parent.mkdir(parents=True, exist_ok=True)
+        (data_root / rel).touch()
+
+
 def test_a_correct_profile_passes_every_check(tmp_path):
     gpkg = _write_fabric(tmp_path / "demo.gpkg", [1, 2, 3])
+    _stage_shared_products(tmp_path)
     results = run_checks(_profile(tmp_path, gpkg))
     assert results, "no checks ran"
     assert _failed(results) == {}
@@ -185,6 +193,7 @@ def test_declared_input_path_missing_fails_and_undeclared_is_not_checked(tmp_pat
 
 def test_main_exits_nonzero_on_failure_and_zero_on_success(tmp_path, capsys):
     _write_fabric(tmp_path / "demo.gpkg", [1, 2, 3])
+    _stage_shared_products(tmp_path)
     base = tmp_path / "base_config.yml"
     base.write_text(yaml.safe_dump({
         "data_root": str(tmp_path),
@@ -376,6 +385,22 @@ def test_main_reports_an_unknown_fabric_as_a_fail_line(tmp_path, capsys):
     out = capsys.readouterr().out
     assert rc == 1
     assert "FAIL" in out and "nope" in out
+
+
+def test_shared_products_under_data_root_are_checked(tmp_path):
+    """fdr.vrt (the clip source) and the hydrodem percentile table (carea_map's
+    percentile lookup) have no profile key. They are build_shared_rasters
+    products, so `init-data-root --check` (RUNME Step 0) cannot demand them;
+    this validator, which runs right before a fabric run, must."""
+    gpkg = _write_fabric(tmp_path / "demo.gpkg", [1, 2, 3])
+    results = run_checks(_profile(tmp_path, gpkg))
+    failed = _failed(results)
+    assert "shared fdr.vrt exists" in failed
+    assert "twi reference table exists" in failed
+    _stage_shared_products(tmp_path)
+    failed = _failed(run_checks(_profile(tmp_path, gpkg)))
+    assert "shared fdr.vrt exists" not in failed
+    assert "twi reference table exists" not in failed
 
 
 def test_every_repo_profile_runs_without_raising():
