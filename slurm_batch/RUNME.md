@@ -17,9 +17,9 @@ in [HPC_REFERENCE.md](HPC_REFERENCE.md).
   the checkout's `pixi.lock` (`pixi --version`; `pixi self-update` if not).
 - Always run `sbatch` / `submit_*.sh` from a shell where `~/.pixi/bin` is on
   `PATH` (SLURM inherits it — a missing PATH causes immediate `pixi: command not found`).
-- Run everything from the repo root (`cd <repo>`), by its absolute path: a
-  stale second clone with the same basename is how the first outside user
-  lost a morning.
+- Run everything from the repo root (`cd <repo>`), by its absolute path, and
+  check `pwd`: a second clone with the same basename under another parent is
+  the wrong place, and its first symptom is `command not found`.
 - Running a fabric other than CONUS `gfv2` for the first time? Start at
   [`docs/adding-a-fabric.md`](../docs/adding-a-fabric.md), not here.
 

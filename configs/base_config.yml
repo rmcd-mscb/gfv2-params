@@ -312,16 +312,16 @@ fabrics:
     wesm_project_attrs: "{data_root}/input/wesm/wesm_project_attrs.parquet"
 
   flaming_gorge:
-    # Regional fabric in VPU 14 (Upper Colorado), added 2026-09-23 by Andy Bock --
-    # the first fabric registered by someone other than the repo owner, and the
-    # run that produced docs/adding-a-fabric.md. Single pre-merged gpkg
-    # (nhru + nsegment) in the tjc shape. 1,745 HRUs; fg_hru_id is the
-    # contiguous 1..1745 local index.
+    # Regional fabric in VPU 14 (Upper Colorado): a single pre-merged gpkg
+    # (nhru + nsegment) in the tjc shape. fg_hru_id is the contiguous local
+    # index; use it, not a national id with gaps.
     expected_max_hru_id: 1745
+    # Two batches of the 1,745 HRUs, so the zonal arrays get two tasks instead of one.
     batch_size: 873
     id_feature: fg_hru_id
     hru_gpkg: "{data_root}/{fabric}/fabric/flaming_gorge_v2.gpkg"
     hru_layer: nhru
+    # template_raster + fdr_raster: fabric-bounds clip of the CONUS fdr.vrt, staged by
     #   pixi run --as-is python scripts/clip_shared_to_fabric.py --fabric flaming_gorge
     template_raster: "{data_root}/{fabric}/shared/{fabric}_fdr.vrt"
     fdr_raster: "{data_root}/{fabric}/shared/{fabric}_fdr.vrt"
@@ -332,9 +332,11 @@ fabrics:
     waterbody_gpkg: "{data_root}/input/nhd/nhd_waterbodies.gpkg"
     waterbody_layer: waterbodies
     wbd_huc12_table: "{data_root}/input/wbd/wbd_huc12.parquet"
-    # The domain has closed basins; set a little below the count the first run
-    # logs, so a collapsed classifier fails instead of silently keeping every
-    # closed lake on-stream.
+    # Floor on Signal A (terminus-inside-itself), the fabric-scoped count. The
+    # first run (2026-09-23) logged Signal A 28; Signal B 21,504 and the union
+    # 21,528 are CONUS-wide because wbd_huc12_table is set (the builder reads the
+    # full WBD), so the floor is NOT tuned against those -- same caveat as oregon.
+    # The same run's segment_wbody line: 176 on-stream COMIDs from 251 pairs.
     min_endorheic_comids: 7
     burn_add_waterbody_table: "{data_root}/input/nhd/burn_add_waterbodies.parquet"
     sink_points_table: "{data_root}/input/nhd/sink_points.parquet"

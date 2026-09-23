@@ -46,8 +46,9 @@ a rule, and the steps below follow the rules.
 | The live checkout (the code) | `/caldera/hovenweep/projects/usgs/water/impd/nhgf/gfv2-params` |
 | The data root (inputs and outputs) | `/caldera/hovenweep/projects/usgs/water/impd/nhgf/gfv2_param_v2` |
 
-`nhgf/gfv2_param/gfv2-params` is not the repo. If you find yourself there,
-you are in the wrong place.
+If `pwd` prints anything other than the checkout path above, for example a
+second clone with the same basename under a different parent, you are in the
+wrong place.
 
 ## Step 0. Open a terminal in the right place
 
@@ -61,9 +62,10 @@ pixi --version
 git branch --show-current
 ```
 
-`pixi --version` must print 0.81 or newer. If it is older, run
-`pixi self-update` once. If it says "command not found", install pixi in your
-own home directory (see the pixi website) and run the `export PATH` line again.
+Your `pixi` must be new enough to read the checkout's `pixi.lock`. If a later
+`pixi run` complains about the lock file, run `pixi self-update` once. If
+`pixi --version` says "command not found", install pixi in your own home
+directory (see the pixi website) and run the `export PATH` line again.
 
 `git branch --show-current` tells you which code you are running. Do not
 switch branches; if it is not the branch you expected, ask the repo owner.
@@ -73,9 +75,15 @@ Two habits for the rest of the page:
 - The login node is for light commands only: the ones on this page marked
   "login node is fine". Anything else goes through `sbatch` so it runs on a
   compute node.
-- `squeue -u $USER` lists your running and waiting jobs. A job is done when it
-  no longer appears there. `sacct -u $USER -X --format=JobID,JobName%30,State`
-  shows how finished jobs ended: you want `COMPLETED`.
+- `squeue -u $USER` lists your running and waiting jobs. When a job leaves
+  that list it has finished, but finished is not the same as succeeded: a job
+  that failed, or was cancelled because the job before it failed, leaves the
+  list too. `sacct -u $USER -X --format=JobID,JobName%30,State` shows how each
+  finished job ended. You want `COMPLETED` on every row.
+- Every job writes its messages to `logs/job_<JOBID>.out` and
+  `logs/job_<JOBID>.err` under the checkout directory (array tasks use
+  `logs/job_<ARRAYID>_<TASK>.err`). When something fails, the `.err` file of
+  the failed job is where to look.
 
 ## Step 1. Look at your geopackage (login node is fine)
 
@@ -107,13 +115,15 @@ geopackage before going on; the validator in Step 5 will refuse it otherwise.
 
 Then decide two things you already know about your domain:
 
-- **VPU.** Which of the 18 NHDPlus vector processing units the fabric lies in,
-  as a two-digit string such as `"14"` (Upper Colorado) or `"12"`
-  (Texas-Gulf). A fabric that spans several VPUs needs a `vpu` column on the
-  `nhru` layer instead; ask the repo owner if that is your case.
+- **VPU.** Which NHDPlus vector processing unit the fabric lies in, as a
+  string such as `"14"` (Upper Colorado) or `"12"` (Texas-Gulf). Sub-region
+  labels like `"03N"` or `"10U"` are accepted too. A fabric that spans several
+  VPUs needs a `vpu` column on the `nhru` layer instead; ask the repo owner if
+  that is your case.
 - **Closed basins.** Does the domain contain terminal lakes or playas with no
-  outlet? If not, leave the endorheic floor out in Step 3. An empty endorheic
-  result is correct for a domain with no closed basin.
+  outlet? You do not have to decide now. Step 3 leaves the two optional
+  classifier floors out, and Step 8 shows where the first run reports the
+  counts you would set them from.
 
 ## Step 2. Copy the geopackage into the data root (login node is fine)
 
@@ -147,10 +157,9 @@ bottom, and fill in the four lines marked `TODO`:
 
 Everything else in the block is already correct for this data root. Two
 optional lines are commented out at the end: `min_onstream_comids` and
-`min_endorheic_comids`. Leave them commented for a first run. Once the first
-run has logged the real counts, you can set each floor a little below its
-count so a future mis-wired run fails instead of silently producing a wrong
-product.
+`min_endorheic_comids`. Leave them commented for the first run. Step 8 says
+which two numbers in the first run's log to set them from, so that a future
+mis-wired run fails instead of silently producing a wrong product.
 
 `configs/base_config.yml` is a shared, tracked file. Tell the repo owner you
 added a profile so it gets committed on a branch, rather than sitting as an
@@ -182,8 +191,9 @@ mistakes that otherwise fail silently: an id column with gaps, a wrong
 `expected_max_hru_id`, a layer name that does not exist, a `vpu` still at its
 placeholder, a declared input that is not on disk.
 
-Also confirm the shared inputs every fabric reads are staged on this data root
-(they are, on this cluster, but the check is free):
+Also confirm the shared inputs every fabric reads are staged on this data root.
+It lists anything missing and exits 1 if there is anything; otherwise it says
+so and exits 0.
 
 ```bash
 pixi run --as-is init-data-root --check --fabric myfabric
@@ -215,7 +225,9 @@ gap-fill. You submit once and wait.
 
 First set the list of zonal parameters this data root can build. Two of the
 ten (`lulc_nlcd`, `lulc_foresce`) have no staged source here, and one failing
-parameter cancels the rest of the chain, so this line is required:
+parameter cancels the rest of the chain, so this line is required. It is a
+copy of `recommended_zonal_params` in `configs/workflow/fabric_rerun.yml`; if
+the two ever differ, the manifest is right.
 
 ```bash
 export ZONAL_PARAMS="elevation slope aspect soils soil_moist_max lulc_nhm_v11 lulc_nalcms ssflux"
@@ -230,8 +242,10 @@ nothing:
 
 Then submit for real. Which line you use depends on the size of the fabric.
 
-**A regional fabric** (up to a few tens of thousands of HRUs), so the jobs do
-not sit in the queue for a day asking for CONUS-sized resources:
+**A fabric the size of `tjc` or `flaming_gorge`** (about 2,000 HRUs, which is
+what these numbers were measured on; a much larger regional fabric may need
+more, check `sacct -o JobID,MaxRSS,Elapsed` afterwards), so the jobs do not
+sit in the queue for a day asking for CONUS-sized resources:
 
 ```bash
 SBATCH_MEM_PER_NODE=64G SBATCH_TIMELIMIT=04:00:00 STAGE2_MEM=64G STAGE2_TIME=02:00:00 ./slurm_batch/submit_fabric_rerun.sh --force /caldera/hovenweep/projects/usgs/water/impd/nhgf/gfv2_param_v2/myfabric/batches myfabric
@@ -246,16 +260,37 @@ numbers:
 
 What to expect:
 
-- The driver prints one `Submitted` line per stage and returns. The chain runs
-  unattended for hours; `squeue -u $USER` shows the stages waiting on each
-  other as `(Dependency)`.
+- The driver echoes each stage's submission (the wrapper stages print several
+  `Submitted batch job` lines each) and ends with a `Chain:` line listing every
+  stage's job id. Keep that line. The chain then runs unattended for hours;
+  `squeue -u $USER` shows the stages waiting on each other as `(Dependency)`.
 - If a stage fails, SLURM cancels everything after it, so nothing runs against
-  incomplete inputs. Look in `logs/` and `slurm_batch/logs/` for the failed
-  job's `.err` file, fix the cause, and resume from that stage:
+  incomplete inputs. Fix the cause (Step 7b shows how to find it) and resume
+  from that stage:
   `./slurm_batch/submit_fabric_rerun.sh --from <stage> <batches path> myfabric`.
   The dry-run output lists the stage names.
 - If you do not need snow-depletion curves, let the `snarea` stage fail (or
   cancel it) and resume with `--from fill`.
+
+## Step 7b. Confirm every stage actually completed
+
+When `squeue -u $USER` is empty, the chain has finished, but that alone does
+not tell you whether it succeeded. Run:
+
+```bash
+sacct -u $USER -X --starttime now-2days --format=JobID,JobName%30,State,Elapsed
+```
+
+Every row from the chain must say `COMPLETED`. Two other states mean the run
+is not done:
+
+- `FAILED`, `OUT_OF_MEMORY` or `TIMEOUT`: that job is the one to debug. Open
+  `logs/job_<JOBID>.err` for its id.
+- `CANCELLED`: a job before it failed, and SLURM cancelled this one because its
+  dependency was never satisfied. Do not debug the cancelled job; find the
+  earliest non-`COMPLETED` row instead.
+
+Only go on to Step 8 when every row is `COMPLETED`.
 
 ## Step 8. Where the results are
 
@@ -265,18 +300,41 @@ The parameter files are here, one CSV per parameter:
 /caldera/hovenweep/projects/usgs/water/impd/nhgf/gfv2_param_v2/myfabric/params/merged/
 ```
 
-`merged/<name>.csv` is the finished, gap-filled product. A quick sanity check
-is the row count: each file should have your HRU count plus one header line.
+`merged/<name>.csv` is the finished, gap-filled product. Counting its rows
+proves nothing, because the gap-fill step adds a row for every missing HRU, so
+the count is always right. The two checks that do discriminate:
+
+- The pre-fill copy at `merged/_unfilled/<name>.csv` should also have your HRU
+  count plus one header line. A shortfall there means some batches produced no
+  data and the fill step invented them.
+- The fill job's `.err` log should say `Found 0 missing` for each parameter,
+  and every file's modification time must be later than the time you submitted
+  the chain. On a re-run, files older than the submission are the previous
+  run's product.
 
 ```bash
-wc -l /caldera/hovenweep/projects/usgs/water/impd/nhgf/gfv2_param_v2/myfabric/params/merged/nhm_elevation_params.csv
+wc -l /caldera/hovenweep/projects/usgs/water/impd/nhgf/gfv2_param_v2/myfabric/params/merged/_unfilled/nhm_elevation_params.csv
+ls -l --time-style=long-iso /caldera/hovenweep/projects/usgs/water/impd/nhgf/gfv2_param_v2/myfabric/params/merged/
 ```
 
-Two numbers worth reading in the job logs: the on-stream waterbody count from
-the `segment_wbody` step and the endorheic count from the `endorheic` step. An
-on-stream count near zero means the segments layer did not match the
-waterbodies, and every waterbody became depression storage. Those two counts
-are what the optional floors in Step 3 protect.
+**Two numbers to read and record.** They are in the `.err` log of the first
+`build_depstor_rasters` job of the chain:
+
+```bash
+grep -E "on-stream COMIDs from|Signal A" logs/job_<JOBID>.err
+```
+
+- `<N> on-stream COMIDs from <M> positive-length pairs` is the `segment_wbody`
+  count. Near zero means the segments layer did not match the waterbodies and
+  every waterbody became depression storage.
+- `Signal A (terminus-inside-itself): <N>` is the endorheic count for your
+  fabric. The `Signal B` and `union` numbers on the same line are CONUS-wide
+  whenever `wbd_huc12_table` is set, so ignore them for this purpose.
+
+If you want the optional floors from Step 3, set `min_onstream_comids` a
+little below the first number and `min_endorheic_comids` a little below Signal
+A. If Signal A is 0 the domain has no closed basin; leave that floor out, since
+a declared floor would make that correct result raise.
 
 Optional figures:
 
@@ -293,9 +351,11 @@ FABRIC=myfabric sbatch slurm_batch/render_figures.batch
 | `No such file or directory` on a command that starts with two spaces | A backslash line continuation was pasted as one line | Retype the command as one line with no backslash. |
 | `ERROR: no batch manifest at /myfabric/batches/manifest.yml` | Same empty-variable problem as above | Use the full batches path from Step 7. |
 | `pixi run` fails to read `pixi.lock` | Your pixi is older than the lock file format | `pixi self-update`, then rerun Step 0. |
-| A job waits in the queue for many hours | CONUS-sized resource request | Use the regional command in Step 7. |
-| The validator says `expected_max_hru_id matches: FAIL` | The profile value is still `0`, or the id column has gaps | Redo Step 1 and Step 3. |
+| A job waits in the queue for many hours | CONUS-sized resource request | Use the small-fabric command in Step 7. |
+| The validator says `expected_max_hru_id matches: FAIL` | The profile value is still `0`, or is a count rather than the highest id | Redo Step 1 and Step 3. |
+| The validator says `id column contiguous 1..N: FAIL` | The id column has gaps or does not start at 1, usually a national id | Pick the local index column in Step 1. |
 | The validator says `vpu resolves: FAIL` | `vpu` is still `"00"` | Set the real VPU in Step 3. |
+| `sacct` shows `CANCELLED` rows | An earlier job failed and its dependents were cancelled | Debug the earliest non-`COMPLETED` job (Step 7b), then resume with `--from`. |
 
 ## Related pages
 
