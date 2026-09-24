@@ -159,7 +159,7 @@ stages:
 
       RUNS ALL 10 PARAMS BY DEFAULT, which fails on any fabric whose sources are not
       staged -- and because depstor_params waits on every merge, one unstaged param
-      cancels the WHOLE remaining chain. Set ZONAL_PARAMS to the subset this data root
+      stops the WHOLE remaining chain. Set ZONAL_PARAMS to the subset this data root
       can actually build (see `recommended_zonal_params` at the top of this file); the
       driver passes the environment through.
 

@@ -165,7 +165,7 @@ then run `python scripts/build_workflow_doc.py`; CI fails if this section is sta
 BATCHES="$(pixi run data-root)/<fabric>/batches"
 
 # Required on this data root -- see ZONAL_PARAMS below. One unstaged param
-# cancels the whole remaining chain.
+# stops the whole remaining chain.
 export ZONAL_PARAMS="elevation slope aspect soils soil_moist_max lulc_nhm_v11 lulc_nalcms ssflux"
 
 # ALWAYS dry-run first: prints the exact submission sequence, submits nothing,
@@ -178,11 +178,18 @@ export ZONAL_PARAMS="elevation slope aspect soils soil_moist_max lulc_nhm_v11 lu
 ```
 
 Each stage chains on the previous stage's terminal SLURM job, so the whole
-sequence runs unattended. A failed stage leaves its dependents in
-`DependencyNeverSatisfied` and SLURM cancels them — the chain stops rather than
-running a stage against incomplete inputs. Fix the cause, then resume:
+sequence runs unattended. A failed stage stops the chain rather than running a
+stage against incomplete inputs, but on this cluster SLURM does **not** cancel
+the jobs behind it (`kill_invalid_depend` is not set). They stay in the queue
+indefinitely: the failed job's direct dependents show
+`PENDING (DependencyNeverSatisfied)` in `squeue`, everything after them
+`PENDING (Dependency)`. So an empty `squeue` never signals the end of a failed
+chain; a `DependencyNeverSatisfied` row does. Clear the stale chain, fix the
+cause, then resume:
 
 ```bash
+# Cancels ALL of your pending jobs; cancel by job id instead if you have others.
+scancel -u "$USER" --state=PENDING
 ./slurm_batch/submit_fabric_rerun.sh --from dprst_depth "$BATCHES" <fabric>
 ```
 
@@ -199,7 +206,7 @@ The driver passes the environment through to every stage.
 
 **`ZONAL_PARAMS`** — `submit_zonal_params.sh` runs all 10 params by default, and
 any whose source is unstaged will fail. Because `depstor_params` waits on *every*
-zonal merge, one unstaged param cancels the whole remaining chain. Set it to the
+zonal merge, one unstaged param stops the whole remaining chain. Set it to the
 subset your data root can actually build — `recommended_zonal_params` in the
 manifest records the subset that works here (`lulc_nlcd` and `lulc_foresce` are
 the two normally left out, their CONUS sources being unstaged):
@@ -315,7 +322,7 @@ sbatch --export=ALL,BASE_CONFIG={base_config},FABRIC={fabric} slurm_batch/build_
 
 > Fans out: an independent array + merge per param, so its terminal is ALL the merge jobs, colon-joined. Independent of depstor_rasters -- ordered after it only because the chain is linear.
 >
-> RUNS ALL 10 PARAMS BY DEFAULT, which fails on any fabric whose sources are not staged -- and because depstor_params waits on every merge, one unstaged param cancels the WHOLE remaining chain. Set ZONAL_PARAMS to the subset this data root can actually build (see `recommended_zonal_params` at the top of this file); the driver passes the environment through.
+> RUNS ALL 10 PARAMS BY DEFAULT, which fails on any fabric whose sources are not staged -- and because depstor_params waits on every merge, one unstaged param stops the WHOLE remaining chain. Set ZONAL_PARAMS to the subset this data root can actually build (see `recommended_zonal_params` at the top of this file); the driver passes the environment through.
 >
 > accepts_force is false because the per-batch and merge products always rebuild -- but ONE artefact here is exists-skipped and --force does not reach it: the CONUS lithology weight matrix (zonal_runners/weights.py). It is rebuilt only by FORCE=1, which build_zonal_weights.batch turns into --force-weights. After restaging lithology, or changing the weight derivation, export FORCE=1 -- otherwise ssflux is rebuilt on the old matrix and every job still reports COMPLETED (cf. #175).
 

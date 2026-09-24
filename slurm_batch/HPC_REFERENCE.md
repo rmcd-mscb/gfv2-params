@@ -859,8 +859,9 @@ pixi run python -m gfv2_params.dprst_depth.tiling --plan \
   NOT reach for `--force` or a re-plan: the primary tile set assignment for
   those polygons is still correct, only the read attempt failed. **Also
   resubmit (or re-run) the downstream stages** — `afterok` chaining means a
-  failed array task already cancelled the Build/mean-zonal/finalize jobs
-  behind it, so a lone `sbatch --array=<idx> ...` resubmit of the array task
+  failed array task leaves the Build/mean-zonal/finalize jobs behind it stuck
+  `PENDING (DependencyNeverSatisfied)` forever (this cluster does not
+  auto-cancel them; `scancel` them first), so a lone `sbatch --array=<idx> ...` resubmit of the array task
   alone leaves the rest of the DAG un-submitted; either chain the remaining
   stages by hand from `slurm_batch/HPC_REFERENCE.md`'s per-stage commands
   above, or just re-run the whole `submit_dprst_depth.sh "$BATCHES" <fabric>

@@ -16,7 +16,8 @@
 #   5. Stage 3 library    (derive_snarea_library.batch, CV/lognormal library)
 #
 # Because every job is afterok on the prior one, a failed Stage-1 array task
-# aborts the whole chain (merge/derive/library stay PENDING then cancel) — a
+# stops the whole chain (merge/derive/library stay PENDING as DependencyNeverSatisfied,
+# and are NOT auto-cancelled on this cluster: scancel them before resubmitting) — a
 # partial Stage-1 run never silently mixes old/new per-batch NetCDFs into the
 # merge. Monitor with `squeue -u $USER` / `sacct -j <id>`.
 #
