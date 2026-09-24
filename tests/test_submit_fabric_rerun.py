@@ -221,7 +221,7 @@ class TestEnvironment:
         runs all 10 params by default; on a data root where a source is unstaged (neither
         lulc_nlcd nor lulc_foresce is staged here) that param's array fails, its merge
         fails, and because depstor_params waits on EVERY merge the whole remaining chain
-        is cancelled. Observed for real on the first tjc run. The remedy is to export the
+        never runs. Observed for real on the first tjc run. The remedy is to export the
         subset -- which only works if the environment survives the driver.
         """
         batches, cfg = _tree(tmp_path)

@@ -77,9 +77,11 @@ Two habits for the rest of the page:
   compute node.
 - `squeue -u $USER` lists your running and waiting jobs. When a job leaves
   that list it has finished, but finished is not the same as succeeded: a job
-  that failed, or was cancelled because the job before it failed, leaves the
-  list too. `sacct -u $USER -X --format=JobID,JobName%30,State` shows how each
-  finished job ended. You want `COMPLETED` on every row.
+  that failed leaves the list too. `sacct -u $USER -X --format=JobID,JobName%30,State`
+  shows how each finished job ended. You want `COMPLETED` on every row.
+- On this cluster, when a job fails, the jobs waiting on it are **not**
+  cancelled. They stay in `squeue` forever, marked `(DependencyNeverSatisfied)`
+  or `(Dependency)`. Step 7b shows how to spot that and clear them.
 - Every job writes its messages to `logs/job_<JOBID>.out` and
   `logs/job_<JOBID>.err` under the checkout directory (array tasks use
   `logs/job_<ARRAYID>_<TASK>.err`). When something fails, the `.err` file of
@@ -225,7 +227,7 @@ gap-fill. You submit once and wait.
 
 First set the list of zonal parameters this data root can build. Two of the
 ten (`lulc_nlcd`, `lulc_foresce`) have no staged source here, and one failing
-parameter cancels the rest of the chain, so this line is required. It is a
+parameter stops the rest of the chain, so this line is required. It is a
 copy of `recommended_zonal_params` in `configs/workflow/fabric_rerun.yml`; if
 the two ever differ, the manifest is right.
 
@@ -264,33 +266,58 @@ What to expect:
   `Submitted batch job` lines each) and ends with a `Chain:` line listing every
   stage's job id. Keep that line. The chain then runs unattended for hours;
   `squeue -u $USER` shows the stages waiting on each other as `(Dependency)`.
-- If a stage fails, SLURM cancels everything after it, so nothing runs against
-  incomplete inputs. Fix the cause (Step 7b shows how to find it) and resume
-  from that stage:
-  `./slurm_batch/submit_fabric_rerun.sh --from <stage> <batches path> myfabric`.
-  The dry-run output lists the stage names.
+- If a stage fails, nothing after it runs against incomplete inputs, but the
+  jobs after it are **not** cancelled either. They stay in the queue until you
+  remove them. Step 7b shows how to recognise that and recover.
 - If you do not need snow-depletion curves, let the `snarea` stage fail (or
   cancel it) and resume with `--from fill`.
 
 ## Step 7b. Confirm every stage actually completed
 
-When `squeue -u $USER` is empty, the chain has finished, but that alone does
-not tell you whether it succeeded. Run:
+Check the queue with the reason column showing:
+
+```bash
+squeue -u $USER -o "%.14i %.24j %.9T %R"
+```
+
+- **Jobs `RUNNING`, or `PENDING (Dependency)` behind a running job:** the chain
+  is still going. Check again later.
+- **Any row `PENDING (DependencyNeverSatisfied)`:** a job it waits on failed,
+  and everything still listed will wait forever. The chain has stopped. Go to
+  "Recovering from a failed stage" below.
+- **Nothing listed:** the chain has finished. Confirm it succeeded:
 
 ```bash
 sacct -u $USER -X --starttime now-2days --format=JobID,JobName%30,State,Elapsed
 ```
 
-Every row from the chain must say `COMPLETED`. Two other states mean the run
-is not done:
+Every row from the chain must say `COMPLETED`. `FAILED`, `OUT_OF_MEMORY` or
+`TIMEOUT` on any row means that job failed; open `logs/job_<JOBID>.err` for its
+id. Only go on to Step 8 when every row is `COMPLETED`.
 
-- `FAILED`, `OUT_OF_MEMORY` or `TIMEOUT`: that job is the one to debug. Open
-  `logs/job_<JOBID>.err` for its id.
-- `CANCELLED`: a job before it failed, and SLURM cancelled this one because its
-  dependency was never satisfied. Do not debug the cancelled job; find the
-  earliest non-`COMPLETED` row instead.
+### Recovering from a failed stage
 
-Only go on to Step 8 when every row is `COMPLETED`.
+1. Find the failed job: the earliest row in the `sacct` command above that is
+   not `COMPLETED`. Its `.err` log says why. A job that ran for hours without
+   progressing, on one node, may just have landed on an unhealthy node; see the
+   troubleshooting table.
+2. Clear the stale chain. This cancels **all** of your pending jobs; if you
+   have unrelated jobs waiting, cancel the chain's job ids instead.
+
+```bash
+scancel -u $USER --state=PENDING
+```
+
+3. Resume from the stage that failed. The dry-run lists the stage names; use
+   the same resource overrides as your first submission:
+
+```bash
+./slurm_batch/submit_fabric_rerun.sh --from <stage> /caldera/hovenweep/projects/usgs/water/impd/nhgf/gfv2_param_v2/myfabric/batches myfabric
+```
+
+If the failure was in `zonal_params` and most params already finished, set
+`ZONAL_PARAMS` to only the ones that did not; the stage reruns every param you
+list, whether or not its merged file already exists.
 
 ## Step 8. Where the results are
 
@@ -359,7 +386,8 @@ FABRIC=myfabric sbatch slurm_batch/render_figures.batch
 | The validator says `expected_max_hru_id matches: FAIL` | The profile value is still `0`, or is a count rather than the highest id | Redo Step 1 and Step 3. |
 | The validator says `id column contiguous 1..N: FAIL` | The id column has gaps or does not start at 1, usually a national id | Pick the local index column in Step 1. |
 | The validator says `vpu resolves: FAIL` | `vpu` is still `"00"` | Set the real VPU in Step 3. |
-| `sacct` shows `CANCELLED` rows | An earlier job failed and its dependents were cancelled | Debug the earliest non-`COMPLETED` job (Step 7b), then resume with `--from`. |
+| `squeue` shows `(DependencyNeverSatisfied)` | An earlier job failed; the jobs behind it are not cancelled automatically | Follow "Recovering from a failed stage" in Step 7b. |
+| One array task runs for hours while its twin finished in minutes | The job landed on a node with very slow filesystem access (seen on cn103 and cn046, Sep 23 2026) | Let it fail or `scancel` it, then recover as in Step 7b. Keep pending jobs off the node with `scontrol update JobId=<jobid> ExcNodeList=<node>`. |
 
 ## Related pages
 

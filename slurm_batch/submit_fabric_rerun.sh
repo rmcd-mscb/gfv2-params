@@ -16,9 +16,12 @@
 # {fabric}/batches/. Changing the fabric is a different, documented act (prepare_fabric)
 # that invalidates everything downstream.
 #
-# FAILURE: stages chain on afterok, so a failed stage leaves its dependents in
-# DependencyNeverSatisfied and SLURM cancels them. The chain stops rather than running a
-# stage against incomplete inputs. Fix the cause, then resume with --from <stage>.
+# FAILURE: stages chain on afterok, so a failed stage stops the chain rather than running a
+# stage against incomplete inputs. SLURM here does NOT cancel the jobs behind it
+# (kill_invalid_depend is not set): the failed job's dependents sit PENDING with reason
+# DependencyNeverSatisfied, the rest PENDING (Dependency), indefinitely. Clear them
+# (scancel -u "$USER" --state=PENDING, or by job id), fix the cause, then resume with
+# --from <stage>.
 #
 # ALWAYS --dry-run FIRST. It prints the exact submission sequence without submitting
 # anything, and is safe on the login node.
@@ -282,5 +285,6 @@ if [ "$DRY_RUN" -eq 1 ]; then
     echo "(dry run -- nothing submitted; job ids above are placeholders)"
 else
     echo "Monitor: squeue -u \$USER"
-    echo "A failed stage cancels its dependents (DependencyNeverSatisfied); resume with --from <stage>."
+    echo "If a stage fails, the jobs behind it stay PENDING (DependencyNeverSatisfied) and are NOT"
+    echo "cancelled. Clear them with: scancel -u \$USER --state=PENDING   then resume with --from <stage>."
 fi
