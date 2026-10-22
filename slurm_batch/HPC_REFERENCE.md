@@ -84,6 +84,7 @@ gfv2_param/
     └── params/             # Parameter outputs; merged/ (canonical, gap-filled)
                              #   + merged/_unfilled/ (pre-fill copies)
                              #   + merged/_intermediates/
+                             #   + prms/ (one <prms_name>.csv per PRMS parameter)
 ```
 
 > **Upgrading an existing `data_root` from the legacy `work/` layout?** Run

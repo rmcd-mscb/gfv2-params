@@ -107,6 +107,12 @@ sbatch slurm_batch/merge_and_fill_params.batch
 > Wait for `COMPLETED`.
 ```bash
 
+# 5b · Export one file per PRMS parameter (params/prms/<name>.csv)
+sbatch slurm_batch/export_prms_params.batch
+```
+> Wait for `COMPLETED`.
+```bash
+
 # 6 · (optional) Merge NHM default parameter tables
 sbatch slurm_batch/merge_default_output_params.batch
 
@@ -114,7 +120,8 @@ sbatch slurm_batch/merge_default_output_params.batch
 sbatch slurm_batch/render_figures.batch
 ```
 
-Outputs land in `{data_root}/gfv2/params/merged/` (parameter CSVs) and
+Outputs land in `{data_root}/gfv2/params/merged/` (parameter CSVs),
+`{data_root}/gfv2/params/prms/` (one file per PRMS parameter) and
 `docs/figures/gfv2/` (figures). See [Where outputs land](#where-outputs-land) below.
 
 ---
@@ -127,6 +134,7 @@ Outputs land in `{data_root}/gfv2/params/merged/` (parameter CSVs) and
 4. **Step 3** — Clip fabric-bounds FDR template; build depstor raster stack.
 5. **Step 4** — Fan out zonal + depstor parameter array jobs.
 6. **Step 5** — KNN gap-fill missing parameter values.
+   **Step 5b** — export one file per PRMS parameter (`params/prms/`).
 7. **Step 6** — (optional) Merge NHM default parameter tables.
 8. **Step 7** — Render results figures headlessly.
 9. **Step 8** — (optional, fabric-independent) Derive snow depletion curves
@@ -367,7 +375,7 @@ sbatch --export=ALL,BASE_CONFIG={base_config},FABRIC={fabric} slurm_batch/merge_
 | Resources | 2h / 64G / 8 cpu |
 | `--force` | not accepted (the driver does not pass it) |
 
-> Must precede export_prms and nothing else may follow that. It rewrites merged/*.csv in place, so a stage scheduled after it leaves its product unfilled -- and because the rewrite is in-place, the filename does not reveal it. merged/<name>.csv IS the gap-filled product (PR #189).
+> Must be the last stage that writes merged/; only export_prms (read-only) may follow it. It rewrites merged/*.csv in place, so a stage scheduled after it leaves its product unfilled -- and because the rewrite is in-place, the filename does not reveal it. merged/<name>.csv IS the gap-filled product (PR #189).
 
 #### export_prms
 
@@ -787,7 +795,8 @@ FABRIC=<fabric> sbatch slurm_batch/export_prms_params.batch
 
 **What it does:** reads the gap-filled `merged/<entry>.csv` files and writes
 `{data_root}/{fabric}/params/prms/<prms_name>.csv`, one file per PRMS parameter, named as in
-`docs/HI_paramDB_DataDictionary.csv` (30 files, e.g. `hru_elev.csv`, `soil_type.csv`).
+`docs/HI_paramDB_DataDictionary.csv` (one file per covered parameter, e.g. `hru_elev.csv`,
+`soil_type.csv`; the count is in the README summary).
 `snarea_curve.csv` is the one file that is not per-HRU. See the README's
 [PRMS parameters covered](../README.md#prms-parameters-covered).
 
@@ -928,6 +937,9 @@ tail -n 200 logs/job_<JOBID>.err
   `dprst_frac`) and
   `nhm_dprst_depth_avg_params.csv` (issue #173 — derived, NOT the pyWatershed
   132 in default; see `docs/pywatershed_depression_storage_requirements.md`).
+- `{data_root}/gfv2/params/prms/` — one `<prms_name>.csv` per PRMS parameter,
+  copied from the gap-filled `merged/` files by Step 5b (`snarea_curve.csv` is the
+  flat curve array, not per-HRU). Re-run Step 5b after anything rewrites `merged/`.
 - `{data_root}/gfv2/params/merged/_intermediates/` — 10 per-fraction count
   CSVs (inputs to ratio derivation; `count` is NOT a [0, 1] fraction).
 - `{data_root}/gfv2/params/merged/_unfilled/` — the pre-fill (raw) copy of

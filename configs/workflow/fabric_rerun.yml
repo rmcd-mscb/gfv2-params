@@ -202,9 +202,10 @@ stages:
     produces: "{fabric}/params/merged/*.csv gap-filled IN PLACE (pre-fill copy in _unfilled/)"
     resources: "2h / 64G / 8 cpu"
     note: >-
-      Must precede export_prms and nothing else may follow that. It rewrites merged/*.csv
-      in place, so a stage scheduled after it leaves its product unfilled -- and because
-      the rewrite is in-place, the filename does not reveal it. merged/<name>.csv IS the
+      Must be the last stage that writes merged/; only export_prms (read-only) may follow
+      it. It rewrites merged/*.csv in place, so a stage scheduled after it leaves its
+      product unfilled -- and because the rewrite is in-place, the filename does not
+      reveal it. merged/<name>.csv IS the
       gap-filled product (PR #189).
 
   - name: export_prms

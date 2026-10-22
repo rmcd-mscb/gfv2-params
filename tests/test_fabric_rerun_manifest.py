@@ -227,7 +227,7 @@ def test_recommended_zonal_params_are_real_params():
 
 
 def test_stage_order_satisfies_the_real_data_dependencies(stages):
-    """Ordering was pinned only at the endpoints (shared first, fill last, snarea < fill).
+    """Ordering was pinned only at the endpoints (shared first, export_prms last with fill immediately before it, snarea < fill).
 
     Because the chain is strictly linear and each stage waits on the previous one, a
     reordering edit produces a chain that runs correctly AS A CHAIN while computing
