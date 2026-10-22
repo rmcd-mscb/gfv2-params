@@ -377,6 +377,10 @@ params:
     # assert two different derivations are the same PRMS parameter; it stays in
     # provenance until someone verifies what, if anything, it corresponds to.
     prms:
+      # Alternative LULC source: lulc_nhm_v11 is the one exported to params/prms/
+      # (cov_type, covden_*, *_intcp are the same PRMS names in all four). Remove
+      # this only if this source REPLACES nhm_v11 -- plan_exports raises on a duplicate.
+      export: false
       builder: zonal_runners/lulc.py
       columns:
         cov_type:
@@ -435,6 +439,10 @@ params:
     # assert two different derivations are the same PRMS parameter; it stays in
     # provenance until someone verifies what, if anything, it corresponds to.
     prms:
+      # Alternative LULC source: lulc_nhm_v11 is the one exported to params/prms/
+      # (cov_type, covden_*, *_intcp are the same PRMS names in all four). Remove
+      # this only if this source REPLACES nhm_v11 -- plan_exports raises on a duplicate.
+      export: false
       builder: zonal_runners/lulc.py
       columns:
         cov_type:
@@ -493,6 +501,10 @@ params:
     # assert two different derivations are the same PRMS parameter; it stays in
     # provenance until someone verifies what, if anything, it corresponds to.
     prms:
+      # Alternative LULC source: lulc_nhm_v11 is the one exported to params/prms/
+      # (cov_type, covden_*, *_intcp are the same PRMS names in all four). Remove
+      # this only if this source REPLACES nhm_v11 -- plan_exports raises on a duplicate.
+      export: false
       builder: zonal_runners/lulc.py
       columns:
         cov_type:
