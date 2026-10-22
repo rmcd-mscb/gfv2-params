@@ -48,7 +48,9 @@ def test_check_fails_on_a_tampered_region(tmp_path):
 def test_rewrite_repairs_a_tampered_copy_and_touches_nothing_outside_the_markers(tmp_path):
     scratch = tmp_path / "README.md"
     original = README.read_text()
-    scratch.write_text(original.replace("| `hru_elev` |", "| `hru_elevX` |", 1))
+    tampered = original.replace("| `hru_elev` |", "| `hru_elevX` |", 1)
+    assert tampered != original, "tamper target not found; this test would pass vacuously"
+    scratch.write_text(tampered)
     assert _run("--path", str(scratch)).returncode == 0
     assert scratch.read_text() == original
 

@@ -93,9 +93,11 @@ def test_happy_path_writes_one_file_per_parameter_named_for_the_prms_parameter(e
 
 
 def test_alternative_lulc_entry_is_not_read_even_when_its_file_is_absent(env):
-    # nalcms is export:false and has no merged file here; the run must not need it
+    # nalcms is export:false and has no merged file here; the run must not need it, and
+    # rad_trncf must come from the nhm_v11 file
     assert not (env[0] / "nhm_lulc_nalcms_params.csv").exists()
     _run(env)
+    assert pd.read_csv(env[1] / "rad_trncf.csv")["rad_trncf"].tolist() == [0.5, 0.6, 0.7, 0.8]
 
 
 def test_integer_typed_parameters_are_written_as_integers(env):
@@ -133,7 +135,7 @@ def test_duplicate_ids_raise(env):
 def test_files_disagreeing_on_the_id_set_raise(env):
     _write_merged(env[0], **{"nhm_soils_params.csv": pd.DataFrame(
         {ID: [1, 2, 3, 9], "soils": [1.0, 2.0, 3.0, 2.0]})})
-    with pytest.raises(ValueError, match="disagree"):
+    with pytest.raises(ValueError, match="spans 1..9"):
         _run(env)
 
 
@@ -170,13 +172,21 @@ def test_snarea_curve_is_flat_ascending_in_deplcrv_order(env):
 def test_hru_deplcrv_beyond_the_library_raises(env):
     _write_merged(env[0], **{"nhm_snarea_curve_params.csv": pd.DataFrame(
         {ID: _ids(), "hru_deplcrv": [1, 2, 3, 2], **{c: 0.0 for c in CURVE_COLS}})})
-    with pytest.raises(ValueError, match="hru_deplcrv"):
+    with pytest.raises(ValueError, match="snarea_curve holds 2 curves"):
+        _run(env)
+
+
+def test_hru_deplcrv_of_zero_raises(env):
+    _write_merged(env[0], **{"nhm_snarea_curve_params.csv": pd.DataFrame(
+        {ID: _ids(), "hru_deplcrv": [0, 2, 1, 2], **{c: 0.0 for c in CURVE_COLS}})})
+    with pytest.raises(ValueError, match="snarea_curve holds"):
         _run(env)
 
 
 def test_rerun_is_byte_identical(env):
     _run(env)
     first = {p.name: p.read_bytes() for p in env[1].glob("*.csv")}
+    assert first, "first run wrote nothing"
     _run(env)
     assert {p.name: p.read_bytes() for p in env[1].glob("*.csv")} == first
     assert not list(env[1].glob("*.tmp"))
@@ -196,6 +206,7 @@ def test_unfilled_directory_is_never_read(env):
     unfilled.mkdir()
     pd.DataFrame({ID: _ids(), "soils": [np.nan] * N}).to_csv(unfilled / "nhm_soils_params.csv", index=False)
     _run(env)   # reads merged/ only; the NaN copy in _unfilled/ is irrelevant
+    assert pd.read_csv(env[1] / "soil_type.csv")["soil_type"].tolist() == [1, 2, 3, 2]
 
 
 def test_out_of_range_values_warn_but_are_still_exported(env, caplog):
@@ -219,3 +230,80 @@ def test_a_degenerate_dictionary_range_never_warns(env, caplog):
     with caplog.at_level(logging.WARNING, logger="prms_export"):
         export_fabric(merged, out, ID, N, library_path=lib, declared=declared, dictionary=DICTIONARY)
     assert "dprst_depth_avg: " not in caplog.text
+
+
+def test_inf_in_an_exported_column_raises(env):
+    _write_merged(env[0], **{"nhm_elevation_params.csv": pd.DataFrame(
+        {ID: _ids(), "mean": [10.0, np.inf, 30.0, 40.0], "std": 1.0})})
+    with pytest.raises(ValueError, match="non-finite"):
+        _run(env)
+
+
+def test_missing_id_column_raises(env):
+    _write_merged(env[0], **{"nhm_soils_params.csv": pd.DataFrame({"other_id": _ids(), "soils": [1.0, 2.0, 3.0, 2.0]})})
+    with pytest.raises(ValueError, match="not in header"):
+        _run(env)
+
+
+def test_ids_must_be_exactly_one_to_n(env):
+    _write_merged(env[0], **{"nhm_soils_params.csv": pd.DataFrame(
+        {ID: _ids() + 1, "soils": [1.0, 2.0, 3.0, 2.0]})})   # consistently shifted: 2..5
+    with pytest.raises(ValueError, match="spans 2..5"):
+        _run(env)
+
+
+@pytest.mark.parametrize("library", [None, "missing.csv"])
+def test_snarea_curve_without_a_library_file_raises(env, library):
+    merged, out, _ = env
+    lib = None if library is None else merged / library
+    with pytest.raises(FileNotFoundError, match="curve library"):
+        export_fabric(merged, out, ID, N, library_path=lib, declared=DECLARED, dictionary=DICTIONARY)
+
+
+def test_two_entries_sharing_one_merged_file_are_both_exported(env):
+    shared = DeclaredParam("slope2", "nhm_elevation_params.csv", [], {},
+                           {"columns": _cols({"std": "hru_slope"})})
+    merged, out, lib = env
+    export_fabric(merged, out, ID, N, library_path=lib, declared=DECLARED + [shared], dictionary=DICTIONARY)
+    assert pd.read_csv(out / "hru_slope.csv")["hru_slope"].tolist() == [1.0] * N
+    assert pd.read_csv(out / "hru_elev.csv")["hru_elev"].tolist() == [10.0, 20.0, 30.0, 40.0]
+
+
+def test_a_failed_write_leaves_no_tmp_file(env, monkeypatch):
+    original = pd.DataFrame.to_csv
+    calls = {"n": 0}
+
+    def flaky(self, path, *a, **kw):
+        calls["n"] += 1
+        original(self, path, *a, **kw)
+        if calls["n"] == 2:
+            raise OSError("disk full")
+
+    monkeypatch.setattr(pd.DataFrame, "to_csv", flaky)
+    with pytest.raises(OSError, match="disk full"):
+        _run(env)
+    assert not list(env[1].glob("*.tmp"))
+
+
+def test_real_declarations_export_end_to_end_on_synthetic_data(tmp_path):
+    """Drive export_fabric with the REAL declarations and dictionary, so the real alias
+    group, shared merged files and integer columns are exercised -- the hand-built
+    DECLARED above mirrors only a slice of reality."""
+    from gfv2_params.prms_export import plan_exports
+
+    items = plan_exports()
+    merged = tmp_path / "merged"
+    merged.mkdir()
+    by_file: dict[str, dict] = {}
+    for item in items:
+        if item.dimension != "nhru":
+            continue
+        cols = by_file.setdefault(item.merged_file, {ID: _ids()})
+        cols[item.source_cols[0]] = 1 if item.dtype == "I" else 0.5
+    for name, cols in by_file.items():
+        pd.DataFrame(cols).to_csv(merged / name, index=False)
+    lib = _library(tmp_path)
+
+    written = export_fabric(merged, tmp_path / "prms", ID, N, library_path=lib)
+    assert sorted(p.stem for p in written) == sorted(i.prms_name for i in items)
+    assert pd.read_csv(tmp_path / "prms" / "cov_type.csv")["cov_type"].dtype.kind == "i"

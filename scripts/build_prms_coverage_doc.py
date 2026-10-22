@@ -25,7 +25,6 @@ from gfv2_params.prms_export import load_dictionary, plan_exports
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 README_PATH = _REPO_ROOT / "README.md"
-REGIONS = ("prms-summary", "prms-covered", "prms-not-covered")
 
 
 def render() -> dict[str, str]:
@@ -59,8 +58,9 @@ def _display_path(path: Path) -> str:
 
 def build(check: bool = False, path: Path = README_PATH) -> int:
     text = path.read_text()
+    regions = render()
     new = text
-    for name, body in render().items():
+    for name, body in regions.items():
         new = _replace_region(new, name, body)
 
     if new == text:
@@ -74,7 +74,7 @@ def build(check: bool = False, path: Path = README_PATH) -> int:
         )
         return 1
     path.write_text(new)
-    print(f"Wrote {_display_path(path)} ({len(REGIONS)} regions).")
+    print(f"Wrote {_display_path(path)} ({len(regions)} regions).")
     return 0
 
 

@@ -8,7 +8,7 @@ Run AFTER the fill stage:
 
     FABRIC=gfv2r2 sbatch slurm_batch/export_prms_params.batch
 
-or by hand (about 30 columns x one fabric's HRUs -- small, but still not for the login node):
+or by hand (a few dozen small per-HRU files -- cheap, but still not for the login node):
 
     srun -p cpu -A impd --time=00:30:00 --ntasks=1 --cpus-per-task=2 --mem=16G \\
       pixi run --as-is python scripts/export_prms_params.py --fabric <fabric>
@@ -64,7 +64,7 @@ def main(argv: list[str] | None = None) -> int:
             library_path=merged_dir / library_file,
             logger=logger,
         )
-    except (FileNotFoundError, ValueError) as exc:
+    except (FileNotFoundError, ValueError, KeyError) as exc:
         logger.error("export failed, nothing written: %s", exc)
         return 1
     logger.info("Exported %d PRMS parameter files to %s", len(written), params_dir / PRMS_SUBDIR)

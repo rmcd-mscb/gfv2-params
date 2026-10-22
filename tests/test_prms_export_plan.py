@@ -26,9 +26,10 @@ def _declared(name, merged_file, columns, **prms):
     )
 
 
-def test_real_plan_has_no_duplicate_names_and_every_name_is_in_the_dictionary():
+def test_real_plan_is_non_empty_with_unique_names_all_in_the_dictionary():
     items = plan_exports()
     names = [i.prms_name for i in items]
+    assert len(names) >= 25, f"suspiciously small plan: {names}"
     assert len(names) == len(set(names))
     assert set(names) <= set(DICTIONARY)
 
@@ -54,6 +55,7 @@ def test_export_false_is_set_on_exactly_the_three_alternative_lulc_entries():
 
 def test_provenance_and_derivation_inputs_are_never_exported():
     names = set(_by_name(plan_exports()))
+    assert {"hru_elev", "hru_aspect", "dprst_depth_avg"} <= names  # positive control: plan is real
     # raw stats, derivation inputs and ssflux's non-PRMS columns (hru_area there is m2,
     # PRMS hru_area is acres)
     for leaked in ("mean_sin", "mean_cos", "hru_area", "vpu", "fflux", "k_perm_log_wtd",
@@ -104,8 +106,15 @@ def test_a_name_missing_from_the_dictionary_raises():
 
 
 def test_a_dimension_the_export_cannot_write_raises_at_plan_time():
-    with pytest.raises(NotImplementedError):
+    with pytest.raises(NotImplementedError, match="nhru"):
         plan_exports([_declared("a", "a.csv", {"x": "adjmix_rain"})], DICTIONARY)  # nhru x nmonths
+
+
+def test_an_ndeplval_parameter_other_than_snarea_curve_raises_at_plan_time():
+    fake = {"fake_curve": {"Type": "F", "Dimensions": "ndeplval", "Units": "", "Description": "",
+                           "minimum": "0", "maximum": "1", "Source": "x"}}
+    with pytest.raises(NotImplementedError, match="snarea_curve"):
+        plan_exports([_declared("a", "a.csv", {"x": "fake_curve"})], fake)
 
 
 def test_defects_and_provenance_are_not_read():

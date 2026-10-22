@@ -7,8 +7,9 @@ parameter in `docs/HI_paramDB_DataDictionary.csv` (`soil_moist_max.csv`, `hru_el
 The mapping is the existing `prms.columns.<emitted col>.prms` declaration, so no new
 declaration is needed beyond the `prms.export: false` opt-out.
 
-Pure pandas/yaml and import-safe like `params_index.py`: no geo imports, no data root
-needed to PLAN. Only `export_fabric` touches disk.
+Pandas/yaml only -- no geo imports, and no data root needed to PLAN. Only `export_fabric`
+touches disk. (`snarea.library`, which drags in xarray and scipy, is imported lazily inside
+the one branch that needs it, so planning and the README generator stay light.)
 
 Rules this module enforces (each is a regression someone has already hit elsewhere):
 
@@ -23,8 +24,10 @@ Rules this module enforces (each is a regression someone has already hit elsewhe
 - A missing merged file for an exportable entry raises. This is deliberately stricter
   than the fill sweep, which skips unbuilt params: here a missing file means a stage
   was not run, and a silently partial `params/prms/` directory is the worse outcome.
-- Everything is built and validated in memory before anything is written, and each
-  write is an atomic replace, so a failure never leaves a half-written product.
+- Everything is built and validated in memory before anything is written, so a validation
+  failure writes nothing. Each FILE is then replaced atomically (`os.replace`), so no file
+  is ever half-written; but a failure partway through the write loop can leave a mix of
+  old and new files in `params/prms/`, so the remedy is always to re-run the stage.
 """
 
 from __future__ import annotations
@@ -39,13 +42,13 @@ import numpy as np
 import pandas as pd
 
 from gfv2_params.params_index import DeclaredParam, load_declared_params
-from gfv2_params.snarea.library import flatten_prms_curve
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 DICTIONARY_PATH = _REPO_ROOT / "docs" / "HI_paramDB_DataDictionary.csv"
 
 # Dictionary `Dimensions` values this module knows how to write. Anything else on a
-# covered column raises at PLAN time (a CI failure), never at export time.
+# covered column raises at PLAN time (a CI failure), never at export time. The one
+# `ndeplval` parameter with a writer is snarea_curve; any other raises at plan time too.
 DIM_NHRU = "nhru"
 DIM_NDEPLVAL = "ndeplval"
 SNAREA_CURVE_POINTS = 11
@@ -97,10 +100,12 @@ def plan_exports(
                 )
             row = dictionary[prms_name]
             dim = row["Dimensions"].strip()
-            if dim not in (DIM_NHRU, DIM_NDEPLVAL):
+            if dim not in (DIM_NHRU, DIM_NDEPLVAL) or (
+                dim == DIM_NDEPLVAL and prms_name != SNAREA_CURVE_NAME
+            ):
                 raise NotImplementedError(
-                    f"{prms_name!r} has dimension {dim!r}; the export writes only "
-                    f"{DIM_NHRU!r} and {DIM_NDEPLVAL!r}"
+                    f"{prms_name!r} has dimension {dim!r}; the export writes {DIM_NHRU!r} "
+                    f"parameters and {SNAREA_CURVE_NAME!r} ({DIM_NDEPLVAL!r}) only"
                 )
             producers.setdefault(prms_name, []).append(d.name)
             items.append(
@@ -117,7 +122,8 @@ def plan_exports(
     return items
 
 
-def _require_finite(name: str, source: str, values: pd.Series) -> None:
+def _finite_array(name: str, source: str, values: pd.Series) -> np.ndarray:
+    """`values` as float64, raising on NaN (with the remedy), inf or a non-numeric cell."""
     arr = pd.to_numeric(values, errors="raise").to_numpy(float)
     nan = int(np.isnan(arr).sum())
     if nan:
@@ -127,19 +133,20 @@ def _require_finite(name: str, source: str, values: pd.Series) -> None:
         )
     if not np.isfinite(arr).all():
         raise ValueError(f"{name}: non-finite value in {source}")
+    return arr
 
 
-def _coerce(name: str, source: str, values: pd.Series, dtype: str) -> pd.Series:
-    _require_finite(name, source, values)
+def _coerce(name: str, source: str, values: pd.Series, dtype: str) -> np.ndarray:
+    """Validated values in the dictionary's type: int64 for `I` (whole numbers only), else float64."""
+    arr = _finite_array(name, source, values)
     if dtype == "I":
-        arr = values.to_numpy(float)
         if not np.array_equal(arr, np.round(arr)):
             raise ValueError(f"{name}: dictionary type is integer but {source} has non-integral values")
-        return pd.Series(arr.astype(np.int64), index=values.index, name=name)
-    return pd.Series(values.to_numpy(float), index=values.index, name=name)
+        return arr.astype(np.int64)
+    return arr
 
 
-def _warn_out_of_range(name: str, series: pd.Series, row: dict, logger) -> None:
+def _warn_out_of_range(name: str, values: np.ndarray, row: dict, logger) -> None:
     """Warn only: the dictionary min/max are the original NHM ranges, wrong for a new fabric.
 
     A degenerate range (min >= max, e.g. dprst_depth_avg 132..132) is the dictionary
@@ -151,7 +158,7 @@ def _warn_out_of_range(name: str, series: pd.Series, row: dict, logger) -> None:
         return
     if lo >= hi:
         return
-    n = int(((series < lo) | (series > hi)).sum())
+    n = int(((values < lo) | (values > hi)).sum())
     if n:
         logger.warning("%s: %d value(s) outside the dictionary range [%s, %s]", name, n, lo, hi)
 
@@ -168,8 +175,10 @@ def export_fabric(
 ) -> list[Path]:
     """Write `out_dir/<prms_name>.csv` for every planned parameter. Returns the paths.
 
-    `expected_rows` is the fabric's `expected_max_hru_id`: the fill stage guarantees ids
-    1..N are all present, so row-count equality is the right test.
+    `expected_rows` is the fabric's `expected_max_hru_id`. The fill stage guarantees the
+    ids are exactly 1..N (it fills against `range(1, expected_max_hru_id + 1)`), so each
+    merged file is required to hold exactly that id set -- which also makes every file
+    agree with every other.
     `library_path` is the snarea curve library CSV; required iff `snarea_curve` is planned.
     """
     logger = logger or logging.getLogger("prms_export")
@@ -178,10 +187,9 @@ def export_fabric(
     merged_dir, out_dir = Path(merged_dir), Path(out_dir)
 
     frames: dict[str, pd.DataFrame] = {}
-    id_sets: dict[str, set] = {}
     cache: dict[str, pd.DataFrame] = {}
 
-    def merged_frame(item: ExportItem) -> tuple[pd.DataFrame, str]:
+    def merged_frame(item: ExportItem) -> pd.DataFrame:
         path = merged_dir / item.merged_file
         if not path.is_file():
             raise FileNotFoundError(
@@ -192,29 +200,34 @@ def export_fabric(
             df = pd.read_csv(path, low_memory=False)  # ssflux's `vpu` has mixed-looking values
             if id_feature not in df.columns:
                 raise ValueError(f"{path}: id column {id_feature!r} not in header")
-            if df[id_feature].duplicated().any():
+            ids = df[id_feature]
+            if ids.duplicated().any():
                 raise ValueError(f"{path}: duplicate {id_feature} values")
             if len(df) != expected_rows:
                 raise ValueError(f"{path}: {len(df)} rows, expected {expected_rows}")
+            if ids.min() != 1 or ids.max() != expected_rows:
+                raise ValueError(
+                    f"{path}: {id_feature} spans {ids.min()}..{ids.max()}, expected exactly "
+                    f"1..{expected_rows}"
+                )
             cache[item.merged_file] = df
-            id_sets[item.merged_file] = set(df[id_feature])
-        return cache[item.merged_file], item.merged_file
+        return cache[item.merged_file]
 
     for item in items:
         if item.dimension == DIM_NDEPLVAL:
-            if item.prms_name != SNAREA_CURVE_NAME:
-                raise NotImplementedError(f"no writer for {item.dimension} parameter {item.prms_name!r}")
             if library_path is None or not Path(library_path).is_file():
                 raise FileNotFoundError(
                     f"snarea_curve needs the curve library CSV; {library_path} is missing"
                 )
+            from gfv2_params.snarea.library import flatten_prms_curve  # lazy: pulls xarray/scipy
+
             flat = flatten_prms_curve(pd.read_csv(library_path))
             frames[item.prms_name] = pd.DataFrame(
                 {"ndeplval_index": np.arange(1, len(flat) + 1), SNAREA_CURVE_NAME: flat}
             )
             continue
 
-        df, key = merged_frame(item)
+        df = merged_frame(item)
         present = [c for c in item.source_cols if c in df.columns]
         if len(present) != 1:
             raise ValueError(
@@ -223,12 +236,9 @@ def export_fabric(
             )
         col = present[0]
         values = _coerce(item.prms_name, f"{item.merged_file}:{col}", df[col], item.dtype)
-        out = pd.DataFrame({id_feature: df[id_feature].to_numpy(), item.prms_name: values.to_numpy()})
+        out = pd.DataFrame({id_feature: df[id_feature].to_numpy(), item.prms_name: values})
         frames[item.prms_name] = out.sort_values(id_feature).reset_index(drop=True)
         _warn_out_of_range(item.prms_name, values, dictionary[item.prms_name], logger)
-
-    if len({frozenset(s) for s in id_sets.values()}) > 1:
-        raise ValueError("merged files disagree on the HRU id set: " + ", ".join(sorted(id_sets)))
 
     if "hru_deplcrv" in frames and SNAREA_CURVE_NAME in frames:
         ndepl = len(frames[SNAREA_CURVE_NAME]) // SNAREA_CURVE_POINTS
@@ -243,8 +253,11 @@ def export_fabric(
     for name, frame in sorted(frames.items()):
         path = out_dir / f"{name}.csv"
         tmp = path.with_suffix(".csv.tmp")
-        frame.to_csv(tmp, index=False)
-        os.replace(tmp, path)
+        try:
+            frame.to_csv(tmp, index=False)
+            os.replace(tmp, path)
+        finally:
+            tmp.unlink(missing_ok=True)  # a failed write must not leave a stray .tmp behind
         written.append(path)
         col = frame.iloc[:, 1]
         logger.info("%s: %d rows, min %s, max %s -> %s", name, len(frame), col.min(), col.max(), path)

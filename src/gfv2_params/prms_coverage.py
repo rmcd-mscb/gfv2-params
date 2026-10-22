@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import re
 
-from gfv2_params.prms_export import ExportItem
+from gfv2_params.prms_export import DIM_NDEPLVAL, ExportItem
 
 # Ordered: first matching rule wins. The title is the README heading for that group.
 RUN_CONTROLS = "Run controls and unit flags"
@@ -67,7 +67,7 @@ def covered_names(items: list[ExportItem]) -> set[str]:
 
 
 def _written_from(item: ExportItem) -> str:
-    if item.dimension == "ndeplval":
+    if item.dimension == DIM_NDEPLVAL:
         return "snarea curve library (flat; not per-HRU)"
     cols = " / ".join(f"`{c}`" for c in item.source_cols)
     return f"`{item.merged_file}` ({cols})"

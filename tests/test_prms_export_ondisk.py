@@ -23,7 +23,9 @@ import pandas as pd
 import pytest
 
 from gfv2_params.config import load_base_config
-from gfv2_params.prms_export import PRMS_SUBDIR, SNAREA_CURVE_NAME, plan_exports
+from gfv2_params.prms_export import (
+    DIM_NDEPLVAL, PRMS_SUBDIR, SNAREA_CURVE_NAME, SNAREA_CURVE_POINTS, plan_exports,
+)
 
 _PLAN = plan_exports()
 
@@ -48,9 +50,9 @@ def test_exported_file_matches_its_filled_source(item):
     assert path.exists(), f"{path} missing -- the export did not write {item.prms_name}"
     out = pd.read_csv(path)
 
-    if item.dimension == "ndeplval":
+    if item.dimension == DIM_NDEPLVAL:
         assert list(out.columns) == ["ndeplval_index", SNAREA_CURVE_NAME]
-        assert len(out) % 11 == 0 and len(out) > 0
+        assert len(out) % SNAREA_CURVE_POINTS == 0 and len(out) > 0
         assert out[SNAREA_CURVE_NAME].notna().all()
         return
 
@@ -71,7 +73,7 @@ def test_exported_file_matches_its_filled_source(item):
 
 def test_hru_deplcrv_indexes_into_the_exported_curve():
     _, prms, _ = _prms_dir_or_skip()
-    ndepl = len(pd.read_csv(prms / f"{SNAREA_CURVE_NAME}.csv")) // 11
+    ndepl = len(pd.read_csv(prms / f"{SNAREA_CURVE_NAME}.csv")) // SNAREA_CURVE_POINTS
     idx = pd.read_csv(prms / "hru_deplcrv.csv")["hru_deplcrv"]
     assert 1 <= idx.min() and idx.max() <= ndepl
 
