@@ -1,0 +1,117 @@
+Parameter,Type,Units,Description,minimum,maximum,default,Dimensions,Source
+adjmix_rain,F,decimal fraction,Monthly (January to December) factor to adjust rain proportion in a mixed rain/snow event,1,1,1,"nhru, nmonths",Regan
+albset_rna,F,decimal fraction,Fraction of rain in a mixed precipitation event above which the snow albedo is not reset; applied during the snowpack accumulation stage,0.8,0.8,0.8,one,Regan
+albset_rnm,F,decimal fraction,Fraction of rain in a mixed precipitation event above which the snow albedo is not reset; applied during the snowpack melt stage,0.6,0.6,0.6,one,Regan
+albset_sna,F,inches,"Minimum snowfall, in water equivalent, needed to reset snow albedo during the snowpack accumulation stage",0.05,0.05,0.05,one,Regan
+albset_snm,F,inches,"Minimum snowfall, in water equivalent, needed to reset snow albedo during the snowpack melt stage",0.2,0.2,0.2,one,Regan
+carea_max,F,decimal fraction,Maximum possible area contributing to surface runoff expressed as a portion of the hydrologic response unit area,0,1,0.6,nhru,Topographic Derivatives 1.1
+cecn_coef,F,calories per degree Celsius above 0,Monthly (January to December) convection condensation energy coefficient for each hydrologic response unit,5,5,5,"nhru, nmonths",Regan
+cov_type,I,none,Vegetation cover type for each hydrologic response unit (0=bare soil; 1=grasses; 2=shrubs; 3=trees; 4=coniferous),0,3,3,nhru,Spatial Data Layers 1.1
+covden_sum,F,decimal fraction,Summer vegetation cover density for the major vegetation type in each hydrologic response unit,0,0.94,0.5,nhru,Spatial Data Layers 1.1
+covden_win,F,decimal fraction,Winter vegetation cover density for the major vegetation type in each hydrologic response unit,0,0.94,0.5,nhru,Spatial Data Layers 1.1
+dday_intcp,F,dday,Monthly (January to December) intercept in degree-day equation for each hydrologic response unit,0,0,-40,"nhru, nmonths",Regan
+dday_slope,F,dday/temp_units,Monthly (January to December) slope in degree-day equation for each hydrologic response unit,0,0,0.4,"nhru, nmonths",Regan
+den_init,F,gram/cubic centimeter,Initial density of new-fallen snow,0.1,0.1,0.1,one,Regan
+den_max,F,gram/cubic centimeter,Average maximum snowpack density,0.6,0.6,0.6,one,Regan
+dprst_depth_avg,F,inches,Average depth of surface depressions at maximum storage capacity,132,132,132,nhru,Regan
+dprst_et_coef,F,decimal fraction,Fraction of unsatisfied potential evapotranspiration to apply to surface-depression storage,1,1,1,nhru,Regan
+dprst_flow_coef,F,fraction/day,Coefficient in linear flow routing equation for open surface depressions for each hydrologic response unit,0.005,0.5,0.05,nhru,Regan
+dprst_frac,F,decimal fraction,Fraction of each hydrologic response unit area that has surface depressions,0,0.921,0,nhru,Topographic Derivatives 1.1
+dprst_frac_init,F,decimal fraction,Fraction of maximum surface-depression storage that contains water at the start of a simulation,0.5,0.5,0.5,nhru,Regan
+dprst_frac_open,F,decimal fraction,Fraction of open surface-depression storage area within an hydrologic response unit that can generate surface runoff as a function of storage volume,1,1,1,nhru,Regan
+dprst_seep_rate_close,F,fraction/day,Coefficient used in linear seepage flow equation for closed surface depressions for each hydrologic response unit,0.005,0.3,0.02,nhru,Topographic Derivatives 1.1
+dprst_seep_rate_open,F,fraction/day,Coefficient used in linear seepage flow equation for open surface depressions for each hydrologic response unit,0.005,0.2,0.02,nhru,Topographic Derivatives 1.1
+elev_units,I,none,Flag to indicate the units of the elevation values (0=feet; 1=meters),0,0,0,one,Regan
+emis_noppt,F,decimal fraction,Average emissivity of air on days without precipitation for each hydrologic response unit,0.757,0.757,0.757,nhru,Regan
+epan_coef,F,decimal fraction,Monthly (January to December) evaporation pan coefficient for each hydrologic response unit,1,1,1,"nhru, nmonths",Regan
+fastcoef_lin,F,fraction/day,Linear coefficient in equation to route preferential-flow storage downslope for each hydrologic response unit,0.01,0.6,0.1,nhru,Spatial Data Layers 1.1
+fastcoef_sq,F,none,Non-linear coefficient in equation used to route preferential-flow storage downslope for each hydrologic response unit,0.8,0.8,0.8,nhru,Regan
+freeh2o_cap,F,decimal fraction,"Free-water holding capacity of snowpack for each hydrologic response unit, expressed as a decimal fraction of the frozen water content of the snowpack (pk_ice)",0.05,0.05,0.05,nhru,Regan
+gwflow_coef,F,fraction/day,Linear coefficient in the equation to compute groundwater discharge for each groundwater reservoir,0.005,0.3,0.015,nhru,Spatial Data Layers 1.1
+gwsink_coef,F,fraction/day,Linear coefficient in the equation to compute outflow to the groundwater sink for each groundwater reservoir,0,0,0,nhru,Regan
+gwstor_init,F,inches,Storage in each groundwater reservoir at the beginning of a simulation,0,0,2,nhru,Regan
+gwstor_min,F,inches,Minimum storage in each groundwater reservoir to ensure storage is greater than specified value to account for inflow from deep aquifers or injection wells with the water source outside the basin,0,0,0,nhru,Regan
+hru_area,F,acres,Area of each hydrologic response unit,0.136,93076.616,1,nhru,GV1.1
+hru_aspect,F,angular degrees,Aspect of each hydrologic response unit,0.1,360,0,nhru,Topographic Derivatives 1.1
+hru_deplcrv,I,none,Index number for the snowpack areal depletion curve associated with each hydrologic response unit,-99999,1,1,nhru,Spatial Data Layers 1.1
+hru_elev,F,elev_units,Median elevation for each hydrologic response unit,0,3894,0,nhru,HI
+hru_lat,F,degrees North,Latitude of each hydrologic response unit,18.96,22.221,40,nhru,HI
+hru_lon,F,degrees East,Longitude of each hydrologic response unit,-160.232,-154.91,-105,nhru,HI
+hru_percent_imperv,F,decimal fraction,Fraction of each hydrologic response unit area that is impervious,0,1,0,nhru,Spatial Data Layers 1.1
+hru_segment_nhm,I,none,"NHM Segment index to which an hydrologic response unit contributes lateral flows (surface runoff, interflow, and groundwater discharge)",0,1477,0,nhru,GV1.1
+hru_slope,F,decimal fraction,"Slope of each hydrologic response unit, specified as change in vertical length divided by change in horizontal length",0,1.547,0,nhru,Topographic Derivatives 1.1
+hru_type,I,none,Type of each hydrologic response unit (0=inactive; 1=land; 2=lake; 3=swale),1,1,1,nhru,Regan
+imperv_stor_max,F,inches,Maximum impervious area retention storage for each hydrologic response unit,0.05,0.05,0.05,nhru,Regan
+jh_coef,F,per degrees Fahrenheit,Monthly (January to December) air temperature coefficient used in Jensen-Haise potential evapotranspiration computations for each hydrologic response unit,0,0,0.014,"nhru, nmonths",Regan
+jh_coef_hru,F,degrees Fahrenheit,Air temperature coefficient used in Jensen-Haise potential evapotranspiration computations for each hydrologic response unit,13,13,13,nhru,Topographic Derivatives 1.1
+K_coef,F,hours,"Travel time of flood wave from one segment to the next downstream segment, called the Muskingum storage coefficient; enter 1.0 for reservoirs, diversions, and segment(s) flowing out of the basin",1,1,1,nsegment,Regan
+mann_n,F,dimensionless,Mannings roughness coefficient for each hydrologic response unit,0.04,0.04,0.04,nsegment,Regan
+melt_force,I,Julian day,Julian date to force snowpack to spring snowmelt stage for each hydrologic response unit; varies with region depending on length of time that permanent snowpack exists,140,140,140,nhru,Regan
+melt_look,I,Julian day,Julian date to start looking for spring snowmelt stage for each hydrologic response unit; varies with region depending on length of time that permanent snowpack exists,90,90,90,nhru,Regan
+nhm_id,I,none,National Hydrologic Model hydrologic response unit ID,1,5649,1,nhru,GV1.1
+nhm_seg,I,none,National Model ID,1,1477,0,nsegment,GV1.1
+obsin_segment,I,none,Index of measured streamflow station that replaces inflow to a segment,0,0,0,nsegment,Regan
+obsout_segment,I,none,Index of measured streamflow station that replaces outflow from a segment,0,0,0,nsegment,Regan
+op_flow_thres,F,decimal fraction,Fraction of open depression storage above which surface runoff occurs; any water above maximum open storage capacity spills as surface runoff,1,1,1,nhru,Regan
+outlet_sta,I,none,Index of measured streamflow station corresponding to the basin outlet,1,1,0,one,Regan
+poi_gage_id,S,none,USGS stream gage for this point of interest,16010000,2.13E+14,NA,npoigages,GV1.1
+poi_gage_segment,I,none,Segment index for gage point of interest,1,1476,0,npoigages,GV1.1
+poi_type,I,none,Type code for each point of interest gage,1,1,1,npoigages,GV1.1
+potet_sublim,F,decimal fraction,Fraction of potential evapotranspiration that is sublimated from snow in the canopy and snowpack for each hydrologic response unit,0.5,0.5,0.5,nhru,Regan
+ppt_rad_adj,F,inches,"Monthly minimum precipitation, if hydrologic response unit precipitation exceeds this value, radiation is multiplied by radj_sppt or radj_wppt adjustment factor",0.02,0.02,0.02,"nhru, nmonths",Regan
+precip_units,I,none,Units for measured precipitation (0=inches; 1=millimeters),0,0,0,one,Regan
+pref_flow_den,F,decimal fraction,Fraction of the soil zone in which preferential flow occurs for each hydrologic response unit,0,0,0,nhru,Regan
+print_freq,I,none,"Flag to select the output frequency; for combinations, add index numbers, e.g., daily plus yearly = 10; yearly plus total = 3 (0=none; 1=run totals; 2=yearly; 4=monthly; 8=daily; or additive combinations)",3,3,3,one,Regan
+print_type,I,none,Flag to select the type of results written to the output file (0=measured and simulated flow only; 1=water balance table; 2=detailed output),1,1,1,one,Regan
+rad_trncf,F,decimal fraction,Transmission coefficient for short-wave radiation through the winter vegetation canopy,0.074,0.992,0.5,nhru,Spatial Data Layers 1.1
+radadj_intcp,F,dday,Monthly (January to December) intercept in air temperature range adjustment to degree-day equation for each hydrologic response unit,1,1,1,"nhru, nmonths",Regan
+radadj_slope,F,dday/temp_units,Monthly (January to December) slope in air temperature range adjustment to degree-day equation for each hydrologic response unit,0.02,0.02,0,"nhru, nmonths",Regan
+radj_sppt,F,decimal fraction,Adjustment factor for computed solar radiation for summer day with greater than ppt_rad_adj inches of precipitation for each hydrologic response unit,0.44,0.44,0.44,nhru,Regan
+radj_wppt,F,decimal fraction,Adjustment factor for computed solar radiation for winter day with greater than ppt_rad_adj inches of precipitation for each hydrologic response unit,0.5,0.5,0.5,nhru,Regan
+radmax,F,decimal fraction,"Monthly (January to December) maximum fraction of the potential solar radiation that may reach the ground due to haze, dust, smog, and so forth, for each hydrologic response unit",0.8,0.8,0.8,"nhru, nmonths",Regan
+rain_cbh_adj,F,decimal fraction,"Monthly (January to December) adjustment factor to measured precipitation determined to be rain on each hydrologic response unit to account for differences in elevation, and so forth",1,1,1,"nhru, nmonths",Regan
+runoff_units,I,none,Measured streamflow units (0=cubic feet per second; 1=cubic meters per second),0,0,0,one,Regan
+sat_threshold,F,inches,Water holding capacity of the gravity and preferential-flow reservoirs; difference between field capacity and total soil saturation for each hydrologic response unit,999,999,999,nhru,Regan
+seg_depth,F,meter,Depth of bankfull water in segment,10,10,1,nsegment,Regan
+seg_length,F,meters,Length of each segment,31.3,50867,1000,nsegment,GV1.1
+seg_slope,F,decimal fraction,Surface slope of each segment,1.00E-05,0.00577,0.32319,nsegment,Topographic Data Layer 1.1
+segment_flow_init,F,cfs,Initial flow in each stream segment,0,0,0,nsegment,Regan
+segment_type,I,none,Segment type (0=segment; 1=headwater; 2=lake; 3=replace inflow; 4=inbound to NHM; 5=outbound from NHM; 6=inbound to region; 7=outbound from region; 8=drains to ocean; 9=sink; 10=inbound from Great Lakes; 11=outbound to Great Lakes),0,0,0,nsegment,Regan
+settle_const,F,decimal fraction,Snowpack settlement time constant,0.1,0.1,0.1,one,Regan
+slowcoef_lin,F,fraction/day,Linear coefficient in equation to route gravity-reservoir storage downslope for each hydrologic response unit,0.005,0.3,0.015,nhru,Spatial Data Layers 1.1
+slowcoef_sq,F,none,Non-linear coefficient in equation to route gravity-reservoir storage downslope for each hydrologic response unit,0.1,0.1,0.1,nhru,Regan
+smidx_coef,F,decimal fraction,Coefficient in non-linear contributing area algorithm for each hydrologic response unit,0,1,0.005,nhru,Topographic Derivatives 1.1
+smidx_exp,F,1.0/inch,Exponent in non-linear contributing area algorithm for each hydrologic response unit,0.3,0.3,0.3,nhru,Regan
+snarea_curve,F,decimal fraction,"Snow area depletion curve values, 11 values for each curve (0.0 to 1.0 in 0.1 increments)",0,1,1,ndeplval,Spatial Data Layers 1.1
+snarea_thresh,F,inches,Maximum threshold snowpack water equivalent below which the snow-covered-area curve is applied,0,0,50,nhru,Topographic Derivatives 1.1
+snow_cbh_adj,F,decimal fraction,"Monthly (January to December) adjustment factor to measured precipitation determined to be snow on each hydrologic response unit to account for differences in elevation, and so forth",1,1,1,"nhru, nmonths",Regan
+snow_intcp,F,inches,Snow interception storage capacity for the major vegetation type in each hydrologic response unit,0,0.05,0.1,nhru,Topographic Derivatives 1.1
+snowinfil_max,F,inches/day,Maximum snow infiltration per day for each hydrologic response unit,2,2,2,nhru,Regan
+snowpack_init,F,inches,Storage of snowpack in each hydrologic response unit at the beginning of a simulation,0,0,0,nhru,Regan
+soil_moist_init_frac,F,decimal fraction,Initial fraction of available water in the capillary reservoir (fraction of soil_moist_max for each hydrologic response unit),0,0,0,nhru,Regan
+soil_moist_max,F,inches,Maximum value of water for soil zone,1.00E-05,9,2,nhru,"Spatial Data Layers 1.1, Topographic Data Layer 1.1"
+soil_rechr_init_frac,F,decimal fraction,Initial fraction of available water in the soil recharge zone within the capillary reservoir,0,0,0,nhru,Regan
+soil_rechr_max_frac,F,decimal fraction,Fraction of capillary reservoir where losses occur as both evaporation and transpiration (soil recharge zone),0,1,1,nhru,Regan
+soil_type,I,none,Soil type of each hydrologic response unit (1=sand; 2=loam; 3=clay),1,3,2,nhru,Spatial Data Layers 1.1
+soil2gw_max,F,inches,Maximum amount of the capillary reservoir excess that is routed directly to the GWR for each HRU,0.1,0.3,0,nhru,Spatial Data Layers 1.1
+srain_intcp,F,inches,Summer rain interception storage capacity for the major vegetation type in each hydrologic response unit,0,0.05,0.1,nhru,Spatial Data Layers 1.1
+sro_to_dprst_imperv,F,decimal fraction,Fraction of impervious surface runoff that flows into surface-depression storage; the remainder flows to a stream network for each hydrologic response unit,0,1,0.2,nhru,"Spatial Data Layers 1.1, Topographic Data Layer 1.1"
+sro_to_dprst_perv,F,decimal fraction,Fraction of pervious surface runoff that flows into surface-depression storage; the remainder flows to a stream network for each hydrologic response unit,0,0.996,0.2,nhru,"Spatial Data Layers 1.1, Topographic Data Layer 1.1"
+ssr2gw_exp,F,none,Non-linear coefficient in equation used to route water from the gravity reservoir to the groundwater reservoir for each hydrologic response unit,1.2,1.2,1,nhru,Regan
+ssr2gw_rate,F,fraction/day,Linear coefficient in equation used to route water from the gravity reservoir to the groundwater reservoir for each hydrologic response unit,0.3,0.7,0.1,nhru,Spatial Data Layers 1.1
+ssstor_init_frac,F,decimal fraction,Initial fraction of available water in the gravity plus preferential-flow reservoirs (fraction of sat_threshold) for each hydrologic response unit,0,0,0,nhru,Regan
+temp_units,I,none,Flag to indicate the units of measured air-temperature values (0=Fahrenheit; 1=Celsius),0,0,0,one,Regan
+tmax_allrain_offset,F,temp_units,"Monthly (January to December) maximum air temperature when precipitation is assumed to be rain; if hydrologic response unit air temperature is greater than or equal to tmax_allsnow plus this value, precipitation is rain",1,1,1,"nhru, nmonths",Regan
+tmax_allsnow,F,temp_units,"Maximum air temperature when precipitation is assumed to be snow; if hydrologic response unit air temperature is less than or equal to this value, precipitation is snow",32,32,32,"nhru, nmonths",Regan
+tmax_cbh_adj,F,temp_units,"Monthly (January to December) adjustment factor to maximum air temperature for each hydrologic response unit, estimated on the basis of slope and aspect",0,0,0,"nhru, nmonths",Regan
+tmax_index,F,temp_units,Monthly (January to December) index temperature used to determine precipitation adjustments to solar radiation for each hydrologic response unit,50,50,50,"nhru, nmonths",Regan
+tmin_cbh_adj,F,temp_units,"Monthly (January to December) adjustment factor to minimum air temperature for each hydrologic response unit, estimated on the basis of slope and aspect",0,0,0,"nhru, nmonths",Regan
+to_segment,I,none,"Index of downstream segment to which the segment streamflow flows, for segments that do not flow to another segment enter 0",0,1477,0,nsegment,GV1.1
+transp_beg,I,month,"Month to begin summing the maximum air temperature for each hydrologic response unit; when sum is greater than or equal to transp_tmax, transpiration begins",1,1,1,nhru,Regan
+transp_end,I,month,Month to stop transpiration computations; transpiration is computed thru end of previous month,13,13,13,nhru,Regan
+transp_tmax,F,temp_units,"Temperature index to determine the specific date of the start of the transpiration period; the maximum air temperature for each hydrologic response unit is summed starting with the first day of month transp_beg; when the sum exceeds this index, transpiration begins",1,1,1,nhru,Regan
+tstorm_mo,I,none,Monthly flag (January to December) for prevalent storm type for each hydrologic response unit (0=frontal storms; 1=convective storms),0,0,0,"nhru, nmonths",Regan
+va_clos_exp,F,none,Coefficient in the exponential equation relating maximum surface area to the fraction that closed depressions are full to compute current surface area for each hydrologic response unit; 0.001 is an approximate rectangle; 1.0 is a triangle,0.001,0.001,0.001,nhru,Regan
+va_open_exp,F,none,Coefficient in the exponential equation relating maximum surface area to the fraction that open depressions are full to compute current surface area for each hydrologic response unit; 0.001 is an approximate rectangle; 1.0 is a triangle,0.001,0.001,0.001,nhru,Regan
+wrain_intcp,F,inches,Winter rain interception storage capacity for the major vegetation type in each hydrologic response unit,0,0.05,0.1,nhru,Spatial Data Layers 1.1
+x_coef,F,decimal fraction,"The amount of attenuation of the flow wave, called the Muskingum routing weighting factor; enter 0.0 for reservoirs, diversions, and segment(s) flowing out of the basin",0.2,0.2,0.2,nsegment,Regan
