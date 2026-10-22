@@ -11,9 +11,11 @@ site_dir: site
 # docs/superpowers/ holds dated specs/plans/reviews with intentionally-stale
 # cross-repo links to source files outside docs_dir; not part of the public
 # site. The catalog at docs/superpowers/INDEX.md stays accessible on GitHub
-# for Claude tooling.
+# for Claude tooling. docs/whitepapers/ is a separate Quarto project
+# (`pixi run -e paper paper-render`), not mkdocs pages.
 exclude_docs: |
   superpowers/
+  whitepapers/
 
 # Sources outside docs_dir that we pull in via include-markdown.
 # README.md, slurm_batch/RUNME.md, CLAUDE.md stay at their canonical paths.
