@@ -48,7 +48,8 @@ data_root/
     ├── depstor_rasters/        # Depression-storage intermediate rasters
     └── params/                 # Parameter outputs; merged/ (canonical,
                                  #   gap-filled) + merged/_unfilled/ (pre-fill
-                                 #   copies) + merged/_intermediates/
+                                 #   copies) + merged/_intermediates/;
+                                 #   prms/ (one <prms_name>.csv per PRMS parameter)
 ```
 
 **The invariant: every fabric reuses the same `shared/` rasters.** Per-VPU
@@ -369,6 +370,18 @@ overwritten on a re-run — the on-disk `merged/<name>.csv` is by then already
 filled), alongside the existing `merged/_intermediates/` per-fraction/derived
 CSVs. A one-time migration off an existing `filled_`-prefixed product is
 `scripts/migrate_filled_params.py` (dry-run by default, `--apply` required).
+
+`merged/` is shaped by config ENTRY, so a file can mix PRMS parameters with raw statistics
+and provenance. `params/prms/<prms_name>.csv` is the PRMS-shaped view of it: one file per
+parameter, named as in `docs/HI_paramDB_DataDictionary.csv`. It is produced by the
+`export_prms` stage (`gfv2_params.prms_export`), which sits AFTER `fill` and is the only
+stage allowed there — it only READS the filled `merged/` files and never rewrites them.
+It is a post-fill reduce step, not an orchestrator/builder stage: there is no `BUILDERS`
+or `STEP_ORDER` entry. The mapping is the existing `prms.columns` declaration;
+`prms.export: false` (the three alternative LULC entries) keeps a source out, and a PRMS
+name with two producers raises. Splitting at merge or fill time was rejected: the derived
+columns (`hru_slope`, `hru_aspect`) are re-derived inside the fill, and ssflux reads the
+slope file's `mean`, so the entry-shaped files must stay what the pipeline reads.
 
 #### `reducer` — whole-population statistics computed at merge time
 

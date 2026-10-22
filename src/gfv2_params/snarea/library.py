@@ -306,6 +306,27 @@ def write_validation_csv(report: dict, path) -> None:
     pd.DataFrame([report]).to_csv(path, index=False)
 
 
+def flatten_prms_curve(library: pd.DataFrame) -> np.ndarray:
+    """The PRMS `snarea_curve` array (ndeplval = 11 * ndepl), flat and ASCENDING.
+
+    Curves are concatenated in ascending `deplcrv_id` order, each reversed from the
+    repo's descending order by `_to_prms_order`. Shared by `write_prms_netcdf` and the
+    `params/prms/snarea_curve.csv` export so the ordering convention lives in one place.
+    Raises on a non-contiguous `deplcrv_id` or any non-finite value.
+    """
+    lib_sorted = library.sort_values("deplcrv_id")
+    ndepl = len(lib_sorted)
+    flat = np.concatenate(
+        [_to_prms_order(r[CURVE_COLS].to_numpy(float)) for _, r in lib_sorted.iterrows()]
+    )
+    ids = lib_sorted["deplcrv_id"].to_numpy()
+    if not np.array_equal(ids, np.arange(1, ndepl + 1)):
+        raise ValueError(f"library deplcrv_id must be contiguous 1..{ndepl}, got {ids.tolist()}")
+    if not np.isfinite(flat).all():
+        raise ValueError("snarea_curve has non-finite values — refusing to write the PRMS param file")
+    return flat
+
+
 def write_prms_netcdf(library: pd.DataFrame, params: pd.DataFrame, id_feature: str, path) -> None:
     """PRMS/pyWatershed param file: snarea_curve flat ASCENDING (ndeplval=11*ndepl),
     hru_deplcrv, snarea_thresh, all on nhru.
@@ -319,16 +340,8 @@ def write_prms_netcdf(library: pd.DataFrame, params: pd.DataFrame, id_feature: s
     ``snarea_curve[11 - 1]`` on new-snow reset) -> ascending frac_swe, frac 0.0 at index 0.
     This matches ``_to_prms_order`` (repo descending -> ascending reverse).
     """
-    lib_sorted = library.sort_values("deplcrv_id")
-    ndepl = len(lib_sorted)
-    flat = np.concatenate(
-        [_to_prms_order(r[CURVE_COLS].to_numpy(float)) for _, r in lib_sorted.iterrows()]
-    )
-    ids = lib_sorted["deplcrv_id"].to_numpy()
-    if not np.array_equal(ids, np.arange(1, ndepl + 1)):
-        raise ValueError(f"library deplcrv_id must be contiguous 1..{ndepl}, got {ids.tolist()}")
-    if not np.isfinite(flat).all():
-        raise ValueError("snarea_curve has non-finite values — refusing to write the PRMS param file")
+    flat = flatten_prms_curve(library)
+    ndepl = len(library)
     if not np.isfinite(params["snarea_thresh"].to_numpy(float)).all():
         raise ValueError("snarea_thresh has non-finite values — refusing to write the PRMS param file")
     ds = xr.Dataset(

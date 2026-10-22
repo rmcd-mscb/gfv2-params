@@ -222,8 +222,8 @@ cat /caldera/hovenweep/projects/usgs/water/impd/nhgf/gfv2_param_v2/myfabric/batc
 
 One driver submits every stage and chains each on the one before it: the
 depression-storage rasters, the tiled depth computation, the zonal parameters,
-the depression-storage ratios, the snow-depletion curves, and the final
-gap-fill. You submit once and wait.
+the depression-storage ratios, the snow-depletion curves, the gap-fill, and
+the one-file-per-PRMS-parameter export. You submit once and wait.
 
 First set the list of zonal parameters this data root can build. Two of the
 ten (`lulc_nlcd`, `lulc_foresce`) have no staged source here, and one failing
@@ -347,6 +347,17 @@ the count is always right. The two checks that do discriminate:
 ls -l --time-style=long-iso /caldera/hovenweep/projects/usgs/water/impd/nhgf/gfv2_param_v2/myfabric/params/merged/*.csv
 wc -l /caldera/hovenweep/projects/usgs/water/impd/nhgf/gfv2_param_v2/myfabric/params/merged/_unfilled/nhm_elevation_params.csv
 ```
+
+The last stage, `export_prms`, splits that finished product into one file per PRMS
+parameter, named as in the PRMS data dictionary (`hru_elev.csv`, `soil_type.csv`, ...):
+
+```
+/caldera/hovenweep/projects/usgs/water/impd/nhgf/gfv2_param_v2/myfabric/params/prms/
+```
+
+Its job (`export_prms_params`) fails rather than writing a partial folder, so check that
+it is `COMPLETED` and that the files in `prms/` are newer than the time you submitted the
+chain. The README's *PRMS parameters covered* section says how many files to expect.
 
 **Two numbers to read and record.** They are in the `.err` log of the first
 `build_depstor_rasters` job of the chain:

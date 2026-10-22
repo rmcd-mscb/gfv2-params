@@ -84,6 +84,7 @@ gfv2_param/
     └── params/             # Parameter outputs; merged/ (canonical, gap-filled)
                              #   + merged/_unfilled/ (pre-fill copies)
                              #   + merged/_intermediates/
+                             #   + prms/ (one <prms_name>.csv per PRMS parameter)
 ```
 
 > **Upgrading an existing `data_root` from the legacy `work/` layout?** Run
@@ -1250,6 +1251,28 @@ migrated first. Filling then migrating (the wrong order) would have the
 migration move a stale `filled_` file over today's already-correct canonical
 fill; that is refused loudly rather than silently reverted, but migrating
 first avoids hitting the refusal at all.
+
+### Stage 7b — Export one file per PRMS parameter
+
+```bash
+FABRIC=<name> sbatch slurm_batch/export_prms_params.batch
+# Print the plan (which file comes from which entry/columns) without touching disk:
+pixi run --as-is python scripts/export_prms_params.py --dry-run
+```
+
+Reads only the FILLED `merged/<entry>.csv` files (never `_unfilled/`) and writes
+`{fabric}/params/prms/<prms_name>.csv`. Everything is validated before anything is written,
+and each write is an atomic replace, so a failure leaves `params/prms/` as it was.
+
+**Recovery:** the stage is idempotent — fix the cause and resubmit. The errors it raises are
+specific: a NaN means the fill has not run for that entry; a missing merged file means an
+upstream stage was not run on this fabric; a PRMS name with two producers means a new
+alternative entry lacks `prms.export: false`. Files in `params/prms/` that are not in the
+current plan are warned about, never deleted. A re-run of any stage that rewrites
+`merged/` obliges a re-run of this one — the files are copies, not links.
+
+**Verification (Guard 4):** `tests/test_prms_export_ondisk.py`, data-root-gated, SKIPS in CI —
+record its result by SLURM job id.
 
 ### Stage 8 — Merge NHM defaults
 

@@ -185,11 +185,13 @@ def test_the_shared_stage_comes_first(stages):
     assert stages[0]["scope"] == "shared"
 
 
-def test_fill_is_the_last_stage(stages):
+def test_export_prms_is_the_last_stage_and_fill_immediately_precedes_it(stages):
     """The gap-fill rewrites merged/*.csv IN PLACE, reading every other stage's output.
     Anything scheduled after it would have its product left unfilled -- and because the
-    fill is in-place, that is invisible in the filename."""
-    assert stages[-1]["name"] == "fill", f"last stage is {stages[-1]['name']!r}, not 'fill'"
+    fill is in-place, that is invisible in the filename. The only stage allowed after it
+    is the PRMS export, which only READS the filled files."""
+    names = [s["name"] for s in stages]
+    assert names[-2:] == ["fill", "export_prms"], f"last stages are {names[-2:]!r}"
 
 
 def test_snarea_precedes_fill(stages):
@@ -225,7 +227,7 @@ def test_recommended_zonal_params_are_real_params():
 
 
 def test_stage_order_satisfies_the_real_data_dependencies(stages):
-    """Ordering was pinned only at the endpoints (shared first, fill last, snarea < fill).
+    """Ordering was pinned only at the endpoints (shared first, export_prms last with fill immediately before it, snarea < fill).
 
     Because the chain is strictly linear and each stage waits on the previous one, a
     reordering edit produces a chain that runs correctly AS A CHAIN while computing
@@ -247,6 +249,8 @@ def test_stage_order_satisfies_the_real_data_dependencies(stages):
         ("zonal_params", "fill"),
         ("depstor_params", "fill"),
         ("dprst_depth", "fill"),
+        ("fill", "export_prms"),
+        ("snarea", "export_prms"),
     ):
         assert names.index(earlier) < names.index(later), (
             f"{earlier} must be ordered before {later}: {later} reads what it writes"

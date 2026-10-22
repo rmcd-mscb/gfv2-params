@@ -180,6 +180,11 @@ Configuration (CFG-*), Code Quality (CODE-*), Hygiene (HYG-*), Architecture (ARC
   `id_feature`, the `hru_gpkg` filename, `vpu`); `--check` verifies the shared inputs
   the ACTIVE profile names, at their resolved paths (re-rooted under `--data_root` if
   given), and exits 1 if any is missing
+- `python scripts/export_prms_params.py --fabric <name>` (or `sbatch
+  slurm_batch/export_prms_params.batch`) — the last `fabric_rerun.yml` stage: splits the
+  gap-filled `merged/` files into one `params/prms/<prms_name>.csv` per PRMS parameter,
+  named as in `docs/HI_paramDB_DataDictionary.csv`. `--dry-run` prints the plan.
+  `python scripts/build_prms_coverage_doc.py` regenerates the README coverage tables
 - `python scripts/check_fabric_profile.py --fabric <name>` — validates a filled profile
   against its gpkg (layers, id column unique + contiguous 1..N, `expected_max_hru_id`,
   `vpu`, declared paths); PASS/FAIL per check, exit 1 on any failure. The last step

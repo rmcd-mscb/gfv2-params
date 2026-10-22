@@ -1,0 +1,25 @@
+#!/bin/bash
+#SBATCH -p cpu
+#SBATCH -A impd
+#SBATCH --job-name=export_prms_params
+#SBATCH --output=logs/job_%j.out
+#SBATCH --error=logs/job_%j.err
+#SBATCH --time=00:30:00
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=2
+#SBATCH --mem=16G
+#
+# Export one file per PRMS parameter (params/prms/<prms_name>.csv) from the gap-filled
+# params/merged/ products. Runs AFTER the fill stage (merge_and_fill_params.batch) and
+# reads only the filled merged/<entry>.csv files, never merged/_unfilled/.
+# Idempotent: re-running overwrites params/prms/ atomically, so recovery is a resubmit.
+#   FABRIC=gfv2r2 sbatch slurm_batch/export_prms_params.batch
+# --mem/--time are starting points; the work is a few dozen small CSV reads/writes.
+cd "$SLURM_SUBMIT_DIR" || exit 1
+BASE_CONFIG=${BASE_CONFIG:-configs/base_config.yml}
+FABRIC=${FABRIC:-gfv2}
+
+pixi run --as-is python scripts/export_prms_params.py \
+    --fabric "$FABRIC" \
+    --base_config "$BASE_CONFIG" \
+    "$@"
