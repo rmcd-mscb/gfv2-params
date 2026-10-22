@@ -779,6 +779,31 @@ separate step — see `scripts/migrate_filled_params.py` (dry-run by default,
 
 ---
 
+### 5b · Export one file per PRMS parameter
+
+```bash
+FABRIC=<fabric> sbatch slurm_batch/export_prms_params.batch
+```
+
+**What it does:** reads the gap-filled `merged/<entry>.csv` files and writes
+`{data_root}/{fabric}/params/prms/<prms_name>.csv`, one file per PRMS parameter, named as in
+`docs/HI_paramDB_DataDictionary.csv` (30 files, e.g. `hru_elev.csv`, `soil_type.csv`).
+`snarea_curve.csv` is the one file that is not per-HRU. See the README's
+[PRMS parameters covered](../README.md#prms-parameters-covered).
+
+**Run it AFTER step 5.** It raises on any NaN, a missing merged file, or a short row count
+rather than writing a partial directory. It is idempotent: if it fails, fix the cause and
+resubmit. (The complete re-run driver includes it as the last stage.)
+
+**Wait for:** the job `COMPLETED`. Then record Guard 4 by job id:
+
+```bash
+FABRIC=<fabric> srun -p cpu -A impd --time=00:15:00 --ntasks=1 --cpus-per-task=2 --mem=16G \
+  pixi run -e dev --as-is pytest tests/test_prms_export_ondisk.py -q -rs
+```
+
+---
+
 ### 6 · Merge NHM defaults
 
 > **Optional:** only needed if you want to merge NHM default parameter tables

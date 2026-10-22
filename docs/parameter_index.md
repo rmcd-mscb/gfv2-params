@@ -4,6 +4,11 @@ Every parameter this pipeline emits to `{fabric}/params/merged/`, mapped to the 
 process that consumes it, the config entry that declares it, and the builder that computes
 it.
 
+The "PRMS parameter" names below are exactly what the `export_prms` stage writes, one
+`params/prms/<name>.csv` each (see the README's
+[PRMS parameters covered](../README.md#prms-parameters-covered)); the alternative LULC
+entries are listed here but are not exported.
+
 Process membership is from `pywatershed.<Process>.get_parameters()` (pywatershed 2.0.4, the
 `reference` pixi env), not inference. Column lists are observed on-disk headers from
 `gfv2/params/merged/`, with two classes of exception: `lulc_nlcd` and `lulc_foresce`, which have

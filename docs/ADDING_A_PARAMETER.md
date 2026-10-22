@@ -286,6 +286,18 @@ raw `mean` (degrees), with no zonal re-run. See
    it — `test_generated_index_is_up_to_date` runs the same generator with
    `--check`.
 
+   **PRMS export.** A new entry is exported to `params/prms/<prms_name>.csv` by
+   default: every `prms.columns.<col>.prms` name becomes one file, and that name must
+   exist in [`docs/HI_paramDB_DataDictionary.csv`](HI_paramDB_DataDictionary.csv). A PRMS
+   name may have only ONE producing entry — if yours is an alternative source for a
+   parameter another entry already produces (as `lulc_nalcms` is for `lulc_nhm_v11`), set
+   `export: false` in your `prms:` block, or `plan_exports` raises. Then regenerate the
+   README coverage list:
+   ```bash
+   pixi run --as-is python scripts/build_prms_coverage_doc.py
+   ```
+   CI fails if the README tables are stale (`tests/test_build_prms_coverage_doc.py`).
+
 7. **Submit the full SLURM array** via
    [`slurm_batch/submit_zonal_params.sh`](../slurm_batch/submit_zonal_params.sh)
    from a shell that has `pixi` on `PATH`. It submits an array zonal job
