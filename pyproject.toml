@@ -214,6 +214,23 @@ mkdocs-include-markdown-plugin = "*"
 python = "3.10.*"
 pywatershed = "*"
 
+[tool.pixi.feature.paper.dependencies]
+# Quarto white papers (docs/whitepapers/): quarto CLI + the Jupyter pieces it
+# needs to execute {python} cells against the full geo stack (default feature).
+# Own solve-group so adding it never re-solves the `default` env that SLURM
+# batches run `--as-is`.
+quarto = "*"
+ipykernel = "*"
+nbclient = "*"
+nbformat = "*"
+jupyter_client = "*"
+matplotlib-base = "*"
+pyarrow = "*"
+tabulate = "*"  # DataFrame.to_markdown for tables
+
+[tool.pixi.feature.paper.tasks]
+paper-render = { cmd = "quarto render", cwd = "docs/whitepapers", description = "Render the Quarto white papers under docs/whitepapers/" }
+
 [tool.pixi.environments]
 default = { features = [], solve-group = "default" }
 notebooks = { features = ["notebooks"], solve-group = "default" }
@@ -224,6 +241,7 @@ reference = { features = ["reference"], solve-group = "reference", no-default-fe
 # `pixi run -e marp marp-setup`); no-default-feature keeps the heavy geo stack
 # out so operators only pay ~250 MB when they render decks. Own solve-group.
 marp = { features = ["marp"], solve-group = "marp", no-default-feature = true }
+paper = { features = ["paper"], solve-group = "paper" }
 all = { features = ["notebooks", "dev", "docs"], solve-group = "default" }
 
 [tool.isort]
