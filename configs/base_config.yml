@@ -343,3 +343,80 @@ fabrics:
     ecoregions_gpkg: "{data_root}/input/ecoregions/us_eco_l3.gpkg"
     dem_1m_inventory: "{data_root}/input/3dep/dem_1m_tile_inventory.parquet"
     wesm_project_attrs: "{data_root}/input/wesm/wesm_project_attrs.parquet"
+
+  # --- gfv2r2: CONUS, single pre-merged geopackage ------------------------
+  # The second-generation CONUS GF v2 fabric. Structurally this is the tjc/oregon
+  # shape, NOT the shape of the `gfv2` profile above: one gpkg holds both nhru and
+  # nsegment, so hru_gpkg and segments_gpkg point at the SAME file and neither
+  # notebooks/merge_vpu_targets.py nor scripts/merge_vpu_segments.py is needed.
+  #
+  # Measured from the staged gpkg on 2026-09-17 (pyogrio):
+  #   nhru      361,472 features, EPSG:5070
+  #   nsegment  186,680 features, 1,667,916 km   (gfv2: 186,709 / 1,668,778)
+  #   fields    nhru: vpu_agg_id nat_hru_id hru_segment vpu hru_area tb_remove
+  #             nsegment: vpu_seg_id vpu_to_segment vpu seg_id to_segment lengthkm
+  #
+  # SCHEMA DRIFT FROM gfv2 IS DELIBERATE AND HARMLESS. This fabric renames
+  # areasqkm -> hru_area and segment_id -> hru_segment, and drops hru_id and
+  # source_vpu. None of those four is read anywhere in src/, scripts/ or configs/ --
+  # the pipeline reads only id_feature, geometry, and the per-HRU vpu. (ssflux
+  # ASSIGNS its own hru_area from geometry.area, so it overwrites this fabric's
+  # column rather than trusting it, which is the safe direction.)
+  #
+  # tb_remove: 306 of the 361,472 rows carry 1.0, the rest null. Nothing reads it and
+  # nothing filters on it -- every HRU is processed, by decision on 2026-09-17. If that
+  # ever changes, filter BEFORE prepare_fabric; the batches are built from this layer.
+  gfv2r2:
+    # 1..361,472, int32, unique, ZERO gaps -- verified, so gap-fill sees no phantom
+    # missing rows (the trap tjc's profile records for picking a sparse national id).
+    expected_max_hru_id: 361472
+    batch_size: 10000
+    id_feature: nat_hru_id
+    # Single-file fabric: one gpkg holds nhru + nsegment (also npoi/poi_data, which
+    # this pipeline does not read). hru_gpkg is authoritative for prepare_fabric, the
+    # ssflux build_weights step, and gap-fill.
+    hru_gpkg: "{data_root}/{fabric}/fabric/{fabric}.gpkg"
+    hru_layer: nhru
+    # --- depstor inputs ---
+    # Fabric-bounds clip of the CONUS fdr.vrt, staged FIRST with:
+    #   srun ... pixi run --as-is python scripts/clip_shared_to_fabric.py --fabric gfv2r2
+    # Both keys point at the clip. It MUST come from the hydrology lattice (fdr.vrt /
+    # twi.vrt), never elevation.vrt: that is on the offset DEM lattice and carea_map
+    # rejects a template not whole-cell aligned with TWI.
+    template_raster: "{data_root}/{fabric}/shared/{fabric}_fdr.vrt"
+    fdr_raster: "{data_root}/{fabric}/shared/{fabric}_fdr.vrt"
+    # Open-source Twi_hydrodem (CONUS-complete); carea_map runs in percentile mode.
+    # NO `vpu:` scalar -- this is a multi-VPU fabric, so per-VPU thresholds are keyed
+    # off the per-HRU `vpu` attribute, which carries the 21 RPU-split codes (03N/03S/
+    # 03W/10L/10U...) exactly as the gfv2 fabric does.
+    twi_raster: "{data_root}/shared/conus/vrt/twi_hydrodem.vrt"
+    # Stream segments: the nsegment layer of the SAME gpkg. This layer is the on-stream
+    # classifier's primary input -- `segment_wbody` promotes a waterbody to on-stream
+    # iff an nsegment here intersects it with positive length.
+    segments_gpkg: "{data_root}/{fabric}/fabric/{fabric}.gpkg"
+    segments_layer: nsegment
+    # Shared CONUS NHDPlusV2 waterbodies (the same layer gfv2/oregon/tjc read).
+    waterbody_gpkg: "{data_root}/input/nhd/nhd_waterbodies.gpkg"
+    waterbody_layer: waterbodies
+    # --- OPT-IN COMPARISON ONLY -- see the gfv2 profile. Never enable for production.
+    #   connected_comids_table: "{data_root}/input/nhd/connected_waterbody_comids.parquet"
+    #   flowthrough_comids_table: "{data_root}/input/nhd/flowthrough_waterbody_comids.parquet"
+    # Floor on the `segment_wbody` COMID count. Same 30000 as gfv2, which measures
+    # 48,529; this fabric has 29 fewer segments, so it should land in the same place.
+    # A result below the floor means the segment/waterbody join collapsed and nearly
+    # every waterbody would silently become depression storage.
+    min_onstream_comids: 30000
+    # --- endorheic classifier ---
+    # Full WBD HUC12 layer; the `endorheic` builder applies the HU_12_TYPE == 'C'
+    # filter itself. Do NOT point this at input/nhd/closed_huc12.gpkg (incomplete).
+    wbd_huc12_table: "{data_root}/input/wbd/wbd_huc12.parquet"
+    # CONUS has closed basins, so the floor applies (gfv2: 100). Below it, the
+    # demotion is a silent no-op and Great Salt Lake goes back on-stream.
+    min_endorheic_comids: 100
+    burn_add_waterbody_table: "{data_root}/input/nhd/burn_add_waterbodies.parquet"
+    # Provenance + BurnAdd linkage only -- NOT a classifier signal. The endorheic
+    # classifier reads the FDR grid the router reads.
+    sink_points_table: "{data_root}/input/nhd/sink_points.parquet"
+    ecoregions_gpkg: "{data_root}/input/ecoregions/us_eco_l3.gpkg"
+    dem_1m_inventory: "{data_root}/input/3dep/dem_1m_tile_inventory.parquet"
+    wesm_project_attrs: "{data_root}/input/wesm/wesm_project_attrs.parquet"
