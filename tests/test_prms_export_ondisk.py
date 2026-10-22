@@ -24,7 +24,11 @@ import pytest
 
 from gfv2_params.config import load_base_config
 from gfv2_params.prms_export import (
-    DIM_NDEPLVAL, PRMS_SUBDIR, SNAREA_CURVE_NAME, SNAREA_CURVE_POINTS, plan_exports,
+    DIM_NDEPLVAL,
+    PRMS_SUBDIR,
+    SNAREA_CURVE_NAME,
+    SNAREA_CURVE_POINTS,
+    plan_exports,
 )
 
 _PLAN = plan_exports()

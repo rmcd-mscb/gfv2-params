@@ -213,7 +213,11 @@ stages:
     kind: sbatch
     scope: fabric
     accepts_force: false
-    consumes: ["{fabric}/params/merged/*.csv (gap-filled)", "{fabric}/params/merged/nhm_snarea_curve_library.csv"]
+    consumes:
+      [
+        "{fabric}/params/merged/*.csv (gap-filled)",
+        "{fabric}/params/merged/nhm_snarea_curve_library.csv",
+      ]
     produces: "{fabric}/params/prms/<prms_name>.csv (one file per PRMS parameter)"
     resources: "30m / 16G / 2 cpu"
     note: >-
