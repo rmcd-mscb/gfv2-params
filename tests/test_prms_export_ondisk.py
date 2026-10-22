@@ -52,7 +52,7 @@ def test_exported_file_matches_its_filled_source(item):
     merged, prms, base = _prms_dir_or_skip()
     path = prms / f"{item.prms_name}.csv"
     assert path.exists(), f"{path} missing -- the export did not write {item.prms_name}"
-    out = pd.read_csv(path)
+    out = pd.read_csv(path, float_precision="round_trip")
 
     if item.dimension == DIM_NDEPLVAL:
         assert list(out.columns) == ["ndeplval_index", SNAREA_CURVE_NAME]
@@ -65,7 +65,7 @@ def test_exported_file_matches_its_filled_source(item):
     assert len(out) == base["expected_max_hru_id"]
     assert out[item.prms_name].notna().all(), f"{path.name} has NaN"
 
-    src = pd.read_csv(merged / item.merged_file, low_memory=False)
+    src = pd.read_csv(merged / item.merged_file, low_memory=False, float_precision="round_trip")
     col = next(c for c in item.source_cols if c in src.columns)
     src = src.sort_values(id_feature).reset_index(drop=True)
     assert np.array_equal(out[id_feature].to_numpy(), src[id_feature].to_numpy())
