@@ -197,7 +197,10 @@ def export_fabric(
                 f"built/filled on this fabric (run its stage, then the fill stage)"
             )
         if item.merged_file not in cache:
-            df = pd.read_csv(path, low_memory=False)  # ssflux's `vpu` has mixed-looking values
+            # round_trip: pandas' default fast float parser can land 1 ulp off the exact value,
+            # and an export must copy the stored number, not a neighbour of it.
+            # low_memory=False: ssflux's `vpu` has mixed-looking values.
+            df = pd.read_csv(path, low_memory=False, float_precision="round_trip")
             if id_feature not in df.columns:
                 raise ValueError(f"{path}: id column {id_feature!r} not in header")
             ids = df[id_feature]

@@ -307,3 +307,15 @@ def test_real_declarations_export_end_to_end_on_synthetic_data(tmp_path):
     written = export_fabric(merged, tmp_path / "prms", ID, N, library_path=lib)
     assert sorted(p.stem for p in written) == sorted(i.prms_name for i in items)
     assert pd.read_csv(tmp_path / "prms" / "cov_type.csv")["cov_type"].dtype.kind == "i"
+
+
+def test_exported_floats_are_bit_identical_to_the_merged_text(env):
+    """pandas' default fast float parser lands 1 ulp off ~35% of long floats (these three are
+    known offenders); the export must copy the stored number exactly, not a neighbour of it."""
+    tricky = [0.009350724237877682, 6.0663577576718e-16, 5.4362499146542284e-21, 0.5]
+    merged = env[0]
+    (merged / "nhm_elevation_params.csv").write_text(
+        f"{ID},mean,std\n" + "\n".join(f"{i + 1},{repr(v)},1.0" for i, v in enumerate(tricky)) + "\n")
+    _run(env)
+    written = [float(line.split(",")[1]) for line in (env[1] / "hru_elev.csv").read_text().splitlines()[1:]]
+    assert written == tricky
