@@ -193,7 +193,7 @@ scancel -u "$USER" --state=PENDING
 ./slurm_batch/submit_fabric_rerun.sh --from dprst_depth "$BATCHES" <fabric>
 ```
 
-Valid `--from` stages: `depstor_rasters`, `dprst_depth`, `depstor_rasters_post`, `zonal_params`, `depstor_params`, `snarea`, `fill`.
+Valid `--from` stages: `depstor_rasters`, `dprst_depth`, `depstor_rasters_post`, `zonal_params`, `depstor_params`, `snarea`, `fill`, `export_prms`.
 
 > `--force` is not decoration. It reaches only the stages whose builders skip
 > existing outputs; every other stage always rebuilds. Which stages those are is
@@ -367,7 +367,22 @@ sbatch --export=ALL,BASE_CONFIG={base_config},FABRIC={fabric} slurm_batch/merge_
 | Resources | 2h / 64G / 8 cpu |
 | `--force` | not accepted (the driver does not pass it) |
 
-> Must be last. It rewrites merged/*.csv in place, so a stage scheduled after it leaves its product unfilled -- and because the rewrite is in-place, the filename does not reveal it. merged/<name>.csv IS the gap-filled product (PR #189).
+> Must precede export_prms and nothing else may follow that. It rewrites merged/*.csv in place, so a stage scheduled after it leaves its product unfilled -- and because the rewrite is in-place, the filename does not reveal it. merged/<name>.csv IS the gap-filled product (PR #189).
+
+#### export_prms
+
+```bash
+sbatch --export=ALL,BASE_CONFIG={base_config},FABRIC={fabric} slurm_batch/export_prms_params.batch
+```
+
+| | |
+|---|---|
+| Consumes | {fabric}/params/merged/*.csv (gap-filled), {fabric}/params/merged/nhm_snarea_curve_library.csv |
+| Produces | {fabric}/params/prms/<prms_name>.csv (one file per PRMS parameter) |
+| Resources | 30m / 16G / 2 cpu |
+| `--force` | not accepted (the driver does not pass it) |
+
+> Must be last. Reads ONLY the gap-filled merged/<entry>.csv files and splits them into one file per PRMS parameter, named for the parameter in docs/HI_paramDB_DataDictionary.csv. It never rewrites merged/, so nothing downstream depends on it, but it must follow fill: exporting before the fill would raise on the NaN the fill exists to remove. Idempotent -- recovery is a resubmit.
 
 *(end of generated section — hand-written prose resumes below)*
 <!-- END GENERATED: workflow -->

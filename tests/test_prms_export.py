@@ -196,3 +196,26 @@ def test_unfilled_directory_is_never_read(env):
     unfilled.mkdir()
     pd.DataFrame({ID: _ids(), "soils": [np.nan] * N}).to_csv(unfilled / "nhm_soils_params.csv", index=False)
     _run(env)   # reads merged/ only; the NaN copy in _unfilled/ is irrelevant
+
+
+def test_out_of_range_values_warn_but_are_still_exported(env, caplog):
+    # soil_moist_max dictionary range is [1e-05, 9.0]; 12.0 is outside it
+    _write_merged(env[0], **{"nhm_soil_moist_max_params.csv": pd.DataFrame({ID: _ids(), "soil_moist_max": 12.0})})
+    declared = DECLARED + [DeclaredParam("soil_moist_max", "nhm_soil_moist_max_params.csv", [], {},
+                                         {"columns": _cols({"soil_moist_max": "soil_moist_max"})})]
+    merged, out, lib = env
+    with caplog.at_level(logging.WARNING, logger="prms_export"):
+        export_fabric(merged, out, ID, N, library_path=lib, declared=declared, dictionary=DICTIONARY)
+    assert "soil_moist_max" in caplog.text and "outside the dictionary range" in caplog.text
+    assert pd.read_csv(out / "soil_moist_max.csv")["soil_moist_max"].eq(12.0).all()
+
+
+def test_a_degenerate_dictionary_range_never_warns(env, caplog):
+    # dprst_depth_avg is 132..132 in the dictionary: one calibrated value, not a bound
+    _write_merged(env[0], **{"nhm_dprst_depth_avg_params.csv": pd.DataFrame({ID: _ids(), "dprst_depth_avg": 49.0})})
+    declared = DECLARED + [DeclaredParam("dprst_depth_avg", "nhm_dprst_depth_avg_params.csv", [], {},
+                                         {"columns": _cols({"dprst_depth_avg": "dprst_depth_avg"})})]
+    merged, out, lib = env
+    with caplog.at_level(logging.WARNING, logger="prms_export"):
+        export_fabric(merged, out, ID, N, library_path=lib, declared=declared, dictionary=DICTIONARY)
+    assert "dprst_depth_avg: " not in caplog.text

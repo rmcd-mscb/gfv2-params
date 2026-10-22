@@ -140,10 +140,16 @@ def _coerce(name: str, source: str, values: pd.Series, dtype: str) -> pd.Series:
 
 
 def _warn_out_of_range(name: str, series: pd.Series, row: dict, logger) -> None:
-    """Warn only: the dictionary min/max are the original NHM ranges, wrong for a new fabric."""
+    """Warn only: the dictionary min/max are the original NHM ranges, wrong for a new fabric.
+
+    A degenerate range (min >= max, e.g. dprst_depth_avg 132..132) is the dictionary
+    recording a single calibrated value, not a bound, so it never warns.
+    """
     try:
         lo, hi = float(row["minimum"]), float(row["maximum"])
     except (KeyError, ValueError):
+        return
+    if lo >= hi:
         return
     n = int(((series < lo) | (series > hi)).sum())
     if n:
@@ -183,7 +189,7 @@ def export_fabric(
                 f"built/filled on this fabric (run its stage, then the fill stage)"
             )
         if item.merged_file not in cache:
-            df = pd.read_csv(path)
+            df = pd.read_csv(path, low_memory=False)  # ssflux's `vpu` has mixed-looking values
             if id_feature not in df.columns:
                 raise ValueError(f"{path}: id column {id_feature!r} not in header")
             if df[id_feature].duplicated().any():
